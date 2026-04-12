@@ -31,10 +31,11 @@ async function sbSelect(table, query = "") {
   return sbFetch(table, "GET", { query: "select=*&" + query });
 }
 
-async function sbUpsert(table, data) {
+async function sbUpsert(table, data, onConflict = null) {
   return sbFetch(table, "POST", {
     body: data,
-    prefer: "return=representation,resolution=merge-duplicates"
+    prefer: "return=representation,resolution=merge-duplicates",
+    query: onConflict ? `on_conflict=${onConflict}` : undefined
   });
 }
 
