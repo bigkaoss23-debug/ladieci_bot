@@ -108,6 +108,27 @@ app.post("/api", async (req, res) => {
       const cfg = await getConfig();
       await invia(req.body.wa_id || req.body.tel, req.body.testo, cfg);
       result = { success: true };
+    } else if (action === "updateWaStato") {
+      const upd = { stato: req.body.stato };
+      if (req.body.ordine_ref !== undefined) upd.ordine_ref = req.body.ordine_ref;
+      await sbUpdate("wa_msgs", `id=eq.${req.body.id}`, upd);
+      result = { success: true };
+    } else if (action === "updateOrden") {
+      result = await modificaOrdine(req.body.id, req.body);
+    } else if (action === "updateEstado") {
+      result = await cambiaStato(req.body.id, req.body.estado);
+    } else if (action === "createOrden") {
+      const d = req.body.data || req.body;
+      if (!d.waId && d.wa_id) d.waId = d.wa_id;
+      result = await creaOrdine(d);
+    } else if (action === "updateNotaCucina") {
+      await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { nota_cucina: req.body.nota_cucina });
+      result = { success: true };
+    } else if (action === "eliminaConversazione") {
+      await sbDelete("conv", `wa_id=eq.${req.body.wa_id}`);
+      result = { success: true };
+    } else if (action === "parseOrdineDaRisposta") {
+      result = { success: true };
     } else {
       result = { error: "unknown action: " + action };
     }
