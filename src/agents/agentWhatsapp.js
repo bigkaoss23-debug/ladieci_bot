@@ -84,7 +84,12 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
     "\"items\":[{\"n\":\"nome\",\"q\":1,\"p\":9.50,\"e\":\"emoji\",\"sub\":\"\"}]," +
     "\"nota\":\"\",\"hora\":\"\",\"conf\":95}\n\n" +
     "CAMPO sub CRITICO: SEMPRE presente. Se nessuna variazione: sub=''. Con variazione: riempilo.\n" +
-    "Esempi: 'marinara sin ajo' -> sub='sin ajo' | 'diavola extra picante' -> sub='extra picante'";
+    "Esempi: 'marinara sin ajo' -> sub='sin ajo' | 'diavola extra picante' -> sub='extra picante'\n\n" +
+    "REGOLA ANTI-INVENZIONE — CRITICA:\n" +
+    "Se il cliente chiede una pizza che NON esiste nel menu e NON ha un abbinamento esplicito sopra\n" +
+    "(es: carbonara, quattro stagioni, fungi, napoli, calzone, hawaiana, bbq, etc.),\n" +
+    "NON mapparla a un'altra pizza. Imposta tipo=domanda, conf=0, items=[].\n" +
+    "Il bot risponderà che non abbiamo quel prodotto e mostrerà il menu.";
 
   try {
     const testoNorm = testo.replace(/\s+/g, " ").trim();
