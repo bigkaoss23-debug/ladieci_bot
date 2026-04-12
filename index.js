@@ -3,6 +3,7 @@ const express = require("express");
 const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert } = require("./src/utils/supabase");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
+const { invia } = require("./src/agents/agentWhatsapp");
 const { chiudiServizio, scanServizio } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
 
@@ -83,6 +84,10 @@ app.post("/api", async (req, res) => {
       result = { success: true };
     } else if (action === "setConfig") {
       await sbUpsert("config", { chiave: req.body.chiave, valore: req.body.valore });
+      result = { success: true };
+    } else if (action === "rispondiWA") {
+      const cfg = await getConfig();
+      await invia(req.body.wa_id || req.body.tel, req.body.testo, cfg);
       result = { success: true };
     } else {
       result = { error: "unknown action: " + action };
