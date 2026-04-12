@@ -68,6 +68,9 @@ app.get("/api", async (req, res) => {
       result = await rigeneraSuggerimenti();
     } else if (action === "approvaSuggerimento") {
       result = await approvaSuggerimento(req.query.id, req.query.stato);
+    } else if (action === "getConvThread") {
+      const rows = await sbSelect("conv", `wa_id=eq.${req.query.wa_id}&select=chat`);
+      result = { chat: rows?.[0]?.chat || [] };
     } else if (action === "generaRispostaIA") {
       const { generaRisposta } = require("./src/agents/agentWhatsapp");
       const thread = await sbSelect("conv", `wa_id=eq.${req.query.wa_id}&order=ts.desc&limit=1`);
