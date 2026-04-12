@@ -12,8 +12,17 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Api-Key");
   if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
+// Auth middleware — protegge tutti gli endpoint /api
+const DASHBOARD_API_KEY = process.env.DASHBOARD_API_KEY;
+app.use("/api", (req, res, next) => {
+  if (!DASHBOARD_API_KEY) return next(); // se non configurata, passa (sviluppo)
+  const key = req.headers["x-api-key"] || req.query._k;
+  if (key !== DASHBOARD_API_KEY) return res.status(401).json({ error: "unauthorized" });
   next();
 });
 
