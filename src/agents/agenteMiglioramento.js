@@ -3,7 +3,7 @@
 // ===============================================================
 
 const { sbSelect, sbUpsert, sbDelete, getConfig } = require("../utils/supabase");
-const { INFO_RISTORANTE } = require("../config");
+const { INFO_RISTORANTE, ABBINAMENTI_NOMI } = require("../config");
 
 function sanitize(s) {
   return String(s || "").replace(/[^\u0000-\u007E\u00A0-\u00FF\u0100-\u017F ]/g, "").trim();
@@ -37,6 +37,16 @@ async function rigeneraSuggerimenti() {
     "Analiza los datos reales del restaurante y genera de 2 a 4 sugerencias concretas para mejorar el bot.\n\n" +
     "DATOS REALES DEL RESTAURANTE:\n" + INFO_RISTORANTE + "\n\n" +
     "REGLA ABSOLUTA: basa las sugerencias SOLO en los datos reales. NO inventes funcionalidades.\n\n" +
+    "CAPACIDADES YA GESTIONADAS POR EL BOT (no reproponer estas):\n" +
+    "- Mappatura nomi pizza: " + ABBINAMENTI_NOMI + "\n" +
+    "- Saluti ignorati (hola, buenas, gracias, ok, vale) — non abbassano la confidenza\n" +
+    "- Ordini in forma cortese già riconosciuti: 'Puedo pedir X', 'Me pones X', 'Queria X', 'Quiero X'\n" +
+    "- Pizza fuori menu → risponde che non c'è e mostra il menu (regola anti-invenzione attiva)\n" +
+    "- Variazioni gestite via campo sub: sin X, doble X, extra X, con X\n" +
+    "- Correzione quantità → tipo=correccion\n" +
+    "- Sostituzione/eliminazione item → tipo=modifica_complessa\n" +
+    "- Pizza completamente inventata → tipo=custom_pizza (va all'operatore)\n" +
+    "- Cliente abituale + 'lo di siempre' → usa preferenze salvate\n\n" +
     "REGLAS YA APROBADAS (no reproponer):\n" + (regoleEsistenti || "ninguna todavía") + "\n\n" +
     "Para cada sugerencia:\n" +
     "- testo: regla concreta en ESPAÑOL (max 2 lineas)\n" +

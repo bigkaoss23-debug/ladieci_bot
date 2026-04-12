@@ -5,7 +5,7 @@
 const { chiamaClaude } = require("../utils/claude");
 const { sbSelect, sbUpdate, sbUpsert } = require("../utils/supabase");
 const { isBevanda } = require("../utils/helpers");
-const { MENU_LISTA, INFO_RISTORANTE } = require("../config");
+const { MENU_LISTA, INFO_RISTORANTE, ABBINAMENTI_NOMI } = require("../config");
 
 function contestoTempo() {
   const now = new Date();
@@ -70,12 +70,7 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
     "5. correccion (conf 90): cliente CORREGGE quantita. items = quantita TOTALE desiderata.\n" +
     "6. modifica_complessa (conf 90, items=[]): cambio/eliminazione item. Segnali: 'en vez de', 'cambiar', 'quitar', 'elimina'.\n" +
     "7. custom_pizza (conf=50, items=[]): pizza completamente inventata fuori menu.\n\n" +
-    "ABBINAMENTI NOMI:\n" +
-    "diavola/diabla=El Gaucho, margherita/clasica=El Pelusa, bufala=Zizou, marinara=O Rei,\n" +
-    "vegetariana=El Mago de Zadar, prosciutto/jamon=El Divino Codino, champinones=La Pulga,\n" +
-    "cuatro quesos=Il Tulipano Nero, atun=El Ultimo 10, caprichosa=Il Gladiatore, inferno=El Maestro,\n" +
-    "coca/cola/fanta=Refresco p:2.50, cerveza/estrella=Estrella Galicia p:3.00,\n" +
-    "heineken=Heineken p:3.00, agua=Agua p:1.80.\n\n" +
+    "ABBINAMENTI NOMI:\n" + ABBINAMENTI_NOMI + "\n\n" +
     "NUMEROS MENU: 1=El Pelusa, 2=Zizou, 3=O Rei, 4=Il Gladiatore, 5=El Gaucho,\n" +
     "6=El Divino Codino, 7=La Pulga, 8=Il Tulipano Nero, 9=El Ultimo 10, 10=El Mago de Zadar, 11=El Maestro.\n\n" +
     (cfg["REGOLE_APPRESE"] ? "REGOLE APPRESE — APPLICA SEMPRE:\n" + cfg["REGOLE_APPRESE"] + "\n\n" : "") +

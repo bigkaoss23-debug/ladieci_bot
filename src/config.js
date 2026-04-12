@@ -57,4 +57,12 @@ const INFO_RISTORANTE =
 
 const NUMEROS_WHITELIST = ["41767011848", "34614267535"];
 
-module.exports = { MENU_LISTA, INFO_RISTORANTE, NUMEROS_WHITELIST };
+// Mappature nomi comuni → nomi ufficiali menu
+// Usato da agentWhatsapp (interpreta) e agenteMiglioramento (evita di riproporre cose già gestite)
+const ABBINAMENTI_NOMI =
+  "diavola/diabla=El Gaucho, margherita/clasica=El Pelusa, bufala=Zizou, marinara=O Rei, " +
+  "vegetariana=El Mago de Zadar, prosciutto/jamon=El Divino Codino, champinones=La Pulga, " +
+  "cuatro quesos=Il Tulipano Nero, atun=El Ultimo 10, caprichosa=Il Gladiatore, inferno=El Maestro, " +
+  "coca/cola/fanta=Refresco, cerveza/estrella=Estrella Galicia, heineken=Heineken, agua=Agua";
+
+module.exports = { MENU_LISTA, INFO_RISTORANTE, NUMEROS_WHITELIST, ABBINAMENTI_NOMI };

@@ -49,6 +49,13 @@ async function gestisci(ctx) {
 
   // --- FLUSSO 2B: aggiunta a ordine confermato ---
   if (!statoOrd.haOrdine && !isWhitelist && conv && conv.stato_ordine === "confermata" && hasItems && (tipo === "ordine" || tipo === "correccion")) {
+    // Controlla messaggio duplicato — se identico all'ultimo del cliente → Preguntas
+    const chatHistory = conv.chat || [];
+    const ultimoCliente = chatHistory.filter(m => m.da === "cliente").slice(-2, -1)[0];
+    if (ultimoCliente && ultimoCliente.txt.trim().toLowerCase() === testo.trim().toLowerCase()) {
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, conv.items || [], conv.hora || "", null, false, waMsgId);
+      return { flusso: "2B", stato: "IN_TRATTAMENTO", motivo: "messaggio_duplicato" };
+    }
     const convItems2B = conv.items || [];
     const hora2B = ia.hora || conv.hora || "";
     let merged2B;
