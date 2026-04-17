@@ -71,6 +71,10 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
     "6. modifica_complessa (conf 90, items=[]): cambio/eliminazione item. Segnali: 'en vez de', 'cambiar', 'quitar', 'elimina'.\n" +
     "7. custom_pizza (conf=50, items=[]): pizza completamente inventata fuori menu.\n\n" +
     "ABBINAMENTI NOMI:\n" + ABBINAMENTI_NOMI + "\n\n" +
+    "BEBIDAS — REGLA sub: Cuando el cliente pide un refresco con nombre específico\n" +
+    "(Coca Cola, Fanta, Sprite, Nestea, Aquarius, Seven Up, etc.) → n='Refresco', p=2.50,\n" +
+    "y guarda el nombre exacto en sub. Ejemplo: 'una Fanta' → {n:'Refresco',p:2.50,sub:'Fanta'}.\n" +
+    "Si dice solo 'refresco' sin especificar → sub=''.\n\n" +
     "NUMEROS MENU: 1=El Pelusa, 2=Zizou, 3=O Rei, 4=Il Gladiatore, 5=El Gaucho,\n" +
     "6=El Divino Codino, 7=La Pulga, 8=Il Tulipano Nero, 9=El Ultimo 10, 10=El Mago de Zadar, 11=El Maestro.\n\n" +
     (cfg["REGOLE_APPRESE"] ? "REGOLE APPRESE — APPLICA SEMPRE:\n" + cfg["REGOLE_APPRESE"] + "\n\n" : "") +
