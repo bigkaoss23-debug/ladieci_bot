@@ -79,10 +79,16 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
     "6=El Divino Codino, 7=La Pulga, 8=Il Tulipano Nero, 9=El Ultimo 10, 10=El Mago de Zadar, 11=El Maestro.\n\n" +
     (cfg["REGOLE_APPRESE"] ? "REGOLE APPRESE — APPLICA SEMPRE:\n" + cfg["REGOLE_APPRESE"] + "\n\n" : "") +
     "CONSEGNA A DOMICILIO — REGOLE ESTRAZIONE:\n" +
-    "Se il messaggio contiene parole come: 'a casa', 'a domicilio', 'llevar', 'traer', 'enviar',\n" +
-    "'entrega', 'delivery', 'me lo traéis', 'me lo llevais', oppure un indirizzo esplicito\n" +
-    "(calle, avenida, urb, plaza, paseo, carretera + numero civico) → tipo_consegna='DOMICILIO'\n" +
-    "Estrai l'indirizzo nel campo 'direccion' esattamente come scritto dal cliente.\n" +
+    "tipo_consegna='DOMICILIO' se il messaggio contiene UNO QUALSIASI di questi segnali:\n" +
+    "VERBI CONSEGNA: llevar, lleváis, llevais, llevas, llevad, traer, traéis, traeis, traes,\n" +
+    "  enviar, repartir, mandar — in qualsiasi forma: 'me lo/la/los/las lleváis/traéis',\n" +
+    "  'me lo llevas', 'me lo traes', 'podéis traerlo', 'lo lleváis', etc.\n" +
+    "PAROLE CHIAVE: 'a casa', 'a domicilio', 'mi casa', 'mi dirección', 'a mi piso',\n" +
+    "  'entrega', 'delivery', 'reparto', 'repartidor'\n" +
+    "INDIRIZZO ESPLICITO: qualsiasi testo che inizia con Calle, Avenida, Avda, C/, Urb,\n" +
+    "  Plaza, Paseo, Carretera, Ctra, Bulevar — seguito da nome e numero (es: 'Avenida Las Gaviotas 33')\n" +
+    "  NOTA: il numero civico può venire DOPO il nome della via (es: 'Avenida Las Gaviotas 33 bajo B')\n" +
+    "Estrai l'indirizzo completo nel campo 'direccion' esattamente come scritto dal cliente.\n" +
     "Se NON menziona consegna a domicilio → tipo_consegna='RITIRO', direccion=''\n" +
     "CRITICO: NON inventare indirizzi. Se scrive 'domicilio' senza indirizzo → tipo_consegna='DOMICILIO', direccion=''\n\n" +
     "FORMATO OUTPUT (solo JSON):\n" +
