@@ -13,6 +13,14 @@ async function creaOrdine(params) {
     ? Math.max(0, ...last.map(o => parseInt((o.id || "").replace(/[^0-9]/g, "")) || 0))
     : 0;
 
+  // ═══ Sovrprezzo consegna 2.50€ — aggiunto automaticamente per DOMICILIO ═══
+  const COSTO_CONSEGNA = { n: "Entrega a domicilio", p: 2.50, q: 1, e: "🛵", sub: "" };
+  let itemsFinali = params.items || [];
+  if ((params.tipo_consegna || "RITIRO") === "DOMICILIO") {
+    const giàPresente = itemsFinali.some(i => i.n === COSTO_CONSEGNA.n);
+    if (!giàPresente) itemsFinali = [...itemsFinali, COSTO_CONSEGNA];
+  }
+
   for (let attempt = 0; attempt < 5; attempt++) {
     const newId = "#" + String(lastNum + 1 + attempt).padStart(3, "0");
     const result = await sbUpsert("ordenes", {
@@ -21,7 +29,7 @@ async function creaOrdine(params) {
       tel: params.tel || "",
       wa_id: params.waId || params.tel || "",
       canal: params.canal || "WA",
-      items: params.items || [],
+      items: itemsFinali,
       nota: params.nota || "",
       nota_cucina: params.nota_cucina || "",
       hora: params.hora || "",
