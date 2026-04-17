@@ -160,7 +160,7 @@ async function gestisci(ctx) {
       if (!conv) await createConv(waId, nombre, allItems, "", "aperta");
       else await updateConvDati(waId, allItems, "");
       const clienteInfoOra = await getCliente(waId);
-      const msgOra = (await generaChiediOra(primo, allItems, config, clienteInfoOra, conv?.chat || []))
+      const msgOra = (await generaChiediOra(primo, allItems, config, clienteInfoOra, conv?.chat || [], ia.tipo_consegna))
                   || `${primo}, ya lo tenemos todo. ¿A qué hora te esperamos?\n*El Bot La Dieci* 🇮🇹🍕`;
       await appendChat(waId, "bot", msgOra);
       await upsertWaMsg(waId, nombre, testo, "NUEVO", conf, allItems, "", msgOra, false, waMsgId);
@@ -206,7 +206,7 @@ async function gestisci(ctx) {
       ];
       msgRicevuto = slotMsgs[Math.floor(Math.random() * slotMsgs.length)] + "\n\n" + buildUpsell(allItems) + "\n*La Dieci* 🇮🇹🍕";
     } else {
-      msgRicevuto = (await generaConfermaOrdine(primo, allItems, totale, horaFinale, config, clienteInfo1, conv?.chat || [], oraCambiata ? hora : undefined))
+      msgRicevuto = (await generaConfermaOrdine(primo, allItems, totale, horaFinale, config, clienteInfo1, conv?.chat || [], oraCambiata ? hora : undefined, tipoConsegna))
                  || buildMsgRicevuto(primo, allItems, totale, horaFinale);
     }
 
@@ -277,12 +277,13 @@ async function gestisci(ctx) {
     if (slotSpostatoOra) {
       msgOraConf = `Ey ${primo}! 🙏\n\nEsta noche el horno vuela 🔥 Las *${oraHora}* ya están completas.\n¿Te va bien a las *${oraHoraFinale}*? ¡Te lo reservamos ahora mismo! ✅\n\n${buildResumen(oraItems)}\n\nTotal: *${oraTotale.toFixed(2)}eur*\n*El Bot La Dieci* 🇮🇹🍕`;
     } else {
-      msgOraConf = (await generaConfermaOrdine(primo, oraItems, oraTotale, oraHoraFinale, config, clienteInfoOra2, conv?.chat || [], oraCambiataOra ? oraHora : undefined))
+      // ═══ Delivery: leggi tipo_consegna/direccion dalla cronologia conv ═══
+    const { tipo_consegna: tipoConsegnaOra, direccion: direccionOra } = getDeliveryFromChat(conv.chat);
+
+    if (!slotSpostatoOra) {
+      msgOraConf = (await generaConfermaOrdine(primo, oraItems, oraTotale, oraHoraFinale, config, clienteInfoOra2, conv?.chat || [], oraCambiataOra ? oraHora : undefined, tipoConsegnaOra))
                 || buildMsgRicevuto(primo, oraItems, oraTotale, oraHoraFinale);
     }
-
-    // ═══ Delivery: leggi tipo_consegna/direccion dalla cronologia conv ═══
-    const { tipo_consegna: tipoConsegnaOra, direccion: direccionOra } = getDeliveryFromChat(conv.chat);
 
     const ordResultOra = await creaOrdine({
       nombre, tel: waId, waId, canal: "WA",

@@ -143,7 +143,7 @@ async function generaRisposta(testo, waId, cfg, threadCtx) {
   return assicuraFirma(await chiamaClaude(systemPrompt, testo, cfg, 400));
 }
 
-async function generaConfermaOrdine(primo, items, totale, hora, cfg, clienteInfo, chatHistory, horaRichiesta) {
+async function generaConfermaOrdine(primo, items, totale, hora, cfg, clienteInfo, chatHistory, horaRichiesta, tipoConsegna) {
   const resumen = items.map(it => {
     let r = `${it.e || ""} ${it.q || 1}x ${it.n} — ${((Number(it.p) || 0) * (Number(it.q) || 1)).toFixed(2)}€`;
     if (it.sub) r += ` (${it.sub})`;
@@ -169,24 +169,29 @@ async function generaConfermaOrdine(primo, items, totale, hora, cfg, clienteInfo
     "IDIOMA: SIEMPRE español.\nTONO: Cálido, profesional, referencias reales (horno, pizzaiolo, masa).\n" +
     "❌ NUNCA: tío, hermano, ey, venga, chaval, argot de bar.\n\n" +
     oraCambioCtx + clienteCtx + convCtx + upsellCtx +
-    `TAREA: Confirma el pedido de ${primo}.\nPEDIDO:\n${resumen}\n*Total: ${totale.toFixed(2)}€*\n*Recogida: ${hora}*\n\n` +
-    "ESTRUCTURA: frase cálida → lista pedido → total/recogida → upsell (si aplica) → *La Dieci* 🇮🇹🍕\n" +
+    (tipoConsegna === "DOMICILIO"
+      ? `TAREA: Confirma el pedido a DOMICILIO de ${primo}.\nPEDIDO:\n${resumen}\n*Total: ${totale.toFixed(2)}€*\n*Entrega: ${hora}*\n\n` +
+        "IMPORTANTE: es entrega a domicilio — usa 'entrega', 'llevamos', NUNCA 'recogida' ni 'recoger'.\n"
+      : `TAREA: Confirma el pedido de ${primo}.\nPEDIDO:\n${resumen}\n*Total: ${totale.toFixed(2)}€*\n*Recogida: ${hora}*\n\n`) +
+    "ESTRUCTURA: frase cálida → lista pedido → total/hora → upsell (si aplica) → *La Dieci* 🇮🇹🍕\n" +
     "PROHIBIDO: inventar URLs, links, webs o botones de confirmación. NO existe ninguna web de pedidos.\n" +
     "Máximo 10 líneas. NO inventar precios.";
 
   return assicuraFirma(await chiamaClaude(systemPrompt, "Confirma el pedido.", cfg, 400));
 }
 
-async function generaChiediOra(primo, items, cfg, clienteInfo, chatHistory) {
+async function generaChiediOra(primo, items, cfg, clienteInfo, chatHistory, tipoConsegna) {
   const resumen = items.map(it => { let b = `${it.e || ""} ${it.q || 1}x ${it.n}`; if (it.sub) b += ` (${it.sub})`; return b; }).join(", ");
   const giaInConv = chatHistory?.length > 0;
+  const esEntrega = tipoConsegna === "DOMICILIO";
   const systemPrompt =
     "Eres el asistente WhatsApp de La Dieci Pizzeria.\n" +
     "TONO: Simpatico, calido. IDIOMA: SIEMPRE ESPANOL.\n" +
     (clienteInfo?.total_pedidos > 0 ? `Cliente habitual con ${clienteInfo.total_pedidos} visitas.\n` : "") +
     (giaInConv ? "YA estais en conversacion. PROHIBIDO saludar. Sigue directamente.\n" : "") +
     `TAREA: El cliente '${primo}' ha pedido [${resumen}] pero falta la hora. Confirma items y pide la hora. Max 3-4 lineas.\n` +
-    "HORARIO: recogidas 19:30-23:00 (miercoles a domingo).\nFIRMA: *El Bot La Dieci* 🇮🇹🍕";
+    (esEntrega ? "Es un pedido a DOMICILIO — usa palabras como 'entrega', 'llevar', NO 'recoger' ni 'recogida'.\n" : "") +
+    "HORARIO: entregas/recogidas 19:30-23:00 (miercoles a domingo).\nFIRMA: *El Bot La Dieci* 🇮🇹🍕";
   return assicuraFirma(await chiamaClaude(systemPrompt, "Pide la hora.", cfg, 200));
 }
 
