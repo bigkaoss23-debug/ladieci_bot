@@ -197,6 +197,10 @@ async function gestisci(ctx) {
       return { flusso: 3, stato: "IN_TRATTAMENTO", motivo: "limite_ai" };
     }
 
+    // ═══ Delivery: estrai tipo_consegna e direccion dal risultato IA ═══
+    const tipoConsegna = ia.tipo_consegna || "RITIRO";
+    const direccion    = ia.direccion    || "";
+
     const clienteInfo1 = await getCliente(waId);
     let msgRicevuto;
     if (slotSpostato) {
@@ -209,10 +213,6 @@ async function gestisci(ctx) {
       msgRicevuto = (await generaConfermaOrdine(primo, allItems, totale, horaFinale, config, clienteInfo1, conv?.chat || [], oraCambiata ? hora : undefined, tipoConsegna))
                  || buildMsgRicevuto(primo, allItems, totale, horaFinale);
     }
-
-    // ═══ Delivery: estrai tipo_consegna e direccion dal risultato IA ═══
-    const tipoConsegna = ia.tipo_consegna || "RITIRO";
-    const direccion    = ia.direccion    || "";
 
     const ordResult1 = await creaOrdine({
       nombre, tel: waId, waId, canal: "WA",
@@ -273,14 +273,13 @@ async function gestisci(ctx) {
     }
 
     const clienteInfoOra2 = await getCliente(waId);
+    // ═══ Delivery: leggi tipo_consegna/direccion dalla cronologia conv ═══
+    const { tipo_consegna: tipoConsegnaOra, direccion: direccionOra } = getDeliveryFromChat(conv.chat);
+
     let msgOraConf;
     if (slotSpostatoOra) {
       msgOraConf = `Ey ${primo}! 🙏\n\nEsta noche el horno vuela 🔥 Las *${oraHora}* ya están completas.\n¿Te va bien a las *${oraHoraFinale}*? ¡Te lo reservamos ahora mismo! ✅\n\n${buildResumen(oraItems)}\n\nTotal: *${oraTotale.toFixed(2)}eur*\n*El Bot La Dieci* 🇮🇹🍕`;
     } else {
-      // ═══ Delivery: leggi tipo_consegna/direccion dalla cronologia conv ═══
-    const { tipo_consegna: tipoConsegnaOra, direccion: direccionOra } = getDeliveryFromChat(conv.chat);
-
-    if (!slotSpostatoOra) {
       msgOraConf = (await generaConfermaOrdine(primo, oraItems, oraTotale, oraHoraFinale, config, clienteInfoOra2, conv?.chat || [], oraCambiataOra ? oraHora : undefined, tipoConsegnaOra))
                 || buildMsgRicevuto(primo, oraItems, oraTotale, oraHoraFinale);
     }
