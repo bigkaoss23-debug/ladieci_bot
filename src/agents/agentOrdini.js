@@ -6,7 +6,9 @@ const { sbSelect, sbUpsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande } = require("../utils/helpers");
 
 async function creaOrdine(params) {
-  const last = await sbSelect("ordenes", "order=ts.desc&limit=50");
+  // Considera solo gli ordini creati OGGI — così dopo chiudiServizio si riparte da #001
+  const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+  const last = await sbSelect("ordenes", `ts=gte.${startOfDay.getTime()}&order=ts.desc&limit=50`);
   const lastNum = (last && Array.isArray(last))
     ? Math.max(0, ...last.map(o => parseInt((o.id || "").replace(/[^0-9]/g, "")) || 0))
     : 0;
