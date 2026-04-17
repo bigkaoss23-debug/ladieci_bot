@@ -23,6 +23,15 @@ function updateConvStato(waId, nuovoStato) {
   return sbUpdate("conv", `wa_id=eq.${waId}&stato_ordine=not.in.(ritirata,chiusa)`, { stato_ordine: nuovoStato, ts: Date.now() });
 }
 
+// Recupera tipo_consegna e direccion dalla cronologia chat (primo messaggio cliente con DOMICILIO)
+function getDeliveryFromChat(chat) {
+  const msgs = (chat || []).filter(m => m.da === "cliente" && m.ia?.tipo_consegna === "DOMICILIO");
+  if (msgs.length > 0) {
+    return { tipo_consegna: "DOMICILIO", direccion: msgs[0].ia?.direccion || "" };
+  }
+  return { tipo_consegna: "RITIRO", direccion: "" };
+}
+
 function upsertWaMsgOrdenRef(waId, ordenId) {
   return sbSelect("wa_msgs", `wa_id=eq.${waId}&stato=not.in.(COMPLETATO,COCINA)&order=ts.desc&limit=1`)
     .then(rows => { if (rows?.[0]) sbUpdate("wa_msgs", `id=eq.${rows[0].id}`, { ordine_ref: ordenId }); });
@@ -272,9 +281,27 @@ async function gestisci(ctx) {
                 || buildMsgRicevuto(primo, oraItems, oraTotale, oraHoraFinale);
     }
 
-    const ordResultOra = await creaOrdine({ nombre, tel: waId, waId, canal: "WA", items: oraItems, hora: oraHoraFinale, estado: "DA_CONFERMARE" });
+    // ═══ Delivery: leggi tipo_consegna/direccion dalla cronologia conv ═══
+    const { tipo_consegna: tipoConsegnaOra, direccion: direccionOra } = getDeliveryFromChat(conv.chat);
+
+    const ordResultOra = await creaOrdine({
+      nombre, tel: waId, waId, canal: "WA",
+      items: oraItems, hora: oraHoraFinale, estado: "DA_CONFERMARE",
+      tipo_consegna: tipoConsegnaOra,
+      direccion: direccionOra || null
+    });
     const numPedidoOra = ordResultOra?.id || "";
-    if (numPedidoOra) msgOraConf += `\n\nTu número de recogida: *${numPedidoOra}* 🎫\nCuando llegues, dínoslo y listo!`;
+    if (numPedidoOra) {
+      if (tipoConsegnaOra === "DOMICILIO") {
+        if (direccionOra) {
+          msgOraConf += `\n\nTu número de pedido: *${numPedidoOra}* 🛵\n📍 Entrega en: *${direccionOra}*`;
+        } else {
+          msgOraConf += `\n\nTu número de pedido: *${numPedidoOra}* 🛵\n\n¿Cuál es tu dirección de entrega? 📍`;
+        }
+      } else {
+        msgOraConf += `\n\nTu número de recogida: *${numPedidoOra}* 🎫\nCuando llegues, dínoslo y listo!`;
+      }
+    }
 
     await updateConvDati(waId, oraItems, oraHoraFinale);
     await updateConvStato(waId, "confermata");
