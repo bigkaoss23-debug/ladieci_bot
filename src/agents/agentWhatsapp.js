@@ -25,7 +25,7 @@ function contestoTempo() {
 
 function assicuraFirma(testo) {
   if (!testo) return testo;
-  if (testo.includes("*La Dieci*") || testo.includes("*El Bot La Dieci*")) return testo;
+  if (testo.includes("La Dieci") || testo.includes("El Bot La Dieci")) return testo;
   return testo + "\n*La Dieci* 🇮🇹🍕";
 }
 
@@ -170,7 +170,8 @@ async function generaConfermaOrdine(primo, items, totale, hora, cfg, clienteInfo
     "❌ NUNCA: tío, hermano, ey, venga, chaval, argot de bar.\n\n" +
     oraCambioCtx + clienteCtx + convCtx + upsellCtx +
     `TAREA: Confirma el pedido de ${primo}.\nPEDIDO:\n${resumen}\n*Total: ${totale.toFixed(2)}€*\n*Recogida: ${hora}*\n\n` +
-    "ESTRUCTURA: frase cálida → lista pedido → total/recogida → upsell (si aplica) → CTA → *La Dieci* 🇮🇹🍕\n" +
+    "ESTRUCTURA: frase cálida → lista pedido → total/recogida → upsell (si aplica) → *La Dieci* 🇮🇹🍕\n" +
+    "PROHIBIDO: inventar URLs, links, webs o botones de confirmación. NO existe ninguna web de pedidos.\n" +
     "Máximo 10 líneas. NO inventar precios.";
 
   return assicuraFirma(await chiamaClaude(systemPrompt, "Confirma el pedido.", cfg, 400));
