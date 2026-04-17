@@ -58,6 +58,9 @@ async function chiudiServizio(deleteAttivi = false) {
     await sbDelete("ordenes", "estado=not.in.(RETIRADO,COMPLETADO)");
   }
 
+  // Salva il timestamp di chiusura — creaOrdine userà questo per resettare il contatore
+  await sbUpsert("config", { chiave: "ORDER_RESET_TS", valore: String(Date.now()) }, "chiave");
+
   return { success: true, data: oggi, conv_archiviate: archiviate, ordini_storico: ordArch };
 }
 

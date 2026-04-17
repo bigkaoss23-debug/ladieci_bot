@@ -6,9 +6,13 @@ const { sbSelect, sbUpsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande } = require("../utils/helpers");
 
 async function creaOrdine(params) {
-  // Considera solo gli ordini creati OGGI — così dopo chiudiServizio si riparte da #001
+  // Usa il timestamp dell'ultimo chiudiServizio come punto di reset del contatore.
+  // Se non esiste, fallback a mezzanotte di oggi.
   const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-  const last = await sbSelect("ordenes", `ts=gte.${startOfDay.getTime()}&order=ts.desc&limit=50`);
+  const resetCfg = await sbSelect("config", "chiave=eq.ORDER_RESET_TS");
+  const resetTs  = resetCfg?.[0]?.valore ? parseInt(resetCfg[0].valore) : 0;
+  const fromTs   = Math.max(startOfDay.getTime(), resetTs);
+  const last = await sbSelect("ordenes", `ts=gte.${fromTs}&order=ts.desc&limit=50`);
   const lastNum = (last && Array.isArray(last))
     ? Math.max(0, ...last.map(o => parseInt((o.id || "").replace(/[^0-9]/g, "")) || 0))
     : 0;
