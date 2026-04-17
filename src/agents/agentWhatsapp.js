@@ -74,10 +74,18 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
     "NUMEROS MENU: 1=El Pelusa, 2=Zizou, 3=O Rei, 4=Il Gladiatore, 5=El Gaucho,\n" +
     "6=El Divino Codino, 7=La Pulga, 8=Il Tulipano Nero, 9=El Ultimo 10, 10=El Mago de Zadar, 11=El Maestro.\n\n" +
     (cfg["REGOLE_APPRESE"] ? "REGOLE APPRESE — APPLICA SEMPRE:\n" + cfg["REGOLE_APPRESE"] + "\n\n" : "") +
+    "CONSEGNA A DOMICILIO — REGOLE ESTRAZIONE:\n" +
+    "Se il messaggio contiene parole come: 'a casa', 'a domicilio', 'llevar', 'traer', 'enviar',\n" +
+    "'entrega', 'delivery', 'me lo traéis', 'me lo llevais', oppure un indirizzo esplicito\n" +
+    "(calle, avenida, urb, plaza, paseo, carretera + numero civico) → tipo_consegna='DOMICILIO'\n" +
+    "Estrai l'indirizzo nel campo 'direccion' esattamente come scritto dal cliente.\n" +
+    "Se NON menziona consegna a domicilio → tipo_consegna='RITIRO', direccion=''\n" +
+    "CRITICO: NON inventare indirizzi. Se scrive 'domicilio' senza indirizzo → tipo_consegna='DOMICILIO', direccion=''\n\n" +
     "FORMATO OUTPUT (solo JSON):\n" +
     "{\"tipo\":\"ordine|domanda|misto|solo_ora|correccion|modifica_complessa|custom_pizza\"," +
     "\"items\":[{\"n\":\"nome\",\"q\":1,\"p\":9.50,\"e\":\"emoji\",\"sub\":\"\"}]," +
-    "\"nota\":\"\",\"hora\":\"\",\"conf\":95}\n\n" +
+    "\"nota\":\"\",\"hora\":\"\",\"conf\":95," +
+    "\"tipo_consegna\":\"RITIRO\",\"direccion\":\"\"}\n\n" +
     "CAMPO sub CRITICO: SEMPRE presente. Se nessuna variazione: sub=''. Con variazione: riempilo.\n" +
     "Esempi: 'marinara sin ajo' -> sub='sin ajo' | 'diavola extra picante' -> sub='extra picante'\n\n" +
     "REGOLA ANTI-INVENZIONE — CRITICA:\n" +
@@ -96,7 +104,18 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
       n: it.n || "", q: Number(it.q) || 1, p: Number(it.p) || 0,
       e: it.e || "", sub: (it.sub != null) ? String(it.sub) : ""
     }));
-    return { items: normalizedItems, nota: parsed.nota || "", hora: parsed.hora || "", conf: parsed.conf || 0, tipo: parsed.tipo || "ordine", correccion: parsed.tipo === "correccion", customPizza: parsed.tipo === "custom_pizza" };
+    return {
+      items: normalizedItems,
+      nota: parsed.nota || "",
+      hora: parsed.hora || "",
+      conf: parsed.conf || 0,
+      tipo: parsed.tipo || "ordine",
+      correccion: parsed.tipo === "correccion",
+      customPizza: parsed.tipo === "custom_pizza",
+      // ═══ Delivery fields ═══
+      tipo_consegna: parsed.tipo_consegna === "DOMICILIO" ? "DOMICILIO" : "RITIRO",
+      direccion: parsed.direccion || ""
+    };
   } catch (err) {
     console.error("interpreta error:", err.message);
     return { items: [], nota: "", hora: "", conf: 0, tipo: "errore" };

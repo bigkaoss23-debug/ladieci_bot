@@ -26,7 +26,11 @@ async function creaOrdine(params) {
       estado: params.estado || "DA_CONFERMARE",
       cucina_check: params.cucina_check || null,
       ts: Date.now(),
-      llegado: false
+      llegado: false,
+      // ═══ Delivery fields ═══
+      tipo_consegna:  params.tipo_consegna  || "RITIRO",
+      direccion:      params.direccion      || null,
+      direccion_note: params.direccion_note || null
     });
     if (Array.isArray(result) && result.length > 0) return { success: true, id: newId };
     if (result && result.code === "23505") continue;

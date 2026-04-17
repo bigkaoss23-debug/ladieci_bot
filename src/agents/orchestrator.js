@@ -201,9 +201,31 @@ async function gestisci(ctx) {
                  || buildMsgRicevuto(primo, allItems, totale, horaFinale);
     }
 
-    const ordResult1 = await creaOrdine({ nombre, tel: waId, waId, canal: "WA", items: allItems, hora: horaFinale, estado: "DA_CONFERMARE" });
+    // ═══ Delivery: estrai tipo_consegna e direccion dal risultato IA ═══
+    const tipoConsegna = ia.tipo_consegna || "RITIRO";
+    const direccion    = ia.direccion    || "";
+
+    const ordResult1 = await creaOrdine({
+      nombre, tel: waId, waId, canal: "WA",
+      items: allItems, hora: horaFinale, estado: "DA_CONFERMARE",
+      tipo_consegna: tipoConsegna,
+      direccion: direccion || null
+    });
     const numPedido1 = ordResult1?.id || "";
-    if (numPedido1) msgRicevuto += `\n\nTu número de recogida: *${numPedido1}* 🎫\nCuando llegues, dínoslo y listo!`;
+
+    if (numPedido1) {
+      if (tipoConsegna === "DOMICILIO") {
+        if (direccion) {
+          // Ha dato indirizzo — conferma con info consegna
+          msgRicevuto += `\n\nTu número de pedido: *${numPedido1}* 🛵\n📍 Entrega en: *${direccion}*`;
+        } else {
+          // Vuole domicilio ma non ha dato indirizzo — chiediamo
+          msgRicevuto += `\n\nTu número de pedido: *${numPedido1}* 🛵\n\n¿Cuál es tu dirección de entrega? 📍`;
+        }
+      } else {
+        msgRicevuto += `\n\nTu número de recogida: *${numPedido1}* 🎫\nCuando llegues, dínoslo y listo!`;
+      }
+    }
 
     if (!conv) await createConv(waId, nombre, allItems, horaFinale, "confermata");
     else { await updateConvDati(waId, allItems, horaFinale); await updateConvStato(waId, "confermata"); }
