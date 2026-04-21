@@ -44,7 +44,12 @@ async function creaOrdine(params) {
       // ═══ Delivery fields ═══
       tipo_consegna:  params.tipo_consegna  || "RITIRO",
       direccion:      params.direccion      || null,
-      direccion_note: params.direccion_note || null
+      direccion_note: params.direccion_note || null,
+      // ═══ Zone delivery ═══
+      zona:           params.zona           || null,
+      zona_lat:       params.zona_lat       || null,
+      zona_lon:       params.zona_lon       || null,
+      zona_manuale:   params.zona_manuale   || false
     });
     if (Array.isArray(result) && result.length > 0) return { success: true, id: newId };
     if (result && result.code === "23505") continue;
