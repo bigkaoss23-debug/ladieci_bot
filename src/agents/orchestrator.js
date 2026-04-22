@@ -9,6 +9,19 @@ const { getStatoCliente, getCaricoForno } = require("./agentCucina");
 const { interpreta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente } = require("./agentWhatsapp");
 const { creaOrdine, modificaOrdine, aggiungiItems } = require("./agentOrdini");
 const { NUMEROS_WHITELIST } = require("../config");
+const { geocodificaEAssegnaZona } = require("../utils/zones");
+
+// Wrapper difensivo: geocode non deve mai bloccare la creazione ordine
+async function resolveZona(direccion, tipoConsegna) {
+  if (tipoConsegna !== "DOMICILIO" || !direccion) return { zona: null, lat: null, lon: null };
+  try {
+    const r = await geocodificaEAssegnaZona(direccion);
+    return { zona: r.zona?.id || null, lat: r.lat ?? null, lon: r.lon ?? null };
+  } catch (e) {
+    console.error("geocode error:", e?.message || e);
+    return { zona: null, lat: null, lon: null };
+  }
+}
 
 const SOGLIA_CONF = 85;
 
@@ -214,11 +227,16 @@ async function gestisci(ctx) {
                  || buildMsgRicevuto(primo, allItems, totale, horaFinale);
     }
 
+    const zonaRes1 = await resolveZona(direccion, tipoConsegna);
     const ordResult1 = await creaOrdine({
       nombre, tel: waId, waId, canal: "WA",
       items: allItems, hora: horaFinale, estado: "DA_CONFERMARE",
       tipo_consegna: tipoConsegna,
-      direccion: direccion || null
+      direccion: direccion || null,
+      zona: zonaRes1.zona,
+      zona_lat: zonaRes1.lat,
+      zona_lon: zonaRes1.lon,
+      zona_manuale: false
     });
     const numPedido1 = ordResult1?.id || "";
 
@@ -284,11 +302,16 @@ async function gestisci(ctx) {
                 || buildMsgRicevuto(primo, oraItems, oraTotale, oraHoraFinale);
     }
 
+    const zonaResOra = await resolveZona(direccionOra, tipoConsegnaOra);
     const ordResultOra = await creaOrdine({
       nombre, tel: waId, waId, canal: "WA",
       items: oraItems, hora: oraHoraFinale, estado: "DA_CONFERMARE",
       tipo_consegna: tipoConsegnaOra,
-      direccion: direccionOra || null
+      direccion: direccionOra || null,
+      zona: zonaResOra.zona,
+      zona_lat: zonaResOra.lat,
+      zona_lon: zonaResOra.lon,
+      zona_manuale: false
     });
     const numPedidoOra = ordResultOra?.id || "";
     if (numPedidoOra) {

@@ -64,6 +64,14 @@ async function modificaOrdine(ordenId, updates) {
   if (updates.nota !== undefined) upd.nota = updates.nota;
   if (updates.hora) upd.hora = updates.hora;
   if (updates.nota_cucina !== undefined) upd.nota_cucina = updates.nota_cucina;
+  // ═══ Delivery/Zone fields ═══
+  if (updates.tipo_consegna  !== undefined) upd.tipo_consegna  = updates.tipo_consegna;
+  if (updates.direccion      !== undefined) upd.direccion      = updates.direccion;
+  if (updates.direccion_note !== undefined) upd.direccion_note = updates.direccion_note;
+  if (updates.zona           !== undefined) upd.zona           = updates.zona;
+  if (updates.zona_lat       !== undefined) upd.zona_lat       = updates.zona_lat;
+  if (updates.zona_lon       !== undefined) upd.zona_lon       = updates.zona_lon;
+  if (updates.zona_manuale   !== undefined) upd.zona_manuale   = updates.zona_manuale;
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
   return { success: true };
 }
