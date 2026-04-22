@@ -2,21 +2,10 @@
 // agentOrdini.js — CRUD ordini. Solo questo. Mai in cucina.
 // ===============================================================
 
-const { sbSelect, sbUpsert, sbUpdate, sbDelete } = require("../utils/supabase");
+const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande } = require("../utils/helpers");
 
 async function creaOrdine(params) {
-  // Usa il timestamp dell'ultimo chiudiServizio come punto di reset del contatore.
-  // Se non esiste, fallback a mezzanotte di oggi.
-  const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-  const resetCfg = await sbSelect("config", "chiave=eq.ORDER_RESET_TS");
-  const resetTs  = resetCfg?.[0]?.valore ? parseInt(resetCfg[0].valore) : 0;
-  const fromTs   = Math.max(startOfDay.getTime(), resetTs);
-  const last = await sbSelect("ordenes", `ts=gte.${fromTs}&order=ts.desc&limit=50`);
-  const lastNum = (last && Array.isArray(last))
-    ? Math.max(0, ...last.map(o => parseInt((o.id || "").replace(/[^0-9]/g, "")) || 0))
-    : 0;
-
   // ═══ Sovrprezzo consegna 2.50€ — aggiunto automaticamente per DOMICILIO ═══
   const COSTO_CONSEGNA = { n: "Entrega a domicilio", p: 2.50, q: 1, e: "🛵", sub: "" };
   let itemsFinali = params.items || [];
@@ -25,9 +14,29 @@ async function creaOrdine(params) {
     if (!giàPresente) itemsFinali = [...itemsFinali, COSTO_CONSEGNA];
   }
 
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const newId = "#" + String(lastNum + 1 + attempt).padStart(3, "0");
-    const result = await sbUpsert("ordenes", {
+  // ═══ ID generation con retry anti-race-condition ═══
+  // Usiamo sbInsert (plain INSERT senza merge-duplicates) così una collisione
+  // su chiave primaria ritorna 23505 anziché sovrascrivere silenziosamente.
+  // Ad ogni tentativo ri-leggiamo il max ID dal DB per evitare stale reads.
+  const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+  const resetCfg = await sbSelect("config", "chiave=eq.ORDER_RESET_TS");
+  const resetTs  = resetCfg?.[0]?.valore ? parseInt(resetCfg[0].valore) : 0;
+  const fromTs   = Math.max(startOfDay.getTime(), resetTs);
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    // Jitter crescente per ridurre la probabilità di collisione ripetuta
+    if (attempt > 0) await new Promise(r => setTimeout(r, 40 + attempt * 30 + Math.random() * 80));
+
+    // Re-legge il max ID ad ogni tentativo — mai usare un valore cached
+    const last = await sbSelect("ordenes", `ts=gte.${fromTs}&select=id&order=ts.desc&limit=100`);
+    const lastNum = (last && Array.isArray(last))
+      ? Math.max(0, ...last.map(o => parseInt((o.id || "").replace(/[^0-9]/g, "")) || 0))
+      : 0;
+
+    const newId = "#" + String(lastNum + 1).padStart(3, "0");
+
+    // INSERT puro: fallisce con 23505 su PK duplicata invece di sovrascrivere
+    const result = await sbInsert("ordenes", {
       id: newId,
       nombre: params.nombre || "",
       tel: params.tel || "",
@@ -41,21 +50,26 @@ async function creaOrdine(params) {
       cucina_check: params.cucina_check || null,
       ts: Date.now(),
       llegado: false,
-      // ═══ Delivery fields ═══
       tipo_consegna:  params.tipo_consegna  || "RITIRO",
       direccion:      params.direccion      || null,
       direccion_note: params.direccion_note || null,
-      // ═══ Zone delivery ═══
       zona:           params.zona           || null,
       zona_lat:       params.zona_lat       || null,
       zona_lon:       params.zona_lon       || null,
       zona_manuale:   params.zona_manuale   || false
     });
+
+    // Successo: sbInsert ritorna array con il record inserito
     if (Array.isArray(result) && result.length > 0) return { success: true, id: newId };
-    if (result && result.code === "23505") continue;
+
+    // Collisione PK → riprova con ID ri-letto dal DB
+    const errCode = result?.code || result?.[0]?.code || "";
+    if (errCode === "23505") continue;
+
+    // Altro errore DB
     return { success: false, error: "errore DB", detail: JSON.stringify(result) };
   }
-  return { success: false, error: "troppi tentativi ID collision" };
+  return { success: false, error: "troppi tentativi ID collision (max 8)" };
 }
 
 async function modificaOrdine(ordenId, updates) {
