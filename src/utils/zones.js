@@ -5,7 +5,7 @@
 
 const ZONE_DELIVERY = [
   {
-    id: "Q1", nome: "CENTRO + BUENAVISTA", tempoGiro: 15, maxOrdiniPerGiro: 4,
+    id: "Q1", nome: "CENTRO + BUENAVISTA", tempoGiro: 22, maxOrdiniPerGiro: 4,
     polygon: [
       [-2.6097482, 36.7789269],[-2.6190179, 36.762426],[-2.6156705, 36.7561685],
       [-2.6106065, 36.753968],[-2.617988,  36.7456465],[-2.6243394, 36.7360173],
@@ -14,7 +14,7 @@ const ZONE_DELIVERY = [
     ]
   },
   {
-    id: "Q2", nome: "LAS MARINAS", tempoGiro: 18, maxOrdiniPerGiro: 4,
+    id: "Q2", nome: "LAS MARINAS", tempoGiro: 36, maxOrdiniPerGiro: 2,
     polygon: [
       [-2.6248974, 36.7359663],[-2.6411628, 36.7309134],[-2.6387595, 36.7270611],
       [-2.6432227, 36.7200095],[-2.6351976, 36.7132669],[-2.6163144, 36.7311512],
@@ -22,7 +22,7 @@ const ZONE_DELIVERY = [
     ]
   },
   {
-    id: "Q3", nome: "IES", tempoGiro: 11, maxOrdiniPerGiro: 5,
+    id: "Q3", nome: "IES", tempoGiro: 25, maxOrdiniPerGiro: 5,
     polygon: [
       [-2.6397746, 36.7623799],[-2.6379721, 36.7578415],[-2.6313632, 36.755641],
       [-2.6333373, 36.751171],[-2.6292174, 36.7493829],[-2.6166861, 36.7572226],
@@ -31,7 +31,7 @@ const ZONE_DELIVERY = [
     ]
   },
   {
-    id: "Q4", nome: "CORTIJOS", tempoGiro: 23, maxOrdiniPerGiro: 2,
+    id: "Q4", nome: "CORTIJOS", tempoGiro: 25, maxOrdiniPerGiro: 2,
     polygon: [
       [-2.6618172, 36.7590341],[-2.6593281, 36.7563178],[-2.6405741, 36.7566273],
       [-2.6390292, 36.7573493],[-2.6404883, 36.7621284],[-2.6584269, 36.7615439],
