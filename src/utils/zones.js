@@ -62,9 +62,9 @@ function assegnaZonaDaCoord(lat, lon) {
 
 const KEYWORDS_ZONA = {
   Q1: ["centro", "buenavista", "plaza", "italica", "itálica"],
-  Q2: ["las marinas", "marinas"],
-  Q3: ["ies", "instituto"],
-  Q4: ["cortijos", "salinas"]
+  Q2: ["las marinas", "marinas", "playa serena", "minarete", "residencial"],
+  Q3: ["ies", "instituto", "cervantes", "colón", "colon", "poeta"],
+  Q4: ["cortijo", "cortijos", "salinas", "camino"]
 };
 
 function assegnaZonaDaKeyword(indirizzo) {
