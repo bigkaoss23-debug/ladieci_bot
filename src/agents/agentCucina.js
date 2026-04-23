@@ -63,17 +63,20 @@ async function getCaricoForno(oraRichiesta) {
   let idxStart = allSlots.indexOf(slotRichiesto);
   if (idxStart < 0) idxStart = 0;
 
-  let slotAssegnato = allSlots[allSlots.length - 1];
+  let slotAssegnato = null;
+  let fornoCompleto = true;
   for (let i = idxStart; i < allSlots.length; i++) {
     if ((pizzeSlot[allSlots[i]] || 0) < MAX_PIZZE_SLOT) {
       slotAssegnato = allSlots[i];
+      fornoCompleto = false;
       break;
     }
   }
 
   return {
     slotAssegnato,
-    pizzeOra: pizzeSlot[slotAssegnato] || 0,
+    fornoCompleto,
+    pizzeOra: slotAssegnato ? (pizzeSlot[slotAssegnato] || 0) : 0,
     pizzeSlotRichiesto: pizzeSlot[slotRichiesto] || 0,
     slotRichiesto
   };

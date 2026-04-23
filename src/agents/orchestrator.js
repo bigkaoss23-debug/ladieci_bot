@@ -47,7 +47,7 @@ function getDeliveryFromChat(chat) {
 
 function upsertWaMsgOrdenRef(waId, ordenId) {
   return sbSelect("wa_msgs", `wa_id=eq.${waId}&stato=not.in.(COMPLETATO,COCINA)&order=ts.desc&limit=1`)
-    .then(rows => { if (rows?.[0]) sbUpdate("wa_msgs", `id=eq.${rows[0].id}`, { ordine_ref: ordenId }); });
+    .then(rows => { if (rows?.[0]) return sbUpdate("wa_msgs", `id=eq.${rows[0].id}`, { ordine_ref: ordenId }); });
 }
 
 async function gestisci(ctx) {
@@ -191,6 +191,17 @@ async function gestisci(ctx) {
       return { flusso: 1, stato: "NUEVO", attesa: "ora", motivo: "fuori_orario" };
     }
 
+    // Forno al completo — nessuno slot libero stasera
+    if (caricoForno?.fornoCompleto) {
+      if (!conv) await createConv(waId, nombre, allItems, hora, "aperta");
+      else await updateConvDati(waId, allItems, hora);
+      const msgCompleto = `¡Ey ${primo}! Esta noche el horno está lleno 🔥🍕\n\nNo nos quedan huecos para esta noche. ¡Escríbenos mañana!\n*La Dieci* 🇮🇹🍕`;
+      await appendChat(waId, "bot", msgCompleto);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, hora, msgCompleto, false, waMsgId);
+      if (autoOn) await invia(waId, msgCompleto, config);
+      return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "forno_completo" };
+    }
+
     let horaFinale = hora;
     let slotSpostato = false, oraCambiata = false;
     if (caricoForno?.slotAssegnato) {
@@ -280,6 +291,16 @@ async function gestisci(ctx) {
       await upsertWaMsg(waId, nombre, testo, "NUEVO", 95, oraItems, oraHora, msgFuori2, false, waMsgId);
       if (autoOn) await invia(waId, msgFuori2, config);
       return { flusso: 1, stato: "NUEVO", attesa: "ora", motivo: "fuori_orario" };
+    }
+
+    // Forno al completo — nessuno slot libero stasera
+    if (caricoForno?.fornoCompleto) {
+      await updateConvDati(waId, oraItems, oraHora);
+      const msgCompletoOra = `¡Ey ${primo}! Esta noche el horno está lleno 🔥🍕\n\nNo nos quedan huecos para esta noche. ¡Escríbenos mañana!\n*La Dieci* 🇮🇹🍕`;
+      await appendChat(waId, "bot", msgCompletoOra);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHora, msgCompletoOra, false, waMsgId);
+      if (autoOn) await invia(waId, msgCompletoOra, config);
+      return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "forno_completo" };
     }
 
     let oraHoraFinale = oraHora;
