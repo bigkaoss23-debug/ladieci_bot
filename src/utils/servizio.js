@@ -61,6 +61,9 @@ async function chiudiServizio(deleteAttivi = false) {
   // Salva il timestamp di chiusura — creaOrdine userà questo per resettare il contatore
   await sbUpsert("config", { chiave: "ORDER_RESET_TS", valore: String(Date.now()) }, "chiave");
 
+  // Resetta stato driver — fine serata il driver è libero
+  await sbUpsert("config", { chiave: "DRIVER_STATO", valore: JSON.stringify({ stato: "LIBERO" }) }, "chiave");
+
   return { success: true, data: oggi, conv_archiviate: archiviate, ordini_storico: ordArch };
 }
 
