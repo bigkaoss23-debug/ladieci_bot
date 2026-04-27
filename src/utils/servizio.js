@@ -10,7 +10,9 @@ async function scanServizio() {
   const ordiniCompletati = await sbSelect("ordenes", "estado=in.(RETIRADO,COMPLETADO)") || [];
   const convChiuse = await sbSelect("conv", "stato_ordine=in.(ritirata,confermata,chiusa)") || [];
   const convAttive = await sbSelect("conv", "stato_ordine=not.in.(ritirata,confermata,chiusa)") || [];
-  const waMsgsAttivi = await sbSelect("wa_msgs", "stato=neq.COMPLETATO") || [];
+  // Solo NUEVO e IN_TRATTAMENTO sono veramente "attivi" per l'operatore.
+  // COCINA = già confermato, non richiede attenzione → non va contato come pending.
+  const waMsgsAttivi = await sbSelect("wa_msgs", "stato=in.(NUEVO,IN_TRATTAMENTO)") || [];
 
   const attiviMap = {};
   (Array.isArray(convAttive) ? convAttive : []).forEach(c => { attiviMap[c.wa_id] = { wa_id: c.wa_id, nombre: c.nombre || c.wa_id, hora: c.hora || "", stato: c.stato_ordine || "" }; });
@@ -49,7 +51,9 @@ async function chiudiServizio(deleteAttivi = false) {
   if (erroriArch.length > 0) return { success: false, errori: erroriArch, conv_archiviate: archiviate, ordini_storico: ordArch };
 
   await sbDelete("conv", "stato_ordine=in.(ritirata,confermata,chiusa)");
-  await sbDelete("wa_msgs", "stato=in.(COMPLETATO)");
+  // COCINA incluso: wa_msgs COCINA = ordine confermato e già gestito dall'operatore.
+  // Senza questa riga sopravvivono a chiudiServizio(false) e ricompaiono il giorno dopo.
+  await sbDelete("wa_msgs", "stato=in.(COMPLETATO,COCINA)");
   await sbDelete("ordenes", "estado=in.(RETIRADO,COMPLETADO)");
 
   if (deleteAttivi) {
