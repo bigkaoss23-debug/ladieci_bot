@@ -41,7 +41,9 @@ async function chiudiServizio(deleteAttivi = false) {
   let ordArch = 0;
   for (const o of (Array.isArray(ordiniDaArch) ? ordiniDaArch : [])) {
     const totale = calcolaTotale(o.items || []);
-    const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id");
+    const row = { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() };
+    if (o.tipo_consegna) row.tipo_consegna = o.tipo_consegna; // incluso solo se la colonna esiste
+    const res = await sbUpsert("storico", row, "orden_id");
     if (!Array.isArray(res) || res.length === 0) erroriArch.push("ordine:" + (o.id || "?"));
     else ordArch++;
   }
@@ -57,7 +59,9 @@ async function chiudiServizio(deleteAttivi = false) {
     const ordiniAttivi = await sbSelect("ordenes", "estado=not.in.(RETIRADO,COMPLETADO)") || [];
     for (const o of (Array.isArray(ordiniAttivi) ? ordiniAttivi : [])) {
       const totale = calcolaTotale(o.items || []);
-      await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: "CHIUSO_FORZATO", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id");
+      const rowA = { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: "CHIUSO_FORZATO", totale, fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() };
+      if (o.tipo_consegna) rowA.tipo_consegna = o.tipo_consegna;
+      await sbUpsert("storico", rowA, "orden_id");
     }
     // Archivia conversazioni ancora aperte
     const convAttive = await sbSelect("conv", "stato_ordine=not.in.(ritirata,confermata,chiusa)") || [];
