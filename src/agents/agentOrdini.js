@@ -56,7 +56,9 @@ async function creaOrdine(params) {
       zona:           params.zona           || null,
       zona_lat:       params.zona_lat       || null,
       zona_lon:       params.zona_lon       || null,
-      zona_manuale:   params.zona_manuale   || false
+      zona_manuale:   params.zona_manuale   || false,
+      ya_pagado:      params.ya_pagado      || false,
+      metodo_pago:    params.metodo_pago    || ""
     });
 
     // Successo: sbInsert ritorna array con il record inserito
