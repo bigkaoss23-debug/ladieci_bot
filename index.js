@@ -144,3 +144,38 @@ app.post("/api", async (req, res) => {
 app.get("/health", (_, res) => res.json({ ok: true, ts: Date.now() }));
 
 app.listen(PORT, () => console.log(`La Dieci Bot running on port ${PORT}`));
+
+// ─── CRON AUTOMATICO: chiudi serata alle 23:50 (ora di Madrid) ──────────────
+// Controlla ogni minuto. Se sono le 23:50 e la serata non è già stata chiusa
+// nelle ultime 2 ore, chiama chiudiServizio(false) automaticamente.
+let ultimaChiusuraAuto = 0; // timestamp ms dell'ultima chiusura automatica
+
+setInterval(async () => {
+  try {
+    const madridNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Madrid" }));
+    const h = madridNow.getHours();
+    const m = madridNow.getMinutes();
+    if (h !== 23 || m !== 50) return;
+
+    // Evita doppio trigger nello stesso minuto (setInterval può scattare più volte)
+    if (Date.now() - ultimaChiusuraAuto < 2 * 60 * 60 * 1000) return;
+    ultimaChiusuraAuto = Date.now();
+
+    console.log("[cron 23:50] Avvio chiusura automatica serata...");
+    const res = await chiudiServizio(false); // false = lascia attivi ordini futuri
+    console.log("[cron 23:50] chiudiServizio:", JSON.stringify(res));
+
+    // Notifica operatori WhatsApp
+    const { invia } = require("./src/agents/agentWhatsapp");
+    const cfg = await getConfig();
+    const OPERATOR_WA_IDS = ["41767011848", "34614267535"];
+    const msg = res.success
+      ? `🌙 *Serata chiusa automaticamente* (23:50)\n\nArchiviate ${res.conv_archiviate || 0} conv · ${res.ordini_storico || 0} ordini su storico.\n\nBuonanotte! 🍕`
+      : `⚠️ Chiusura automatica 23:50 — errore archivio:\n${JSON.stringify(res.errori || res)}`;
+    for (const waId of OPERATOR_WA_IDS) {
+      await invia(waId, msg, cfg).catch(() => {});
+    }
+  } catch (e) {
+    console.error("[cron 23:50] errore:", e);
+  }
+}, 60000);
