@@ -140,6 +140,7 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
       n: it.n || "", q: Number(it.q) || 1, p: Number(it.p) || 0,
       e: it.e || "", sub: (it.sub != null) ? String(it.sub) : ""
     }));
+    const esDomicilio = direccionPreDetectada || parsed.tipo_consegna === "DOMICILIO";
     return {
       items: normalizedItems,
       nota: parsed.nota || "",
@@ -148,7 +149,7 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
       tipo: parsed.tipo || "ordine",
       correccion: parsed.tipo === "correccion",
       customPizza: parsed.tipo === "custom_pizza",
-      tipo_consegna: parsed.tipo_consegna === "DOMICILIO" ? "DOMICILIO" : "RITIRO",
+      tipo_consegna: esDomicilio ? "DOMICILIO" : "RITIRO",
       direccion: parsed.direccion || ""
     };
   } catch (err) {
