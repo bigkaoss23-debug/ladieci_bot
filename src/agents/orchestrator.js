@@ -6,7 +6,7 @@ const { sbSelect, sbUpdate, getConfig } = require("../utils/supabase");
 const { appendChat, updateConvDati, createConv, upsertWaMsg, getConversazione,
         mergeItemsBevande, calcolaTotale, buildResumen, buildUpsell, buildMsgRicevuto } = require("../utils/helpers");
 const { getStatoCliente, getCaricoForno, getCaricoDelivery } = require("./agentCucina");
-const { interpreta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente } = require("./agentWhatsapp");
+const { interpreta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion } = require("./agentWhatsapp");
 const { creaOrdine, modificaOrdine, aggiungiItems } = require("./agentOrdini");
 const { NUMEROS_WHITELIST, COSTO_CONSEGNA } = require("../config");
 const { geocodificaEAssegnaZona, ZONE_DELIVERY } = require("../utils/zones");
@@ -190,7 +190,7 @@ async function gestisci(ctx) {
     const allItems = convItems.length > 0 ? mergeItemsBevande(convItems, ia.items) : ia.items;
     const totale = calcolaTotale(allItems);
     const hora = ia.hora || "";
-    const tipoConsegna = ia.tipo_consegna || "RITIRO";
+    const tipoConsegna = (ia.tipo_consegna === "DOMICILIO" || preDetectaDireccion(testo)) ? "DOMICILIO" : "RITIRO";
     const direccion    = ia.direccion    || "";
 
     // Manca l'orario — chiedi

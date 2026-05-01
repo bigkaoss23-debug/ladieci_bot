@@ -274,4 +274,4 @@ function rilevaTonoCliente(testo) {
   return ["usted","podria","quisiera","por favor","disculpe"].some(k => t.includes(k)) ? "formale" : "informale";
 }
 
-module.exports = { interpreta, generaRisposta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente };
+module.exports = { interpreta, generaRisposta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion };
