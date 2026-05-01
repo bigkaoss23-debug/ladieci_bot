@@ -76,6 +76,9 @@ app.get("/api", async (req, res) => {
       const thread = await sbSelect("conv", `wa_id=eq.${req.query.wa_id}&order=ts.desc&limit=1`);
       const threadCtx = (thread?.[0]?.chat || []).slice(-10).map(m => (m.da === "cliente" ? "C" : "B") + ": " + m.txt).join("\n");
       result = { risposta: await generaRisposta(req.query.testo, req.query.wa_id, cfg, threadCtx) };
+    } else if (action === "debugInterpreta") {
+      const { interpreta } = require("./src/agents/agentWhatsapp");
+      result = await interpreta(req.query.testo || "", cfg, null, []);
     } else {
       result = { error: "unknown action: " + action };
     }

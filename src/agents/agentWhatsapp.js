@@ -136,6 +136,7 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
     if (!raw) return { items: [], nota: "", hora: "", conf: 0, tipo: "errore" };
     const clean = raw.trim().replace(/```json/g, "").replace(/```/g, "").trim();
     const parsed = JSON.parse(clean);
+    console.log(`[interpreta] regex=${direccionPreDetectada} claude_tc=${parsed.tipo_consegna} dir="${parsed.direccion}"`);
     const normalizedItems = (parsed.items || []).map(it => ({
       n: it.n || "", q: Number(it.q) || 1, p: Number(it.p) || 0,
       e: it.e || "", sub: (it.sub != null) ? String(it.sub) : ""
