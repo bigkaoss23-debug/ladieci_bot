@@ -121,9 +121,17 @@ function buildResumen(items = []) {
   }).join("\n");
 }
 
-function buildMsgRicevuto(primo, items, total, hora) {
-  let msg = introConferma(primo) + "\n\n" + buildResumen(items) + "\n\n" + `*Total: ${total.toFixed(2)}€*`;
-  if (hora) msg += `\n*Recogida: ${hora}*`;
+function buildMsgRicevuto(primo, items, total, hora, tipoConsegna, costoConsegna) {
+  const costo = costoConsegna || 0;
+  const totaleFinale = total + costo;
+  let msg = introConferma(primo) + "\n\n" + buildResumen(items) + "\n\n";
+  if (costo > 0) {
+    msg += `*Subtotal: ${total.toFixed(2)}€*\n*Envío: ${costo.toFixed(2)}€*\n*Total: ${totaleFinale.toFixed(2)}€*`;
+  } else {
+    msg += `*Total: ${total.toFixed(2)}€*`;
+  }
+  const labelOra = tipoConsegna === "DOMICILIO" ? "Entrega" : "Recogida";
+  if (hora) msg += `\n*${labelOra}: ${hora}*`;
   msg += "\n\n" + buildUpsell(items) + "\n*La Dieci* 🇮🇹🍕";
   return msg;
 }

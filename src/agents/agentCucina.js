@@ -4,6 +4,7 @@
 
 const { sbSelect } = require("../utils/supabase");
 const { isBevanda, isDesert, getConversazione } = require("../utils/helpers");
+const { ZONE_DELIVERY } = require("../utils/zones");
 
 function pad(n) { return n < 10 ? "0" + n : "" + n; }
 
@@ -82,4 +83,76 @@ async function getCaricoForno(oraRichiesta) {
   };
 }
 
-module.exports = { getStatoCliente, getCaricoForno, getConversazione };
+// Verifica capacità giri delivery per una zona — analogo a getCaricoForno per il forno.
+// Consolida ordini: prima cerca slot già "caldi" (stessa zona, stesso orario con spazio),
+// poi cerca il primo slot libero. Considera driver IN_GIRO per posticipare se necessario.
+async function getCaricoDelivery(zonaId, oraRichiesta) {
+  const zona = ZONE_DELIVERY.find(z => z.id === zonaId);
+  if (!zona) return { slotAssegnato: oraRichiesta, slotRichiesto: oraRichiesta, zonaCompleta: false, driverInGiro: false };
+
+  // Stato driver da config Supabase
+  const driverRows = await sbSelect("config", "chiave=eq.DRIVER_STATO");
+  let driverStato = null;
+  try {
+    const val = driverRows?.[0]?.valore;
+    driverStato = val ? (typeof val === "string" ? JSON.parse(val) : val) : null;
+  } catch(e) {}
+
+  const driverInGiro = !!(driverStato?.stato === "IN_GIRO" && driverStato?.zona === zonaId && driverStato?.partito_alle);
+
+  // Conta ordini delivery attivi per (zona, hora)
+  const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
+  const slotCount = {};
+  for (const o of rows) {
+    if (!o.zona || !o.hora) continue;
+    const key = `${o.zona}|${o.hora}`;
+    slotCount[key] = (slotCount[key] || 0) + 1;
+  }
+
+  // Orario minimo: rispetta driver in giro (aspetta rientro se non è ancora tornato)
+  const [h, m] = String(oraRichiesta || "20:00").split(":").map(Number);
+  let minMin = h * 60 + (m || 0);
+
+  if (driverInGiro) {
+    const rientro = new Date(new Date(driverStato.partito_alle).getTime() + zona.tempoGiro * 60000);
+    if (rientro > new Date()) {
+      const rientroMin = rientro.getHours() * 60 + rientro.getMinutes();
+      minMin = Math.max(minMin, rientroMin + 5); // +5 min buffer
+    }
+  }
+  minMin = Math.ceil(minMin / 10) * 10; // arrotonda al prossimo slot da 10 min
+
+  const slotRichiesto = oraRichiesta;
+  const slot10 = (min) => `${String(Math.floor(min / 60)).padStart(2,"0")}:${String(min % 60).padStart(2,"0")}`;
+
+  // Priorità 1: slot "caldo" — stessa zona, già ha ordini, c'è ancora spazio (consolidazione)
+  const slotsConOrdini = Object.keys(slotCount)
+    .filter(k => k.startsWith(`${zonaId}|`))
+    .map(k => ({ ora: k.split("|")[1], count: slotCount[k] }))
+    .filter(({ ora, count }) => {
+      const [hh, mm] = ora.split(":").map(Number);
+      return hh * 60 + mm >= minMin && hh * 60 + mm <= 23 * 60 && count < zona.maxOrdiniPerGiro;
+    })
+    .sort((a, b) => {
+      const [ha, ma] = a.ora.split(":").map(Number);
+      const [hb, mb] = b.ora.split(":").map(Number);
+      return (ha * 60 + ma) - (hb * 60 + mb);
+    });
+
+  if (slotsConOrdini.length > 0) {
+    return { slotAssegnato: slotsConOrdini[0].ora, slotRichiesto, zonaCompleta: false, driverInGiro };
+  }
+
+  // Priorità 2: primo slot libero (nuovo giro)
+  for (let min = minMin; min <= 23 * 60; min += 10) {
+    const ora = slot10(min);
+    if ((slotCount[`${zonaId}|${ora}`] || 0) < zona.maxOrdiniPerGiro) {
+      return { slotAssegnato: ora, slotRichiesto, zonaCompleta: false, driverInGiro };
+    }
+  }
+
+  // Tutti i slot pieni stasera
+  return { slotAssegnato: null, slotRichiesto, zonaCompleta: true, driverInGiro };
+}
+
+module.exports = { getStatoCliente, getCaricoForno, getCaricoDelivery, getConversazione };

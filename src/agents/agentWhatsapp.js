@@ -5,7 +5,7 @@
 const { chiamaClaude } = require("../utils/claude");
 const { sbSelect, sbUpdate, sbUpsert } = require("../utils/supabase");
 const { isBevanda } = require("../utils/helpers");
-const { MENU_LISTA, INFO_RISTORANTE, ABBINAMENTI_NOMI } = require("../config");
+const { MENU_LISTA, INFO_RISTORANTE, ABBINAMENTI_NOMI, COSTO_CONSEGNA } = require("../config");
 
 function contestoTempo() {
   const now = new Date();
@@ -15,11 +15,12 @@ function contestoTempo() {
   const hStr = String(h).padStart(2,"0") + ":" + String(m).padStart(2,"0");
   const abierto = (now.getDay() === 0 || now.getDay() >= 3);
   const enHorario = (h > 19 || (h === 19 && m >= 30)) && h < 23;
-  return "CONTESTO TEMPORALE:\n" +
-    `- Oggi: ${dia} ${now.getDate()}/${now.getMonth()+1}/${now.getFullYear()}\n` +
-    `- Ora attuale: ${hStr}\n` +
-    `- Apertura: mercoledì-domenica 19:30-23:00\n` +
-    `- Stato oggi: ${abierto ? "APERTO" : "CHIUSO (lunes y martes no abrimos)"}` +
+  return "CONTEXTO TEMPORAL:\n" +
+    `- Hoy: ${dia} ${now.getDate()}/${now.getMonth()+1}/${now.getFullYear()}\n` +
+    `- Hora actual: ${hStr}\n` +
+    `- Recogida en local: miércoles-domingo 19:30-23:00\n` +
+    `- Reparto a domicilio: miércoles-domingo 20:00-23:00\n` +
+    `- Estado hoy: ${abierto ? "ABIERTO" : "CERRADO (lunes y martes no abrimos)"}` +
     (abierto ? (enHorario ? " — servicio en marcha ahora" : " — fuera de horario ahora") : "") + "\n";
 }
 
@@ -35,78 +36,78 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
   if (clienteInfo?.total_pedidos > 0) {
     const testoLow = (testo || "").toLowerCase();
     const isLoSiempre = testoLow.includes("siempre") || testoLow.includes("habitual");
-    contestoCliente = `\nCLIENTE ABITUALE: ${clienteInfo.nombre} - ${clienteInfo.total_pedidos} ordini.\n`;
+    contestoCliente = `\nCLIENTE HABITUAL: ${clienteInfo.nombre} - ${clienteInfo.total_pedidos} pedidos.\n`;
     if (isLoSiempre && clienteInfo.pizza_pref) {
-      contestoCliente += `pizza_pref: ${clienteInfo.pizza_pref}${clienteInfo.bevanda_pref ? ", bevanda_pref: " + clienteInfo.bevanda_pref : ""}\n`;
+      contestoCliente += `pizza_pref: ${clienteInfo.pizza_pref}${clienteInfo.bevanda_pref ? ", bebida_pref: " + clienteInfo.bevanda_pref : ""}\n`;
     }
   }
   let contestoChat = "";
   if (chatHistory?.length > 0) {
-    contestoChat = "\nCONVERSAZIONE PRECEDENTE:\n" +
+    contestoChat = "\nCONVERSACIÓN PREVIA:\n" +
       chatHistory.map(m => (m.da === "cliente" ? "Cliente" : "Bot") + ": " + m.txt).join("\n") + "\n";
   }
   contestoChat +=
-    "\nREGOLE CONTESTO:\n" +
-    "- Restituisci SOLO gli items ESPLICITAMENTE richiesti nel MESSAGGIO ATTUALE.\n" +
-    "- NON estrarre items da opzioni offerte dal bot.\n" +
-    "- Saluti/conferme/ringraziamenti senza ordine -> tipo=domanda, items=[], conf=0.\n" +
-    "- Messaggio con SOLO un orario -> tipo=solo_ora, items=[].\n" +
-    "- OGNI modifica (mas/sin/con/extra/doble) nel messaggio DEVE finire nel campo sub.\n";
+    "\nREGLAS CONTEXTO:\n" +
+    "- Devuelve SOLO los items EXPLÍCITAMENTE pedidos en el MENSAJE ACTUAL.\n" +
+    "- NO extraer items de opciones ofrecidas por el bot.\n" +
+    "- Saludos/confirmaciones/agradecimientos sin pedido -> tipo=domanda, items=[], conf=0.\n" +
+    "- Mensaje con SOLO un horario -> tipo=solo_ora, items=[].\n" +
+    "- CADA modificación (mas/sin/con/extra/doble) en el mensaje DEBE ir en el campo sub.\n";
 
   const systemPrompt =
-    "Sei un assistente per una pizzeria italiana. Analizza il messaggio WhatsApp.\n" +
-    "Rispondi SOLO con JSON valido, niente testo extra.\n\n" +
-    "MENU: " + MENU_LISTA.join(", ") + "\n" +
+    "Eres un asistente para una pizzería italiana. Analiza el mensaje de WhatsApp.\n" +
+    "Responde SOLO con JSON válido, sin texto extra.\n\n" +
+    "MENÚ: " + MENU_LISTA.join(", ") + "\n" +
     cTempo + contestoCliente + contestoChat +
-    "\nSALUTI — REGOLA FONDAMENTALE:\n" +
-    "Ignora completamente saluti iniziali e finali: hola, buenas, hey, buenos dias, buenas noches,\n" +
-    "que tal, gracias, adios, hasta luego, nos vemos, de nada, vale, ok, perfecto.\n" +
-    "I saluti NON abbassano mai la confidenza.\n\n" +
-    "TIPI DI RISPOSTA:\n" +
-    "1. domanda (conf=0, items=[]): info, prezzi, orari, allergeni.\n" +
-    "2. ordine (conf 70-99): ordina esplicitamente. INCLUDE frasi come 'Puedo pedir X?', 'Me pones X?'.\n" +
-    "3. misto (conf max 40): domanda REALE + intento vago.\n" +
-    "4. solo_ora (conf 90, items=[]): messaggio contiene SOLO un orario.\n" +
-    "5. correccion (conf 90): cliente CORREGGE quantita. items = quantita TOTALE desiderata.\n" +
-    "6. modifica_complessa (conf 90, items=[]): cambio/eliminazione item. Segnali: 'en vez de', 'cambiar', 'quitar', 'elimina'.\n" +
-    "7. custom_pizza (conf=50, items=[]): pizza completamente inventata fuori menu.\n\n" +
-    "ABBINAMENTI NOMI:\n" + ABBINAMENTI_NOMI + "\n\n" +
+    "\nSALUDOS — REGLA FUNDAMENTAL:\n" +
+    "Ignora completamente saludos iniciales y finales: hola, buenas, hey, buenos días, buenas noches,\n" +
+    "qué tal, gracias, adiós, hasta luego, nos vemos, de nada, vale, ok, perfecto.\n" +
+    "Los saludos NUNCA reducen la confianza.\n\n" +
+    "TIPOS DE RESPUESTA:\n" +
+    "1. domanda (conf=0, items=[]): info, precios, horarios, alérgenos.\n" +
+    "2. ordine (conf 70-99): pide explícitamente. INCLUYE frases como 'Puedo pedir X?', 'Me pones X?'.\n" +
+    "3. misto (conf max 40): pregunta REAL + intención vaga.\n" +
+    "4. solo_ora (conf 90, items=[]): mensaje contiene SOLO un horario.\n" +
+    "5. correccion (conf 90): cliente CORRIGE cantidad. items = cantidad TOTAL deseada.\n" +
+    "6. modifica_complessa (conf 90, items=[]): cambio/eliminación de item. Señales: 'en vez de', 'cambiar', 'quitar', 'elimina'.\n" +
+    "7. custom_pizza (conf=50, items=[]): pizza completamente inventada fuera del menú.\n\n" +
+    "EQUIVALENCIAS DE NOMBRES:\n" + ABBINAMENTI_NOMI + "\n\n" +
     "BEBIDAS — REGLA sub: Cuando el cliente pide un refresco con nombre específico\n" +
     "(Coca Cola, Fanta, Sprite, Nestea, Aquarius, Seven Up, etc.) → n='Refresco', p=2.50,\n" +
     "y guarda el nombre exacto en sub. Ejemplo: 'una Fanta' → {n:'Refresco',p:2.50,sub:'Fanta'}.\n" +
     "Si dice solo 'refresco' sin especificar → sub=''.\n\n" +
-    "NUMEROS MENU: 1=El Pelusa, 2=Zizou, 3=O Rei, 4=Il Gladiatore, 5=El Gaucho,\n" +
+    "NÚMEROS MENÚ: 1=El Pelusa, 2=Zizou, 3=O Rei, 4=Il Gladiatore, 5=El Gaucho,\n" +
     "6=El Divino Codino, 7=La Pulga, 8=Il Tulipano Nero, 9=El Ultimo 10, 10=El Mago de Zadar, 11=El Maestro.\n\n" +
-    (cfg["REGOLE_APPRESE"] ? "REGOLE APPRESE — APPLICA SEMPRE:\n" + cfg["REGOLE_APPRESE"] + "\n\n" : "") +
-    "CONSEGNA A DOMICILIO — REGOLE ESTRAZIONE:\n" +
-    "tipo_consegna='DOMICILIO' se il messaggio contiene UNO QUALSIASI di questi segnali:\n" +
-    "VERBI CONSEGNA: llevar, lleváis, llevais, llevas, llevad, traer, traéis, traeis, traes,\n" +
-    "  enviar, repartir, mandar — in qualsiasi forma: 'me lo/la/los/las lleváis/traéis',\n" +
-    "  'me lo llevas', 'me lo traes', 'podéis traerlo', 'lo lleváis', etc.\n" +
-    "PAROLE CHIAVE: 'a casa', 'a domicilio', 'mi casa', 'mi dirección', 'a mi piso',\n" +
-    "  'entrega', 'delivery', 'reparto', 'repartidor'\n" +
-    "INDIRIZZO ESPLICITO: qualsiasi testo che inizia con Calle, Avenida, Avda, C/, Urb,\n" +
-    "  Plaza, Paseo, Carretera, Ctra, Bulevar — seguito da nome e numero (es: 'Avenida Las Gaviotas 33')\n" +
-    "  NOTA: il numero civico può venire DOPO il nome della via (es: 'Avenida Las Gaviotas 33 bajo B')\n" +
-    "Estrai l'indirizzo completo nel campo 'direccion' esattamente come scritto dal cliente.\n" +
-    "Se NON menziona consegna a domicilio → tipo_consegna='RITIRO', direccion=''\n" +
-    "CRITICO: NON inventare indirizzi. Se scrive 'domicilio' senza indirizzo → tipo_consegna='DOMICILIO', direccion=''\n\n" +
+    (cfg["REGOLE_APPRESE"] ? "REGLAS APRENDIDAS — APLICAR SIEMPRE:\n" + cfg["REGOLE_APPRESE"] + "\n\n" : "") +
+    "DETECCIÓN DOMICILIO — REGLAS:\n" +
+    "tipo_consegna='DOMICILIO' si el mensaje contiene CUALQUIERA de estas señales:\n" +
+    "VERBOS ENTREGA: llevar, lleváis, llevais, llevas, llevad, traer, traéis, traeis, traes,\n" +
+    "  enviar, repartir, mandar — en cualquier forma: 'me lo/la/los/las lleváis/traéis',\n" +
+    "  'me lo llevas', 'me lo traes', 'podéis traerlo', 'lo lleváis', 'nos lo lleváis', etc.\n" +
+    "PALABRAS CLAVE: 'a domicilio', 'a mi casa', 'en casa', 'mi dirección', 'a mi piso', 'a mi domicilio',\n" +
+    "  'entrega', 'delivery', 'reparto', 'repartidor', 'para llevar a casa', 'que me lo traigáis'\n" +
+    "DIRECCIÓN EXPLÍCITA: cualquier texto que empiece por Calle, Avenida, Avda, C/, Urb,\n" +
+    "  Plaza, Paseo, Carretera, Ctra, Bulevar — seguido de nombre y número (ej: 'Avenida Las Gaviotas 33')\n" +
+    "  NOTA: el número puede ir después del nombre (ej: 'Avenida Las Gaviotas 33 bajo B')\n" +
+    "Extrae la dirección completa en el campo 'direccion' exactamente como la escribe el cliente.\n" +
+    "Si NO menciona entrega a domicilio → tipo_consegna='RITIRO', direccion=''\n" +
+    "CRÍTICO: NO inventar direcciones. Si escribe 'domicilio' sin dirección → tipo_consegna='DOMICILIO', direccion=''\n\n" +
     "FORMATO OUTPUT (solo JSON):\n" +
     "{\"tipo\":\"ordine|domanda|misto|solo_ora|correccion|modifica_complessa|custom_pizza\"," +
-    "\"items\":[{\"n\":\"nome\",\"q\":1,\"p\":9.50,\"e\":\"emoji\",\"sub\":\"\"}]," +
+    "\"items\":[{\"n\":\"nombre\",\"q\":1,\"p\":9.50,\"e\":\"emoji\",\"sub\":\"\"}]," +
     "\"nota\":\"\",\"hora\":\"\",\"conf\":95," +
     "\"tipo_consegna\":\"RITIRO\",\"direccion\":\"\"}\n\n" +
-    "CAMPO sub CRITICO: SEMPRE presente. Se nessuna variazione: sub=''. Con variazione: riempilo.\n" +
-    "Esempi: 'marinara sin ajo' -> sub='sin ajo' | 'diavola extra picante' -> sub='extra picante'\n\n" +
-    "REGOLA ANTI-INVENZIONE — CRITICA:\n" +
-    "Se il cliente chiede una pizza che NON esiste nel menu e NON ha un abbinamento esplicito sopra\n" +
-    "(es: carbonara, quattro stagioni, fungi, napoli, calzone, hawaiana, bbq, etc.),\n" +
-    "NON mapparla a un'altra pizza. Imposta tipo=domanda, conf=0, items=[].\n" +
-    "Il bot risponderà che non abbiamo quel prodotto e mostrerà il menu.";
+    "CAMPO sub CRÍTICO: SIEMPRE presente. Sin variación: sub=''. Con variación: rellenarlo.\n" +
+    "Ejemplos: 'marinara sin ajo' -> sub='sin ajo' | 'diavola extra picante' -> sub='extra picante'\n\n" +
+    "REGLA ANTI-INVENCIÓN — CRÍTICA:\n" +
+    "Si el cliente pide una pizza que NO existe en el menú y NO tiene equivalencia explícita arriba\n" +
+    "(ej: carbonara, quattro stagioni, fungi, napoli, calzone, hawaiana, bbq, etc.),\n" +
+    "NO mapearla a otra pizza. Pon tipo=domanda, conf=0, items=[].\n" +
+    "El bot responderá que no tenemos ese producto y mostrará el menú.";
 
   try {
     const testoNorm = testo.replace(/\s+/g, " ").trim();
-    const raw = await chiamaClaude(systemPrompt, `MESSAGGIO: "${testoNorm}"`, cfg, 600);
+    const raw = await chiamaClaude(systemPrompt, `MENSAJE: "${testoNorm}"`, cfg, 600);
     if (!raw) return { items: [], nota: "", hora: "", conf: 0, tipo: "errore" };
     const clean = raw.trim().replace(/```json/g, "").replace(/```/g, "").trim();
     const parsed = JSON.parse(clean);
@@ -122,7 +123,6 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
       tipo: parsed.tipo || "ordine",
       correccion: parsed.tipo === "correccion",
       customPizza: parsed.tipo === "custom_pizza",
-      // ═══ Delivery fields ═══
       tipo_consegna: parsed.tipo_consegna === "DOMICILIO" ? "DOMICILIO" : "RITIRO",
       direccion: parsed.direccion || ""
     };
@@ -145,11 +145,14 @@ async function generaRisposta(testo, waId, cfg, threadCtx) {
     "FORMATO: respuesta directa y cálida, máximo 4 líneas. Firma: *La Dieci* 🇮🇹🍕\n" +
     contestoTempo() + INFO_RISTORANTE + "\n" +
     (cliente ? `CLIENTE CONOCIDO: ${cliente.nombre} - ${cliente.total_pedidos} visitas\n` : "") +
-    (threadCtx ? `\nCONVERSACION:\n${threadCtx}\n` : "");
+    (threadCtx ? `\nCONVERSACIÓN:\n${threadCtx}\n` : "");
   return assicuraFirma(await chiamaClaude(systemPrompt, testo, cfg, 400));
 }
 
-async function generaConfermaOrdine(primo, items, totale, hora, cfg, clienteInfo, chatHistory, horaRichiesta, tipoConsegna) {
+async function generaConfermaOrdine(primo, items, totale, hora, cfg, clienteInfo, chatHistory, horaRichiesta, tipoConsegna, tempoGiro) {
+  const costoConsegna = tipoConsegna === "DOMICILIO" ? COSTO_CONSEGNA : 0;
+  const totaleFinale = totale + costoConsegna;
+
   const resumen = items.map(it => {
     let r = `${it.e || ""} ${it.q || 1}x ${it.n} — ${((Number(it.p) || 0) * (Number(it.q) || 1)).toFixed(2)}€`;
     if (it.sub) r += ` (${it.sub})`;
@@ -160,12 +163,12 @@ async function generaConfermaOrdine(primo, items, totale, hora, cfg, clienteInfo
   const tieneDolce  = items.some(i => { const n = (i.n || "").toLowerCase(); return n.includes("tiramisu") || n.includes("tartufo") || n.includes("nutella"); });
 
   let upsellCtx = "";
-  if (!tieneBebida && !tieneDolce) upsellCtx = "UPSELL OBBLIGATORIO: nessuna bevanda né dolce. Aggiungi UNA domanda su birra (Heineken, Estrella, Peroni) e dolce (Tiramisù, Tartufo). Termina con: '👇 _Escríbenos aquí y lo añadimos al momento._'\n";
-  else if (!tieneBebida) upsellCtx = "UPSELL OBBLIGATORIO: nessuna bevanda. Aggiungi UNA domanda su birra. Termina con CTA 👇.\n";
-  else if (!tieneDolce) upsellCtx = "UPSELL OBBLIGATORIO: nessun dolce. Aggiungi UNA domanda su Tiramisù o Tartufo. Termina con CTA 👇.\n";
+  if (!tieneBebida && !tieneDolce) upsellCtx = "UPSELL OBLIGATORIO: sin bebida ni postre. Añade UNA pregunta sobre cerveza (Heineken, Estrella, Peroni) y postre (Tiramisú, Tartufo). Termina con: '👇 _Escríbenos aquí y lo añadimos al momento._'\n";
+  else if (!tieneBebida) upsellCtx = "UPSELL OBLIGATORIO: sin bebida. Añade UNA pregunta sobre cerveza. Termina con CTA 👇.\n";
+  else if (!tieneDolce) upsellCtx = "UPSELL OBLIGATORIO: sin postre. Añade UNA pregunta sobre Tiramisú o Tartufo. Termina con CTA 👇.\n";
 
   const oraCambioCtx = (horaRichiesta && horaRichiesta !== hora)
-    ? `CAMBIO ORARIO: cliente ha chiesto le ${horaRichiesta} ma slot disponibile è ${hora}. Menzionalo in modo caldo.\n` : "";
+    ? `CAMBIO HORARIO: cliente pidió las ${horaRichiesta} pero el slot disponible es ${hora}. Menciónalo de forma cálida.\n` : "";
   const giaInConv = chatHistory?.length > 0;
   const convCtx = giaInConv ? "YA estáis en conversación. PROHIBIDO saludar — ve directo a confirmar.\n" : "";
   const clienteCtx = (clienteInfo?.total_pedidos > 0) ? `Cliente habitual: ${primo} (${clienteInfo.total_pedidos} visitas).\n` : "";
@@ -176,8 +179,11 @@ async function generaConfermaOrdine(primo, items, totale, hora, cfg, clienteInfo
     "❌ NUNCA: tío, hermano, ey, venga, chaval, argot de bar.\n\n" +
     oraCambioCtx + clienteCtx + convCtx + upsellCtx +
     (tipoConsegna === "DOMICILIO"
-      ? `TAREA: Confirma el pedido a DOMICILIO de ${primo}.\nPEDIDO:\n${resumen}\n*Total: ${totale.toFixed(2)}€*\n*Entrega: ${hora}*\n\n` +
-        "IMPORTANTE: es entrega a domicilio — usa 'entrega', 'llevamos', NUNCA 'recogida' ni 'recoger'.\n"
+      ? `TAREA: Confirma el pedido a DOMICILIO de ${primo}.\nPEDIDO:\n${resumen}\n` +
+        `*Subtotal: ${totale.toFixed(2)}€*\n*Envío: ${costoConsegna.toFixed(2)}€*\n*Total: ${totaleFinale.toFixed(2)}€*\n` +
+        `*Entrega: ${hora}*` +
+        (tempoGiro ? `\n*Tiempo estimado: ~${tempoGiro} min*` : "") + `\n\n` +
+        "IMPORTANTE: es entrega a domicilio. Pago en efectivo al repartidor. Usa 'entrega', 'llevamos', NUNCA 'recogida' ni 'recoger'.\n"
       : `TAREA: Confirma el pedido de ${primo}.\nPEDIDO:\n${resumen}\n*Total: ${totale.toFixed(2)}€*\n*Recogida: ${hora}*\n\n`) +
     "ESTRUCTURA: frase cálida → lista pedido → total/hora → upsell (si aplica) → *La Dieci* 🇮🇹🍕\n" +
     "PROHIBIDO: inventar URLs, links, webs o botones de confirmación. NO existe ninguna web de pedidos.\n" +
@@ -190,14 +196,15 @@ async function generaChiediOra(primo, items, cfg, clienteInfo, chatHistory, tipo
   const resumen = items.map(it => { let b = `${it.e || ""} ${it.q || 1}x ${it.n}`; if (it.sub) b += ` (${it.sub})`; return b; }).join(", ");
   const giaInConv = chatHistory?.length > 0;
   const esEntrega = tipoConsegna === "DOMICILIO";
+  const horaMin = esEntrega ? "20:00" : "19:30";
   const systemPrompt =
     "Eres el asistente WhatsApp de La Dieci Pizzeria.\n" +
-    "TONO: Simpatico, calido. IDIOMA: SIEMPRE ESPANOL.\n" +
+    "TONO: Simpático, cálido. IDIOMA: SIEMPRE ESPAÑOL.\n" +
     (clienteInfo?.total_pedidos > 0 ? `Cliente habitual con ${clienteInfo.total_pedidos} visitas.\n` : "") +
-    (giaInConv ? "YA estais en conversacion. PROHIBIDO saludar. Sigue directamente.\n" : "") +
-    `TAREA: El cliente '${primo}' ha pedido [${resumen}] pero falta la hora. Confirma items y pide la hora. Max 3-4 lineas.\n` +
+    (giaInConv ? "YA estáis en conversación. PROHIBIDO saludar. Sigue directamente.\n" : "") +
+    `TAREA: El cliente '${primo}' ha pedido [${resumen}] pero falta la hora. Confirma los items y pide la hora. Máx 3-4 líneas.\n` +
     (esEntrega ? "Es un pedido a DOMICILIO — usa palabras como 'entrega', 'llevar', NO 'recoger' ni 'recogida'.\n" : "") +
-    "HORARIO: entregas/recogidas 19:30-23:00 (miercoles a domingo).\nFIRMA: *El Bot La Dieci* 🇮🇹🍕";
+    `HORARIO: ${esEntrega ? "entregas a domicilio" : "recogidas"} ${horaMin}-23:00 (miércoles a domingo).\nFIRMA: *El Bot La Dieci* 🇮🇹🍕`;
   return assicuraFirma(await chiamaClaude(systemPrompt, "Pide la hora.", cfg, 200));
 }
 
