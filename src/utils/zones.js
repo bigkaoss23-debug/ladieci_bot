@@ -122,6 +122,7 @@ async function geocodificaEAssegnaZona(indirizzo) {
 
 module.exports = {
   ZONE_DELIVERY,
+  KEYWORDS_ZONA,
   pointInPolygon,
   assegnaZonaDaCoord,
   assegnaZonaDaKeyword,

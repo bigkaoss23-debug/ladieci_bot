@@ -248,6 +248,14 @@ async function gestisci(ctx) {
       return { flusso: 3, stato: "IN_TRATTAMENTO", motivo: "limite_ai" };
     }
 
+    // ── Domicilio senza indirizzo → Preguntas (operatore chiede dove) ─
+    if (tipoConsegna === "DOMICILIO" && !direccion) {
+      if (!conv) await createConv(waId, nombre, allItems, horaFinale, "aperta");
+      else await updateConvDati(waId, allItems, horaFinale);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, horaFinale, null, false, waMsgId);
+      return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "sin_direccion" };
+    }
+
     // ── Geocoding zona (sempre prima del messaggio) ──────────────
     const zonaRes1 = await resolveZona(direccion, tipoConsegna);
     const zonaObj1 = tipoConsegna === "DOMICILIO" ? ZONE_DELIVERY.find(z => z.id === zonaRes1.zona) : null;
@@ -381,6 +389,13 @@ async function gestisci(ctx) {
       oraHoraFinale = caricoForno.slotAssegnato;
       slotSpostatoOra = oraHoraFinale !== caricoForno.slotRichiesto;
       oraCambiataOra  = oraHoraFinale !== oraHora;
+    }
+
+    // ── Domicilio senza indirizzo → Preguntas ───────────────────
+    if (tipoConsegnaOra === "DOMICILIO" && !direccionOra) {
+      await updateConvDati(waId, oraItems, oraHoraFinale);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, null, false, waMsgId);
+      return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "sin_direccion" };
     }
 
     // ── Geocoding zona ───────────────────────────────────────────

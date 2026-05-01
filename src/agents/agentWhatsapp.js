@@ -6,6 +6,25 @@ const { chiamaClaude } = require("../utils/claude");
 const { sbSelect, sbUpdate, sbUpsert } = require("../utils/supabase");
 const { isBevanda } = require("../utils/helpers");
 const { MENU_LISTA, INFO_RISTORANTE, ABBINAMENTI_NOMI, COSTO_CONSEGNA } = require("../config");
+const { KEYWORDS_ZONA } = require("../utils/zones");
+
+// Tipi di via spagnoli non ambigui come marcatori di indirizzo postale
+const RE_TIPOS_VIA = /\b(calle|c\/|avenida|avda?\.?|paseo|carretera|ctra\.?|bulevar|boulevard|urbanizaci[oó]n|urb\.?|ronda|traves[íi]a|autov[íi]a|plaza)[\s.]+\w/i;
+
+// Parole chiave di zona non ambigue come marcatori di indirizzo
+// Escluse: "camino" (es. "voy de camino"), "centro", "marinas", "ies", "instituto", "poeta", "residencial"
+const KEYWORDS_ZONA_ADDRESS = [
+  "buenavista", "italica", "itálica",
+  "las marinas", "playa serena", "minarete",
+  "cortijo", "cortijos", "salinas",
+  "cervantes", "colón", "colon"
+];
+
+function preDetectaDireccion(testo) {
+  if (RE_TIPOS_VIA.test(testo)) return true;
+  const lower = testo.toLowerCase();
+  return KEYWORDS_ZONA_ADDRESS.some(k => lower.includes(k));
+}
 
 function contestoTempo() {
   const now = new Date();
@@ -32,6 +51,7 @@ function assicuraFirma(testo) {
 
 async function interpreta(testo, cfg, clienteInfo, chatHistory) {
   const cTempo = contestoTempo();
+  const direccionPreDetectada = preDetectaDireccion(testo);
   let contestoCliente = "";
   if (clienteInfo?.total_pedidos > 0) {
     const testoLow = (testo || "").toLowerCase();
@@ -79,19 +99,24 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
     "NÚMEROS MENÚ: 1=El Pelusa, 2=Zizou, 3=O Rei, 4=Il Gladiatore, 5=El Gaucho,\n" +
     "6=El Divino Codino, 7=La Pulga, 8=Il Tulipano Nero, 9=El Ultimo 10, 10=El Mago de Zadar, 11=El Maestro.\n\n" +
     (cfg["REGOLE_APPRESE"] ? "REGLAS APRENDIDAS — APLICAR SIEMPRE:\n" + cfg["REGOLE_APPRESE"] + "\n\n" : "") +
-    "DETECCIÓN DOMICILIO — REGLAS:\n" +
-    "tipo_consegna='DOMICILIO' si el mensaje contiene CUALQUIERA de estas señales:\n" +
-    "VERBOS ENTREGA: llevar, lleváis, llevais, llevas, llevad, traer, traéis, traeis, traes,\n" +
-    "  enviar, repartir, mandar — en cualquier forma: 'me lo/la/los/las lleváis/traéis',\n" +
-    "  'me lo llevas', 'me lo traes', 'podéis traerlo', 'lo lleváis', 'nos lo lleváis', etc.\n" +
-    "PALABRAS CLAVE: 'a domicilio', 'a mi casa', 'en casa', 'mi dirección', 'a mi piso', 'a mi domicilio',\n" +
-    "  'entrega', 'delivery', 'reparto', 'repartidor', 'para llevar a casa', 'que me lo traigáis'\n" +
-    "DIRECCIÓN EXPLÍCITA: cualquier texto que empiece por Calle, Avenida, Avda, C/, Urb,\n" +
-    "  Plaza, Paseo, Carretera, Ctra, Bulevar — seguido de nombre y número (ej: 'Avenida Las Gaviotas 33')\n" +
-    "  NOTA: el número puede ir después del nombre (ej: 'Avenida Las Gaviotas 33 bajo B')\n" +
-    "Extrae la dirección completa en el campo 'direccion' exactamente como la escribe el cliente.\n" +
-    "Si NO menciona entrega a domicilio → tipo_consegna='RITIRO', direccion=''\n" +
-    "CRÍTICO: NO inventar direcciones. Si escribe 'domicilio' sin dirección → tipo_consegna='DOMICILIO', direccion=''\n\n" +
+    (direccionPreDetectada
+      ? "⚠️ DIRECCIÓN DETECTADA AUTOMÁTICAMENTE: el sistema ha identificado un tipo de vía\n" +
+        "(calle, avenida, plaza, paseo, urb, etc.) o nombre de zona en el mensaje.\n" +
+        "OBLIGATORIO — no negociable:\n" +
+        "  1. tipo_consegna='DOMICILIO'\n" +
+        "  2. Extrae la dirección completa en 'direccion' exactamente como la escribe el cliente.\n" +
+        "     Incluye tipo de vía + nombre + número + piso/letra si los hay.\n" +
+        "     Si no puedes extraerla con precisión → direccion='' pero tipo_consegna='DOMICILIO' igual.\n" +
+        "  3. El campo 'nota' debe estar vacío o en ESPAÑOL. Nunca en italiano.\n\n"
+      : "DETECCIÓN DOMICILIO — REGLAS:\n" +
+        "tipo_consegna='DOMICILIO' si el mensaje contiene CUALQUIERA de estas señales:\n" +
+        "VERBOS ENTREGA: llevar, lleváis, llevais, llevas, llevad, traer, traéis, traeis, traes,\n" +
+        "  enviar, repartir, mandar — en cualquier forma: 'me lo llevas', 'me lo traes',\n" +
+        "  'podéis traerlo', 'lo lleváis', 'nos lo lleváis', 'que me lo traigáis', etc.\n" +
+        "PALABRAS CLAVE: 'a domicilio', 'a mi casa', 'en casa', 'mi dirección', 'a mi piso',\n" +
+        "  'entrega', 'delivery', 'reparto', 'repartidor', 'para llevar a casa'.\n" +
+        "Si NO menciona entrega → tipo_consegna='RITIRO', direccion=''\n" +
+        "CRÍTICO: NO inventar direcciones. Si escribe 'domicilio' sin dirección → direccion=''\n\n") +
     "FORMATO OUTPUT (solo JSON):\n" +
     "{\"tipo\":\"ordine|domanda|misto|solo_ora|correccion|modifica_complessa|custom_pizza\"," +
     "\"items\":[{\"n\":\"nombre\",\"q\":1,\"p\":9.50,\"e\":\"emoji\",\"sub\":\"\"}]," +
