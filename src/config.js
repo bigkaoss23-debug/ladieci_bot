@@ -16,6 +16,7 @@ const MENU_LISTA = [
   "9. El Ultimo 10 - Atun y Cebolla 14.00",
   "10. El Mago de Zadar - Vegetariana 13.50",
   "11. El Maestro - Inferno 13.50",
+  "12. Parmazola - Parma y Gorgonzola 16.50",
   // POSTRES
   "Tiramisu Clasico 4.50", "Tiramisu Pistacho 5.50",
   "Tiramisu Nutella 5.50", "Tiramisu Lotus 5.50",
@@ -53,7 +54,8 @@ const INFO_RISTORANTE =
   "8. Il Tulipano Nero (Cuatro Quesos) 14.50€\n" +
   "9. El Ultimo 10 (Atún y Cebolla) 14€\n" +
   "10. El Mago de Zadar (Vegetariana) 13.50€\n" +
-  "11. El Maestro (Inferno) 13.50€\n\n" +
+  "11. El Maestro (Inferno) 13.50€\n" +
+  "12. Parmazola (Parma y Gorgonzola) 16.50€\n\n" +
   "POSTRES: Tiramisú Clásico 4.50€, Tiramisú Pistacho 5.50€, Tiramisú Nutella 5.50€,\n" +
   "Tiramisú Lotus 5.50€, Pizza Nutella 7€,\n" +
   "Tartufo Bianco 5€, Tartufo Nero 5€, Tartufo Pistacchio 5€, Tartufo Limoncello 5€\n" +
@@ -69,6 +71,7 @@ const ABBINAMENTI_NOMI =
   "diavola/diabla=El Gaucho, margherita/clasica=El Pelusa, bufala=Zizou, marinara=O Rei, " +
   "vegetariana=El Mago de Zadar, prosciutto/jamon=El Divino Codino, champinones=La Pulga, " +
   "cuatro quesos=Il Tulipano Nero, atun=El Ultimo 10, caprichosa=Il Gladiatore, inferno=El Maestro, " +
+  "parmazola/parma gorgonzola=Parmazola, " +
   "coca/cola/fanta=Refresco, cerveza/estrella=Estrella Galicia, heineken=Heineken, agua=Agua";
 
 module.exports = { MENU_LISTA, INFO_RISTORANTE, NUMEROS_WHITELIST, ABBINAMENTI_NOMI, COSTO_CONSEGNA };
