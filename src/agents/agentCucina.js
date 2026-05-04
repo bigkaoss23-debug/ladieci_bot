@@ -143,12 +143,25 @@ async function getCaricoDelivery(zonaId, oraRichiesta) {
     return { slotAssegnato: slotsConOrdini[0].ora, slotRichiesto, zonaCompleta: false, driverInGiro };
   }
 
-  // Priorità 2: primo slot libero (nuovo giro)
+  // Priorità 2: primo slot libero — con controllo conflitti inter-zona
+  // Il driver è unico: se sta già consegnando in un'altra zona nello stesso intervallo, non può andare qui.
+  // Intervallo occupazione = [hora_consegna − tempoGiro, hora_consegna + tempoGiro]
   for (let min = minMin; min <= 23 * 60; min += 10) {
     const ora = slot10(min);
-    if ((slotCount[`${zonaId}|${ora}`] || 0) < zona.maxOrdiniPerGiro) {
-      return { slotAssegnato: ora, slotRichiesto, zonaCompleta: false, driverInGiro };
-    }
+    if ((slotCount[`${zonaId}|${ora}`] || 0) >= zona.maxOrdiniPerGiro) continue;
+
+    // Controlla sovrapposizione con ordini in zone diverse
+    const nuovaPartenza = min - zona.tempoGiro;
+    const nuovoRientro  = min + zona.tempoGiro;
+    const conflitto = rows.some(o => {
+      if (!o.zona || o.zona === zonaId || !o.hora) return false;
+      const zonaO = ZONE_DELIVERY.find(z => z.id === o.zona);
+      if (!zonaO) return false;
+      const partenzaO = oraToMin(o.hora) - zonaO.tempoGiro;
+      const rientroO  = oraToMin(o.hora) + zonaO.tempoGiro;
+      return Math.max(partenzaO, nuovaPartenza) < Math.min(rientroO, nuovoRientro);
+    });
+    if (!conflitto) return { slotAssegnato: ora, slotRichiesto, zonaCompleta: false, driverInGiro };
   }
 
   // Tutti i slot pieni stasera
