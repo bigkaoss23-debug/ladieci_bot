@@ -77,8 +77,12 @@ app.get("/api", async (req, res) => {
       const threadCtx = (thread?.[0]?.chat || []).slice(-10).map(m => (m.da === "cliente" ? "C" : "B") + ": " + m.txt).join("\n");
       result = { risposta: await generaRisposta(req.query.testo, req.query.wa_id, cfg, threadCtx) };
     } else if (action === "debugInterpreta") {
-      const { interpreta } = require("./src/agents/agentWhatsapp");
-      result = await interpreta(req.query.testo || "", cfg, null, []);
+      const { interpreta, preDetectaDireccion } = require("./src/agents/agentWhatsapp");
+      const testo = req.query.testo || "";
+      const ia = await interpreta(testo, cfg, null, []);
+      const regex = preDetectaDireccion(testo);
+      const tipoConsegna = (ia.tipo_consegna === "DOMICILIO" || regex) ? "DOMICILIO" : "RITIRO";
+      result = { ia, regex_match: regex, tipoConsegna_calcolato: tipoConsegna };
     } else {
       result = { error: "unknown action: " + action };
     }
