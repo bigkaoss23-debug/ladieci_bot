@@ -29,9 +29,12 @@ async function creaOrdine(params) {
 
     // Re-legge il max ID ad ogni tentativo — mai usare un valore cached
     const last = await sbSelect("ordenes", `ts=gte.${fromTs}&select=id&order=ts.desc&limit=100`);
-    const lastNum = (last && Array.isArray(last))
-      ? Math.max(0, ...last.map(o => parseInt((o.id || "").replace(/[^0-9]/g, "")) || 0))
-      : 0;
+    // Fallback all-time: se la finestra di oggi è vuota (ordini test eliminati),
+    // calcola max su tutti gli ordini per evitare il loop di collisione su #001
+    const lastSrc = (last && Array.isArray(last) && last.length > 0)
+      ? last
+      : (await sbSelect("ordenes", `select=id&order=ts.desc&limit=100`) || []);
+    const lastNum = Math.max(0, ...lastSrc.map(o => parseInt((o.id || "").replace(/[^0-9]/g, "")) || 0));
 
     const newId = "#" + String(lastNum + 1).padStart(3, "0");
 
