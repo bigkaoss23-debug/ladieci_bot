@@ -190,8 +190,10 @@ async function gestisci(ctx) {
     const allItems = convItems.length > 0 ? mergeItemsBevande(convItems, ia.items) : ia.items;
     const totale = calcolaTotale(allItems);
     const hora = ia.hora || "";
-    const tipoConsegna = (ia.tipo_consegna === "DOMICILIO" || preDetectaDireccion(testo)) ? "DOMICILIO" : "RITIRO";
+    const regexMatch = preDetectaDireccion(testo);
+    const tipoConsegna = (ia.tipo_consegna === "DOMICILIO" || regexMatch) ? "DOMICILIO" : "RITIRO";
     const direccion    = ia.direccion    || "";
+    console.log(`[FLUSSO1-DEBUG] ia.tipo_consegna=${ia.tipo_consegna} regex=${regexMatch} tipoConsegna=${tipoConsegna} direccion="${direccion}" testo="${testo}" conf=${conf} isWhitelist=${isWhitelist} ia_keys=${Object.keys(ia).join(",")}`);
 
     // Manca l'orario — chiedi
     if (!hora) {
@@ -564,6 +566,7 @@ async function processWebhook(body) {
 
           const clienteInfo = isWhitelist ? null : await getCliente(waId);
           const ia = await interpreta(text, config, clienteInfo, conv?.chat || []);
+          console.log(`[WEBHOOK-DEBUG] ia from interpreta: tipo_consegna=${ia.tipo_consegna} direccion="${ia.direccion}" conf=${ia.conf} tipo=${ia.tipo} keys=${Object.keys(ia).join(",")}`);
 
           if (isWhitelist) {
             const convEsistente = await getConversazione(waId);
