@@ -6,7 +6,7 @@ const { sbSelect, sbUpdate, getConfig } = require("../utils/supabase");
 const { appendChat, updateConvDati, createConv, upsertWaMsg, getConversazione,
         mergeItemsBevande, calcolaTotale, buildResumen, buildUpsell, buildMsgRicevuto } = require("../utils/helpers");
 const { getStatoCliente, getCaricoForno, getCaricoDelivery } = require("./agentCucina");
-const { interpreta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion } = require("./agentWhatsapp");
+const { interpreta, generaRisposta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion } = require("./agentWhatsapp");
 const { creaOrdine, modificaOrdine, aggiungiItems } = require("./agentOrdini");
 const { NUMEROS_WHITELIST, COSTO_CONSEGNA } = require("../config");
 const { geocodificaEAssegnaZona, ZONE_DELIVERY } = require("../utils/zones");
@@ -506,6 +506,25 @@ async function gestisci(ctx) {
   // --- FLUSSO 3: domanda / ambiguo ---
   if (!conv) await createConv(waId, nombre, ia.items || [], ia.hora || "", "aperta");
   else if (hasItems) await updateConvDati(waId, mergeItemsBevande(conv.items || [], ia.items), ia.hora || conv.hora || "");
+
+  // Risposta automatica per domande (horarios, delivery, menú, allergie, ecc.)
+  // generaRisposta usa INFO_RISTORANTE che include orari, delivery, costo envío, ecc.
+  if (autoOn && (tipo === "domanda" || tipo === "misto")) {
+    try {
+      const chatRecente = conv ? (conv.chat || []).slice(-6) : [];
+      const threadCtx = chatRecente.map(m => (m.da === "cliente" ? "C" : "B") + ": " + m.txt).join("\n");
+      const msgRisposta = await generaRisposta(testo, waId, config, threadCtx);
+      if (msgRisposta) {
+        await appendChat(waId, "bot", msgRisposta);
+        await invia(waId, msgRisposta, config);
+        await upsertWaMsg(waId, nombre, testo, "COMPLETATO", conf, ia.items || [], ia.hora || "", msgRisposta, false, waMsgId);
+        return { flusso: 3, stato: "COMPLETATO" };
+      }
+    } catch (e) {
+      console.error("[flusso3] generaRisposta error:", e.message);
+    }
+  }
+
   await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, ia.items || [], ia.hora || "", null, false, waMsgId);
   return { flusso: 3, stato: "IN_TRATTAMENTO" };
 }
