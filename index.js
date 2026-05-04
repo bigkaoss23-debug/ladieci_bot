@@ -132,7 +132,10 @@ app.post("/api", async (req, res) => {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { nota_cucina: req.body.nota_cucina });
       result = { success: true };
     } else if (action === "eliminaConversazione") {
-      await sbDelete("conv", `wa_id=eq.${req.body.wa_id}`);
+      const wid = req.body.wa_id;
+      await sbDelete("conv",     `wa_id=eq.${wid}`);
+      await sbDelete("wa_msgs",  `wa_id=eq.${wid}`);
+      await sbDelete("ordenes",  `wa_id=eq.${wid}`);
       result = { success: true };
     } else if (action === "parseOrdineDaRisposta") {
       result = { success: true };
