@@ -263,14 +263,8 @@ async function gestisci(ctx) {
     const zonaObj1 = tipoConsegna === "DOMICILIO" ? ZONE_DELIVERY.find(z => z.id === zonaRes1.zona) : null;
     const fueraDeZona = tipoConsegna === "DOMICILIO" && direccion && !zonaRes1.zona;
 
-    // Fuori zona → operatore silente (appare in giallo "Sin zona" in TabEntregas)
+    // Fuori zona → Preguntas (operatore decide se accettare/rifiutare)
     if (fueraDeZona) {
-      await creaOrdine({
-        nombre, tel: waId, waId, canal: "WA",
-        items: allItems, hora: horaFinale, estado: "DA_CONFIRMARE",
-        tipo_consegna: tipoConsegna, direccion: direccion || null,
-        zona: null, zona_lat: null, zona_lon: null, zona_manuale: false
-      });
       if (!conv) await createConv(waId, nombre, allItems, horaFinale, "in_attesa");
       else { await updateConvDati(waId, allItems, horaFinale); await updateConvStato(waId, "in_attesa"); }
       await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, horaFinale, null, false, waMsgId);
