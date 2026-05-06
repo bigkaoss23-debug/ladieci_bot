@@ -57,11 +57,12 @@ function msgFueraHorario(primo, items, tipoConsegna) {
 }
 
 // Genera messaggio slot-spostato per il caso delivery (zona piena o driver in giro)
-function msgSlotDelivery(primo, allItems, totaleConConsegna, horaOriginal, horaFinale, driverInGiro) {
+function msgSlotDelivery(primo, allItems, totaleConConsegna, horaOriginal, horaFinale, driverInGiro, costoConsegna, direccion) {
   const motivo = driverInGiro
     ? `nuestro repartidor está ahora mismo en tu zona. Te apuntamos para las *${horaFinale}* cuando pueda recogerte el pedido`
     : `ese horario está completo en tu zona — te reservamos las *${horaFinale}*`;
-  return `${primo}, ${motivo}. 🛵\n\n${buildResumen(allItems)}\n\n*Total: ${totaleConConsegna.toFixed(2)}€* · *Entrega: ${horaFinale}*\n\n${buildUpsell(allItems)}\n*La Dieci* 🇮🇹🍕`;
+  const introSlot = `${primo}, ${motivo}. 🛵`;
+  return buildMsgRicevuto(primo, allItems, totaleConConsegna - (costoConsegna || 0), horaFinale, "DOMICILIO", costoConsegna || 0, direccion, introSlot);
 }
 
 async function gestisci(ctx) {
@@ -302,7 +303,7 @@ async function gestisci(ctx) {
     let msgRicevuto;
     if (slotSpostato) {
       if (tipoConsegna === "DOMICILIO") {
-        msgRicevuto = msgSlotDelivery(primo, allItems, totaleConConsegna1, hora, horaFinale, caricoDelivery1?.driverInGiro);
+        msgRicevuto = msgSlotDelivery(primo, allItems, totaleConConsegna1, hora, horaFinale, caricoDelivery1?.driverInGiro, costoConse1, direccion);
       } else {
         const introSlot = rand([
           `${primo}, el horno está a tope a las *${hora}* — te reservamos las *${horaFinale}*. 🔥`,
@@ -430,7 +431,7 @@ async function gestisci(ctx) {
     let msgOraConf;
     if (slotSpostatoOra) {
       if (tipoConsegnaOra === "DOMICILIO") {
-        msgOraConf = msgSlotDelivery(primo, oraItems, totaleConConsegnaOra, oraHora, oraHoraFinale, caricoDeliveryOra?.driverInGiro);
+        msgOraConf = msgSlotDelivery(primo, oraItems, totaleConConsegnaOra, oraHora, oraHoraFinale, caricoDeliveryOra?.driverInGiro, costoConseOra, direccionOra);
       } else {
         const introSlotOra = `${primo}, las *${oraHora}* ya están completas. 🔥 Te reservamos las *${oraHoraFinale}*, ¿perfecto?`;
         msgOraConf = buildMsgRicevuto(primo, oraItems, oraTotale, oraHoraFinale, tipoConsegnaOra, costoConseOra, null, introSlotOra);
