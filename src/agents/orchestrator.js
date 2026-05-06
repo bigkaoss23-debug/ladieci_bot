@@ -4,7 +4,7 @@
 
 const { sbSelect, sbUpdate, getConfig } = require("../utils/supabase");
 const { appendChat, updateConvDati, createConv, upsertWaMsg, getConversazione,
-        mergeItemsBevande, calcolaTotale, buildResumen, buildUpsell, buildMsgRicevuto } = require("../utils/helpers");
+        mergeItemsBevande, calcolaTotale, buildResumen, buildUpsell, buildMsgRicevuto, rand } = require("../utils/helpers");
 const { getStatoCliente, getCaricoForno, getCaricoDelivery } = require("./agentCucina");
 const { interpreta, generaRisposta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion } = require("./agentWhatsapp");
 const { creaOrdine, modificaOrdine, aggiungiItems } = require("./agentOrdini");
@@ -115,10 +115,8 @@ async function gestisci(ctx) {
       await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, merged2B, hora2B, null, false, waMsgId);
       return { flusso: "2B", stato: "IN_TRATTAMENTO", motivo: "limite_ai" };
     }
-    const clienteInfo2B = await getCliente(waId);
-    const { tipo_consegna: tc2B } = getDeliveryFromChat(conv.chat || []);
-    const msg2B = (await generaConfermaOrdine(primo, merged2B, totaleMerged2B, hora2B, config, clienteInfo2B, conv.chat || [], undefined, tc2B))
-               || buildMsgRicevuto(primo, merged2B, totaleMerged2B, hora2B, tc2B, tc2B === "DOMICILIO" ? COSTO_CONSEGNA : 0);
+    const { tipo_consegna: tc2B, direccion: dir2B } = getDeliveryFromChat(conv.chat || []);
+    const msg2B = buildMsgRicevuto(primo, merged2B, totaleMerged2B, hora2B, tc2B, tc2B === "DOMICILIO" ? COSTO_CONSEGNA : 0, tc2B === "DOMICILIO" ? dir2B : null);
     await appendChat(waId, "bot", msg2B);
     await upsertWaMsg(waId, nombre, testo, "NUEVO", conf, merged2B, hora2B, msg2B, false, waMsgId);
     if (autoOn) await invia(waId, msg2B, config);
@@ -306,15 +304,14 @@ async function gestisci(ctx) {
       if (tipoConsegna === "DOMICILIO") {
         msgRicevuto = msgSlotDelivery(primo, allItems, totaleConConsegna1, hora, horaFinale, caricoDelivery1?.driverInGiro);
       } else {
-        const slotMsgs = [
-          `${primo}, el horno está a tope a las *${hora}* — te reservamos las *${horaFinale}*. 🔥\n\n${buildResumen(allItems)}\n\n*Total: ${totaleConConsegna1.toFixed(2)}€* · *${labelOra1}: ${horaFinale}*`,
-          `Para las *${hora}* el horno ya vuela, ${primo}. Te apuntamos a las *${horaFinale}*, ¿perfecto? 🍕\n\n${buildResumen(allItems)}\n\n*Total: ${totaleConConsegna1.toFixed(2)}€* · *${labelOra1}: ${horaFinale}*`
-        ];
-        msgRicevuto = slotMsgs[Math.floor(Math.random() * slotMsgs.length)] + "\n\n" + buildUpsell(allItems) + "\n*La Dieci* 🇮🇹🍕";
+        const introSlot = rand([
+          `${primo}, el horno está a tope a las *${hora}* — te reservamos las *${horaFinale}*. 🔥`,
+          `Para las *${hora}* el horno ya vuela, ${primo}. Te apuntamos a las *${horaFinale}*, ¿perfecto? 🍕`
+        ]);
+        msgRicevuto = buildMsgRicevuto(primo, allItems, totale, horaFinale, tipoConsegna, costoConse1, null, introSlot);
       }
     } else {
-      msgRicevuto = (await generaConfermaOrdine(primo, allItems, totale, horaFinale, config, clienteInfo1, conv?.chat || [], oraCambiata ? hora : undefined, tipoConsegna, tempoGiro1))
-                 || buildMsgRicevuto(primo, allItems, totale, horaFinale, tipoConsegna, costoConse1);
+      msgRicevuto = buildMsgRicevuto(primo, allItems, totale, horaFinale, tipoConsegna, costoConse1, direccion);
     }
 
     // Crea ordine in Supabase
@@ -327,16 +324,7 @@ async function gestisci(ctx) {
     const numPedido1 = ordResult1?.id || "";
 
     if (numPedido1) {
-      if (tipoConsegna === "DOMICILIO") {
-        if (direccion) {
-          const tiempoStr = tempoGiro1 ? ` (~${tempoGiro1} min)` : "";
-          msgRicevuto += `\n\nTu número de pedido: *${numPedido1}* 🛵\n📍 Entrega en: *${direccion}*${tiempoStr}\n🛵 Envío a domicilio: *${COSTO_CONSEGNA.toFixed(2)}€*`;
-        } else {
-          msgRicevuto += `\n\nTu número de pedido: *${numPedido1}* 🛵\n\n¿Cuál es tu dirección de entrega? 📍`;
-        }
-      } else {
-        msgRicevuto += `\n\nTu número de recogida: *${numPedido1}* 🎫\nCuando llegues, dínoslo y listo!`;
-      }
+      msgRicevuto += `\n\n*Tu pedido: ${numPedido1}*`;
     }
 
     if (!conv) await createConv(waId, nombre, allItems, horaFinale, "confermata");
@@ -444,11 +432,11 @@ async function gestisci(ctx) {
       if (tipoConsegnaOra === "DOMICILIO") {
         msgOraConf = msgSlotDelivery(primo, oraItems, totaleConConsegnaOra, oraHora, oraHoraFinale, caricoDeliveryOra?.driverInGiro);
       } else {
-        msgOraConf = `Ey ${primo}! 🙏\n\nEsta noche el horno vuela 🔥 Las *${oraHora}* ya están completas.\n¿Te va bien a las *${oraHoraFinale}*? ¡Te lo reservamos ahora mismo! ✅\n\n${buildResumen(oraItems)}\n\nTotal: *${totaleConConsegnaOra.toFixed(2)}€*\n*El Bot La Dieci* 🇮🇹🍕`;
+        const introSlotOra = `${primo}, las *${oraHora}* ya están completas. 🔥 Te reservamos las *${oraHoraFinale}*, ¿perfecto?`;
+        msgOraConf = buildMsgRicevuto(primo, oraItems, oraTotale, oraHoraFinale, tipoConsegnaOra, costoConseOra, null, introSlotOra);
       }
     } else {
-      msgOraConf = (await generaConfermaOrdine(primo, oraItems, oraTotale, oraHoraFinale, config, clienteInfoOra2, conv?.chat || [], oraCambiataOra ? oraHora : undefined, tipoConsegnaOra, tempoGiroOra))
-                || buildMsgRicevuto(primo, oraItems, oraTotale, oraHoraFinale, tipoConsegnaOra, costoConseOra);
+      msgOraConf = buildMsgRicevuto(primo, oraItems, oraTotale, oraHoraFinale, tipoConsegnaOra, costoConseOra, tipoConsegnaOra === "DOMICILIO" ? direccionOra : null);
     }
 
     const ordResultOra = await creaOrdine({
@@ -460,16 +448,7 @@ async function gestisci(ctx) {
     const numPedidoOra = ordResultOra?.id || "";
 
     if (numPedidoOra) {
-      if (tipoConsegnaOra === "DOMICILIO") {
-        if (direccionOra) {
-          const tiempoStrOra = tempoGiroOra ? ` (~${tempoGiroOra} min)` : "";
-          msgOraConf += `\n\nTu número de pedido: *${numPedidoOra}* 🛵\n📍 Entrega en: *${direccionOra}*${tiempoStrOra}\n🛵 Envío a domicilio: *${COSTO_CONSEGNA.toFixed(2)}€*`;
-        } else {
-          msgOraConf += `\n\nTu número de pedido: *${numPedidoOra}* 🛵\n\n¿Cuál es tu dirección de entrega? 📍`;
-        }
-      } else {
-        msgOraConf += `\n\nTu número de recogida: *${numPedidoOra}* 🎫\nCuando llegues, dínoslo y listo!`;
-      }
+      msgOraConf += `\n\n*Tu pedido: ${numPedidoOra}*`;
     }
 
     await updateConvDati(waId, oraItems, oraHoraFinale);

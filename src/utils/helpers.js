@@ -90,27 +90,28 @@ function buildUpsell(items = []) {
 
   if (!tieneBebida && !tieneDolce) {
     return rand([
-      "¿Lo acompañamos con algo? Una cerveza bien fría y un Tiramisù para cerrar la noche como se merece. 🍺🍮",
-      "El pizzaiolo dice que la pizza sola es buena, pero con una Heineken y un Tartufo es otra cosa. ¿Te apunto algo? 🍺🍮",
-      "¿Añadimos algo para beber y un dulce? Los Tiramisù están esperando. 🍺🍮",
-      "Una cerveza fría mientras espera la pizza y un Tiramisù de postre — ¿lo ponemos? 🍺🍮"
-    ]) + "\n\n" + ctaRisposta();
+      "¿Lo acompañamos con algo? Una cerveza fría (Heineken, Estrella, Peroni) o un Tiramisù / Tartufo de postre. 🍺🍮",
+      "¿Añadimos algo más? Tenemos cervezas bien frías y Tiramisù o Tartufo para cerrar la noche. 🍺🍮",
+      "¿Una cerveza o un postre para acompañar? Heineken, Tiramisù, Tartufo — tú eliges. 🍺🍮"
+    ]);
   }
   if (!tieneBebida) {
     return rand([
-      "¿Y para beber? Una cerveza bien fría siempre cae bien con la pizza. 🍺",
-      "El Heineken y la pizza son buenos amigos — ¿te apunto una? 🍺",
-      "¿Algo para beber para acompañar? Heineken, Estrella, Peroni... 🍺"
-    ]) + "\n\n" + ctaRisposta();
+      "¿Y para beber? Una Heineken, Estrella o Peroni bien fría siempre cae bien. 🍺",
+      "¿Añadimos algo para beber? Tenemos Heineken, Estrella, Peroni. 🍺"
+    ]);
   }
   if (!tieneDolce) {
     return rand([
-      "¿Y de postre? Los Tiramisù y Tartufo están ahí esperando. 🍮",
-      "Para cerrar la noche — ¿un Tiramisù o un Tartufo? 🍮",
-      "El pizzaiolo recomienda no irse sin el Tiramisù. Solo lo decimos. 🍮"
-    ]) + "\n\n" + ctaRisposta();
+      "¿Y de postre? Un Tiramisù o un Tartufo para cerrar la noche en grande. 🍮",
+      "Para terminar — ¿un Tiramisù o un Tartufo? 🍮"
+    ]);
   }
-  return closingMsg();
+  return rand([
+    "¿Algo más para esta noche? Aquí seguimos.",
+    "¿Todo bien? Si necesitas algo más, escríbenos.",
+    "Cualquier cosa más, aquí estamos hasta las 23h."
+  ]);
 }
 
 function buildResumen(items = []) {
@@ -121,18 +122,31 @@ function buildResumen(items = []) {
   }).join("\n");
 }
 
-function buildMsgRicevuto(primo, items, total, hora, tipoConsegna, costoConsegna) {
+function buildMsgRicevuto(primo, items, total, hora, tipoConsegna, costoConsegna, direccion, introOverride) {
   const costo = costoConsegna || 0;
-  const totaleFinale = total + costo;
-  let msg = introConferma(primo) + "\n\n" + buildResumen(items) + "\n\n";
+  const totaleFinale = Math.round((total + costo) * 100) / 100;
+  const pizzaItems = items.filter(i => i.n !== "Entrega a domicilio");
+
+  let msg = (introOverride || introConferma(primo)) + "\n\n";
+  msg += buildResumen(pizzaItems) + "\n\n";
+
   if (costo > 0) {
-    msg += `*Subtotal: ${total.toFixed(2)}€*\n*Envío: ${costo.toFixed(2)}€*\n*Total: ${totaleFinale.toFixed(2)}€*`;
+    msg += `💰 *Total: ${totaleFinale.toFixed(2)}€*  🛵 Delivery: ${costo.toFixed(2)}€\n`;
   } else {
-    msg += `*Total: ${total.toFixed(2)}€*`;
+    msg += `💰 *Total: ${total.toFixed(2)}€*\n`;
   }
+
   const labelOra = tipoConsegna === "DOMICILIO" ? "Entrega" : "Recogida";
-  if (hora) msg += `\n*${labelOra}: ${hora}*`;
-  msg += "\n\n" + buildUpsell(items) + "\n*La Dieci* 🇮🇹🍕";
+  if (hora) {
+    if (tipoConsegna === "DOMICILIO" && direccion) {
+      msg += `⏰ ${labelOra}: *${hora}* · 📍 *${direccion}*\n`;
+    } else {
+      msg += `⏰ ${labelOra}: *${hora}*\n`;
+    }
+  }
+
+  const upsell = buildUpsell(pizzaItems);
+  msg += "\n" + upsell + "\n\nSi quieres añadir algo, escríbenos aquí.\n*Bot La Dieci* 🇮🇹🍕";
   return msg;
 }
 
@@ -222,7 +236,7 @@ async function upsertWaMsg(waId, nombre, txt, stato, conf, items, hora, botRispo
 }
 
 module.exports = {
-  calcolaTotale, isBevanda, isDesert, mergeItems, mergeItemsBevande,
+  rand, calcolaTotale, isBevanda, isDesert, mergeItems, mergeItemsBevande,
   buildResumen, buildUpsell, buildMsgRicevuto, introChiediOra, ctaRisposta,
   appendChat, updateConvDati, createConv, getConversazione, upsertWaMsg
 };
