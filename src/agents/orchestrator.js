@@ -330,7 +330,7 @@ async function gestisci(ctx) {
       if (tipoConsegna === "DOMICILIO") {
         if (direccion) {
           const tiempoStr = tempoGiro1 ? ` (~${tempoGiro1} min)` : "";
-          msgRicevuto += `\n\nTu número de pedido: *${numPedido1}* 🛵\n📍 Entrega en: *${direccion}*${tiempoStr}`;
+          msgRicevuto += `\n\nTu número de pedido: *${numPedido1}* 🛵\n📍 Entrega en: *${direccion}*${tiempoStr}\n🛵 Envío a domicilio: *${COSTO_CONSEGNA.toFixed(2)}€*`;
         } else {
           msgRicevuto += `\n\nTu número de pedido: *${numPedido1}* 🛵\n\n¿Cuál es tu dirección de entrega? 📍`;
         }
@@ -463,7 +463,7 @@ async function gestisci(ctx) {
       if (tipoConsegnaOra === "DOMICILIO") {
         if (direccionOra) {
           const tiempoStrOra = tempoGiroOra ? ` (~${tempoGiroOra} min)` : "";
-          msgOraConf += `\n\nTu número de pedido: *${numPedidoOra}* 🛵\n📍 Entrega en: *${direccionOra}*${tiempoStrOra}`;
+          msgOraConf += `\n\nTu número de pedido: *${numPedidoOra}* 🛵\n📍 Entrega en: *${direccionOra}*${tiempoStrOra}\n🛵 Envío a domicilio: *${COSTO_CONSEGNA.toFixed(2)}€*`;
         } else {
           msgOraConf += `\n\nTu número de pedido: *${numPedidoOra}* 🛵\n\n¿Cuál es tu dirección de entrega? 📍`;
         }
