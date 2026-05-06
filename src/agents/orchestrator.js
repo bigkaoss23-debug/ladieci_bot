@@ -9,16 +9,16 @@ const { getStatoCliente, getCaricoForno, getCaricoDelivery } = require("./agentC
 const { interpreta, generaRisposta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion } = require("./agentWhatsapp");
 const { creaOrdine, modificaOrdine, aggiungiItems } = require("./agentOrdini");
 const { NUMEROS_WHITELIST, COSTO_CONSEGNA } = require("../config");
-const { geocodificaEAssegnaZona, ZONE_DELIVERY } = require("../utils/zones");
+const { geocodificaEAssegnaZona, ZONE_DELIVERY, calcolaTempoGiro } = require("../utils/zones");
 
 async function resolveZona(direccion, tipoConsegna) {
-  if (tipoConsegna !== "DOMICILIO" || !direccion) return { zona: null, lat: null, lon: null };
+  if (tipoConsegna !== "DOMICILIO" || !direccion) return { zona: null, lat: null, lon: null, metodo: null };
   try {
     const r = await geocodificaEAssegnaZona(direccion);
-    return { zona: r.zona?.id || null, lat: r.lat ?? null, lon: r.lon ?? null };
+    return { zona: r.zona?.id || null, lat: r.lat ?? null, lon: r.lon ?? null, metodo: r.metodo || null };
   } catch (e) {
     console.error("geocode error:", e?.message || e);
-    return { zona: null, lat: null, lon: null };
+    return { zona: null, lat: null, lon: null, metodo: null };
   }
 }
 
@@ -273,7 +273,7 @@ async function gestisci(ctx) {
     // ── Check capacità giri delivery ─────────────────────────────
     let caricoDelivery1 = null;
     if (tipoConsegna === "DOMICILIO" && zonaRes1.zona) {
-      caricoDelivery1 = await getCaricoDelivery(zonaRes1.zona, horaFinale);
+      caricoDelivery1 = await getCaricoDelivery(zonaRes1.zona, horaFinale, calcolaTempoGiro(zonaRes1.lat, zonaRes1.lon, zonaObj1));
 
       if (caricoDelivery1.zonaCompleta) {
         if (!conv) await createConv(waId, nombre, allItems, horaFinale, "aperta");
@@ -294,7 +294,7 @@ async function gestisci(ctx) {
     }
 
     // ── Generazione messaggio ────────────────────────────────────
-    const tempoGiro1  = zonaObj1?.tempoGiro ?? null;
+    const tempoGiro1  = calcolaTempoGiro(zonaRes1.lat, zonaRes1.lon, zonaObj1);
     const costoConse1 = tipoConsegna === "DOMICILIO" ? COSTO_CONSEGNA : 0;
     const totaleConConsegna1 = totale + costoConse1;
     const labelOra1   = tipoConsegna === "DOMICILIO" ? "Entrega" : "Recogida";
@@ -404,7 +404,7 @@ async function gestisci(ctx) {
     // ── Check capacità giri delivery ─────────────────────────────
     let caricoDeliveryOra = null;
     if (tipoConsegnaOra === "DOMICILIO" && zonaResOra.zona) {
-      caricoDeliveryOra = await getCaricoDelivery(zonaResOra.zona, oraHoraFinale);
+      caricoDeliveryOra = await getCaricoDelivery(zonaResOra.zona, oraHoraFinale, calcolaTempoGiro(zonaResOra.lat, zonaResOra.lon, zonaObjOra));
 
       if (caricoDeliveryOra.zonaCompleta) {
         await updateConvDati(waId, oraItems, oraHoraFinale);
@@ -423,7 +423,7 @@ async function gestisci(ctx) {
     }
 
     // ── Generazione messaggio ────────────────────────────────────
-    const tempoGiroOra   = zonaObjOra?.tempoGiro ?? null;
+    const tempoGiroOra   = calcolaTempoGiro(zonaResOra.lat, zonaResOra.lon, zonaObjOra);
     const costoConseOra  = tipoConsegnaOra === "DOMICILIO" ? COSTO_CONSEGNA : 0;
     const totaleConConsegnaOra = oraTotale + costoConseOra;
     const clienteInfoOra2 = await getCliente(waId);

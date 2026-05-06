@@ -4,7 +4,7 @@
 
 const { sbSelect } = require("../utils/supabase");
 const { isBevanda, isDesert, getConversazione } = require("../utils/helpers");
-const { ZONE_DELIVERY } = require("../utils/zones");
+const { ZONE_DELIVERY, calcolaTempoGiro } = require("../utils/zones");
 
 function pad(n) { return n < 10 ? "0" + n : "" + n; }
 
@@ -86,7 +86,7 @@ async function getCaricoForno(oraRichiesta) {
 // Verifica capacità giri delivery per una zona — analogo a getCaricoForno per il forno.
 // Consolida ordini: prima cerca slot già "caldi" (stessa zona, stesso orario con spazio),
 // poi cerca il primo slot libero. Considera driver IN_GIRO per posticipare se necessario.
-async function getCaricoDelivery(zonaId, oraRichiesta) {
+async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null) {
   const zona = ZONE_DELIVERY.find(z => z.id === zonaId);
   if (!zona) return { slotAssegnato: oraRichiesta, slotRichiesto: oraRichiesta, zonaCompleta: false, driverInGiro: false };
 
@@ -145,20 +145,23 @@ async function getCaricoDelivery(zonaId, oraRichiesta) {
 
   // Priorità 2: primo slot libero — con controllo conflitti inter-zona
   // Il driver è unico: se sta già consegnando in un'altra zona nello stesso intervallo, non può andare qui.
-  // Intervallo occupazione = [hora_consegna − tempoGiro, hora_consegna + tempoGiro]
+  // Usa tempoGiroRichiesto (calcolato da distanza reale) se disponibile, altrimenti zona.tempoGiro.
+  const tg = tempoGiroRichiesto ?? zona.tempoGiro;
   for (let min = minMin; min <= 23 * 60; min += 10) {
     const ora = slot10(min);
     if ((slotCount[`${zonaId}|${ora}`] || 0) >= zona.maxOrdiniPerGiro) continue;
 
     // Controlla sovrapposizione con ordini in zone diverse
-    const nuovaPartenza = min - zona.tempoGiro;
-    const nuovoRientro  = min + zona.tempoGiro;
+    const nuovaPartenza = min - tg;
+    const nuovoRientro  = min + tg;
     const conflitto = rows.some(o => {
       if (!o.zona || o.zona === zonaId || !o.hora) return false;
       const zonaO = ZONE_DELIVERY.find(z => z.id === o.zona);
       if (!zonaO) return false;
-      const partenzaO = oraToMin(o.hora) - zonaO.tempoGiro;
-      const rientroO  = oraToMin(o.hora) + zonaO.tempoGiro;
+      // Usa distanza reale dell'ordine esistente se disponibile, altrimenti zona.tempoGiro
+      const tgO = calcolaTempoGiro(o.zona_lat, o.zona_lon, zonaO);
+      const partenzaO = oraToMin(o.hora) - tgO;
+      const rientroO  = oraToMin(o.hora) + tgO;
       return Math.max(partenzaO, nuovaPartenza) < Math.min(rientroO, nuovoRientro);
     });
     if (!conflitto) return { slotAssegnato: ora, slotRichiesto, zonaCompleta: false, driverInGiro };
