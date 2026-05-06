@@ -493,8 +493,11 @@ async function gestisci(ctx) {
       if (msgRisposta) {
         await appendChat(waId, "bot", msgRisposta);
         await invia(waId, msgRisposta, config);
-        await upsertWaMsg(waId, nombre, testo, "COMPLETATO", conf, ia.items || [], ia.hora || "", msgRisposta, false, waMsgId);
-        return { flusso: 3, stato: "COMPLETATO" };
+        // Se conf bassa o c'era un tentativo d'ordine (hora/direccion presenti) → IN_TRATTAMENTO
+        // così l'operatore vede il messaggio in Preguntas e può intervenire
+        const statoF3 = (conf < SOGLIA_CONF || ia.hora || ia.direccion) ? "IN_TRATTAMENTO" : "COMPLETATO";
+        await upsertWaMsg(waId, nombre, testo, statoF3, conf, ia.items || [], ia.hora || "", msgRisposta, false, waMsgId);
+        return { flusso: 3, stato: statoF3 };
       }
     } catch (e) {
       console.error("[flusso3] generaRisposta error:", e.message);
