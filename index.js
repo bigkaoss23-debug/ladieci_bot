@@ -60,7 +60,6 @@ app.get("/api", async (req, res) => {
     } else if (action === "getConfig") {
       result = cfg;
     } else if (action === "chiudiServizio") {
-      const { chiudi } = await import("./src/utils/servizio.js");
       result = await chiudiServizio(req.query.deleteAttivi === "true");
     } else if (action === "scanServizio") {
       result = await scanServizio();

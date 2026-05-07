@@ -13,10 +13,16 @@ async function scanServizio() {
   // Solo NUEVO e IN_TRATTAMENTO sono veramente "attivi" per l'operatore.
   // COCINA = già confermato, non richiede attenzione → non va contato come pending.
   const waMsgsAttivi = await sbSelect("wa_msgs", "stato=in.(NUEVO,IN_TRATTAMENTO)") || [];
+  // Ordini ancora in lavorazione/consegna: pizza non ritirata o driver ancora in giro.
+  const ordiniInCorso = await sbSelect("ordenes", "estado=in.(DA_CONFERMARE,EN_COCINA,LISTO,EN_ENTREGA)") || [];
 
   const attiviMap = {};
   (Array.isArray(convAttive) ? convAttive : []).forEach(c => { attiviMap[c.wa_id] = { wa_id: c.wa_id, nombre: c.nombre || c.wa_id, hora: c.hora || "", stato: c.stato_ordine || "" }; });
   (Array.isArray(waMsgsAttivi) ? waMsgsAttivi : []).forEach(m => { if (!attiviMap[m.wa_id]) attiviMap[m.wa_id] = { wa_id: m.wa_id, nombre: m.nombre || m.wa_id, hora: "", stato: m.stato || "" }; });
+  (Array.isArray(ordiniInCorso) ? ordiniInCorso : []).forEach(o => {
+    const key = o.wa_id || o.tel || o.id;
+    if (!attiviMap[key]) attiviMap[key] = { wa_id: o.wa_id || o.tel || "", nombre: o.nombre || o.id || "", hora: o.hora || "", stato: o.estado || "" };
+  });
 
   return { ok: true, data: oggi, completati: { ordini: Array.isArray(ordiniCompletati) ? ordiniCompletati.length : 0, conv: Array.isArray(convChiuse) ? convChiuse.length : 0 }, attivi: Object.values(attiviMap) };
 }
