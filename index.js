@@ -4,7 +4,7 @@ const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert } = require("./src/utils/supabase");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
 const { invia } = require("./src/agents/agentWhatsapp");
-const { chiudiServizio, scanServizio } = require("./src/utils/servizio");
+const { chiudiServizio, scanServizio, backupSerata } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
 
 const app = express();
@@ -63,6 +63,8 @@ app.get("/api", async (req, res) => {
       result = await chiudiServizio(req.query.deleteAttivi === "true");
     } else if (action === "scanServizio") {
       result = await scanServizio();
+    } else if (action === "backupSerata") {
+      result = await backupSerata();
     } else if (action === "rigeneraSuggerimenti") {
       result = await rigeneraSuggerimenti();
     } else if (action === "approvaSuggerimento") {
@@ -154,18 +156,35 @@ app.get("/health", (_, res) => res.json({ ok: true, ts: Date.now() }));
 
 app.listen(PORT, () => console.log(`La Dieci Bot running on port ${PORT}`));
 
-// ─── CRON AUTOMATICO: chiudi serata alle 23:50 (ora di Madrid) ──────────────
-function msUntilMadrid2350() {
+// ─── CRON AUTOMATICO: backup + chiudi serata (ora di Madrid) ────────────────
+function msUntilMadridHM(h, m) {
   const now = new Date();
   const madridNow = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Madrid" }));
   const target = new Date(madridNow);
-  target.setHours(23, 50, 0, 0);
+  target.setHours(h, m, 0, 0);
   if (madridNow >= target) target.setDate(target.getDate() + 1);
   return target - madridNow;
 }
 
+// 23:40 — backup preventivo prima della chiusura
+function schedula2340() {
+  const delay = msUntilMadridHM(23, 40);
+  console.log(`[cron 23:40] prossimo backup tra ${Math.round(delay / 60000)} minuti`);
+  setTimeout(async () => {
+    try {
+      console.log("[cron 23:40] Backup pre-chiusura...");
+      const res = await backupSerata();
+      console.log("[cron 23:40] backup:", JSON.stringify(res));
+    } catch (e) {
+      console.error("[cron 23:40] errore:", e);
+    }
+    schedula2340();
+  }, delay);
+}
+
+// 23:50 — chiudi serata (backupSerata viene chiamato anche dentro chiudiServizio)
 function schedula2350() {
-  const delay = msUntilMadrid2350();
+  const delay = msUntilMadridHM(23, 50);
   console.log(`[cron 23:50] prossima chiusura tra ${Math.round(delay / 60000)} minuti`);
   setTimeout(async () => {
     try {
@@ -185,8 +204,9 @@ function schedula2350() {
     } catch (e) {
       console.error("[cron 23:50] errore:", e);
     }
-    schedula2350(); // riprogramma per il giorno dopo
+    schedula2350();
   }, delay);
 }
 
+schedula2340();
 schedula2350();

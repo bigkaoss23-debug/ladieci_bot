@@ -1,9 +1,9 @@
 // ===============================================================
-// servizio.js — chiudiServizio, scanServizio
+// servizio.js — chiudiServizio, scanServizio, backupSerata
 // ===============================================================
 
-const { sbSelect, sbUpsert, sbDelete } = require("./supabase");
-const { calcolaTotale } = require("./helpers");
+const { sbSelect, sbUpsert, sbDelete, sbInsert } = require("./supabase");
+const { calcolaTotale, isBevanda, isDesert } = require("./helpers");
 
 async function scanServizio() {
   const oggi = new Date().toISOString().slice(0, 10);
@@ -27,12 +27,45 @@ async function scanServizio() {
   return { ok: true, data: oggi, completati: { ordini: Array.isArray(ordiniCompletati) ? ordiniCompletati.length : 0, conv: Array.isArray(convChiuse) ? convChiuse.length : 0 }, attivi: Object.values(attiviMap) };
 }
 
+async function backupSerata() {
+  const oggi = new Date().toISOString().slice(0, 10);
+  const ordini = await sbSelect("ordenes", "select=*") || [];
+  const lista = Array.isArray(ordini) ? ordini : [];
+
+  let totale = 0, nPizze = 0, nBevande = 0, nDessert = 0;
+  for (const o of lista) {
+    totale += calcolaTotale(o.items || []);
+    for (const it of (o.items || [])) {
+      const nome = it.n || "";
+      if (isBevanda(nome))      nBevande += parseInt(it.q || 1);
+      else if (isDesert(nome))  nDessert += parseInt(it.q || 1);
+      else if (nome && !nome.toLowerCase().includes("entrega")) nPizze += parseInt(it.q || 1);
+    }
+  }
+
+  const res = await sbInsert("backup_serata", {
+    fecha: oggi,
+    ts_backup: Date.now(),
+    n_ordini: lista.length,
+    totale: Math.round(totale * 100) / 100,
+    n_pizze: nPizze,
+    n_bevande: nBevande,
+    n_dessert: nDessert,
+    ordini: lista
+  });
+
+  return { success: Array.isArray(res) && res.length > 0, n_ordini: lista.length, totale: Math.round(totale * 100) / 100 };
+}
+
 async function chiudiServizio(deleteAttivi = false) {
   const oggi = new Date().toISOString().slice(0, 10);
   const giorniSettimana = ["domenica","lunedi","martedi","mercoledi","giovedi","venerdi","sabato"];
   const diaSemana = giorniSettimana[new Date().getDay()];
   const ora = new Date().getHours();
   const fasciaOra = ora < 20 ? "presto" : ora < 21 ? "20:00" : ora < 22 ? "21:00" : "tardivo";
+
+  // Backup immediato — prima di qualsiasi operazione sul DB
+  await backupSerata().catch(e => console.error("[chiudiServizio] backup fallito:", e));
 
   // Errori separati: conv e storico gestiti indipendentemente.
   // Se storico OK ma conv fallisce → cleanup ordines avviene comunque (no data loss).
@@ -101,4 +134,4 @@ async function chiudiServizio(deleteAttivi = false) {
   return { success: true, data: oggi, conv_archiviate: archiviate, ordini_storico: ordArch };
 }
 
-module.exports = { scanServizio, chiudiServizio };
+module.exports = { scanServizio, chiudiServizio, backupSerata };
