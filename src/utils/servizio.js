@@ -52,7 +52,7 @@ async function chiudiServizio(deleteAttivi = false) {
   let ordArch = 0;
   for (const o of (Array.isArray(ordiniDaArch) ? ordiniDaArch : [])) {
     const totale = calcolaTotale(o.items || []);
-    const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id");
+    const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id,fecha");
     if (!Array.isArray(res) || res.length === 0) erroriStorico.push("ordine:" + (o.id || "?"));
     else ordArch++;
   }
@@ -75,7 +75,7 @@ async function chiudiServizio(deleteAttivi = false) {
     const erroriAttivi = [];
     for (const o of (Array.isArray(ordiniAttivi) ? ordiniAttivi : [])) {
       const totale = calcolaTotale(o.items || []);
-      const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: "CHIUSO_FORZATO", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id");
+      const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: "CHIUSO_FORZATO", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id,fecha");
       if (!Array.isArray(res) || res.length === 0) erroriAttivi.push("ordine_attivo:" + (o.id || "?"));
     }
     if (erroriAttivi.length > 0) {
