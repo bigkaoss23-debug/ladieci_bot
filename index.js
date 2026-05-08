@@ -170,7 +170,9 @@ function schedula2350() {
   setTimeout(async () => {
     try {
       console.log("[cron 23:50] Avvio chiusura automatica serata...");
-      const res = await chiudiServizio(false);
+      // true = archivia tutto inclusi ordini ancora attivi (EN_COCINA, LISTO, ecc.)
+      // A mezzanotte il servizio è finito — nessun ordine deve restare senza archiviare.
+      const res = await chiudiServizio(true);
       console.log("[cron 23:50] chiudiServizio:", JSON.stringify(res));
       const cfg = await getConfig();
       const OPERATOR_WA_IDS = ["41767011848", "34614267535"];

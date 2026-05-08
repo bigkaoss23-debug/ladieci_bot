@@ -34,14 +34,17 @@ async function chiudiServizio(deleteAttivi = false) {
   const ora = new Date().getHours();
   const fasciaOra = ora < 20 ? "presto" : ora < 21 ? "20:00" : ora < 22 ? "21:00" : "tardivo";
 
-  const erroriArch = [];
+  // Errori separati: conv e storico gestiti indipendentemente.
+  // Se storico OK ma conv fallisce → cleanup ordines avviene comunque (no data loss).
+  const erroriConv = [];
+  const erroriStorico = [];
 
   const convDaArch = await sbSelect("conv", "stato_ordine=in.(ritirata,confermata,chiusa)") || [];
   let archiviate = 0;
   for (const c of (Array.isArray(convDaArch) ? convDaArch : [])) {
     const totale = calcolaTotale(c.items || []);
     const res = await sbUpsert("archivio_conv", { data_servizio: oggi, wa_id: c.wa_id || "", nombre: c.nombre || "", chat: c.chat || [], items: c.items || [], totale, hora: c.hora || "", stato_finale: c.stato_ordine || "", n_messaggi: (c.chat || []).length, ts: c.ts || Date.now() });
-    if (!Array.isArray(res) || res.length === 0) erroriArch.push("conv:" + (c.wa_id || "?"));
+    if (!Array.isArray(res) || res.length === 0) erroriConv.push("conv:" + (c.wa_id || "?"));
     else archiviate++;
   }
 
@@ -50,12 +53,16 @@ async function chiudiServizio(deleteAttivi = false) {
   for (const o of (Array.isArray(ordiniDaArch) ? ordiniDaArch : [])) {
     const totale = calcolaTotale(o.items || []);
     const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id");
-    if (!Array.isArray(res) || res.length === 0) erroriArch.push("ordine:" + (o.id || "?"));
+    if (!Array.isArray(res) || res.length === 0) erroriStorico.push("ordine:" + (o.id || "?"));
     else ordArch++;
   }
 
-  if (erroriArch.length > 0) return { success: false, errori: erroriArch, conv_archiviate: archiviate, ordini_storico: ordArch };
+  // Blocca SOLO se storico ha fallito — errori conv non impediscono la pulizia ordini
+  if (erroriStorico.length > 0) {
+    return { success: false, errori: [...erroriConv, ...erroriStorico], conv_archiviate: archiviate, ordini_storico: ordArch };
+  }
 
+  // Storico OK → elimina completati (anche se alcune conv hanno avuto errori)
   await sbDelete("conv", "stato_ordine=in.(ritirata,confermata,chiusa)");
   // COCINA incluso: wa_msgs COCINA = ordine confermato e già gestito dall'operatore.
   // Senza questa riga sopravvivono a chiudiServizio(false) e ricompaiono il giorno dopo.
@@ -63,11 +70,16 @@ async function chiudiServizio(deleteAttivi = false) {
   await sbDelete("ordenes", "estado=in.(RETIRADO,COMPLETADO)");
 
   if (deleteAttivi) {
-    // Archivia ordini ancora attivi prima di cancellarli (evita perdita dati)
+    // Archivia ordini ancora attivi — verifica errori PRIMA di cancellare (evita data loss)
     const ordiniAttivi = await sbSelect("ordenes", "estado=not.in.(RETIRADO,COMPLETADO)") || [];
+    const erroriAttivi = [];
     for (const o of (Array.isArray(ordiniAttivi) ? ordiniAttivi : [])) {
       const totale = calcolaTotale(o.items || []);
-      await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: "CHIUSO_FORZATO", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id");
+      const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: "CHIUSO_FORZATO", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id");
+      if (!Array.isArray(res) || res.length === 0) erroriAttivi.push("ordine_attivo:" + (o.id || "?"));
+    }
+    if (erroriAttivi.length > 0) {
+      return { success: false, errori: erroriAttivi, conv_archiviate: archiviate, ordini_storico: ordArch };
     }
     // Archivia conversazioni ancora aperte
     const convAttive = await sbSelect("conv", "stato_ordine=not.in.(ritirata,confermata,chiusa)") || [];
