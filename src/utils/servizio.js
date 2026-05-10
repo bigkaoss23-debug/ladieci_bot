@@ -57,12 +57,20 @@ async function backupSerata() {
   return { success: Array.isArray(res) && res.length > 0, n_ordini: lista.length, totale: Math.round(totale * 100) / 100 };
 }
 
+// Calcola la fascia oraria a partire dall'orario "HH:MM" dell'ordine (non dall'ora di esecuzione del cron).
+function fasciaOraDa(hora) {
+  const h = parseInt(String(hora || "").split(":")[0], 10);
+  if (isNaN(h)) return "tardivo";
+  if (h < 20) return "presto";
+  if (h < 21) return "20:00";
+  if (h < 22) return "21:00";
+  return "tardivo";
+}
+
 async function chiudiServizio(deleteAttivi = false) {
   const oggi = new Date().toISOString().slice(0, 10);
   const giorniSettimana = ["domenica","lunedi","martedi","mercoledi","giovedi","venerdi","sabato"];
   const diaSemana = giorniSettimana[new Date().getDay()];
-  const ora = new Date().getHours();
-  const fasciaOra = ora < 20 ? "presto" : ora < 21 ? "20:00" : ora < 22 ? "21:00" : "tardivo";
 
   // Backup immediato — prima di qualsiasi operazione sul DB
   await backupSerata().catch(e => console.error("[chiudiServizio] backup fallito:", e));
@@ -85,7 +93,7 @@ async function chiudiServizio(deleteAttivi = false) {
   let ordArch = 0;
   for (const o of (Array.isArray(ordiniDaArch) ? ordiniDaArch : [])) {
     const totale = calcolaTotale(o.items || []);
-    const payload = { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() };
+    const payload = { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOraDa(o.hora), ts: o.ts || Date.now() };
     // Schema bug: c'è una unique constraint su orden_id da sola che blocca on_conflict=orden_id,fecha.
     // Fallback su on_conflict=orden_id finché la constraint non viene droppata in Supabase.
     let res = await sbUpsert("storico", payload, "orden_id,fecha");
@@ -114,7 +122,7 @@ async function chiudiServizio(deleteAttivi = false) {
     const erroriAttivi = [];
     for (const o of (Array.isArray(ordiniAttivi) ? ordiniAttivi : [])) {
       const totale = calcolaTotale(o.items || []);
-      const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: "CHIUSO_FORZATO", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id,fecha");
+      const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: "CHIUSO_FORZATO", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOraDa(o.hora), ts: o.ts || Date.now() }, "orden_id,fecha");
       if (!Array.isArray(res) || res.length === 0) erroriAttivi.push("ordine_attivo:" + (o.id || "?"));
     }
     if (erroriAttivi.length > 0) {
