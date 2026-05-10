@@ -85,7 +85,13 @@ async function chiudiServizio(deleteAttivi = false) {
   let ordArch = 0;
   for (const o of (Array.isArray(ordiniDaArch) ? ordiniDaArch : [])) {
     const totale = calcolaTotale(o.items || []);
-    const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() }, "orden_id,fecha");
+    const payload = { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOra, ts: o.ts || Date.now() };
+    // Schema bug: c'è una unique constraint su orden_id da sola che blocca on_conflict=orden_id,fecha.
+    // Fallback su on_conflict=orden_id finché la constraint non viene droppata in Supabase.
+    let res = await sbUpsert("storico", payload, "orden_id,fecha");
+    if (!Array.isArray(res) || res.length === 0) {
+      res = await sbUpsert("storico", payload, "orden_id");
+    }
     if (!Array.isArray(res) || res.length === 0) erroriStorico.push("ordine:" + (o.id || "?"));
     else ordArch++;
   }
@@ -134,4 +140,32 @@ async function chiudiServizio(deleteAttivi = false) {
   return { success: true, data: oggi, conv_archiviate: archiviate, ordini_storico: ordArch };
 }
 
-module.exports = { scanServizio, chiudiServizio, backupSerata };
+// Data Madrid in formato YYYY-MM-DD — usata da chiudiServizioGuarded.
+function madridDateStr(d = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
+  const y = parts.find(p => p.type === "year").value;
+  const m = parts.find(p => p.type === "month").value;
+  const day = parts.find(p => p.type === "day").value;
+  return `${y}-${m}-${day}`;
+}
+
+// Wrapper idempotente: se LAST_CLOSE_DATE in config = oggi (Madrid), no-op.
+// Usato da cron 23:50 e dal catch-up all'avvio del server, così se Railway riavvia
+// e il setTimeout muore, al primo restart successivo la chiusura viene recuperata.
+async function chiudiServizioGuarded(deleteAttivi, source) {
+  const oggi = madridDateStr();
+  const cfg = await sbSelect("config", "chiave=eq.LAST_CLOSE_DATE");
+  const last = cfg?.[0]?.valore || "";
+  if (last === oggi) {
+    console.log(`[chiudiServizioGuarded ${source}] già chiuso oggi (${oggi}) — skip`);
+    return { skipped: true, reason: "already_closed_today", data: oggi };
+  }
+  console.log(`[chiudiServizioGuarded ${source}] avvio chiusura (last=${last}, oggi=${oggi})`);
+  const res = await chiudiServizio(deleteAttivi);
+  if (res.success) {
+    await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
+  }
+  return res;
+}
+
+module.exports = { scanServizio, chiudiServizio, chiudiServizioGuarded, backupSerata, madridDateStr };

@@ -4,7 +4,7 @@ const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert } = require("./src/utils/supabase");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
 const { invia } = require("./src/agents/agentWhatsapp");
-const { chiudiServizio, scanServizio, backupSerata } = require("./src/utils/servizio");
+const { chiudiServizio, chiudiServizioGuarded, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
 
 const app = express();
@@ -61,6 +61,10 @@ app.get("/api", async (req, res) => {
       result = cfg;
     } else if (action === "chiudiServizio") {
       result = await chiudiServizio(req.query.deleteAttivi === "true");
+    } else if (action === "triggerCloseIfNeeded") {
+      // Endpoint per cron esterno (es. cron-job.org) — backup del cron interno.
+      // Idempotente: se già chiuso oggi, no-op.
+      result = await chiudiServizioGuarded(true, "external");
     } else if (action === "scanServizio") {
       result = await scanServizio();
     } else if (action === "backupSerata") {
@@ -189,18 +193,17 @@ function schedula2350() {
   setTimeout(async () => {
     try {
       console.log("[cron 23:50] Avvio chiusura automatica serata...");
-      // true = archivia tutto inclusi ordini ancora attivi (EN_COCINA, LISTO, ecc.)
-      // A mezzanotte il servizio è finito — nessun ordine deve restare senza archiviare.
-      const res = await chiudiServizio(true);
-      console.log("[cron 23:50] chiudiServizio:", JSON.stringify(res));
+      // chiudiServizioGuarded è idempotente: setta LAST_CLOSE_DATE in config dopo successo.
+      // Se Railway riavvia dopo le 23:50, il catch-up all'avvio recupera la chiusura mancata.
+      const res = await chiudiServizioGuarded(true, "cron2350");
+      console.log("[cron 23:50] risultato:", JSON.stringify(res));
       const cfg = await getConfig();
       const OPERATOR_WA_IDS = ["41767011848", "34614267535"];
-      const msg = res.success
-        ? `🌙 *Serata chiusa automaticamente* (23:50)\n\nArchiviate ${res.conv_archiviate || 0} conv · ${res.ordini_storico || 0} ordini su storico.\n\nBuonanotte! 🍕`
-        : `⚠️ Chiusura automatica 23:50 — errore archivio:\n${JSON.stringify(res.errori || res)}`;
-      for (const waId of OPERATOR_WA_IDS) {
-        await invia(waId, msg, cfg).catch(() => {});
-      }
+      let msg;
+      if (res.skipped) msg = null;
+      else if (res.success) msg = `🌙 *Serata chiusa automaticamente* (23:50)\n\nArchiviate ${res.conv_archiviate || 0} conv · ${res.ordini_storico || 0} ordini su storico.\n\nBuonanotte! 🍕`;
+      else msg = `⚠️ Chiusura automatica 23:50 — errore archivio:\n${JSON.stringify(res.errori || res)}`;
+      if (msg) for (const waId of OPERATOR_WA_IDS) await invia(waId, msg, cfg).catch(() => {});
     } catch (e) {
       console.error("[cron 23:50] errore:", e);
     }
@@ -208,5 +211,44 @@ function schedula2350() {
   }, delay);
 }
 
+// Catch-up all'avvio del server: se è dopo le 23:55 Madrid (o prima delle 06:00 del giorno
+// dopo) e LAST_CLOSE_DATE in config non è "ieri", il setTimeout della sera è morto durante
+// un riavvio Railway — recuperiamo subito.
+async function catchUpChiusura() {
+  try {
+    const now = new Date();
+    const madridHourStr = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", hour12: false }).format(now);
+    const h = parseInt(madridHourStr, 10);
+    // Finestra di recupero: 23:55-23:59 (cron interno morto) oppure 00:00-06:00 (recupero post-restart notturno)
+    const inWindow = (h === 23) || (h >= 0 && h < 6);
+    if (!inWindow) {
+      console.log(`[catchUp] fuori finestra (h=${h} Madrid) — skip`);
+      return;
+    }
+    const cfg = await sbSelect("config", "chiave=eq.LAST_CLOSE_DATE");
+    const last = cfg?.[0]?.valore || "";
+    // Determina la data di chiusura attesa: se ora Madrid è 0-5, è "ieri Madrid";
+    // se è 23, è "oggi Madrid".
+    const refDate = new Date(now);
+    if (h < 6) refDate.setUTCDate(refDate.getUTCDate() - 1);
+    const expectedDate = madridDateStr(refDate);
+    if (last === expectedDate) {
+      console.log(`[catchUp] LAST_CLOSE_DATE=${last} OK — skip`);
+      return;
+    }
+    console.log(`[catchUp] chiusura mancante (last=${last}, expected=${expectedDate}) — eseguo`);
+    const res = await chiudiServizioGuarded(true, "catchUp");
+    console.log("[catchUp] risultato:", JSON.stringify(res));
+    if (res.success && !res.skipped) {
+      const cfgAll = await getConfig();
+      const msg = `🌙 *Recupero chiusura serata* (avvio server)\n\nArchiviate ${res.conv_archiviate || 0} conv · ${res.ordini_storico || 0} ordini su storico.`;
+      for (const waId of ["41767011848", "34614267535"]) await invia(waId, msg, cfgAll).catch(() => {});
+    }
+  } catch (e) {
+    console.error("[catchUp] errore:", e);
+  }
+}
+
 schedula2340();
 schedula2350();
+catchUpChiusura();
