@@ -152,6 +152,11 @@ function madridDateStr(d = new Date()) {
 // Wrapper idempotente: se LAST_CLOSE_DATE in config = oggi (Madrid), no-op.
 // Usato da cron 23:50 e dal catch-up all'avvio del server, così se Railway riavvia
 // e il setTimeout muore, al primo restart successivo la chiusura viene recuperata.
+//
+// LAST_CLOSE_DATE viene settato SOLO se siamo dentro la "finestra di chiusura"
+// (ora Madrid 22:00-06:59) oppure se è stato archiviato almeno qualcosa. Questo
+// evita che una chiamata mattutina (es. trigger esterno alle 10) marchi il giorno
+// come "chiuso" e blocchi la chiusura serale legittima alle 23:50.
 async function chiudiServizioGuarded(deleteAttivi, source) {
   const oggi = madridDateStr();
   const cfg = await sbSelect("config", "chiave=eq.LAST_CLOSE_DATE");
@@ -162,8 +167,16 @@ async function chiudiServizioGuarded(deleteAttivi, source) {
   }
   console.log(`[chiudiServizioGuarded ${source}] avvio chiusura (last=${last}, oggi=${oggi})`);
   const res = await chiudiServizio(deleteAttivi);
-  if (res.success) {
+
+  const madridHourStr = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", hour12: false }).format(new Date());
+  const h = parseInt(madridHourStr, 10);
+  const inFinestraChiusura = (h >= 22) || (h < 7);
+  const haArchiviato = (res.conv_archiviate || 0) + (res.ordini_storico || 0) > 0;
+  if (res.success && (inFinestraChiusura || haArchiviato)) {
     await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
+    console.log(`[chiudiServizioGuarded ${source}] LAST_CLOSE_DATE settato a ${oggi}`);
+  } else if (res.success) {
+    console.log(`[chiudiServizioGuarded ${source}] success ma fuori finestra e 0 archiviati — LAST_CLOSE_DATE NON aggiornato`);
   }
   return res;
 }
