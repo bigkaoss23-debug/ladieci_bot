@@ -60,7 +60,15 @@ app.get("/api", async (req, res) => {
     } else if (action === "getConfig") {
       result = cfg;
     } else if (action === "chiudiServizio") {
-      result = await chiudiServizio(req.query.deleteAttivi === "true");
+      // Blocco temporale: chiusura permessa solo dopo le 22:00 Madrid (override con ?force=true)
+      const madridHourStr = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", hour12: false }).format(new Date());
+      const h = parseInt(madridHourStr, 10);
+      if (h < 22 && req.query.force !== "true") {
+        result = { success: false, error: `Chiusura permessa solo dopo le 22:00 Madrid (ora attuale: ${h}:00). Per forzare aggiungere &force=true.` };
+      } else {
+        // Sempre via Guarded: idempotente, non si ripete nello stesso giorno
+        result = await chiudiServizioGuarded(req.query.deleteAttivi === "true", "operator");
+      }
     } else if (action === "triggerCloseIfNeeded") {
       // Endpoint per cron esterno (es. cron-job.org) — backup del cron interno.
       // Idempotente: se già chiuso oggi, no-op.
@@ -68,7 +76,14 @@ app.get("/api", async (req, res) => {
     } else if (action === "scanServizio") {
       result = await scanServizio();
     } else if (action === "backupSerata") {
-      result = await backupSerata();
+      // Stesso blocco temporale del chiudiServizio: il backup è preludio alla chiusura
+      const madridHourStr = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", hour12: false }).format(new Date());
+      const h = parseInt(madridHourStr, 10);
+      if (h < 22 && req.query.force !== "true") {
+        result = { success: false, error: `Backup permesso solo dopo le 22:00 Madrid (ora attuale: ${h}:00). Per forzare aggiungere &force=true.` };
+      } else {
+        result = await backupSerata();
+      }
     } else if (action === "rigeneraSuggerimenti") {
       result = await rigeneraSuggerimenti();
     } else if (action === "approvaSuggerimento") {

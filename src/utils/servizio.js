@@ -94,12 +94,9 @@ async function chiudiServizio(deleteAttivi = false) {
   for (const o of (Array.isArray(ordiniDaArch) ? ordiniDaArch : [])) {
     const totale = calcolaTotale(o.items || []);
     const payload = { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOraDa(o.hora), ts: o.ts || Date.now() };
-    // Schema bug: c'è una unique constraint su orden_id da sola che blocca on_conflict=orden_id,fecha.
-    // Fallback su on_conflict=orden_id finché la constraint non viene droppata in Supabase.
-    let res = await sbUpsert("storico", payload, "orden_id,fecha");
-    if (!Array.isArray(res) || res.length === 0) {
-      res = await sbUpsert("storico", payload, "orden_id");
-    }
+    // La unique constraint sbagliata su solo orden_id è stata droppata: ora (orden_id, fecha) è la chiave.
+    // Niente più fallback — il fallback su solo orden_id sovrascriveva righe di giorni passati causando data loss.
+    const res = await sbUpsert("storico", payload, "orden_id,fecha");
     if (!Array.isArray(res) || res.length === 0) erroriStorico.push("ordine:" + (o.id || "?"));
     else ordArch++;
   }
