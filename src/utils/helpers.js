@@ -3,11 +3,25 @@
 // ===============================================================
 
 const { sbSelect, sbUpsert, sbUpdate } = require("./supabase");
+const { COSTO_CONSEGNA } = require("../config");
 
 // --- CALCOLI ---
+//
+// Una sola sorgente di verità per il totale ordine:
+//   totale = sum(items.p * items.q) + delivery_fee
+// delivery_fee dipende SOLO da tipo_consegna ("DOMICILIO" → COSTO_CONSEGNA, altrimenti 0).
+// Mai sommare il delivery in altri punti del codice — usare sempre queste funzioni.
 
 function calcolaTotale(items = []) {
   return Math.round(items.reduce((t, it) => t + (parseFloat(it.p || 0) * parseInt(it.q || 1)), 0) * 100) / 100;
+}
+
+function deliveryFeeFor(tipoConsegna) {
+  return (tipoConsegna === "DOMICILIO") ? COSTO_CONSEGNA : 0;
+}
+
+function calcolaTotaleOrdine(items = [], tipoConsegna = "RITIRO") {
+  return Math.round((calcolaTotale(items) + deliveryFeeFor(tipoConsegna)) * 100) / 100;
 }
 
 function isBevanda(n = "") {
@@ -236,7 +250,8 @@ async function upsertWaMsg(waId, nombre, txt, stato, conf, items, hora, botRispo
 }
 
 module.exports = {
-  rand, calcolaTotale, isBevanda, isDesert, mergeItems, mergeItemsBevande,
+  rand, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine,
+  isBevanda, isDesert, mergeItems, mergeItemsBevande,
   buildResumen, buildUpsell, buildMsgRicevuto, introChiediOra, ctaRisposta,
   appendChat, updateConvDati, createConv, getConversazione, upsertWaMsg
 };

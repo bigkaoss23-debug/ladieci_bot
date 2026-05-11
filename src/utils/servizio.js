@@ -3,7 +3,7 @@
 // ===============================================================
 
 const { sbSelect, sbUpsert, sbDelete, sbInsert } = require("./supabase");
-const { calcolaTotale, isBevanda, isDesert } = require("./helpers");
+const { calcolaTotale, calcolaTotaleOrdine, deliveryFeeFor, isBevanda, isDesert } = require("./helpers");
 
 async function scanServizio() {
   const oggi = new Date().toISOString().slice(0, 10);
@@ -34,12 +34,16 @@ async function backupSerata() {
 
   let totale = 0, nPizze = 0, nBevande = 0, nDessert = 0;
   for (const o of lista) {
-    totale += calcolaTotale(o.items || []);
+    // Preferisce il totale già calcolato e salvato (nuovo sistema).
+    // Fallback per ordini legacy senza la colonna: ricalcola con delivery_fee.
+    const t = Number(o.totale) || 0;
+    totale += (t > 0) ? t : calcolaTotaleOrdine(o.items || [], o.tipo_consegna || "RITIRO");
     for (const it of (o.items || [])) {
       const nome = it.n || "";
+      if (nome === "Entrega a domicilio") continue; // legacy: ignora il fake item
       if (isBevanda(nome))      nBevande += parseInt(it.q || 1);
       else if (isDesert(nome))  nDessert += parseInt(it.q || 1);
-      else if (nome && !nome.toLowerCase().includes("entrega")) nPizze += parseInt(it.q || 1);
+      else if (nome)            nPizze += parseInt(it.q || 1);
     }
   }
 
@@ -92,10 +96,18 @@ async function chiudiServizio(deleteAttivi = false) {
   const ordiniDaArch = await sbSelect("ordenes", "estado=in.(RETIRADO,COMPLETADO)") || [];
   let ordArch = 0;
   for (const o of (Array.isArray(ordiniDaArch) ? ordiniDaArch : [])) {
-    const totale = calcolaTotale(o.items || []);
-    const payload = { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOraDa(o.hora), ts: o.ts || Date.now() };
+    // Copia delivery_fee e totale dall'ordine (già calcolati alla creazione/modifica).
+    // Fallback safe per ordini legacy senza queste colonne.
+    const tipoConsegna = o.tipo_consegna || "RITIRO";
+    const deliveryFee  = (o.delivery_fee != null) ? Number(o.delivery_fee) : deliveryFeeFor(tipoConsegna);
+    const totale       = (Number(o.totale) > 0) ? Number(o.totale) : calcolaTotaleOrdine(o.items || [], tipoConsegna);
+    const payload = {
+      orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA",
+      items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: o.estado || "",
+      totale, delivery_fee: deliveryFee, tipo_consegna: tipoConsegna,
+      fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOraDa(o.hora), ts: o.ts || Date.now()
+    };
     // La unique constraint sbagliata su solo orden_id è stata droppata: ora (orden_id, fecha) è la chiave.
-    // Niente più fallback — il fallback su solo orden_id sovrascriveva righe di giorni passati causando data loss.
     const res = await sbUpsert("storico", payload, "orden_id,fecha");
     if (!Array.isArray(res) || res.length === 0) erroriStorico.push("ordine:" + (o.id || "?"));
     else ordArch++;
@@ -118,8 +130,15 @@ async function chiudiServizio(deleteAttivi = false) {
     const ordiniAttivi = await sbSelect("ordenes", "estado=not.in.(RETIRADO,COMPLETADO)") || [];
     const erroriAttivi = [];
     for (const o of (Array.isArray(ordiniAttivi) ? ordiniAttivi : [])) {
-      const totale = calcolaTotale(o.items || []);
-      const res = await sbUpsert("storico", { orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA", items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: "CHIUSO_FORZATO", totale, tipo_consegna: o.tipo_consegna || "RITIRO", fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOraDa(o.hora), ts: o.ts || Date.now() }, "orden_id,fecha");
+      const tipoConsegna = o.tipo_consegna || "RITIRO";
+      const deliveryFee  = (o.delivery_fee != null) ? Number(o.delivery_fee) : deliveryFeeFor(tipoConsegna);
+      const totale       = (Number(o.totale) > 0) ? Number(o.totale) : calcolaTotaleOrdine(o.items || [], tipoConsegna);
+      const res = await sbUpsert("storico", {
+        orden_id: o.id || "", nombre: o.nombre || "", tel: o.tel || o.wa_id || "", canal: o.canal || "WA",
+        items: o.items || [], nota: o.nota || "", hora: o.hora || "", estado: "CHIUSO_FORZATO",
+        totale, delivery_fee: deliveryFee, tipo_consegna: tipoConsegna,
+        fecha: oggi, dia_semana: diaSemana, fascia_ora: fasciaOraDa(o.hora), ts: o.ts || Date.now()
+      }, "orden_id,fecha");
       if (!Array.isArray(res) || res.length === 0) erroriAttivi.push("ordine_attivo:" + (o.id || "?"));
     }
     if (erroriAttivi.length > 0) {

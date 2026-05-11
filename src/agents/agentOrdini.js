@@ -3,16 +3,18 @@
 // ===============================================================
 
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
-const { mergeItemsBevande } = require("../utils/helpers");
+const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine } = require("../utils/helpers");
 
 async function creaOrdine(params) {
-  // ═══ Sovrprezzo consegna 2.50€ — aggiunto automaticamente per DOMICILIO ═══
-  const COSTO_CONSEGNA = { n: "Entrega a domicilio", p: 2.50, q: 1, e: "🛵", sub: "" };
-  let itemsFinali = params.items || [];
-  if ((params.tipo_consegna || "RITIRO") === "DOMICILIO") {
-    const giàPresente = itemsFinali.some(i => i.n === COSTO_CONSEGNA.n);
-    if (!giàPresente) itemsFinali = [...itemsFinali, COSTO_CONSEGNA];
-  }
+  // ═══ Items SENZA fake "Entrega a domicilio" ═══
+  // Il costo consegna vive nella colonna delivery_fee, NON dentro items.
+  // Items contiene solo prodotti veri (pizze, bevande, dolci).
+  // Se qualcuno (vecchi flussi) lo manda dentro items, lo filtriamo via.
+  const itemsRaw = params.items || [];
+  const itemsFinali = itemsRaw.filter(i => i.n !== "Entrega a domicilio");
+  const tipoConsegna = params.tipo_consegna || "RITIRO";
+  const deliveryFee = deliveryFeeFor(tipoConsegna);
+  const totale = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
 
   // ═══ ID generation con retry anti-race-condition ═══
   // Usiamo sbInsert (plain INSERT senza merge-duplicates) così una collisione
@@ -53,7 +55,9 @@ async function creaOrdine(params) {
       cucina_check: params.cucina_check || null,
       ts: Date.now(),
       llegado: false,
-      tipo_consegna:  params.tipo_consegna  || "RITIRO",
+      tipo_consegna:  tipoConsegna,
+      delivery_fee:   deliveryFee,
+      totale:         totale,
       direccion:      params.direccion      || null,
       direccion_note: params.direccion_note || null,
       zona:           params.zona           || null,
@@ -79,7 +83,8 @@ async function creaOrdine(params) {
 
 async function modificaOrdine(ordenId, updates) {
   const upd = {};
-  if (updates.items) upd.items = updates.items;
+  // Items: filtra sempre il fake item (sicurezza retrocompatibile con chiamate vecchie)
+  if (updates.items) upd.items = updates.items.filter(i => i.n !== "Entrega a domicilio");
   if (updates.nota !== undefined) upd.nota = updates.nota;
   if (updates.hora) upd.hora = updates.hora;
   if (updates.nota_cucina !== undefined) upd.nota_cucina = updates.nota_cucina;
@@ -91,6 +96,20 @@ async function modificaOrdine(ordenId, updates) {
   if (updates.zona_lat       !== undefined) upd.zona_lat       = updates.zona_lat;
   if (updates.zona_lon       !== undefined) upd.zona_lon       = updates.zona_lon;
   if (updates.zona_manuale   !== undefined) upd.zona_manuale   = updates.zona_manuale;
+
+  // Se items o tipo_consegna cambiano, ricalcola delivery_fee + totale.
+  // Servono i valori attuali del DB per le parti non aggiornate.
+  if (upd.items || upd.tipo_consegna !== undefined) {
+    const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
+    const ord = rows?.[0];
+    if (ord) {
+      const itemsFinali = upd.items || (ord.items || []).filter(i => i.n !== "Entrega a domicilio");
+      const tipoConsegna = upd.tipo_consegna !== undefined ? upd.tipo_consegna : (ord.tipo_consegna || "RITIRO");
+      upd.delivery_fee = deliveryFeeFor(tipoConsegna);
+      upd.totale       = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
+    }
+  }
+
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
   return { success: true };
 }
@@ -118,8 +137,15 @@ async function cambiaStato(ordenId, nuovoStato) {
 async function aggiungiItems(ordenId, newItems) {
   const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
   if (!rows || rows.length === 0) return { error: "not found" };
-  const merged = mergeItemsBevande(rows[0].items || [], newItems);
-  await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, { items: merged });
+  // Filtriamo via il fake item anche dagli newItems per sicurezza
+  const cleanedNew = (newItems || []).filter(i => i.n !== "Entrega a domicilio");
+  const merged = mergeItemsBevande((rows[0].items || []).filter(i => i.n !== "Entrega a domicilio"), cleanedNew);
+  const tipoConsegna = rows[0].tipo_consegna || "RITIRO";
+  await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, {
+    items: merged,
+    delivery_fee: deliveryFeeFor(tipoConsegna),
+    totale:       calcolaTotaleOrdine(merged, tipoConsegna)
+  });
   return { success: true, items: merged };
 }
 
