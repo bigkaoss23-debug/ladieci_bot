@@ -114,8 +114,20 @@ async function modificaOrdine(ordenId, updates) {
   return { success: true };
 }
 
-async function cambiaStato(ordenId, nuovoStato) {
-  await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, { estado: nuovoStato });
+// extras: { metodo_pago, cobrado, hora_entrega, hora_salida, repartidor, llegado, cucina_check }
+// Scrittura atomica singola — niente cerotti, niente race tra metodo_pago e estado.
+async function cambiaStato(ordenId, nuovoStato, extras = {}) {
+  const upd = { estado: nuovoStato };
+  if (extras.metodo_pago  !== undefined) upd.metodo_pago  = extras.metodo_pago || "";
+  if (extras.cobrado      !== undefined) upd.cobrado      = extras.cobrado === true;
+  if (extras.ya_pagado    !== undefined) upd.ya_pagado    = extras.ya_pagado === true;
+  if (extras.hora_entrega !== undefined) upd.hora_entrega = extras.hora_entrega;
+  if (extras.hora_salida  !== undefined) upd.hora_salida  = extras.hora_salida;
+  if (extras.repartidor   !== undefined) upd.repartidor   = extras.repartidor || null;
+  if (extras.llegado      !== undefined) upd.llegado      = extras.llegado === true;
+  if (extras.cucina_check !== undefined) upd.cucina_check = extras.cucina_check;
+
+  await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
   if (nuovoStato === "EN_COCINA") {
     const ord1 = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
     if (ord1?.[0]?.wa_id) {

@@ -4,7 +4,7 @@ const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert } = require("./src/utils/supabase");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
 const { invia } = require("./src/agents/agentWhatsapp");
-const { chiudiServizio, chiudiServizioGuarded, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
+const { chiudiServizio, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
 
 const app = express();
@@ -67,12 +67,12 @@ app.get("/api", async (req, res) => {
         result = { success: false, error: `Chiusura permessa solo dopo le 22:00 Madrid (ora attuale: ${h}:00). Per forzare aggiungere &force=true.` };
       } else {
         // Sempre via Guarded: idempotente, non si ripete nello stesso giorno
-        result = await chiudiServizioGuarded(req.query.deleteAttivi === "true", "operator");
+        result = await chiudiServizio(req.query.deleteAttivi === "true", "operator");
       }
     } else if (action === "triggerCloseIfNeeded") {
       // Endpoint per cron esterno (es. cron-job.org) — backup del cron interno.
       // Idempotente: se già chiuso oggi, no-op.
-      result = await chiudiServizioGuarded(true, "external");
+      result = await chiudiServizio(true, "external");
     } else if (action === "scanServizio") {
       result = await scanServizio();
     } else if (action === "backupSerata") {
@@ -143,13 +143,75 @@ app.post("/api", async (req, res) => {
     } else if (action === "updateOrden") {
       result = await modificaOrdine(req.body.id, req.body);
     } else if (action === "updateEstado") {
-      result = await cambiaStato(req.body.id, req.body.estado);
+      // Accetta campi pagamento/timing/repartidor in unica scrittura atomica
+      const extras = {};
+      for (const k of ["metodo_pago","cobrado","ya_pagado","hora_entrega","hora_salida","repartidor","llegado","cucina_check"]) {
+        if (req.body[k] !== undefined) extras[k] = req.body[k];
+      }
+      result = await cambiaStato(req.body.id, req.body.estado, extras);
+    } else if (action === "marcarEnEntrega") {
+      // LISTO → EN_ENTREGA — registra hora_salida atomicamente
+      result = await cambiaStato(req.body.id, "EN_ENTREGA", { hora_salida: Date.now() });
+    } else if (action === "marcarEntregado") {
+      // EN_ENTREGA/LISTO → RETIRADO — registra hora_entrega + cobrado + metodo_pago atomicamente
+      result = await cambiaStato(req.body.id, "RETIRADO", {
+        hora_entrega: Date.now(),
+        cobrado: req.body.cobrado !== false,
+        metodo_pago: req.body.metodo_pago || ""
+      });
+    } else if (action === "asignarRepartidor") {
+      await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { repartidor: req.body.repartidor || null });
+      result = { success: true };
+    } else if (action === "registrarSalidaDriver") {
+      // Driver fuori: setta DRIVER_STATO con zona + ora partenza
+      const nuovoStato = {
+        stato: "IN_GIRO",
+        zona: req.body.zona || null,
+        partito_alle: new Date().toISOString(),
+        n_ordini: req.body.n_ordini || 1,
+        rientro_stimato: null
+      };
+      await sbUpsert("config", { chiave: "DRIVER_STATO", valore: JSON.stringify(nuovoStato) }, "chiave");
+      result = { success: true, stato: nuovoStato };
+    } else if (action === "chiudiGiro") {
+      // Driver rientra: calcola rientro stimato, logga il giro
+      const rows = await sbSelect("config", "chiave=eq.DRIVER_STATO");
+      const ds = rows?.[0]?.valore
+        ? (typeof rows[0].valore === "string" ? JSON.parse(rows[0].valore) : rows[0].valore)
+        : null;
+      if (ds?.partito_alle) {
+        const adesso = new Date();
+        const tempoAndata = Math.round((adesso - new Date(ds.partito_alle)) / 60000);
+        const rientroStimato = new Date(adesso.getTime() + (tempoAndata + 3) * 60000).toISOString();
+        await sbUpsert("config", {
+          chiave: "DRIVER_STATO",
+          valore: JSON.stringify({ ...ds, rientro_stimato: rientroStimato })
+        }, "chiave");
+        // Log silenzioso se la tabella non esiste
+        try {
+          await sbUpsert("delivery_logs", {
+            zona: ds.zona, n_ordini: ds.n_ordini || 1,
+            partito_alle: ds.partito_alle, ultimo_entregado: adesso.toISOString(),
+            tempo_andata_min: tempoAndata, rientro_stimato: rientroStimato
+          });
+        } catch (_) {}
+        result = { success: true, rientroStimato, tempoAndata };
+      } else {
+        result = { success: true, skipped: "driver_not_out" };
+      }
+    } else if (action === "marcarLlegado") {
+      // Cliente arrivato (RITIRO) — segna flag llegado
+      await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { llegado: req.body.llegado !== false });
+      result = { success: true };
     } else if (action === "createOrden") {
       const d = req.body.data || req.body;
       if (!d.waId && d.wa_id) d.waId = d.wa_id;
       result = await creaOrdine(d);
     } else if (action === "updateNotaCucina") {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { nota_cucina: req.body.nota_cucina });
+      result = { success: true };
+    } else if (action === "eliminaOrdine") {
+      await sbDelete("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`);
       result = { success: true };
     } else if (action === "eliminaConversazione") {
       const wid = req.body.wa_id;
@@ -174,6 +236,39 @@ app.post("/api", async (req, res) => {
 app.get("/health", (_, res) => res.json({ ok: true, ts: Date.now() }));
 
 app.listen(PORT, () => console.log(`La Dieci Bot running on port ${PORT}`));
+
+// ─── Messaggio operatore di fine chiusura (summary completa) ────────────────
+function buildCloseSummaryMsg(res, ctx) {
+  if (res?.skipped) return null;
+  if (!res?.success) {
+    return `⚠️ *Chiusura ${ctx} — ERRORE*\n\n${res?.error || "fallita"}\n\n${JSON.stringify(res?.details || res).slice(0, 400)}\n\nIl backup raw è in backup_serata, nessun dato perso. Riprova manualmente.`;
+  }
+  const s = res.summary || {};
+  const eur = n => `${(Number(n)||0).toFixed(2)}€`;
+  const cassaLines = [];
+  if (s.cassa_efectivo > 0)        cassaLines.push(`  💵 Efectivo  ${eur(s.cassa_efectivo)}`);
+  if (s.cassa_tarjeta > 0)         cassaLines.push(`  💳 Tarjeta   ${eur(s.cassa_tarjeta)}`);
+  if (s.cassa_bizum > 0)           cassaLines.push(`  📱 Bizum     ${eur(s.cassa_bizum)}`);
+  if (s.cassa_non_specificato > 0) cassaLines.push(`  ❓ Non spec. ${eur(s.cassa_non_specificato)}`);
+  const zonaLines = Object.entries(s.per_zona || {}).map(([z, v]) => `  ${z}: ${v.n}× · ${eur(v.eur)}`);
+  return [
+    `🌙 *Serata chiusa* (${ctx})`,
+    ``,
+    `📊 ${s.n_ordini} ordini · 🍕 ${s.n_pizze} pizze · 🥤 ${s.n_bevande} bevande${s.n_dessert ? ` · 🍰 ${s.n_dessert} dolci` : ""}`,
+    `🛵 ${s.n_delivery} delivery · 🏠 ${s.n_ritiro} ritiro`,
+    `👥 ${s.n_clienti_unici} clienti${s.n_clienti_nuovi ? ` (${s.n_clienti_nuovi} nuovi)` : ""}`,
+    `💬 ${s.n_domande_gestite || 0} domande gestite`,
+    ``,
+    `💰 *Cassa ${eur(s.cassa_totale)}*` + (s.delivery_fee_totale > 0 ? ` (di cui ${eur(s.delivery_fee_totale)} delivery fee)` : ""),
+    ...cassaLines,
+    ``,
+    zonaLines.length > 0 ? `🗺️ *Per zona:*` : "",
+    ...zonaLines,
+    ``,
+    res.backupOk ? `✅ Backup raw OK` : `⚠️ Backup raw fallito (chiusura comunque OK)`,
+    `Buonanotte! 🍕`
+  ].filter(Boolean).join("\n");
+}
 
 // ─── CRON AUTOMATICO: backup + chiudi serata (ora di Madrid) ────────────────
 function msUntilMadridHM(h, m) {
@@ -208,16 +303,13 @@ function schedula2350() {
   setTimeout(async () => {
     try {
       console.log("[cron 23:50] Avvio chiusura automatica serata...");
-      // chiudiServizioGuarded è idempotente: setta LAST_CLOSE_DATE in config dopo successo.
+      // chiudiServizio è idempotente: lock via INSERT serata_summary (PK su fecha).
       // Se Railway riavvia dopo le 23:50, il catch-up all'avvio recupera la chiusura mancata.
-      const res = await chiudiServizioGuarded(true, "cron2350");
+      const res = await chiudiServizio(true, "cron2350");
       console.log("[cron 23:50] risultato:", JSON.stringify(res));
       const cfg = await getConfig();
       const OPERATOR_WA_IDS = ["41767011848", "34614267535"];
-      let msg;
-      if (res.skipped) msg = null;
-      else if (res.success) msg = `🌙 *Serata chiusa automaticamente* (23:50)\n\nArchiviate ${res.conv_archiviate || 0} conv · ${res.ordini_storico || 0} ordini su storico.\n\nBuonanotte! 🍕`;
-      else msg = `⚠️ Chiusura automatica 23:50 — errore archivio:\n${JSON.stringify(res.errori || res)}`;
+      const msg = buildCloseSummaryMsg(res, "23:50 automatica");
       if (msg) for (const waId of OPERATOR_WA_IDS) await invia(waId, msg, cfg).catch(() => {});
     } catch (e) {
       console.error("[cron 23:50] errore:", e);
@@ -252,12 +344,12 @@ async function catchUpChiusura() {
       return;
     }
     console.log(`[catchUp] chiusura mancante (last=${last}, expected=${expectedDate}) — eseguo`);
-    const res = await chiudiServizioGuarded(true, "catchUp");
+    const res = await chiudiServizio(true, "catchUp");
     console.log("[catchUp] risultato:", JSON.stringify(res));
     if (res.success && !res.skipped) {
       const cfgAll = await getConfig();
-      const msg = `🌙 *Recupero chiusura serata* (avvio server)\n\nArchiviate ${res.conv_archiviate || 0} conv · ${res.ordini_storico || 0} ordini su storico.`;
-      for (const waId of ["41767011848", "34614267535"]) await invia(waId, msg, cfgAll).catch(() => {});
+      const msg = buildCloseSummaryMsg(res, "Recupero post-restart");
+      if (msg) for (const waId of ["41767011848", "34614267535"]) await invia(waId, msg, cfgAll).catch(() => {});
     }
   } catch (e) {
     console.error("[catchUp] errore:", e);
