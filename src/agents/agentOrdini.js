@@ -64,6 +64,7 @@ async function creaOrdine(params) {
       zona_lat:       params.zona_lat       || null,
       zona_lon:       params.zona_lon       || null,
       zona_manuale:   params.zona_manuale   || false,
+      forzado:        params.forzado        || false,
       ya_pagado:      params.ya_pagado      || false,
       metodo_pago:    params.metodo_pago    || ""
     });
@@ -96,6 +97,7 @@ async function modificaOrdine(ordenId, updates) {
   if (updates.zona_lat       !== undefined) upd.zona_lat       = updates.zona_lat;
   if (updates.zona_lon       !== undefined) upd.zona_lon       = updates.zona_lon;
   if (updates.zona_manuale   !== undefined) upd.zona_manuale   = updates.zona_manuale;
+  if (updates.forzado        !== undefined) upd.forzado        = updates.forzado === true;
 
   // Se items o tipo_consegna cambiano, ricalcola delivery_fee + totale.
   // Servono i valori attuali del DB per le parti non aggiornate.
