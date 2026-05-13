@@ -4,7 +4,7 @@
 
 const { sbSelect } = require("../utils/supabase");
 const { isBevanda, isDesert, getConversazione } = require("../utils/helpers");
-const { ZONE_DELIVERY, calcolaTempoGiro } = require("../utils/zones");
+const { ZONE_DELIVERY, calcolaTempoGiro, simulateDriverSchedule } = require("../utils/zones");
 
 function pad(n) { return n < 10 ? "0" + n : "" + n; }
 
@@ -83,14 +83,14 @@ async function getCaricoForno(oraRichiesta) {
   };
 }
 
-// Verifica capacità giri delivery per una zona — analogo a getCaricoForno per il forno.
-// Consolida ordini: prima cerca slot già "caldi" (stessa zona, stesso orario con spazio),
-// poi cerca il primo slot libero. Considera driver IN_GIRO per posticipare se necessario.
+// Verifica capacità giri delivery per una zona (cascade-aware via simulateDriverSchedule).
+// Consolida ordini: prima cerca slot già "caldi" (stessa zona stesso slot10 con spazio),
+// poi propone il primo slot libero. Considera driver IN_GIRO + sequenza cascadeata.
 async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null) {
   const zona = ZONE_DELIVERY.find(z => z.id === zonaId);
   if (!zona) return { slotAssegnato: oraRichiesta, slotRichiesto: oraRichiesta, zonaCompleta: false, driverInGiro: false };
 
-  // Stato driver da config Supabase
+  // Stato driver da config Supabase (override "real-time" se driver è fuori adesso)
   const driverRows = await sbSelect("config", "chiave=eq.DRIVER_STATO");
   let driverStato = null;
   try {
@@ -100,74 +100,66 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
 
   const driverInGiro = !!(driverStato?.stato === "IN_GIRO" && driverStato?.zona === zonaId && driverStato?.partito_alle);
 
-  // Conta ordini delivery attivi per (zona, hora)
+  // Ordini delivery attivi (per consolidazione zonale + simulazione cascade)
   const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
+
+  // ── Conta ordini per (zona, slot10(hora)) — coerente con la logica di aggregazione ──
+  const slotKey = (z, h) => {
+    const [hh, mm] = String(h).split(":").map(Number);
+    const m = hh * 60 + (mm || 0);
+    const mArr = Math.round(m / 10) * 10;
+    const aH = Math.floor(mArr / 60), aM = mArr % 60;
+    return `${z}|${String(aH).padStart(2,"0")}:${String(aM).padStart(2,"0")}`;
+  };
   const slotCount = {};
   for (const o of rows) {
     if (!o.zona || !o.hora) continue;
-    const key = `${o.zona}|${o.hora}`;
-    slotCount[key] = (slotCount[key] || 0) + 1;
+    const k = slotKey(o.zona, o.hora);
+    slotCount[k] = (slotCount[k] || 0) + 1;
   }
 
-  // Orario minimo: rispetta driver in giro (aspetta rientro se non è ancora tornato)
+  // ── minMin: rispetta hora richiesta + driver in giro (real-time) + driverLibero (cascade) ──
   const [h, m] = String(oraRichiesta || "20:00").split(":").map(Number);
   let minMin = h * 60 + (m || 0);
 
+  // Override real-time: driver fuori adesso, deve tornare prima di poter ripartire
   if (driverInGiro) {
     const rientro = new Date(new Date(driverStato.partito_alle).getTime() + zona.tempoGiro * 60000);
     if (rientro > new Date()) {
       const rientroMin = rientro.getHours() * 60 + rientro.getMinutes();
-      minMin = Math.max(minMin, rientroMin + 5); // +5 min buffer
+      minMin = Math.max(minMin, rientroMin + 5);
     }
   }
+
+  // Simulazione cascade: quando è realmente libero il driver dopo tutti gli ordini in DB?
+  const sim = simulateDriverSchedule(rows);
+  minMin = Math.max(minMin, sim.driverLiberoMin);
   minMin = Math.ceil(minMin / 10) * 10; // arrotonda al prossimo slot da 10 min
 
   const slotRichiesto = oraRichiesta;
   const slot10 = (min) => `${String(Math.floor(min / 60)).padStart(2,"0")}:${String(min % 60).padStart(2,"0")}`;
 
-  // Priorità 1: slot "caldo" — stessa zona, già ha ordini, c'è ancora spazio (consolidazione)
-  const slotsConOrdini = Object.keys(slotCount)
-    .filter(k => k.startsWith(`${zonaId}|`))
-    .map(k => ({ ora: k.split("|")[1], count: slotCount[k] }))
-    .filter(({ ora, count }) => {
-      const [hh, mm] = ora.split(":").map(Number);
-      return hh * 60 + mm >= minMin && hh * 60 + mm <= 23 * 60 && count < zona.maxOrdiniPerGiro;
-    })
-    .sort((a, b) => {
-      const [ha, ma] = a.ora.split(":").map(Number);
-      const [hb, mb] = b.ora.split(":").map(Number);
-      return (ha * 60 + ma) - (hb * 60 + mb);
-    });
+  // ── Priorità 1: slot "caldo" — stessa zona, stesso slot10, con spazio (aggregazione) ──
+  // Cerco tra i giri esistenti uno con same-zone same-slot e count < max
+  // Nota: usiamo slot10 (non hora esatta) per coerenza con aggregazione simulate.
+  const giriSameZona = sim.giri
+    .filter(g => g.zona === zonaId && g.count < zona.maxOrdiniPerGiro && g.horaMin >= (h*60 + (m||0)))
+    .sort((a, b) => a.horaMin - b.horaMin);
 
-  if (slotsConOrdini.length > 0) {
-    return { slotAssegnato: slotsConOrdini[0].ora, slotRichiesto, zonaCompleta: false, driverInGiro };
+  if (giriSameZona.length > 0) {
+    return { slotAssegnato: slot10(giriSameZona[0].horaMin), slotRichiesto, zonaCompleta: false, driverInGiro };
   }
 
-  // Priorità 2: primo slot libero — con controllo conflitti inter-zona
-  // Il driver è unico: se sta già consegnando in un'altra zona nello stesso intervallo, non può andare qui.
-  // Usa tempoGiroRichiesto (calcolato da distanza reale) se disponibile, altrimenti zona.tempoGiro.
-  const tg = tempoGiroRichiesto ?? zona.tempoGiro;
+  // ── Priorità 2: primo slot vuoto >= minMin con spazio in zona ──
+  // Dato che minMin = driverLiberoMin (cascade-aware), qualsiasi slot >= minMin
+  // è libero dal punto di vista driver. Resta da verificare capacità giro stessa zona.
   for (let min = minMin; min <= 23 * 60; min += 10) {
     const ora = slot10(min);
     if ((slotCount[`${zonaId}|${ora}`] || 0) >= zona.maxOrdiniPerGiro) continue;
-
-    // Controlla sovrapposizione con ordini in zone diverse
-    const nuovaPartenza = min - tg;
-    const nuovoRientro  = min + tg;
-    const conflitto = rows.some(o => {
-      if (!o.zona || o.zona === zonaId || !o.hora) return false;
-      const zonaO = ZONE_DELIVERY.find(z => z.id === o.zona);
-      if (!zonaO) return false;
-      // Usa distanza reale dell'ordine esistente se disponibile, altrimenti zona.tempoGiro
-      const tgO = calcolaTempoGiro(o.zona_lat, o.zona_lon, zonaO);
-      const partenzaO = oraToMin(o.hora) - tgO;
-      const rientroO  = oraToMin(o.hora) + tgO;
-      return Math.max(partenzaO, nuovaPartenza) < Math.min(rientroO, nuovoRientro);
-    });
-    if (!conflitto) return { slotAssegnato: ora, slotRichiesto, zonaCompleta: false, driverInGiro };
+    return { slotAssegnato: ora, slotRichiesto, zonaCompleta: false, driverInGiro };
   }
 
-  // Tutti i slot pieni stasera
+  // Tutti gli slot pieni stasera
   return { slotAssegnato: null, slotRichiesto, zonaCompleta: true, driverInGiro };
 }
 

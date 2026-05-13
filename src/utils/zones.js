@@ -109,6 +109,10 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 }
 
 // Calcola tempoGiro (minuti) dalla distanza reale del cliente dal ristorante.
+// CONVENZIONE: `tempoGiro` = tempo ANDATA one-way (driver dalla pizzeria al cliente).
+// I consumatori (agentCucina, frontend) modellano la finestra di occupazione del driver
+// come [hora - tg, hora + tg], cioè durata totale del trip = 2 × tg.
+//
 // La formula può SOLO ridurre il tempoGiro rispetto al valore fisso della zona —
 // mai aumentarlo (evita sovra-blocco per zone ampie come Q5 Las Marinas).
 // Se le coordinate non sono disponibili, ritorna zonaFallback.tempoGiro.
@@ -121,14 +125,16 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 // aggiunge sempre ~15 min di cuscino (es. "tra 20:30 e 20:45"). Questo NON è nel
 // codice — è una pratica lato operatore per gestire imprevisti senza promesse rigide.
 function calcolaTempoGiro(lat, lon, zonaFallback = null) {
-  if (!lat || !lon) return zonaFallback?.tempoGiro ?? 20;
+  if (lat == null || lon == null) return zonaFallback?.tempoGiro ?? 20;
   const ROAD_FACTOR  = 1.70;  // fattore strade urbane (calibrato su misurazioni reali)
   const CAR_KMH      = 20;    // velocità media MACCHINA in città (con soste, semafori, parcheggio)
-  const BUFFER_MIN   = 3;     // buffer sicurezza
-  const MIN_GIRO     = 10;    // minimo fisico: suonare, aspettare, consegnare, tornare
-  const distKm = haversineKm(RISTORANTE_LAT, RISTORANTE_LON, lat, lon);
-  const tempoAndata = (distKm * ROAD_FACTOR / CAR_KMH) * 60; // minuti
-  const tgCalcolato = Math.max(MIN_GIRO, Math.ceil(tempoAndata * 2 + BUFFER_MIN));
+  const BUFFER_MIN   = 3;     // buffer (ricerca parcheggio, suonare, scendere)
+  const MIN_GIRO     = 10;    // minimo fisico andata one-way (anche per cliente vicinissimo)
+  const distKm = haversineKm(RISTORANTE_LAT, RISTORANTE_LON, Number(lat), Number(lon));
+  const tempoAndata = (distKm * ROAD_FACTOR / CAR_KMH) * 60; // minuti, andata one-way
+  // FIX 2026-05-13: rimosso `* 2` che raddoppiava il tempo (precedente bug).
+  // tempoGiro = andata + buffer (one-way con margine), non round trip totale.
+  const tgCalcolato = Math.max(MIN_GIRO, Math.ceil(tempoAndata + BUFFER_MIN));
   // Non superare il valore fisso della zona — la formula ottimizza, non penalizza
   return zonaFallback ? Math.min(tgCalcolato, zonaFallback.tempoGiro) : tgCalcolato;
 }
@@ -247,6 +253,144 @@ async function geocodificaEAssegnaZona(indirizzo) {
   return { zona: zonaKw, lat: null, lon: null, metodo: zonaKw ? "keyword" : null };
 }
 
+// ─── Simulazione schedule del driver (schedule-aware, cascade-safe) ──────────
+// COPIA 1:1 di ladieci-app33/src/zones.js (frontend). Tenere sincronizzati.
+//
+// Dato un set di ordini delivery esistenti, simula la giornata del driver in
+// sequenza. Permette di calcolare quando il driver sarà REALMENTE libero e
+// quando arrivano realmente le pizze (cascade-aware).
+//
+// Aggregazione same-zone-slot10: ordini stessa zona stesso slot10(hora) vanno
+// in UN solo giro (driver fa più consegne in un trip), fino a maxOrdiniPerGiro.
+function simulateDriverSchedule(orders, options = {}) {
+  const toMin = (t) => { if (!t) return null; const [h,m]=String(t).split(":").map(Number); return h*60+(m||0); };
+  const slot10 = (min) => {
+    const mArr = Math.round(min / 10) * 10;
+    const h = Math.floor(mArr / 60), m = mArr % 60;
+    return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+  };
+
+  const validi = (orders || []).filter(o =>
+    o && o.tipo_consegna === "DOMICILIO" && o.hora && o.zona
+    && !["RETIRADO","COMPLETATO","DA_CONFERMARE"].includes(o.estado)
+  );
+
+  const giriMap = new Map();
+  for (const o of validi) {
+    const zona = ZONE_DELIVERY.find(z => z.id === o.zona);
+    if (!zona) continue;
+    const minOra = toMin(o.hora);
+    const sl = slot10(minOra);
+    const key = `${o.zona}|${sl}`;
+    if (!giriMap.has(key)) {
+      giriMap.set(key, {
+        zona: o.zona, zonaObj: zona, slot: sl,
+        horaMin: minOra, count: 0, tg: 0,
+      });
+    }
+    const g = giriMap.get(key);
+    g.count += 1;
+    g.horaMin = Math.min(g.horaMin, minOra);
+    const tgO = calcolaTempoGiro(o.zona_lat, o.zona_lon, zona);
+    g.tg = Math.max(g.tg, tgO); // worst case del gruppo
+  }
+
+  const giri = Array.from(giriMap.values()).sort((a, b) => a.horaMin - b.horaMin);
+
+  let t = toMin(options.startTime || "00:00") || 0;
+  for (const g of giri) {
+    const partTeorica = g.horaMin - g.tg;
+    g.partenzaMin = Math.max(t, partTeorica);
+    g.consegnaMin = g.partenzaMin + g.tg;
+    g.rientroMin  = g.consegnaMin + g.tg;
+    t = g.rientroMin;
+  }
+
+  return { giri, driverLiberoMin: t };
+}
+
+// ─── Proposta per un nuovo ordine (cascade-aware + aggregation same-zone-slot) ─
+// Output:
+//   {
+//     ok: bool,                     // true se hora richiesta è fattibile
+//     consegnaPropostaMin: number,
+//     consegnaPropostaH: "HH:MM",
+//     aggregato: bool,              // si unisce a giro esistente same-zone-slot
+//     giroEsistente: {hora, count} | null,
+//     motivo: string | null,
+//     driverLiberoMin: number,      // dopo simulazione ordini esistenti
+//     tgNew: number,                // tempoGiro reale calcolato per il nuovo
+//     sim: { giri, driverLiberoMin } // dettaglio per debugging
+//   }
+function proposeForNewOrder(orders, newOrder, options = {}) {
+  const toMin = (t) => { if (!t) return null; const [h,m]=String(t).split(":").map(Number); return h*60+(m||0); };
+  const toH = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+  const slot10 = (min) => {
+    const mArr = Math.round(min / 10) * 10;
+    const h = Math.floor(mArr / 60), m = mArr % 60;
+    return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+  };
+
+  const zona = ZONE_DELIVERY.find(z => z.id === newOrder.zona);
+  if (!zona) return { ok: true, consegnaPropostaMin: toMin(newOrder.hora), consegnaPropostaH: newOrder.hora, motivo: null, aggregato: false };
+
+  const tgNew = calcolaTempoGiro(newOrder.zona_lat, newOrder.zona_lon, zona);
+  const horaNewMin = toMin(newOrder.hora);
+  const slotNew = slot10(horaNewMin);
+
+  const sim = simulateDriverSchedule(orders, options);
+
+  const giroEsistente = sim.giri.find(g =>
+    g.zona === newOrder.zona && g.slot === slotNew && g.count < zona.maxOrdiniPerGiro
+  );
+
+  if (giroEsistente) {
+    return {
+      ok: true,
+      consegnaPropostaMin: giroEsistente.horaMin,
+      consegnaPropostaH: toH(giroEsistente.horaMin),
+      motivo: `Aggregado al giro ${zona.id} ${toH(giroEsistente.horaMin)} (${giroEsistente.count + 1}/${zona.maxOrdiniPerGiro})`,
+      aggregato: true,
+      giroEsistente: { hora: toH(giroEsistente.horaMin), count: giroEsistente.count },
+      driverLiberoMin: sim.driverLiberoMin,
+      tgNew, sim,
+    };
+  }
+
+  // Strategia conservativa: il driver fa prima tutti gli esistenti, poi il nuovo.
+  // Non perturba ordini già confermati. L'operatore può forzare se sa che c'è margine.
+  const rientroPrec = sim.driverLiberoMin;
+
+  const partTeorica = horaNewMin - tgNew;
+  const partReale = Math.max(rientroPrec, partTeorica);
+  const consegnaReale = partReale + tgNew;
+  const ok = consegnaReale <= horaNewMin;
+  const consegnaProposta = ok ? horaNewMin : Math.ceil(consegnaReale / 5) * 5;
+
+  let motivo = null;
+  if (!ok) {
+    if (sim.giri.length === 0) {
+      motivo = `Driver libre solo desde ~${toH(rientroPrec)}`;
+    } else if (sim.giri.length === 1) {
+      const g = sim.giri[0];
+      motivo = `Driver en ${g.zona} ${toH(g.horaMin)} · vuelve ~${toH(g.rientroMin)}`;
+    } else {
+      motivo = `Driver ocupado hasta ~${toH(rientroPrec)} (${sim.giri.length} entregas en curso)`;
+    }
+  }
+
+  return {
+    ok,
+    consegnaPropostaMin: consegnaProposta,
+    consegnaPropostaH: toH(consegnaProposta),
+    motivo,
+    aggregato: false,
+    giroEsistente: null,
+    driverLiberoMin: sim.driverLiberoMin,
+    tgNew, sim,
+  };
+}
+
 module.exports = {
   ZONE_DELIVERY,
   KEYWORDS_ZONA,
@@ -254,5 +398,7 @@ module.exports = {
   assegnaZonaDaCoord,
   assegnaZonaDaKeyword,
   geocodificaEAssegnaZona,
-  calcolaTempoGiro
+  calcolaTempoGiro,
+  simulateDriverSchedule,
+  proposeForNewOrder
 };
