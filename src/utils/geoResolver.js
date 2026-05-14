@@ -32,7 +32,9 @@ const {
   RISTORANTE_LAT, RISTORANTE_LON
 } = require("./zones");
 
-const CONSEGNA_BUFFER_MIN = 3;   // tempo per scendere/suonare/consegnare/risalire
+const CONSEGNA_BUFFER_MIN = 5;   // tempo per scendere/suonare/consegnare/risalire
+                                 // + margine per driver non sempre fermo in pizzeria
+                                 // (può essere in rientro o appena fuori). Bumped 3→5 il 2026-05-14.
 const GEOCODER_TIMEOUT_MS = 4000;
 
 // ─── Util: fetch con timeout ──────────────────────────────────
