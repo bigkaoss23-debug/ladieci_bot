@@ -139,6 +139,25 @@ function calcolaTempoGiro(lat, lon, zonaFallback = null) {
   return zonaFallback ? Math.min(tgCalcolato, zonaFallback.tempoGiro) : tgCalcolato;
 }
 
+// ─── Costanti e helper tempi di cottura/giro ──────────────────────────────────
+// MARGINE_COTTURA_MIN: tempo tipico di preparazione + cottura di un batch (~5 min,
+// coerente con max 4 pizze per slot 10min in getCaricoForno).
+//
+// Convenzione tempi:
+//   - durata_andata_min (snapshot Google su `ordenes`): viaggio one-way puro
+//     (guida + 3 min consegna). NON include cottura.
+//   - zona.tempoGiro (fallback storico): aggregato implicito andata+cottura.
+//
+// tempoConCottura: helper unificato che ritorna i minuti da sottrarre a horaConsegna
+// per ottenere horaForno, scegliendo la convenzione giusta in base a quello che l'ordine ha.
+const MARGINE_COTTURA_MIN = 5;
+function tempoConCottura(o, zonaObj) {
+  if (o && o.durata_andata_min != null) {
+    return o.durata_andata_min + MARGINE_COTTURA_MIN;
+  }
+  return zonaObj?.tempoGiro ?? 20;
+}
+
 function pointInPolygon(point, polygon) {
   const [px, py] = point;
   let inside = false;
@@ -291,7 +310,11 @@ function simulateDriverSchedule(orders, options = {}) {
     const g = giriMap.get(key);
     g.count += 1;
     g.horaMin = Math.min(g.horaMin, minOra);
-    const tgO = calcolaTempoGiro(o.zona_lat, o.zona_lon, zona);
+    // Preferisce snapshot Google (durata_andata_min) se presente sull'ordine,
+    // sennò Haversine. Convenzione one-way (andata pura, no cottura).
+    const tgO = o.durata_andata_min != null
+      ? o.durata_andata_min
+      : calcolaTempoGiro(o.zona_lat, o.zona_lon, zona);
     g.tg = Math.max(g.tg, tgO); // worst case del gruppo
   }
 
@@ -396,6 +419,8 @@ module.exports = {
   KEYWORDS_ZONA,
   RISTORANTE_LAT,
   RISTORANTE_LON,
+  MARGINE_COTTURA_MIN,
+  tempoConCottura,
   haversineKm,
   pointInPolygon,
   assegnaZonaDaCoord,
