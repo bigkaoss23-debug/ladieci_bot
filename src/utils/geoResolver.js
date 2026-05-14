@@ -29,12 +29,14 @@ const { direccionToCacheKey } = require("./helpers");
 const {
   ZONE_DELIVERY, assegnaZonaDaCoord, assegnaZonaDaKeyword,
   coordInRoquetas, limpiaPerGeocode, haversineKm,
-  RISTORANTE_LAT, RISTORANTE_LON
+  RISTORANTE_LAT, RISTORANTE_LON, BUFFER_OPS_DRIVER_MIN
 } = require("./zones");
 
-const CONSEGNA_BUFFER_MIN = 5;   // tempo per scendere/suonare/consegnare/risalire
-                                 // + margine per driver non sempre fermo in pizzeria
-                                 // (può essere in rientro o appena fuori). Bumped 3→5 il 2026-05-14.
+// REFACTOR 14/05/2026: rimosso CONSEGNA_BUFFER_MIN locale. Ora `durata_andata_min`
+// salvata in DB = GUIDA PURA (Google ETA o Haversine, no buffer). Il buffer operativo
+// driver (parcheggio + citofono + scale + handoff) vive in zones.BUFFER_OPS_DRIVER_MIN
+// ed è applicato dai consumatori (NuevoPedidoModal per hora promessa, simulateDriverSchedule
+// per round-trip driver).
 const GEOCODER_TIMEOUT_MS = 4000;
 
 // ─── Util: fetch con timeout ──────────────────────────────────
@@ -49,6 +51,9 @@ async function fetchTimeout(url, opts = {}, ms = GEOCODER_TIMEOUT_MS) {
 }
 
 // ─── Step 1: cache lookup ─────────────────────────────────────
+// Cache hit = riga completa (zona + lat + lon + durata). Se durata manca,
+// trattiamo come cache miss → il flusso prosegue verso Google, che salverà
+// il valore corretto (guida pura).
 async function loadFromCache(direccion) {
   const key = direccionToCacheKey(direccion);
   if (!key || key.length < 5) return null;
@@ -56,6 +61,7 @@ async function loadFromCache(direccion) {
     const rows = await sbSelect("geo_cache", `direccion_key=eq.${encodeURIComponent(key)}&limit=1`);
     const row = rows?.[0];
     if (!row || row.lat == null || row.lon == null || !row.zona) return null;
+    if (row.durata_andata_min == null) return null; // cache incompleta → miss
     // Bump hit_count best-effort, non blocca.
     // PATCH, non upsert: `zona` è NOT NULL → INSERT-on-conflict fallirebbe sul path INSERT.
     sbUpdate("geo_cache",
@@ -79,6 +85,8 @@ async function loadFromCache(direccion) {
 }
 
 // ─── Step 2: cliente hit (solo se direccion confermata e key match) ─
+// Hit valido = cliente con direccion confermata + lat/lon + durata. Se durata
+// manca, trattiamo come miss → flusso prosegue verso Google.
 async function loadFromCliente(tel, direccion) {
   if (!tel) return null;
   try {
@@ -89,9 +97,10 @@ async function loadFromCliente(tel, direccion) {
     if (cli.zona_lat == null || cli.zona_lon == null || !cli.zona) return null;
     // L'indirizzo attuale deve corrispondere a quello confermato (cache-key match)
     if (direccionToCacheKey(cli.direccion) !== direccionToCacheKey(direccion)) return null;
+    if (cli.durata_andata_min == null) return null; // dato incompleto → miss
     return {
       zona: cli.zona, lat: cli.zona_lat, lon: cli.zona_lon,
-      durataAndataMin: cli.durata_andata_min ?? null,
+      durataAndataMin: cli.durata_andata_min,
       source: "cliente",
       cached: true
     };
@@ -150,8 +159,9 @@ async function googleGeocode(direccion) {
 
 // ─── Step 3b: Google Distance Matrix ──────────────────────────
 // Restituisce {ok, durataMin, error?}.
-// durataMin = ceil(duration_in_traffic / 60) + CONSEGNA_BUFFER_MIN
-// (la guida pura + 3 min per scendere/suonare/consegnare).
+// durataMin = ceil(duration_in_traffic / 60) — GUIDA PURA.
+// Il buffer ops (parcheggio/citofono/scale) vive in zones.BUFFER_OPS_DRIVER_MIN
+// e viene aggiunto dai consumatori (NuevoPedidoModal, simulateDriverSchedule).
 async function googleDistanceMatrix(lat, lon) {
   const KEY = process.env.GOOGLE_MAPS_API_KEY;
   if (!KEY) return { ok: false, error: "google_disabled" };
@@ -191,7 +201,8 @@ async function googleDistanceMatrix(lat, lon) {
   const secs = el.duration_in_traffic?.value ?? el.duration?.value;
   if (secs == null) return { ok: false, error: "google_error" };
 
-  const durataMin = Math.ceil(secs / 60) + CONSEGNA_BUFFER_MIN;
+  // Guida pura — il buffer ops vive in zones.BUFFER_OPS_DRIVER_MIN
+  const durataMin = Math.ceil(secs / 60);
   return { ok: true, durataMin };
 }
 
@@ -286,15 +297,16 @@ function classifyByCoord(lat, lon, direccion) {
   return { zona: kw, fuoriZona: !kw };
 }
 
-// ─── Helper: Haversine durata ANDATA (fallback se source != google) ─
+// ─── Helper: Haversine durata ANDATA pura (fallback se source != google) ─
 function haversineDurataAndata(lat, lon) {
   if (lat == null || lon == null) return null;
   const ROAD_FACTOR = 1.70;
   const CAR_KMH = 20;
-  const MIN_GIRO = 10;
+  const MIN_GIRO = 8;
   const distKm = haversineKm(RISTORANTE_LAT, RISTORANTE_LON, Number(lat), Number(lon));
   const tempoAndata = (distKm * ROAD_FACTOR / CAR_KMH) * 60;
-  return Math.max(MIN_GIRO, Math.ceil(tempoAndata + CONSEGNA_BUFFER_MIN));
+  // Guida pura. Il buffer ops vive in zones.BUFFER_OPS_DRIVER_MIN
+  return Math.max(MIN_GIRO, Math.ceil(tempoAndata));
 }
 
 // ─── Output shape ─────────────────────────────────────────────
@@ -309,9 +321,11 @@ function emptyResult(error = null) {
 }
 
 function buildResult({ zona, lat, lon, durataAndataMin, source, cached, fuoriZona }) {
-  // Ritorno = andata + buffer consegna (D3 + insight utente: ritorno simmetrico)
+  // Ritorno = guida simmetrica all'andata (entrambe pure, no buffer).
+  // Il BUFFER_OPS_DRIVER_MIN sta TRA andata e ritorno (tempo al cliente),
+  // non dentro l'una o l'altra. Modellato in simulateDriverSchedule.
   // Se durataAndataMin = null (es. keyword), il ritorno è anche null.
-  const ritorno = (durataAndataMin != null) ? durataAndataMin + CONSEGNA_BUFFER_MIN : null;
+  const ritorno = durataAndataMin ?? null;
   // Shadow A/B: registriamo sempre entrambe le stime quando possibile.
   // - haversineMin: sempre calcolata se abbiamo lat/lon (raw, no cap zona)
   // - googleMin:   popolato solo se la riga è di origine Google (anche via cache)
@@ -432,6 +446,5 @@ module.exports = {
   loadFromCache, loadFromCliente, saveToCache,
   nominatimGeocode, photonGeocode, keywordZona,
   haversineDurataAndata,
-  getGeoProvider,
-  CONSEGNA_BUFFER_MIN
+  getGeoProvider
 };

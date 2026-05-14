@@ -4,7 +4,7 @@
 
 const { sbSelect } = require("../utils/supabase");
 const { isBevanda, isDesert, getConversazione } = require("../utils/helpers");
-const { ZONE_DELIVERY, calcolaTempoGiro, simulateDriverSchedule } = require("../utils/zones");
+const { ZONE_DELIVERY, calcolaTempoGiro, simulateDriverSchedule, BUFFER_OPS_DRIVER_MIN } = require("../utils/zones");
 
 function pad(n) { return n < 10 ? "0" + n : "" + n; }
 
@@ -124,8 +124,9 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
 
   // Override real-time: driver fuori adesso, deve tornare prima di poter ripartire
   if (driverInGiro) {
-    // Stima round-trip dal worst-case degli ordini del giro corrente (snapshot Google).
-    // Fallback zona.tempoGiro se nessun ordine ha durata_andata_min (vecchia convenzione round-trip).
+    // Stima round-trip dal worst-case degli ordini del giro corrente (snapshot Google guida pura).
+    // Round trip = 2 × guida + buffer ops al cliente.
+    // Fallback zona.tempoGiro (×2 + buffer) se nessun ordine ha durata_andata_min.
     const partitoMs = new Date(driverStato.partito_alle).getTime();
     const ordiniGiroCorrente = (rows || []).filter(o =>
       o && o.zona === zonaId && o.ts && Number(o.ts) >= partitoMs - 5 * 60000
@@ -134,8 +135,8 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
       .map(o => o.durata_andata_min)
       .filter(v => v != null);
     const roundTripMin = durateSnap.length > 0
-      ? Math.max(...durateSnap) * 2
-      : zona.tempoGiro;
+      ? Math.max(...durateSnap) * 2 + BUFFER_OPS_DRIVER_MIN
+      : zona.tempoGiro * 2 + BUFFER_OPS_DRIVER_MIN;
     const rientro = new Date(partitoMs + roundTripMin * 60000);
     if (rientro > new Date()) {
       const rientroMin = rientro.getHours() * 60 + rientro.getMinutes();

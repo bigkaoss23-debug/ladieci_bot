@@ -124,17 +124,22 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 // Bonus operatore: quando comunica al cliente l'orario di consegna, l'operatore
 // aggiunge sempre ~15 min di cuscino (es. "tra 20:30 e 20:45"). Questo NON è nel
 // codice — è una pratica lato operatore per gestire imprevisti senza promesse rigide.
+// BUFFER operativo driver al cliente (parcheggio + citofono + scale + handoff).
+// Una sola costante esposta — non sommare in altri punti.
+// Modello (refactor 14/05/2026):
+//   hora_promessa_cliente = forno_out + guida_pura + BUFFER_OPS_DRIVER_MIN
+//   round_trip_driver    = guida_pura + BUFFER_OPS_DRIVER_MIN + guida_pura
+const BUFFER_OPS_DRIVER_MIN = 3;
+
 function calcolaTempoGiro(lat, lon, zonaFallback = null) {
   if (lat == null || lon == null) return zonaFallback?.tempoGiro ?? 20;
   const ROAD_FACTOR  = 1.70;  // fattore strade urbane (calibrato su misurazioni reali)
   const CAR_KMH      = 20;    // velocità media MACCHINA in città (con soste, semafori, parcheggio)
-  const BUFFER_MIN   = 3;     // buffer (ricerca parcheggio, suonare, scendere)
-  const MIN_GIRO     = 10;    // minimo fisico andata one-way (anche per cliente vicinissimo)
+  const MIN_GIRO     = 8;     // minimo fisico guida one-way (anche per cliente vicinissimo)
   const distKm = haversineKm(RISTORANTE_LAT, RISTORANTE_LON, Number(lat), Number(lon));
   const tempoAndata = (distKm * ROAD_FACTOR / CAR_KMH) * 60; // minuti, andata one-way
-  // FIX 2026-05-13: rimosso `* 2` che raddoppiava il tempo (precedente bug).
-  // tempoGiro = andata + buffer (one-way con margine), non round trip totale.
-  const tgCalcolato = Math.max(MIN_GIRO, Math.ceil(tempoAndata + BUFFER_MIN));
+  // Ritorna GUIDA PURA (no buffer ops). Il buffer va aggiunto dove serve dal consumatore.
+  const tgCalcolato = Math.max(MIN_GIRO, Math.ceil(tempoAndata));
   // Non superare il valore fisso della zona — la formula ottimizza, non penalizza
   return zonaFallback ? Math.min(tgCalcolato, zonaFallback.tempoGiro) : tgCalcolato;
 }
@@ -307,7 +312,8 @@ function simulateDriverSchedule(orders, options = {}) {
     const partTeorica = g.horaMin - g.tg;
     g.partenzaMin = Math.max(t, partTeorica);
     g.consegnaMin = g.partenzaMin + g.tg;
-    g.rientroMin  = g.consegnaMin + g.tg;
+    // Round trip: andata + BUFFER ops al cliente + ritorno
+    g.rientroMin  = g.consegnaMin + BUFFER_OPS_DRIVER_MIN + g.tg;
     t = g.rientroMin;
   }
 
@@ -401,6 +407,7 @@ module.exports = {
   KEYWORDS_ZONA,
   RISTORANTE_LAT,
   RISTORANTE_LON,
+  BUFFER_OPS_DRIVER_MIN,
   haversineKm,
   pointInPolygon,
   assegnaZonaDaCoord,
