@@ -17,7 +17,30 @@
 // ===============================================================
 
 const { sbSelect, sbInsert, sbUpsert, sbUpdate, sbDelete } = require("./supabase");
-const { calcolaTotale, calcolaTotaleOrdine, deliveryFeeFor, isBevanda, isDesert } = require("./helpers");
+const { calcolaTotale, calcolaTotaleOrdine, deliveryFeeFor, isBevanda, isDesert, direccionToCacheKey } = require("./helpers");
+
+// Incrementa n_ordini_consegnati sulla riga di geo_cache associata all'indirizzo dell'ordine.
+// Chiamata da chiudiServizio per ogni ordine archiviato → la "conferma indirizzo" non dipende dal bottone driver.
+// Best-effort: se la migration non è applicata o la riga manca, fallisce silenziosamente con warn.
+async function bumpGeoCacheDelivered(direccion, geoSource) {
+  if (!direccion || !geoSource) return;
+  // Solo ordini con lat/lon reali (Google/Nominatim/Photon) sono significativi per geo_cache.
+  // "keyword" e null vivono fuori dalla cache, niente da incrementare.
+  if (geoSource === "keyword") return;
+  const key = direccionToCacheKey(direccion);
+  if (!key || key.length < 5) return;
+  try {
+    const rows = await sbSelect("geo_cache", `direccion_key=eq.${encodeURIComponent(key)}&limit=1`);
+    const row = rows?.[0];
+    if (!row) return;
+    await sbUpsert("geo_cache",
+      { direccion_key: key, n_ordini_consegnati: (row.n_ordini_consegnati || 0) + 1 },
+      "direccion_key"
+    );
+  } catch (e) {
+    console.warn("[geo_cache] n_ordini_consegnati bump failed:", e?.message || e);
+  }
+}
 
 
 // ─── Date helpers ────────────────────────────────────────────────
@@ -339,7 +362,12 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
     const payload = buildStoricoPayload(o, oggi, diaSemana, isAttivo ? "CHIUSO_FORZATO" : null);
     const res = await sbUpsert("storico", payload, "orden_id,fecha");
     if (!Array.isArray(res) || res.length === 0) erroriStorico.push(o.id || "?");
-    else storicoOk++;
+    else {
+      storicoOk++;
+      // Conferma indirizzo via segnale "ordine archiviato" — indipendente dal bottone driver.
+      // Ordini CHIUSO_FORZATO non contano (non sono andati a buon fine).
+      if (!isAttivo) await bumpGeoCacheDelivered(o.direccion, o.geo_source);
+    }
   }
 
   // ─── PASSO 7: writeArchivioConv ───────────────────────────────

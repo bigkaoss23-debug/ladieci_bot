@@ -59,11 +59,15 @@ async function loadFromCache(direccion) {
       { direccion_key: key, hit_count: (row.hit_count || 0) + 1 },
       "direccion_key"
     ).catch(e => console.warn("[geoResolver] hit_count bump:", e?.message || e));
+    // "Blindata" = almeno 1 ordine consegnato a questo indirizzo → autorità sopra Google.
+    // n_ordini_consegnati viene incrementato in chiudiServizio (servizio.js) sugli ordini archiviati.
+    const blindata = (row.n_ordini_consegnati || 0) >= 1;
     return {
       zona: row.zona, lat: row.lat, lon: row.lon,
       durataAndataMin: row.durata_andata_min ?? null,
       source: row.source || "nominatim",
-      cached: true
+      cached: true,
+      blindata
     };
   } catch (e) {
     console.warn("[geoResolver] cache lookup error:", e?.message || e);
@@ -344,10 +348,17 @@ async function risolviIndirizzo({ direccion, tel = null, tipoConsegna = "DOMICIL
   const googleEnabled = (provider === "google" || provider === "shadow");
 
   // ── Step 1: cache ─────────────────────────────────────────
+  // Se cache "blindata" (>=1 ordine consegnato) → autorità assoluta, bypassa anche shadow.
+  // forceRefresh su blindata è loggato come warn ma esegue lo stesso (escape hatch operatore).
   if (!forceRefresh) {
     const fromCache = await loadFromCache(direccion);
     if (fromCache) {
       return buildResult(fromCache);
+    }
+  } else {
+    const peek = await loadFromCache(direccion);
+    if (peek?.blindata) {
+      console.warn("[geo_cache] WARN forceRefresh su cache blindata, direccion=", direccion);
     }
   }
 

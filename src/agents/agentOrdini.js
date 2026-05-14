@@ -3,7 +3,26 @@
 // ===============================================================
 
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
-const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine } = require("../utils/helpers");
+const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, direccionToCacheKey } = require("../utils/helpers");
+
+// Incrementa n_ordini_creati sulla riga di geo_cache associata all'indirizzo.
+// Best-effort: se la migration non è ancora applicata o la riga non esiste, fallisce silenziosamente.
+async function bumpGeoCacheCreated(direccion, geoSource) {
+  if (!direccion || !geoSource) return;
+  const key = direccionToCacheKey(direccion);
+  if (!key || key.length < 5) return;
+  try {
+    const rows = await sbSelect("geo_cache", `direccion_key=eq.${encodeURIComponent(key)}&limit=1`);
+    const row = rows?.[0];
+    if (!row) return;
+    await sbUpsert("geo_cache",
+      { direccion_key: key, n_ordini_creati: (row.n_ordini_creati || 0) + 1 },
+      "direccion_key"
+    );
+  } catch (e) {
+    console.warn("[geo_cache] n_ordini_creati bump failed:", e?.message || e);
+  }
+}
 
 async function creaOrdine(params) {
   // ═══ Items SENZA fake "Entrega a domicilio" ═══
@@ -74,7 +93,11 @@ async function creaOrdine(params) {
     });
 
     // Successo: sbInsert ritorna array con il record inserito
-    if (Array.isArray(result) && result.length > 0) return { success: true, id: newId };
+    if (Array.isArray(result) && result.length > 0) {
+      // Best-effort: incrementa n_ordini_creati su geo_cache (segnale "operatore ha creduto all'indirizzo")
+      bumpGeoCacheCreated(params.direccion, params.geo_source);
+      return { success: true, id: newId };
+    }
 
     // Collisione PK → riprova con ID ri-letto dal DB
     const errCode = result?.code || result?.[0]?.code || "";
