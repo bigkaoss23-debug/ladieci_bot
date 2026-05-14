@@ -4,58 +4,29 @@
 
 const { sbSelect, sbUpdate, sbUpsert, getConfig } = require("../utils/supabase");
 const { appendChat, updateConvDati, createConv, upsertWaMsg, getConversazione,
-        mergeItemsBevande, calcolaTotale, buildResumen, buildUpsell, buildMsgRicevuto, rand,
-        normalizzaDireccion } = require("../utils/helpers");
+        mergeItemsBevande, calcolaTotale, buildResumen, buildUpsell, buildMsgRicevuto, rand
+      } = require("../utils/helpers");
 const { getStatoCliente, getCaricoForno, getCaricoDelivery } = require("./agentCucina");
 const { interpreta, generaRisposta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion } = require("./agentWhatsapp");
 const { creaOrdine, modificaOrdine, aggiungiItems } = require("./agentOrdini");
 const { NUMEROS_WHITELIST, COSTO_CONSEGNA } = require("../config");
-const { geocodificaEAssegnaZona, ZONE_DELIVERY, calcolaTempoGiro } = require("../utils/zones");
+const { ZONE_DELIVERY, calcolaTempoGiro } = require("../utils/zones");
+const { risolviIndirizzo } = require("../utils/geoResolver");
 
-async function resolveZona(direccion, tipoConsegna) {
-  if (tipoConsegna !== "DOMICILIO" || !direccion) return { zona: null, lat: null, lon: null, metodo: null };
-  // 1) Cache lookup (Fix 2026-05-14: prima il flusso WhatsApp saltava la cache —
-  //    chiamava direttamente Nominatim ad ogni messaggio).
-  try {
-    const key = normalizzaDireccion(direccion);
-    if (key && key.length >= 5) {
-      const rows = await sbSelect("geo_cache", `direccion_key=eq.${encodeURIComponent(key)}&limit=1`);
-      const cached = rows?.[0];
-      if (cached && cached.lat != null && cached.lon != null && cached.zona) {
-        // Bump hit_count (best-effort, non bloccante)
-        sbUpsert("geo_cache",
-          { direccion_key: key, hit_count: (cached.hit_count || 0) + 1 },
-          "direccion_key"
-        ).catch(e => console.warn("[geo_cache] hit_count bump failed:", e?.message || e));
-        return { zona: cached.zona, lat: cached.lat, lon: cached.lon, metodo: "cache" };
-      }
-    }
-  } catch (e) {
-    console.warn("[resolveZona] cache lookup failed:", e?.message || e);
+// Thin wrapper su risolviIndirizzo per i 2 chiamanti orchestrator.
+// Restituisce shape allargato {zona, lat, lon, durataAndataMin, durataRitornoMin, source, fuoriZona}.
+async function resolveZona(direccion, tipoConsegna, tel = null) {
+  if (tipoConsegna !== "DOMICILIO" || !direccion) {
+    return { zona: null, lat: null, lon: null, durataAndataMin: null, durataRitornoMin: null, source: null, fuoriZona: false };
   }
-  // 2) Cache miss → geocoder esistente (Nominatim → Photon → keyword)
-  try {
-    const r = await geocodificaEAssegnaZona(direccion);
-    const result = { zona: r.zona?.id || null, lat: r.lat ?? null, lon: r.lon ?? null, metodo: r.metodo || null };
-    // 3) Persist su cache se trovata via polygon (no keyword — keyword non ha lat/lon reali)
-    if (result.metodo === "polygon" && result.zona && result.lat != null && result.lon != null) {
-      const key = normalizzaDireccion(direccion);
-      if (key && key.length >= 5) {
-        sbUpsert("geo_cache", {
-          direccion_key: key,
-          direccion_orig: direccion,
-          zona: result.zona,
-          lat: result.lat, lon: result.lon,
-          source: r.source || "nominatim",
-          updated_at: new Date().toISOString()
-        }, "direccion_key").catch(e => console.warn("[geo_cache] save failed:", e?.message || e));
-      }
-    }
-    return result;
-  } catch (e) {
-    console.error("[resolveZona] geocode error:", e?.message || e);
-    return { zona: null, lat: null, lon: null, metodo: null };
-  }
+  return await risolviIndirizzo({ direccion, tel, tipoConsegna });
+}
+
+// Se il resolver ha già il tempo Google (durataAndataMin != null) usalo;
+// altrimenti calcolo Haversine (cap-applicato sulla zona, comportamento pre-Google).
+function tempoAndataDa(res, zonaObj) {
+  if (res?.durataAndataMin != null) return res.durataAndataMin;
+  return calcolaTempoGiro(res?.lat, res?.lon, zonaObj);
 }
 
 const SOGLIA_CONF = 85;
@@ -294,7 +265,7 @@ async function gestisci(ctx) {
     }
 
     // ── Geocoding zona (sempre prima del messaggio) ──────────────
-    const zonaRes1 = await resolveZona(direccion, tipoConsegna);
+    const zonaRes1 = await resolveZona(direccion, tipoConsegna, waId);
     const zonaObj1 = tipoConsegna === "DOMICILIO" ? ZONE_DELIVERY.find(z => z.id === zonaRes1.zona) : null;
     const fueraDeZona = tipoConsegna === "DOMICILIO" && direccion && !zonaRes1.zona;
 
@@ -309,7 +280,7 @@ async function gestisci(ctx) {
     // ── Check capacità giri delivery ─────────────────────────────
     let caricoDelivery1 = null;
     if (tipoConsegna === "DOMICILIO" && zonaRes1.zona) {
-      caricoDelivery1 = await getCaricoDelivery(zonaRes1.zona, horaFinale, calcolaTempoGiro(zonaRes1.lat, zonaRes1.lon, zonaObj1));
+      caricoDelivery1 = await getCaricoDelivery(zonaRes1.zona, horaFinale, tempoAndataDa(zonaRes1, zonaObj1));
 
       if (caricoDelivery1.zonaCompleta) {
         if (!conv) await createConv(waId, nombre, allItems, horaFinale, "aperta");
@@ -330,7 +301,7 @@ async function gestisci(ctx) {
     }
 
     // ── Generazione messaggio ────────────────────────────────────
-    const tempoGiro1  = calcolaTempoGiro(zonaRes1.lat, zonaRes1.lon, zonaObj1);
+    const tempoGiro1  = tempoAndataDa(zonaRes1, zonaObj1);
     const costoConse1 = tipoConsegna === "DOMICILIO" ? COSTO_CONSEGNA : 0;
     const totaleConConsegna1 = totale + costoConse1;
     const labelOra1   = tipoConsegna === "DOMICILIO" ? "Entrega" : "Recogida";
@@ -356,7 +327,9 @@ async function gestisci(ctx) {
       nombre, tel: waId, waId, canal: "WA",
       items: allItems, hora: horaFinale, estado: "DA_CONFIRMARE",
       tipo_consegna: tipoConsegna, direccion: direccion || null,
-      zona: zonaRes1.zona, zona_lat: zonaRes1.lat, zona_lon: zonaRes1.lon, zona_manuale: false
+      zona: zonaRes1.zona, zona_lat: zonaRes1.lat, zona_lon: zonaRes1.lon, zona_manuale: false,
+      durata_andata_min: tipoConsegna === "DOMICILIO" ? tempoGiro1 : null,
+      geo_source: zonaRes1.source || null
     });
     const numPedido1 = ordResult1?.id || "";
 
@@ -379,7 +352,8 @@ async function gestisci(ctx) {
       zona: zonaRes1.zona || null,
       zona_lat: zonaRes1.lat ?? null,
       zona_lon: zonaRes1.lon ?? null,
-      geo_source: zonaRes1.metodo || null
+      durata_andata_min: zonaRes1.durataAndataMin ?? null,
+      geo_source: zonaRes1.source || null
     } : null);
     return { flusso: 1, stato: "NUEVO", ordenId: numPedido1 };
   }
@@ -426,7 +400,7 @@ async function gestisci(ctx) {
     }
 
     // ── Geocoding zona ───────────────────────────────────────────
-    const zonaResOra = await resolveZona(direccionOra, tipoConsegnaOra);
+    const zonaResOra = await resolveZona(direccionOra, tipoConsegnaOra, waId);
     const zonaObjOra = tipoConsegnaOra === "DOMICILIO" ? ZONE_DELIVERY.find(z => z.id === zonaResOra.zona) : null;
     const fueraDeZonaOra = tipoConsegnaOra === "DOMICILIO" && direccionOra && !zonaResOra.zona;
 
@@ -446,7 +420,7 @@ async function gestisci(ctx) {
     // ── Check capacità giri delivery ─────────────────────────────
     let caricoDeliveryOra = null;
     if (tipoConsegnaOra === "DOMICILIO" && zonaResOra.zona) {
-      caricoDeliveryOra = await getCaricoDelivery(zonaResOra.zona, oraHoraFinale, calcolaTempoGiro(zonaResOra.lat, zonaResOra.lon, zonaObjOra));
+      caricoDeliveryOra = await getCaricoDelivery(zonaResOra.zona, oraHoraFinale, tempoAndataDa(zonaResOra, zonaObjOra));
 
       if (caricoDeliveryOra.zonaCompleta) {
         await updateConvDati(waId, oraItems, oraHoraFinale);
@@ -465,7 +439,7 @@ async function gestisci(ctx) {
     }
 
     // ── Generazione messaggio ────────────────────────────────────
-    const tempoGiroOra   = calcolaTempoGiro(zonaResOra.lat, zonaResOra.lon, zonaObjOra);
+    const tempoGiroOra   = tempoAndataDa(zonaResOra, zonaObjOra);
     const costoConseOra  = tipoConsegnaOra === "DOMICILIO" ? COSTO_CONSEGNA : 0;
     const totaleConConsegnaOra = oraTotale + costoConseOra;
     const clienteInfoOra2 = await getCliente(waId);
@@ -486,7 +460,9 @@ async function gestisci(ctx) {
       nombre, tel: waId, waId, canal: "WA",
       items: oraItems, hora: oraHoraFinale, estado: "DA_CONFIRMARE",
       tipo_consegna: tipoConsegnaOra, direccion: direccionOra || null,
-      zona: zonaResOra.zona, zona_lat: zonaResOra.lat, zona_lon: zonaResOra.lon, zona_manuale: false
+      zona: zonaResOra.zona, zona_lat: zonaResOra.lat, zona_lon: zonaResOra.lon, zona_manuale: false,
+      durata_andata_min: tipoConsegnaOra === "DOMICILIO" ? tempoGiroOra : null,
+      geo_source: zonaResOra.source || null
     });
     const numPedidoOra = ordResultOra?.id || "";
 
@@ -503,7 +479,14 @@ async function gestisci(ctx) {
       else await upsertWaMsgOrdenRef(waId, numPedidoOra);
     }
     if (autoOn) await invia(waId, msgOraConf, config);
-    await upsertCliente(nombre, waId, oraItems);
+    await upsertCliente(nombre, waId, oraItems, tipoConsegnaOra === "DOMICILIO" ? {
+      direccion: direccionOra || null,
+      zona: zonaResOra.zona || null,
+      zona_lat: zonaResOra.lat ?? null,
+      zona_lon: zonaResOra.lon ?? null,
+      durata_andata_min: zonaResOra.durataAndataMin ?? null,
+      geo_source: zonaResOra.source || null
+    } : null);
     return { flusso: 1, stato: "NUEVO", ordenId: numPedidoOra };
   }
 

@@ -249,10 +249,8 @@ async function upsertWaMsg(waId, nombre, txt, stato, conf, items, hora, botRispo
   return { success: true, id };
 }
 
-// Normalizza un indirizzo per produrre una chiave di cache stabile.
-// "Av. Playa Serena, 33" / "AV PLAYA SERENA 33" / "av. playa serena,33"
-//   → tutti diventano "av playa serena 33".
-// Rimuove accenti, lowercase, punteggiatura → spazi, doppi spazi compressi.
+// Normalizzazione "leggera": lowercase, accenti, punteggiatura → spazi.
+// Usata per direccion_orig e display. NON per la cache key.
 // Stessa logica usata sul frontend (api.js) — DEVE restare allineata.
 function normalizzaDireccion(s) {
   return String(s || "")
@@ -263,10 +261,57 @@ function normalizzaDireccion(s) {
     .trim();
 }
 
+// Normalizzazione AGGRESSIVA "edificio-level" — chiave di cache stabile.
+// Obiettivo: due clienti nello stesso condominio condividono la stessa chiave
+// → una sola chiamata Google per edificio.
+//
+// "Calle Cuba 5, 3ºA"  ┐
+// "C/ Cuba 5 piso 4"   ├─→ "calle cuba 5"
+// "calle cuba 5 izq"   ┘
+//
+// Pipeline:
+// 1. lowercase + togli accenti
+// 2. rimuovi info appartamento (piso, planta, puerta, escalera, bloque, portal,
+//    apto, interior, letra, izq/dcha, "3ºA", bajo, ático, ecc.)
+// 3. canonicalizza abbreviazioni via (c/→calle, av./avda→avenida, pza→plaza, ecc.)
+// 4. punteggiatura → spazi, comprimi spazi
+function direccionToCacheKey(s) {
+  let r = String(s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+  // Step 2: rimuovi tutto da indicatore appartamento in poi
+  // Cattura: piso/planta/puerta/pta/escalera/esc/bloque/blq/portal/apto/apartamento/
+  //          interior/int/letra/izq(uierda)?/dcha?/derecha/bajo/atico/sotano + tutto dopo
+  r = r.replace(/[\s,]+(?:piso|planta|puerta|pta\b\.?|escalera?|esc\b\.?|bloque?|blq\b\.?|portal|apto\b\.?|apartamento|interior|int\b\.?|letra|izq(?:uierda)?|dcha?|derecha|bajo|atico|sotano).*$/gi, "");
+  // Cattura pattern "3ºA" / "1ª izq" / "2-B" alla fine (anche senza keyword)
+  r = r.replace(/[\s,]+\d+\s*[ºª°o]\s*[a-z]*\s*$/gi, "");
+  r = r.replace(/[\s,]+\d+\s*[\-/]\s*[a-z]\s*$/gi, "");
+
+  // Step 3: canonicalizza abbreviazioni VIA (token-based, sicuro)
+  // Sostituisce SOLO il primo token via, per evitare di toccare nomi di via
+  r = r.replace(/^\s*c\s*[\/.,]\s*/i,  "calle ");        // "c/ cuba" → "calle cuba"
+  r = r.replace(/^\s*calle\b\.?/i,     "calle");
+  r = r.replace(/^\s*(?:av|avd|avda)\b\.?/i,           "avenida");
+  r = r.replace(/^\s*avenida\b\.?/i,                   "avenida");
+  r = r.replace(/^\s*(?:pza|pl)\b\.?/i,                "plaza");
+  r = r.replace(/^\s*plaza\b\.?/i,                     "plaza");
+  r = r.replace(/^\s*(?:ctra|crta)\b\.?/i,             "carretera");
+  r = r.replace(/^\s*carretera\b\.?/i,                 "carretera");
+  r = r.replace(/^\s*paseo\b\.?/i,                   "paseo");
+  r = r.replace(/^\s*p\s*\.?\s*[ºª°]\s+/i,           "paseo ");
+  r = r.replace(/^\s*(?:urb|urbanizacion|urbanización)\b\.?/i, "urbanizacion");
+
+  // Step 4: punteggiatura → spazi + comprimi
+  r = r.replace(/[.,;:]/g, " ").replace(/\s+/g, " ").trim();
+
+  return r;
+}
+
 module.exports = {
   rand, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine,
   isBevanda, isDesert, mergeItems, mergeItemsBevande,
   buildResumen, buildUpsell, buildMsgRicevuto, introChiediOra, ctaRisposta,
   appendChat, updateConvDati, createConv, getConversazione, upsertWaMsg,
-  normalizzaDireccion
+  normalizzaDireccion, direccionToCacheKey
 };

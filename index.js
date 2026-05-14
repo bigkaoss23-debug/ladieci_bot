@@ -187,6 +187,33 @@ app.post("/api", async (req, res) => {
           chiave: "DRIVER_STATO",
           valore: JSON.stringify({ ...ds, rientro_stimato: rientroStimato })
         }, "chiave");
+
+        // ── Shadow A/B: raccoglie stime degli ordini consegnati in questo giro ──
+        // Per ogni ordine RETIRADO con hora_entrega DOPO partito_alle e stessa zona,
+        // estrae le 3 stime (chosen, google, haversine) + source.
+        // Aggregazione MAX (worst-case del giro) per coerenza con tempo reale registrato.
+        let durataStimataMin = null, durataGoogleMin = null, durataHaversineMin = null, durataStimataSource = null;
+        try {
+          const partitoMs = new Date(ds.partito_alle).getTime();
+          const recent = await sbSelect("ordenes",
+            `estado=eq.RETIRADO&zona=eq.${encodeURIComponent(ds.zona || "")}&order=hora_entrega.desc&limit=10`
+          );
+          const ords = (recent || []).filter(o => o.hora_entrega && Number(o.hora_entrega) >= partitoMs);
+          if (ords.length > 0) {
+            const maxOf = (k) => {
+              const vals = ords.map(o => o[k]).filter(v => v != null);
+              return vals.length ? Math.max(...vals) : null;
+            };
+            durataStimataMin    = maxOf("durata_andata_min");
+            durataGoogleMin     = maxOf("durata_google_min");
+            durataHaversineMin  = maxOf("durata_haversine_min");
+            const sources = [...new Set(ords.map(o => o.geo_source).filter(Boolean))];
+            durataStimataSource = sources.length === 1 ? sources[0] : (sources.length > 1 ? "mixed" : null);
+          }
+        } catch (e) {
+          console.warn("[chiudiGiro] A/B aggregation failed:", e?.message || e);
+        }
+
         // INSERT (non upsert) — ogni giro è una nuova riga, id è serial autoincrement.
         // sbUpsert qui falliva sempre per via di prefer=resolution=merge-duplicates senza on_conflict
         // → PostgREST 400 → catch silenzioso → tabella vuota per mesi. Bug fixato 2026-05-14.
@@ -194,7 +221,11 @@ app.post("/api", async (req, res) => {
           await sbInsert("delivery_logs", {
             zona: ds.zona, n_ordini: ds.n_ordini || 1,
             partito_alle: ds.partito_alle, ultimo_entregado: adesso.toISOString(),
-            tempo_andata_min: tempoAndata, rientro_stimato: rientroStimato
+            tempo_andata_min: tempoAndata, rientro_stimato: rientroStimato,
+            durata_stimata_min: durataStimataMin,
+            durata_stimata_source: durataStimataSource,
+            durata_stimata_google_min: durataGoogleMin,
+            durata_stimata_haversine_min: durataHaversineMin
           });
         } catch (e) {
           console.warn("[delivery_logs] insert failed:", e?.message || e);
@@ -207,6 +238,14 @@ app.post("/api", async (req, res) => {
       // Cliente arrivato (RITIRO) — segna flag llegado
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { llegado: req.body.llegado !== false });
       result = { success: true };
+    } else if (action === "resolveAddress") {
+      const { risolviIndirizzo } = require("./src/utils/geoResolver");
+      const { direccion, tel, tipoConsegna, forceRefresh } = req.body;
+      result = await risolviIndirizzo({
+        direccion, tel: tel || null,
+        tipoConsegna: tipoConsegna || "DOMICILIO",
+        forceRefresh: !!forceRefresh
+      });
     } else if (action === "createOrden") {
       const d = req.body.data || req.body;
       if (!d.waId && d.wa_id) d.waId = d.wa_id;

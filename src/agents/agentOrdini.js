@@ -64,6 +64,10 @@ async function creaOrdine(params) {
       zona_lat:       params.zona_lat       || null,
       zona_lon:       params.zona_lon       || null,
       zona_manuale:   params.zona_manuale   || false,
+      durata_andata_min:    params.durata_andata_min    ?? null,
+      durata_google_min:    params.durata_google_min    ?? null,
+      durata_haversine_min: params.durata_haversine_min ?? null,
+      geo_source:           params.geo_source           || null,
       forzado:        params.forzado        || false,
       ya_pagado:      params.ya_pagado      || false,
       metodo_pago:    params.metodo_pago    || ""
@@ -97,6 +101,10 @@ async function modificaOrdine(ordenId, updates) {
   if (updates.zona_lat       !== undefined) upd.zona_lat       = updates.zona_lat;
   if (updates.zona_lon       !== undefined) upd.zona_lon       = updates.zona_lon;
   if (updates.zona_manuale   !== undefined) upd.zona_manuale   = updates.zona_manuale;
+  if (updates.durata_andata_min    !== undefined) upd.durata_andata_min    = updates.durata_andata_min;
+  if (updates.durata_google_min    !== undefined) upd.durata_google_min    = updates.durata_google_min;
+  if (updates.durata_haversine_min !== undefined) upd.durata_haversine_min = updates.durata_haversine_min;
+  if (updates.geo_source           !== undefined) upd.geo_source           = updates.geo_source;
   if (updates.forzado        !== undefined) upd.forzado        = updates.forzado === true;
 
   // Se items o tipo_consegna cambiano, ricalcola delivery_fee + totale.
@@ -139,10 +147,21 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   }
   if (nuovoStato === "RETIRADO") {
     const ord2 = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
-    if (ord2?.[0]?.wa_id) {
-      const waId = ord2[0].wa_id;
-      await sbUpdate("conv", `wa_id=eq.${waId}&stato_ordine=not.in.(ritirata,chiusa)`, { stato_ordine: "ritirata" });
-      await sbUpdate("wa_msgs", `wa_id=eq.${waId}&stato=not.eq.COMPLETATO`, { stato: "COMPLETATO" });
+    if (ord2?.[0]) {
+      const ord = ord2[0];
+      if (ord.wa_id) {
+        const waId = ord.wa_id;
+        await sbUpdate("conv", `wa_id=eq.${waId}&stato_ordine=not.in.(ritirata,chiusa)`, { stato_ordine: "ritirata" });
+        await sbUpdate("wa_msgs", `wa_id=eq.${waId}&stato=not.eq.COMPLETATO`, { stato: "COMPLETATO" });
+      }
+      // Consegna riuscita → l'indirizzo è "validato dal mondo reale".
+      // Edge case C: clienti senza numero civico ("Calle Cuba" → unica casa)
+      // possono ora essere risolti dallo Step 2 della cascata sui prossimi ordini.
+      if (ord.tipo_consegna === "DOMICILIO" && ord.tel && ord.direccion) {
+        await sbUpdate("clientes", `tel=eq.${encodeURIComponent(ord.tel)}`,
+          { direccion_confermata_il: new Date().toISOString() }
+        ).catch(e => console.warn("[direccion_confermata_il] update failed:", e?.message || e));
+      }
     }
   }
   return { success: true, id: ordenId, estado: nuovoStato };
