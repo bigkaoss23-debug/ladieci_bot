@@ -24,7 +24,7 @@
 //   - "fallback_only" → step 3 saltato (DEFAULT se config manca)
 // ===============================================================
 
-const { sbSelect, sbUpsert } = require("./supabase");
+const { sbSelect, sbUpsert, sbUpdate } = require("./supabase");
 const { direccionToCacheKey } = require("./helpers");
 const {
   ZONE_DELIVERY, assegnaZonaDaCoord, assegnaZonaDaKeyword,
@@ -56,10 +56,11 @@ async function loadFromCache(direccion) {
     const rows = await sbSelect("geo_cache", `direccion_key=eq.${encodeURIComponent(key)}&limit=1`);
     const row = rows?.[0];
     if (!row || row.lat == null || row.lon == null || !row.zona) return null;
-    // Bump hit_count best-effort, non blocca
-    sbUpsert("geo_cache",
-      { direccion_key: key, hit_count: (row.hit_count || 0) + 1 },
-      "direccion_key"
+    // Bump hit_count best-effort, non blocca.
+    // PATCH, non upsert: `zona` è NOT NULL → INSERT-on-conflict fallirebbe sul path INSERT.
+    sbUpdate("geo_cache",
+      `direccion_key=eq.${encodeURIComponent(key)}`,
+      { hit_count: (row.hit_count || 0) + 1 }
     ).catch(e => console.warn("[geoResolver] hit_count bump:", e?.message || e));
     // "Blindata" = almeno 1 ordine consegnato a questo indirizzo → autorità sopra Google.
     // n_ordini_consegnati viene incrementato in chiudiServizio (servizio.js) sugli ordini archiviati.

@@ -7,6 +7,9 @@ const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, d
 
 // Incrementa n_ordini_creati sulla riga di geo_cache associata all'indirizzo.
 // Best-effort: se la migration non è ancora applicata o la riga non esiste, fallisce silenziosamente.
+// IMPORTANTE: usa PATCH (sbUpdate), NON sbUpsert. La colonna `zona` è NOT NULL: un upsert
+// con body parziale {direccion_key, n_ordini_creati} fa fallire la validazione INSERT del path
+// PostgREST INSERT ... ON CONFLICT DO UPDATE, anche se la riga esiste già.
 async function bumpGeoCacheCreated(direccion, geoSource) {
   if (!direccion || !geoSource) return;
   const key = direccionToCacheKey(direccion);
@@ -15,9 +18,9 @@ async function bumpGeoCacheCreated(direccion, geoSource) {
     const rows = await sbSelect("geo_cache", `direccion_key=eq.${encodeURIComponent(key)}&limit=1`);
     const row = rows?.[0];
     if (!row) return;
-    await sbUpsert("geo_cache",
-      { direccion_key: key, n_ordini_creati: (row.n_ordini_creati || 0) + 1 },
-      "direccion_key"
+    await sbUpdate("geo_cache",
+      `direccion_key=eq.${encodeURIComponent(key)}`,
+      { n_ordini_creati: (row.n_ordini_creati || 0) + 1 }
     );
   } catch (e) {
     console.warn("[geo_cache] n_ordini_creati bump failed:", e?.message || e);

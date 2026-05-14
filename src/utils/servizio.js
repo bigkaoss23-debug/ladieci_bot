@@ -33,9 +33,11 @@ async function bumpGeoCacheDelivered(direccion, geoSource) {
     const rows = await sbSelect("geo_cache", `direccion_key=eq.${encodeURIComponent(key)}&limit=1`);
     const row = rows?.[0];
     if (!row) return;
-    await sbUpsert("geo_cache",
-      { direccion_key: key, n_ordini_consegnati: (row.n_ordini_consegnati || 0) + 1 },
-      "direccion_key"
+    // PATCH, non upsert: la colonna `zona` è NOT NULL → un INSERT-on-conflict con
+    // body parziale fallirebbe la validazione INSERT prima del DO UPDATE.
+    await sbUpdate("geo_cache",
+      `direccion_key=eq.${encodeURIComponent(key)}`,
+      { n_ordini_consegnati: (row.n_ordini_consegnati || 0) + 1 }
     );
   } catch (e) {
     console.warn("[geo_cache] n_ordini_consegnati bump failed:", e?.message || e);

@@ -280,6 +280,21 @@ function direccionToCacheKey(s) {
     .toLowerCase()
     .normalize("NFD").replace(/[̀-ͯ]/g, "");
 
+  // Step 1bis: rimuovi suffissi località/CAP/provincia/paese.
+  // "Calle X 5, 04740 Roquetas de Mar, Almería, España" → "Calle X 5"
+  // IMPORTANTE: richiede una virgola davanti (formato postale standard). Senza virgola
+  // non strippa, per evitare di tagliare parole legittime nei nomi di via — es.
+  // "Avenida Reino de España 250" non deve perdere "españa".
+  // Eseguito prima del filtro appartamento per evitare che il match con "roquetas" interferisca.
+  r = r.replace(/,\s*\d{5}\b/g, ",");                              // CAP es. ", 04740"
+  r = r.replace(/,\s*roquetas\s+de\s+mar\b/gi, ",");
+  r = r.replace(/,\s*roquetas\b/gi, ",");
+  r = r.replace(/,\s*aguadulce\b/gi, ",");
+  r = r.replace(/,\s*almer[ií]a\b/gi, ",");
+  r = r.replace(/,\s*(?:espa[ñn]a|spain)\b/gi, ",");
+  // Compatta virgole vuote lasciate dalle sostituzioni: ",,," → ","
+  r = r.replace(/,(?:\s*,)+/g, ",").replace(/,\s*$/g, "");
+
   // Step 2: rimuovi tutto da indicatore appartamento in poi
   // Cattura: piso/planta/puerta/pta/escalera/esc/bloque/blq/portal/apto/apartamento/
   //          interior/int/letra/izq(uierda)?/dcha?/derecha/bajo/atico/sotano + tutto dopo
