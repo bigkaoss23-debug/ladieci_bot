@@ -255,16 +255,48 @@ async function getCliente(tel) {
   return (rows?.length > 0) ? rows[0] : null;
 }
 
-async function upsertCliente(nombre, tel, items) {
+// geoSnapshot: { direccion?, direccion_note?, zona?, zona_lat?, zona_lon?, durata_andata_min?, geo_source? }
+// Passato dal chiamante quando l'ordine è DOMICILIO. Fix 2026-05-14: prima i campi
+// direccion/zona/lat/lon dei clienti restavano sempre null perché upsertCliente li ignorava
+// — la cascata "cliente abituale → suo indirizzo" non poteva mai matchare.
+async function upsertCliente(nombre, tel, items, geoSnapshot = null) {
   if (!nombre || !tel) return;
   const telNorm = String(tel).replace("+", "");
   const pizze = [], bevande = [];
   (items || []).forEach(it => { if (isBevanda(it.n)) bevande.push(it.n); else pizze.push(it.n); });
+
+  const geoFields = {};
+  if (geoSnapshot?.direccion) {
+    geoFields.direccion = geoSnapshot.direccion;
+    if (geoSnapshot.direccion_note != null) geoFields.direccion_note = geoSnapshot.direccion_note;
+    if (geoSnapshot.zona) geoFields.zona = geoSnapshot.zona;
+    if (geoSnapshot.zona_lat != null) geoFields.zona_lat = geoSnapshot.zona_lat;
+    if (geoSnapshot.zona_lon != null) geoFields.zona_lon = geoSnapshot.zona_lon;
+    if (geoSnapshot.durata_andata_min != null) geoFields.durata_andata_min = geoSnapshot.durata_andata_min;
+    if (geoSnapshot.geo_source) geoFields.geo_source = geoSnapshot.geo_source;
+    geoFields.geo_aggiornato_il = new Date().toISOString();
+  }
+
   const existing = await getCliente(telNorm);
   if (existing) {
-    await sbUpdate("clientes", `tel=eq.${telNorm}`, { nombre, total_pedidos: (existing.total_pedidos || 0) + 1, ultimo_pedido: new Date().toISOString(), ultimo_items: items || [], pizza_pref: pizze[0] || existing.pizza_pref || "", bevanda_pref: bevande[0] || existing.bevanda_pref || "" });
+    await sbUpdate("clientes", `tel=eq.${telNorm}`, {
+      nombre,
+      total_pedidos: (existing.total_pedidos || 0) + 1,
+      ultimo_pedido: new Date().toISOString(),
+      ultimo_items: items || [],
+      pizza_pref: pizze[0] || existing.pizza_pref || "",
+      bevanda_pref: bevande[0] || existing.bevanda_pref || "",
+      ...geoFields
+    });
   } else {
-    await sbUpsert("clientes", { tel: telNorm, nombre, total_pedidos: 1, ultimo_pedido: new Date().toISOString(), ultimo_items: items || [], pizza_pref: pizze[0] || "", bevanda_pref: bevande[0] || "", nota_fissa: "", orario_solito: "" });
+    await sbUpsert("clientes", {
+      tel: telNorm, nombre, total_pedidos: 1,
+      ultimo_pedido: new Date().toISOString(),
+      ultimo_items: items || [],
+      pizza_pref: pizze[0] || "", bevanda_pref: bevande[0] || "",
+      nota_fissa: "", orario_solito: "",
+      ...geoFields
+    }, "tel");
   }
 }
 

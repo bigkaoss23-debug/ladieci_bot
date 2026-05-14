@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const { processWebhook } = require("./src/agents/orchestrator");
-const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert } = require("./src/utils/supabase");
+const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert, sbInsert } = require("./src/utils/supabase");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
 const { invia } = require("./src/agents/agentWhatsapp");
 const { chiudiServizio, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
@@ -187,14 +187,18 @@ app.post("/api", async (req, res) => {
           chiave: "DRIVER_STATO",
           valore: JSON.stringify({ ...ds, rientro_stimato: rientroStimato })
         }, "chiave");
-        // Log silenzioso se la tabella non esiste
+        // INSERT (non upsert) — ogni giro è una nuova riga, id è serial autoincrement.
+        // sbUpsert qui falliva sempre per via di prefer=resolution=merge-duplicates senza on_conflict
+        // → PostgREST 400 → catch silenzioso → tabella vuota per mesi. Bug fixato 2026-05-14.
         try {
-          await sbUpsert("delivery_logs", {
+          await sbInsert("delivery_logs", {
             zona: ds.zona, n_ordini: ds.n_ordini || 1,
             partito_alle: ds.partito_alle, ultimo_entregado: adesso.toISOString(),
             tempo_andata_min: tempoAndata, rientro_stimato: rientroStimato
           });
-        } catch (_) {}
+        } catch (e) {
+          console.warn("[delivery_logs] insert failed:", e?.message || e);
+        }
         result = { success: true, rientroStimato, tempoAndata };
       } else {
         result = { success: true, skipped: "driver_not_out" };

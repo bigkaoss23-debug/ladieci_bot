@@ -2,9 +2,10 @@
 // orchestrator.js — cervello centrale
 // ===============================================================
 
-const { sbSelect, sbUpdate, getConfig } = require("../utils/supabase");
+const { sbSelect, sbUpdate, sbUpsert, getConfig } = require("../utils/supabase");
 const { appendChat, updateConvDati, createConv, upsertWaMsg, getConversazione,
-        mergeItemsBevande, calcolaTotale, buildResumen, buildUpsell, buildMsgRicevuto, rand } = require("../utils/helpers");
+        mergeItemsBevande, calcolaTotale, buildResumen, buildUpsell, buildMsgRicevuto, rand,
+        normalizzaDireccion } = require("../utils/helpers");
 const { getStatoCliente, getCaricoForno, getCaricoDelivery } = require("./agentCucina");
 const { interpreta, generaRisposta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion } = require("./agentWhatsapp");
 const { creaOrdine, modificaOrdine, aggiungiItems } = require("./agentOrdini");
@@ -13,11 +14,46 @@ const { geocodificaEAssegnaZona, ZONE_DELIVERY, calcolaTempoGiro } = require("..
 
 async function resolveZona(direccion, tipoConsegna) {
   if (tipoConsegna !== "DOMICILIO" || !direccion) return { zona: null, lat: null, lon: null, metodo: null };
+  // 1) Cache lookup (Fix 2026-05-14: prima il flusso WhatsApp saltava la cache —
+  //    chiamava direttamente Nominatim ad ogni messaggio).
+  try {
+    const key = normalizzaDireccion(direccion);
+    if (key && key.length >= 5) {
+      const rows = await sbSelect("geo_cache", `direccion_key=eq.${encodeURIComponent(key)}&limit=1`);
+      const cached = rows?.[0];
+      if (cached && cached.lat != null && cached.lon != null && cached.zona) {
+        // Bump hit_count (best-effort, non bloccante)
+        sbUpsert("geo_cache",
+          { direccion_key: key, hit_count: (cached.hit_count || 0) + 1 },
+          "direccion_key"
+        ).catch(e => console.warn("[geo_cache] hit_count bump failed:", e?.message || e));
+        return { zona: cached.zona, lat: cached.lat, lon: cached.lon, metodo: "cache" };
+      }
+    }
+  } catch (e) {
+    console.warn("[resolveZona] cache lookup failed:", e?.message || e);
+  }
+  // 2) Cache miss → geocoder esistente (Nominatim → Photon → keyword)
   try {
     const r = await geocodificaEAssegnaZona(direccion);
-    return { zona: r.zona?.id || null, lat: r.lat ?? null, lon: r.lon ?? null, metodo: r.metodo || null };
+    const result = { zona: r.zona?.id || null, lat: r.lat ?? null, lon: r.lon ?? null, metodo: r.metodo || null };
+    // 3) Persist su cache se trovata via polygon (no keyword — keyword non ha lat/lon reali)
+    if (result.metodo === "polygon" && result.zona && result.lat != null && result.lon != null) {
+      const key = normalizzaDireccion(direccion);
+      if (key && key.length >= 5) {
+        sbUpsert("geo_cache", {
+          direccion_key: key,
+          direccion_orig: direccion,
+          zona: result.zona,
+          lat: result.lat, lon: result.lon,
+          source: r.source || "nominatim",
+          updated_at: new Date().toISOString()
+        }, "direccion_key").catch(e => console.warn("[geo_cache] save failed:", e?.message || e));
+      }
+    }
+    return result;
   } catch (e) {
-    console.error("geocode error:", e?.message || e);
+    console.error("[resolveZona] geocode error:", e?.message || e);
     return { zona: null, lat: null, lon: null, metodo: null };
   }
 }
@@ -338,7 +374,13 @@ async function gestisci(ctx) {
       else await upsertWaMsgOrdenRef(waId, numPedido1);
     }
     if (autoOn) await invia(waId, msgRicevuto, config);
-    await upsertCliente(nombre, waId, allItems);
+    await upsertCliente(nombre, waId, allItems, tipoConsegna === "DOMICILIO" ? {
+      direccion: direccion || null,
+      zona: zonaRes1.zona || null,
+      zona_lat: zonaRes1.lat ?? null,
+      zona_lon: zonaRes1.lon ?? null,
+      geo_source: zonaRes1.metodo || null
+    } : null);
     return { flusso: 1, stato: "NUEVO", ordenId: numPedido1 };
   }
 

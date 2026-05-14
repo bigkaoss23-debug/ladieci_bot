@@ -249,9 +249,24 @@ async function upsertWaMsg(waId, nombre, txt, stato, conf, items, hora, botRispo
   return { success: true, id };
 }
 
+// Normalizza un indirizzo per produrre una chiave di cache stabile.
+// "Av. Playa Serena, 33" / "AV PLAYA SERENA 33" / "av. playa serena,33"
+//   → tutti diventano "av playa serena 33".
+// Rimuove accenti, lowercase, punteggiatura → spazi, doppi spazi compressi.
+// Stessa logica usata sul frontend (api.js) — DEVE restare allineata.
+function normalizzaDireccion(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[.,;:]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 module.exports = {
   rand, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine,
   isBevanda, isDesert, mergeItems, mergeItemsBevande,
   buildResumen, buildUpsell, buildMsgRicevuto, introChiediOra, ctaRisposta,
-  appendChat, updateConvDati, createConv, getConversazione, upsertWaMsg
+  appendChat, updateConvDati, createConv, getConversazione, upsertWaMsg,
+  normalizzaDireccion
 };
