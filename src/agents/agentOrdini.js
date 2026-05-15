@@ -27,6 +27,56 @@ async function bumpGeoCacheCreated(direccion, geoSource) {
   }
 }
 
+// Upsert cliente quando arriva un ordine con tel valorizzato.
+// - Se esiste già (match per tel) → ritorna il suo id, senza toccare preferito (rispetta scelta operatore).
+// - Se non esiste → crea riga con preferito=false (ancora occasionale).
+// Best-effort: errori non bloccano la creazione dell'ordine.
+async function upsertClienteByTel({ tel, nombre, direccion, direccion_note, zona, zona_lat, zona_lon }) {
+  const t = String(tel || "").trim();
+  if (!t) return null;
+  try {
+    const rows = await sbSelect("clientes", `tel=eq.${encodeURIComponent(t)}&select=id&limit=1`);
+    if (rows?.[0]?.id) return rows[0].id;
+    const aliasUp = String(nombre || "").trim().toUpperCase();
+    const ins = await sbInsert("clientes", {
+      tel: t,
+      nombre: nombre || aliasUp || "",
+      alias: aliasUp || null,
+      direccion: direccion || null,
+      direccion_note: direccion_note || null,
+      zona: zona || null,
+      zona_lat: zona_lat ?? null,
+      zona_lon: zona_lon ?? null,
+      preferito: false,
+      total_pedidos: 0
+    });
+    return Array.isArray(ins) ? (ins[0]?.id || null) : (ins?.id || null);
+  } catch (e) {
+    console.warn("[upsertClienteByTel] failed:", e?.message || e);
+    return null;
+  }
+}
+
+// Incrementa contatore + auto-promozione a preferito al 2° ordine.
+// Best-effort: non bloccare l'ordine se fallisce.
+async function bumpClienteCounters(clienteId) {
+  if (!clienteId) return;
+  try {
+    const rows = await sbSelect("clientes", `id=eq.${clienteId}&select=total_pedidos,preferito&limit=1`);
+    const c = rows?.[0];
+    if (!c) return;
+    const newCount = (c.total_pedidos || 0) + 1;
+    const newPreferito = c.preferito || newCount >= 2;
+    await sbUpdate("clientes", `id=eq.${clienteId}`, {
+      total_pedidos: newCount,
+      ultimo_pedido: new Date().toISOString(),
+      preferito: newPreferito
+    });
+  } catch (e) {
+    console.warn("[bumpClienteCounters] failed:", e?.message || e);
+  }
+}
+
 async function creaOrdine(params) {
   // ═══ Items SENZA fake "Entrega a domicilio" ═══
   // Il costo consegna vive nella colonna delivery_fee, NON dentro items.
@@ -50,6 +100,22 @@ async function creaOrdine(params) {
     if (Array.isArray(existing) && existing[0]?.id) {
       return { success: true, id: existing[0].id, idempotent: true };
     }
+  }
+
+  // ═══ Auto-upsert cliente (se ho un tel e cliente_id non già fornito) ═══
+  // Così ogni cliente con tel finisce in `clientes` (anagrafica), e dopo il 2°
+  // ordine viene auto-promosso a preferito → appare nell'autocomplete.
+  let clienteIdResolved = params.cliente_id || null;
+  if (!clienteIdResolved && params.tel) {
+    clienteIdResolved = await upsertClienteByTel({
+      tel: params.tel,
+      nombre: params.nombre,
+      direccion: params.direccion,
+      direccion_note: params.direccion_note,
+      zona: params.zona,
+      zona_lat: params.zona_lat,
+      zona_lon: params.zona_lon
+    });
   }
 
   // ═══ ID generation con retry anti-race-condition ═══
@@ -82,7 +148,7 @@ async function creaOrdine(params) {
       client_req_id: clientReqId,
       nombre: params.nombre || "",
       tel: params.tel || "",
-      cliente_id: params.cliente_id || null,
+      cliente_id: clienteIdResolved,
       wa_id: params.waId || params.tel || "",
       canal: params.canal || "WA",
       items: itemsFinali,
@@ -115,6 +181,8 @@ async function creaOrdine(params) {
     if (Array.isArray(result) && result.length > 0) {
       // Best-effort: incrementa n_ordini_creati su geo_cache (segnale "operatore ha creduto all'indirizzo")
       bumpGeoCacheCreated(params.direccion, params.geo_source);
+      // Best-effort: aggiorna contatori cliente (total_pedidos, ultimo_pedido, auto-promote preferito).
+      bumpClienteCounters(clienteIdResolved);
       return { success: true, id: newId };
     }
 
