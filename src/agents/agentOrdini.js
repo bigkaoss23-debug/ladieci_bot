@@ -82,6 +82,7 @@ async function creaOrdine(params) {
       client_req_id: clientReqId,
       nombre: params.nombre || "",
       tel: params.tel || "",
+      cliente_id: params.cliente_id || null,
       wa_id: params.waId || params.tel || "",
       canal: params.canal || "WA",
       items: itemsFinali,
@@ -159,6 +160,7 @@ async function modificaOrdine(ordenId, updates) {
   if (updates.durata_haversine_min !== undefined) upd.durata_haversine_min = updates.durata_haversine_min;
   if (updates.geo_source           !== undefined) upd.geo_source           = updates.geo_source;
   if (updates.forzado        !== undefined) upd.forzado        = updates.forzado === true;
+  if (updates.cliente_id     !== undefined) upd.cliente_id     = updates.cliente_id || null;
 
   // Se items o tipo_consegna cambiano, ricalcola delivery_fee + totale.
   // Servono i valori attuali del DB per le parti non aggiornate.

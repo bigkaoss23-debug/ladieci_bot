@@ -96,6 +96,24 @@ app.get("/api", async (req, res) => {
       const thread = await sbSelect("conv", `wa_id=eq.${req.query.wa_id}&order=ts.desc&limit=1`);
       const threadCtx = (thread?.[0]?.chat || []).slice(-10).map(m => (m.da === "cliente" ? "C" : "B") + ": " + m.txt).join("\n");
       result = { risposta: await generaRisposta(req.query.testo, req.query.wa_id, cfg, threadCtx) };
+    } else if (action === "getClientes") {
+      // Lista clienti preferiti + conteggio ordini ultimi 30gg per calcolare VIP lato server.
+      // Soglia configurabile via config.VIP_SOGLIA_30GG (default 4).
+      const soglia = parseInt(cfg.VIP_SOGLIA_30GG || "4", 10) || 4;
+      const cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const clientes = await sbSelect("clientes",
+        "preferito=eq.true&select=id,alias,nombre,tel,direccion,direccion_note,zona,zona_lat,zona_lon,pizza_pref,bevanda_pref,nota_fissa,orario_solito,ultimo_pedido&limit=2000"
+      ) || [];
+      // Una sola query a storico (cliente_id not null + finestra 30gg) — poi raggruppo in memoria.
+      const storicoRows = await sbSelect("storico",
+        `cliente_id=not.is.null&ts=gte.${cutoffMs}&select=cliente_id,ts&limit=20000`
+      ) || [];
+      const counts = {};
+      for (const r of storicoRows) counts[r.cliente_id] = (counts[r.cliente_id] || 0) + 1;
+      result = clientes.map(c => {
+        const n = counts[c.id] || 0;
+        return { ...c, ordini_30gg: n, vip: n >= soglia };
+      });
     } else if (action === "debugInterpreta") {
       const { interpreta, preDetectaDireccion } = require("./src/agents/agentWhatsapp");
       const testo = req.query.testo || "";
@@ -262,6 +280,42 @@ app.post("/api", async (req, res) => {
       await sbDelete("wa_msgs",  `wa_id=eq.${wid}`);
       await sbDelete("ordenes",  `wa_id=eq.${wid}`);
       result = { success: true };
+    } else if (action === "upsertCliente") {
+      // Upsert cliente (preferito). Match per id se passato, altrimenti per alias (UPPER) o tel.
+      // Ritorna sempre l'id finale, così il frontend può attaccarlo a createOrden.
+      const b = req.body || {};
+      const aliasUp = (b.alias || "").trim().toUpperCase();
+      const tel = (b.tel || "").trim();
+      let existing = null;
+      if (b.id) {
+        const rows = await sbSelect("clientes", `id=eq.${encodeURIComponent(b.id)}&limit=1`);
+        existing = rows?.[0] || null;
+      } else if (aliasUp) {
+        const rows = await sbSelect("clientes", `alias=ilike.${encodeURIComponent(aliasUp)}&limit=1`);
+        existing = rows?.[0] || null;
+      } else if (tel) {
+        const rows = await sbSelect("clientes", `tel=eq.${encodeURIComponent(tel)}&limit=1`);
+        existing = rows?.[0] || null;
+      }
+      const patch = {
+        alias:          aliasUp || existing?.alias || null,
+        nombre:         b.nombre || existing?.nombre || aliasUp || "",
+        tel:            tel || existing?.tel || null,
+        direccion:      b.direccion ?? existing?.direccion ?? null,
+        direccion_note: b.direccion_note ?? existing?.direccion_note ?? null,
+        zona:           b.zona ?? existing?.zona ?? null,
+        zona_lat:       b.zona_lat ?? existing?.zona_lat ?? null,
+        zona_lon:       b.zona_lon ?? existing?.zona_lon ?? null,
+        preferito:      b.preferito !== false
+      };
+      if (existing) {
+        await sbUpdate("clientes", `id=eq.${existing.id}`, patch);
+        result = { success: true, id: existing.id };
+      } else {
+        const ins = await sbInsert("clientes", patch);
+        const newId = Array.isArray(ins) ? ins[0]?.id : ins?.id;
+        result = { success: true, id: newId };
+      }
     } else if (action === "parseOrdineDaRisposta") {
       result = { success: true };
     } else {
