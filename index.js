@@ -154,8 +154,12 @@ app.post("/api", async (req, res) => {
       await invia(req.body.wa_id || req.body.tel, req.body.testo, cfg);
       result = { success: true };
     } else if (action === "updateWaStato") {
-      const upd = { stato: req.body.stato };
-      if (req.body.ordine_ref !== undefined) upd.ordine_ref = req.body.ordine_ref;
+      // Patch generica su wa_msgs — stato, ordine_ref, ia_items.
+      // Solo i campi passati vengono aggiornati.
+      const upd = {};
+      if (req.body.stato       !== undefined) upd.stato       = req.body.stato;
+      if (req.body.ordine_ref  !== undefined) upd.ordine_ref  = req.body.ordine_ref;
+      if (req.body.ia_items    !== undefined) upd.ia_items    = req.body.ia_items;
       await sbUpdate("wa_msgs", `id=eq.${req.body.id}`, upd);
       result = { success: true };
     } else if (action === "updateOrden") {
