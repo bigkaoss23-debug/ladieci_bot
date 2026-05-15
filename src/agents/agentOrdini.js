@@ -38,6 +38,20 @@ async function creaOrdine(params) {
   const deliveryFee = deliveryFeeFor(tipoConsegna);
   const totale = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
 
+  // ═══ Idempotency check ═══
+  // Se il frontend passa client_req_id, prima cosa: vediamo se un ordine con
+  // quella chiave esiste già. Se sì → ritorniamo lo stesso id (replay sicuro).
+  // Copre il caso "Railway ha creato l'ordine ma la risposta non è arrivata
+  // al client" (network timeout, 502 intermittente, ecc.).
+  const clientReqId = params.client_req_id || null;
+  if (clientReqId) {
+    const existing = await sbSelect("ordenes",
+      `client_req_id=eq.${encodeURIComponent(clientReqId)}&select=id&limit=1`);
+    if (Array.isArray(existing) && existing[0]?.id) {
+      return { success: true, id: existing[0].id, idempotent: true };
+    }
+  }
+
   // ═══ ID generation con retry anti-race-condition ═══
   // Usiamo sbInsert (plain INSERT senza merge-duplicates) così una collisione
   // su chiave primaria ritorna 23505 anziché sovrascrivere silenziosamente.
@@ -65,6 +79,7 @@ async function creaOrdine(params) {
     // INSERT puro: fallisce con 23505 su PK duplicata invece di sovrascrivere
     const result = await sbInsert("ordenes", {
       id: newId,
+      client_req_id: clientReqId,
       nombre: params.nombre || "",
       tel: params.tel || "",
       wa_id: params.waId || params.tel || "",
@@ -102,9 +117,21 @@ async function creaOrdine(params) {
       return { success: true, id: newId };
     }
 
-    // Collisione PK → riprova con ID ri-letto dal DB
+    // Errore PostgREST: distinguere PK duplicate (retry) da client_req_id duplicate (idempotent).
+    // Su client_req_id collision significa che un'altra request gemella ha già inserito
+    // l'ordine concorrentemente — recuperiamo il suo id invece di sbagliare a creare un duplicato.
     const errCode = result?.code || result?.[0]?.code || "";
-    if (errCode === "23505") continue;
+    const errDetails = (result?.details || result?.message || "") + "";
+    if (errCode === "23505") {
+      if (clientReqId && errDetails.includes("client_req_id")) {
+        const existing = await sbSelect("ordenes",
+          `client_req_id=eq.${encodeURIComponent(clientReqId)}&select=id&limit=1`);
+        if (Array.isArray(existing) && existing[0]?.id) {
+          return { success: true, id: existing[0].id, idempotent: true };
+        }
+      }
+      continue; // PK collision (id sequenziale) → riprova con un nuovo lastNum
+    }
 
     // Altro errore DB
     return { success: false, error: "errore DB", detail: JSON.stringify(result) };

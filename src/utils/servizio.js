@@ -171,6 +171,7 @@ function buildStoricoPayload(o, oggi, diaSemana, estadoOverride = null) {
 
   return {
     orden_id:       o.id || "",
+    client_req_id:  o.client_req_id || null,
     nombre:         o.nombre || "",
     tel:            o.tel || "",
     wa_id:          o.wa_id || "",
