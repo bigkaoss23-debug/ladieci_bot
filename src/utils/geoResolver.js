@@ -151,6 +151,14 @@ async function googleGeocode(direccion) {
     return { ok: false, error: "google_low_quality" };
   }
 
+  // partial_match=true significa che Google ha interpolato l'indirizzo (es. via inesistente
+  // → match su via simile). Risultato non affidabile: scarta e lascia fare a Nominatim/Photon
+  // o keyword. Senza questo check, "Calle Poseidón 3" finto può finire nel centro città.
+  if (r.partial_match === true) {
+    console.log(`[geoResolver] google partial_match scartato: "${direccion}" → ${r.formatted_address}`);
+    return { ok: false, error: "google_partial_match" };
+  }
+
   const lat = loc.lat, lon = loc.lng;
   if (!coordInRoquetas(lat, lon)) return { ok: false, error: "google_low_quality" };
 
