@@ -403,9 +403,24 @@ async function getGeoProvider() {
 // ═══════════════════════════════════════════════════════════════
 // MAIN: risolviIndirizzo
 // ═══════════════════════════════════════════════════════════════
+// Localities che non fanno parte delle nostre zone di consegna.
+// Se il testo dell'indirizzo le contiene esplicitamente, blocchiamo il geocoding
+// prima ancora di chiamare qualsiasi API — evita false positive da geocoder con
+// dati misti (es. Photon etichetta "Paseo Marítimo, Roquetas" come Aguadulce).
+const LOCALITA_FUORI_ZONA = ["aguadulce", "almería", "almeria", "vícar", "vicar",
+  "la mojonera", "mojonera", "el ejido", "ejido", "adra", "berja", "dalías", "dalias"];
+
 async function risolviIndirizzo({ direccion, tel = null, tipoConsegna = "DOMICILIO", forceRefresh = false } = {}) {
   if (tipoConsegna !== "DOMICILIO") return emptyResult();
   if (!direccion || String(direccion).trim().length < 5) return emptyResult("no_address");
+
+  // Pre-flight: se l'indirizzo contiene una locality esplicitamente fuori zona → stop subito.
+  // Più affidabile di qualsiasi geocoder, che può avere dati misti tra comuni limitrofi.
+  const dirLower = String(direccion).toLowerCase();
+  if (LOCALITA_FUORI_ZONA.some(loc => dirLower.includes(loc))) {
+    console.log(`[geoResolver] pre-flight fuori zona: "${direccion}"`);
+    return emptyResult("fuori_zona_localita");
+  }
 
   const provider = await getGeoProvider();
   const googleEnabled = (provider === "google" || provider === "shadow");
