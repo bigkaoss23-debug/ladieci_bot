@@ -15,6 +15,20 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
   }
   const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
   const sim = simulateDriverSchedule(rows);
+
+  // Aggregazione stesso giro: se il nuovo ordine cade nello stesso slot+zona di un
+  // giro già pianificato, il driver parte UNA SOLA VOLTA per tutti. forno_out =
+  // partenza del giro esistente, non driver_libero (che è DOPO quel giro e farebbe
+  // uscire la pizza dopo la consegna promessa — es. forno 17:46 per delivery 17:40).
+  const toMinL = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
+  const toHL   = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+  const slot10L = (min) => { const r = Math.round(min/10)*10; return toHL(r); };
+  const newSlot = slot10L(toMinL(hora));
+  const giroEsistente = sim.giri.find(g => g.zona === zona && g.slot === newSlot);
+  if (giroEsistente) {
+    return toHL(giroEsistente.partenzaMin);
+  }
+
   return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin: sim.driverLiberoMin });
 }
 
