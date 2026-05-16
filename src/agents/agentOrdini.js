@@ -32,6 +32,36 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
   return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin: sim.driverLiberoMin });
 }
 
+// Sibling-sync: tutti gli ordini dello stesso giro (zona+slot) escono dal forno
+// nello STESSO istante — il driver parte una volta sola. Quando un ordine si
+// aggrega, i fratelli già in DB possono avere un forno_out vecchio (calcolato
+// quando il giro aveva max-durata diversa). Qui riallineo tutti al partenzaMin
+// del giro: zero scarto, stesso countdown in cucina = stessa comanda a colpo
+// d'occhio. Best-effort: errori loggati, non bloccano il flusso ordine.
+async function risincronizzaGiro(zona, hora) {
+  if (!zona || !hora) return;
+  try {
+    const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
+    const sim = simulateDriverSchedule(rows);
+    const toMinL = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
+    const toHL   = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+    const slot10L = (min) => { const r = Math.round(min/10)*10; return toHL(r); };
+    const targetSlot = slot10L(toMinL(hora));
+    const giro = sim.giri.find(g => g.zona === zona && g.slot === targetSlot);
+    if (!giro) return;
+    const fornoGiro = toHL(giro.partenzaMin);
+    const fratelli = rows.filter(o =>
+      o.zona === zona && o.hora && slot10L(toMinL(o.hora)) === targetSlot
+      && o.forno_out !== fornoGiro
+    );
+    for (const f of fratelli) {
+      await sbUpdate("ordenes", `id=eq.${encodeURIComponent(f.id)}`, { forno_out: fornoGiro });
+    }
+  } catch (e) {
+    console.warn("[risincronizzaGiro] fallita per", zona, hora, e?.message || e);
+  }
+}
+
 // Incrementa n_ordini_creati sulla riga di geo_cache associata all'indirizzo.
 // Best-effort: se la migration non è ancora applicata o la riga non esiste, fallisce silenziosamente.
 // IMPORTANTE: usa PATCH (sbUpdate), NON sbUpsert. La colonna `zona` è NOT NULL: un upsert
@@ -222,6 +252,7 @@ async function creaOrdine(params) {
       bumpGeoCacheCreated(params.direccion, params.geo_source);
       // Best-effort: aggiorna contatori cliente (total_pedidos, ultimo_pedido, auto-promote preferito).
       bumpClienteCounters(clienteIdResolved);
+      if (tipoConsegna === "DOMICILIO") await risincronizzaGiro(params.zona, params.hora);
       return { success: true, id: newId };
     }
 
@@ -293,6 +324,16 @@ async function modificaOrdine(ordenId, updates) {
   }
 
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
+  if (upd.forno_out !== undefined) {
+    const zonaSync = upd.zona !== undefined ? upd.zona : undefined;
+    const horaSync = upd.hora !== undefined ? upd.hora : undefined;
+    if (zonaSync && horaSync) {
+      await risincronizzaGiro(zonaSync, horaSync);
+    } else {
+      const r = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=zona,hora`);
+      if (r?.[0]) await risincronizzaGiro(r[0].zona, r[0].hora);
+    }
+  }
   return { success: true };
 }
 
@@ -315,6 +356,10 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     if (ord1?.[0]?.wa_id) {
       await sbUpdate("wa_msgs", `ordine_ref=eq.${encodeURIComponent(ordenId)}&stato=not.in.(COMPLETATO,COCINA)`, { stato: "COCINA" });
       await sbUpdate("conv", `wa_id=eq.${ord1[0].wa_id}&stato_ordine=not.in.(ritirata,chiusa)`, { stato_ordine: "aperta", items: [], hora: "", ts: Date.now() });
+    }
+    // Ordine appena entrato in cucina → il giro può aver cambiato composizione
+    if (ord1?.[0]?.tipo_consegna === "DOMICILIO") {
+      await risincronizzaGiro(ord1[0].zona, ord1[0].hora);
     }
   }
   if (nuovoStato === "RETIRADO") {
