@@ -212,6 +212,19 @@ async function nominatimGeocode(direccion) {
   const cleaned = limpiaPerGeocode(direccion);
   const base = cleaned.replace(/\s+\d+\s*$/, "").trim();
 
+  // Se la direccion contiene una locality esplicita (testo dopo virgola che non è
+  // un codice appartamento, es. "Aguadulce"), la estraiamo per verificare che
+  // Nominatim abbia effettivamente geocodificato QUELLA zona e non una via
+  // omonima dentro Roquetas de Mar.
+  let localityCheck = null;
+  if (cleaned.includes(',')) {
+    const afterComma = cleaned.split(',').slice(1).join(',').trim();
+    // Usiamo come locality solo se è un nome proprio (alpha, ≥5 char, non solo numeri)
+    if (afterComma.length >= 5 && /^[a-záéíóúüñ\s]+$/i.test(afterComma)) {
+      localityCheck = afterComma.toLowerCase().trim();
+    }
+  }
+
   async function tryQuery(q) {
     const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`;
     try {
@@ -219,6 +232,12 @@ async function nominatimGeocode(direccion) {
       if (!r.ok) return null;
       const d = await r.json();
       if (!d?.length) return null;
+      // Se abbiamo una locality esplicita, verifica che il display_name la contenga.
+      // Evita che "paseo marítimo, Aguadulce" geocodifichi il Paseo Marítimo di Roquetas.
+      if (localityCheck) {
+        const dn = (d[0].display_name || "").toLowerCase();
+        if (!dn.includes(localityCheck)) return null;
+      }
       const lat = parseFloat(d[0].lat), lon = parseFloat(d[0].lon);
       if (!coordInRoquetas(lat, lon)) return null;
       return { lat, lon };
