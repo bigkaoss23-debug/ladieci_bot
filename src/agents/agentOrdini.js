@@ -4,6 +4,19 @@
 
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, direccionToCacheKey } = require("../utils/helpers");
+const { calcolaFornoOut, simulateDriverSchedule } = require("../utils/zones");
+
+// Fallback per chi chiama creaOrdine/modificaOrdine senza passare forno_out
+// (es. operatore manuale via dashboard). Riusa lo stesso sistema cascade del bot.
+async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zona }) {
+  if (!hora) return null;
+  if (tipoConsegna !== "DOMICILIO" || !zona || !durataAndataMin) {
+    return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin });
+  }
+  const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
+  const sim = simulateDriverSchedule(rows);
+  return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin: sim.driverLiberoMin });
+}
 
 // Incrementa n_ordini_creati sulla riga di geo_cache associata all'indirizzo.
 // Best-effort: se la migration non è ancora applicata o la riga non esiste, fallisce silenziosamente.
@@ -88,6 +101,17 @@ async function creaOrdine(params) {
   const deliveryFee = deliveryFeeFor(tipoConsegna);
   const totale = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
 
+  // forno_out: se non passato (operatore manuale), calcola cascade-aware
+  let fornoOut = params.forno_out;
+  if (fornoOut === undefined || fornoOut === null) {
+    fornoOut = await calcolaFornoOutFallback({
+      tipoConsegna,
+      hora: params.hora,
+      durataAndataMin: params.durata_andata_min,
+      zona: params.zona
+    });
+  }
+
   // ═══ Idempotency check ═══
   // Se il frontend passa client_req_id, prima cosa: vediamo se un ordine con
   // quella chiave esiste già. Se sì → ritorniamo lo stesso id (replay sicuro).
@@ -155,6 +179,7 @@ async function creaOrdine(params) {
       nota: params.nota || "",
       nota_cucina: params.nota_cucina || "",
       hora: params.hora || "",
+      forno_out: fornoOut,
       estado: params.estado || "POR_CONFIRMAR",
       cucina_check: params.cucina_check || null,
       ts: Date.now(),
@@ -231,8 +256,9 @@ async function modificaOrdine(ordenId, updates) {
   if (updates.cliente_id     !== undefined) upd.cliente_id     = updates.cliente_id || null;
 
   // Se items o tipo_consegna cambiano, ricalcola delivery_fee + totale.
+  // Se hora, tipo_consegna o durata_andata_min cambiano, ricalcola forno_out.
   // Servono i valori attuali del DB per le parti non aggiornate.
-  if (upd.items || upd.tipo_consegna !== undefined) {
+  if (upd.items || upd.tipo_consegna !== undefined || upd.hora !== undefined || upd.durata_andata_min !== undefined) {
     const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
     const ord = rows?.[0];
     if (ord) {
@@ -240,6 +266,15 @@ async function modificaOrdine(ordenId, updates) {
       const tipoConsegna = upd.tipo_consegna !== undefined ? upd.tipo_consegna : (ord.tipo_consegna || "RITIRO");
       upd.delivery_fee = deliveryFeeFor(tipoConsegna);
       upd.totale       = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
+
+      if (upd.tipo_consegna !== undefined || upd.hora !== undefined || upd.durata_andata_min !== undefined) {
+        const horaFinal = upd.hora || ord.hora;
+        const durataFinal = upd.durata_andata_min !== undefined ? upd.durata_andata_min : ord.durata_andata_min;
+        const zonaFinal = upd.zona !== undefined ? upd.zona : ord.zona;
+        upd.forno_out = await calcolaFornoOutFallback({
+          tipoConsegna, hora: horaFinal, durataAndataMin: durataFinal, zona: zonaFinal
+        });
+      }
     }
   }
 

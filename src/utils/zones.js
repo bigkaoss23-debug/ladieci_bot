@@ -326,6 +326,21 @@ function simulateDriverSchedule(orders, options = {}) {
   return { giri, driverLiberoMin: t };
 }
 
+// ─── Forno-out: quando la pizza deve uscire dal forno ────────────────────────
+// Sorgente unica per backend (creaOrdine, getCaricoDelivery) e frontend.
+// Regola: pizza esce il più tardi possibile MA non prima che il driver sia libero.
+// Anticipo = pizza fredda sul bancone (peggio). Ritardo = driver aspetta in pizzeria (ok).
+//   forno_out = max(hora_consegna − durata_andata, driver_libero)
+function calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin = 0 }) {
+  if (!hora) return null;
+  if (tipoConsegna !== "DOMICILIO" || !durataAndataMin) return hora; // RITIRO: forno_out = hora
+  const toMin = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
+  const toH = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+  const fornoNaiveMin = toMin(hora) - durataAndataMin;
+  const fornoRealMin = Math.max(fornoNaiveMin, driverLiberoMin || 0);
+  return toH(Math.max(0, fornoRealMin));
+}
+
 // ─── Proposta per un nuovo ordine (cascade-aware + aggregation same-zone-slot) ─
 // Output:
 //   {
@@ -414,6 +429,8 @@ module.exports = {
   RISTORANTE_LAT,
   RISTORANTE_LON,
   BUFFER_OPS_DRIVER_MIN,
+  calcolaFornoOut,
+  simulateDriverSchedule,
   haversineKm,
   pointInPolygon,
   assegnaZonaDaCoord,

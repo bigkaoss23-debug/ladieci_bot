@@ -4,7 +4,7 @@
 
 const { sbSelect } = require("../utils/supabase");
 const { isBevanda, isDesert, getConversazione } = require("../utils/helpers");
-const { ZONE_DELIVERY, calcolaTempoGiro, simulateDriverSchedule, BUFFER_OPS_DRIVER_MIN } = require("../utils/zones");
+const { ZONE_DELIVERY, calcolaTempoGiro, simulateDriverSchedule, BUFFER_OPS_DRIVER_MIN, calcolaFornoOut } = require("../utils/zones");
 
 function pad(n) { return n < 10 ? "0" + n : "" + n; }
 
@@ -88,7 +88,7 @@ async function getCaricoForno(oraRichiesta) {
 // poi propone il primo slot libero. Considera driver IN_GIRO + sequenza cascadeata.
 async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null) {
   const zona = ZONE_DELIVERY.find(z => z.id === zonaId);
-  if (!zona) return { slotAssegnato: oraRichiesta, slotRichiesto: oraRichiesta, zonaCompleta: false, driverInGiro: false };
+  if (!zona) return { slotAssegnato: oraRichiesta, slotRichiesto: oraRichiesta, zonaCompleta: false, driverInGiro: false, forno_out: null };
 
   // Stato driver da config Supabase (override "real-time" se driver è fuori adesso)
   const driverRows = await sbSelect("config", "chiave=eq.DRIVER_STATO");
@@ -160,7 +160,14 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
     .sort((a, b) => a.horaMin - b.horaMin);
 
   if (giriSameZona.length > 0) {
-    return { slotAssegnato: slot10(giriSameZona[0].horaMin), slotRichiesto, zonaCompleta: false, driverInGiro };
+    const slotAss = slot10(giriSameZona[0].horaMin);
+    const forno_out = calcolaFornoOut({
+      tipoConsegna: "DOMICILIO",
+      hora: slotAss,
+      durataAndataMin: tempoGiroRichiesto,
+      driverLiberoMin: sim.driverLiberoMin
+    });
+    return { slotAssegnato: slotAss, slotRichiesto, zonaCompleta: false, driverInGiro, forno_out };
   }
 
   // ── Priorità 2: primo slot vuoto >= minMin con spazio in zona ──
@@ -169,11 +176,17 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
   for (let min = minMin; min <= 23 * 60; min += 10) {
     const ora = slot10(min);
     if ((slotCount[`${zonaId}|${ora}`] || 0) >= zona.maxOrdiniPerGiro) continue;
-    return { slotAssegnato: ora, slotRichiesto, zonaCompleta: false, driverInGiro };
+    const forno_out = calcolaFornoOut({
+      tipoConsegna: "DOMICILIO",
+      hora: ora,
+      durataAndataMin: tempoGiroRichiesto,
+      driverLiberoMin: sim.driverLiberoMin
+    });
+    return { slotAssegnato: ora, slotRichiesto, zonaCompleta: false, driverInGiro, forno_out };
   }
 
   // Tutti gli slot pieni stasera
-  return { slotAssegnato: null, slotRichiesto, zonaCompleta: true, driverInGiro };
+  return { slotAssegnato: null, slotRichiesto, zonaCompleta: true, driverInGiro, forno_out: null };
 }
 
 module.exports = { getStatoCliente, getCaricoForno, getCaricoDelivery, getConversazione };

@@ -329,6 +329,7 @@ async function gestisci(ctx) {
       tipo_consegna: tipoConsegna, direccion: direccion || null,
       zona: zonaRes1.zona, zona_lat: zonaRes1.lat, zona_lon: zonaRes1.lon, zona_manuale: false,
       durata_andata_min: tipoConsegna === "DOMICILIO" ? tempoGiro1 : null,
+      forno_out: tipoConsegna === "DOMICILIO" ? (caricoDelivery1?.forno_out || null) : horaFinale,
       geo_source: zonaRes1.source || null
     });
     const numPedido1 = ordResult1?.id || "";
@@ -409,7 +410,9 @@ async function gestisci(ctx) {
         nombre, tel: waId, waId, canal: "WA",
         items: oraItems, hora: oraHoraFinale, estado: "POR_CONFIRMAR",
         tipo_consegna: tipoConsegnaOra, direccion: direccionOra || null,
-        zona: null, zona_lat: null, zona_lon: null, zona_manuale: false
+        zona: null, zona_lat: null, zona_lon: null, zona_manuale: false,
+        // fuera_de_zona: forno_out non calcolabile (no driver schedule per zone sconosciute)
+        forno_out: tipoConsegnaOra === "RITIRO" ? oraHoraFinale : null
       });
       await updateConvDati(waId, oraItems, oraHoraFinale);
       await updateConvStato(waId, "in_attesa");
@@ -462,6 +465,7 @@ async function gestisci(ctx) {
       tipo_consegna: tipoConsegnaOra, direccion: direccionOra || null,
       zona: zonaResOra.zona, zona_lat: zonaResOra.lat, zona_lon: zonaResOra.lon, zona_manuale: false,
       durata_andata_min: tipoConsegnaOra === "DOMICILIO" ? tempoGiroOra : null,
+      forno_out: tipoConsegnaOra === "DOMICILIO" ? (caricoDeliveryOra?.forno_out || null) : oraHoraFinale,
       geo_source: zonaResOra.source || null
     });
     const numPedidoOra = ordResultOra?.id || "";
