@@ -284,7 +284,7 @@ function simulateDriverSchedule(orders, options = {}) {
 
   const validi = (orders || []).filter(o =>
     o && o.tipo_consegna === "DOMICILIO" && o.hora && o.zona
-    && !["RETIRADO","COMPLETATO","DA_CONFERMARE"].includes(o.estado)
+    && !["RETIRADO","COMPLETATO","POR_CONFIRMAR"].includes(o.estado)
   );
 
   const giriMap = new Map();

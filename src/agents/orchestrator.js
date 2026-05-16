@@ -113,7 +113,7 @@ async function gestisci(ctx) {
       merged2B = mergeItemsBevande(convItems2B, ia.items);
     }
     await updateConvDati(waId, merged2B, hora2B);
-    const ordenRows2B = await sbSelect("ordenes", `wa_id=eq.${waId}&estado=eq.DA_CONFIRMARE&order=ts.desc&limit=1`);
+    const ordenRows2B = await sbSelect("ordenes", `wa_id=eq.${waId}&estado=eq.POR_CONFIRMAR&order=ts.desc&limit=1`);
     if (ordenRows2B?.length > 0) await modificaOrdine(ordenRows2B[0].id, { items: merged2B, hora: hora2B });
     const totaleMerged2B = calcolaTotale(merged2B);
     const forza2B = isWhitelist ? "STRONG" : (config["AI_FORZA"] || "BASIC");
@@ -145,7 +145,7 @@ async function gestisci(ctx) {
     }
     const items2C = conv.items || [];
     const totale2C = calcolaTotale(items2C);
-    const ordenRows2C = await sbSelect("ordenes", `wa_id=eq.${waId}&estado=eq.DA_CONFERMARE&order=ts.desc&limit=1`);
+    const ordenRows2C = await sbSelect("ordenes", `wa_id=eq.${waId}&estado=eq.POR_CONFIRMAR&order=ts.desc&limit=1`);
     if (!ordenRows2C?.length) {
       await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, items2C, hora2C, null, false, waMsgId);
       return { flusso: "2C", stato: "IN_TRATTAMENTO", motivo: "ordine_non_trovato" };
@@ -325,7 +325,7 @@ async function gestisci(ctx) {
     // Crea ordine in Supabase
     const ordResult1 = await creaOrdine({
       nombre, tel: waId, waId, canal: "WA",
-      items: allItems, hora: horaFinale, estado: "DA_CONFIRMARE",
+      items: allItems, hora: horaFinale, estado: "POR_CONFIRMAR",
       tipo_consegna: tipoConsegna, direccion: direccion || null,
       zona: zonaRes1.zona, zona_lat: zonaRes1.lat, zona_lon: zonaRes1.lon, zona_manuale: false,
       durata_andata_min: tipoConsegna === "DOMICILIO" ? tempoGiro1 : null,
@@ -407,7 +407,7 @@ async function gestisci(ctx) {
     if (fueraDeZonaOra) {
       await creaOrdine({
         nombre, tel: waId, waId, canal: "WA",
-        items: oraItems, hora: oraHoraFinale, estado: "DA_CONFIRMARE",
+        items: oraItems, hora: oraHoraFinale, estado: "POR_CONFIRMAR",
         tipo_consegna: tipoConsegnaOra, direccion: direccionOra || null,
         zona: null, zona_lat: null, zona_lon: null, zona_manuale: false
       });
@@ -458,7 +458,7 @@ async function gestisci(ctx) {
 
     const ordResultOra = await creaOrdine({
       nombre, tel: waId, waId, canal: "WA",
-      items: oraItems, hora: oraHoraFinale, estado: "DA_CONFIRMARE",
+      items: oraItems, hora: oraHoraFinale, estado: "POR_CONFIRMAR",
       tipo_consegna: tipoConsegnaOra, direccion: direccionOra || null,
       zona: zonaResOra.zona, zona_lat: zonaResOra.lat, zona_lon: zonaResOra.lon, zona_manuale: false,
       durata_andata_min: tipoConsegnaOra === "DOMICILIO" ? tempoGiroOra : null,

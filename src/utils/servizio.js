@@ -76,7 +76,7 @@ async function scanServizio() {
   const convChiuse       = await sbSelect("conv", "stato_ordine=in.(ritirata,confermata,chiusa)") || [];
   const convAttive       = await sbSelect("conv", "stato_ordine=not.in.(ritirata,confermata,chiusa)") || [];
   const waMsgsAttivi     = await sbSelect("wa_msgs", "stato=in.(NUEVO,IN_TRATTAMENTO)") || [];
-  const ordiniInCorso    = await sbSelect("ordenes", "estado=in.(DA_CONFERMARE,EN_COCINA,LISTO,EN_ENTREGA)") || [];
+  const ordiniInCorso    = await sbSelect("ordenes", "estado=in.(POR_CONFIRMAR,EN_COCINA,LISTO,EN_ENTREGA)") || [];
 
   const attiviMap = {};
   (Array.isArray(convAttive)    ? convAttive    : []).forEach(c => { attiviMap[c.wa_id] = { wa_id: c.wa_id, nombre: c.nombre || c.wa_id, hora: c.hora || "", stato: c.stato_ordine || "" }; });

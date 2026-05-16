@@ -155,7 +155,7 @@ async function creaOrdine(params) {
       nota: params.nota || "",
       nota_cucina: params.nota_cucina || "",
       hora: params.hora || "",
-      estado: params.estado || "DA_CONFERMARE",
+      estado: params.estado || "POR_CONFIRMAR",
       cucina_check: params.cucina_check || null,
       ts: Date.now(),
       llegado: false,
