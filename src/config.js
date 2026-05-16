@@ -14,9 +14,9 @@ const MENU_LISTA = [
   "7. La Pulga - Jamon y Champinones 13.00",
   "8. Il Tulipano Nero - Cuatro Quesos 14.50",
   "9. El Ultimo 10 - Atun y Cebolla 14.00",
-  "10. El Mago de Zadar - Vegetariana 13.50",
+  "10. El Mago de Zadar - Vegetariana 14.50",
   "11. El Maestro - Inferno 13.50",
-  "12. Parmazola - Parma y Gorgonzola 16.50",
+  "12. Magicbox - Parmazola 16.50",
   "13. La Joya - Carbonara 15.00",
   "14. La Pinturicchio - La Ahumada 15.00",
   // POSTRES
@@ -55,9 +55,9 @@ const INFO_RISTORANTE =
   "7. La Pulga (Jamón y Champiñones) 13€\n" +
   "8. Il Tulipano Nero (Cuatro Quesos) 14.50€\n" +
   "9. El Ultimo 10 (Atún y Cebolla) 14€\n" +
-  "10. El Mago de Zadar (Vegetariana) 13.50€\n" +
+  "10. El Mago de Zadar (Vegetariana) 14.50€\n" +
   "11. El Maestro (Inferno) 13.50€\n" +
-  "12. Parmazola (Parma y Gorgonzola) 16.50€\n" +
+  "12. Magicbox (Parmazola) 16.50€\n" +
   "13. La Joya (Carbonara) 15€\n" +
   "14. La Pinturicchio (La Ahumada) 15€\n\n" +
   "POSTRES: Misú Clásico (Tiramisú) 5€, Misú Especial (Tiramisú) 6€, Ferrero Rocher 7€,\n" +
@@ -77,7 +77,7 @@ const ABBINAMENTI_NOMI =
   "prosciutto e funghi/jamon y champinones/champinones=La Pulga, " +
   "quattro formaggi/cuatro quesos=Il Tulipano Nero, vegetariana=El Mago de Zadar, " +
   "tonno e cipolla/tonno/atun=El Ultimo 10, capricciosa/caprichosa=Il Gladiatore, " +
-  "carbonara=La Joya, parmazola/parma gorgonzola/magicbox=Parmazola, " +
+  "carbonara=La Joya, parmazola/parma gorgonzola/magicbox=Magicbox, " +
   "ahumada/affumicata/provola=La Pinturicchio, " +
   "tiramisu/misu=Misu Clásico, baba=Babá Napoletano, ferrero/rocher=Ferrero Rocher, " +
   "coca/cola/fanta=Refresco, cerveza/estrella=Estrella Galicia, heineken=Heineken, agua=Agua";
