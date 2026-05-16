@@ -17,15 +17,17 @@ const MENU_LISTA = [
   "10. El Mago de Zadar - Vegetariana 13.50",
   "11. El Maestro - Inferno 13.50",
   "12. Parmazola - Parma y Gorgonzola 16.50",
+  "13. La Joya - Carbonara 15.00",
+  "14. La Pinturicchio - La Ahumada 15.00",
   // POSTRES
-  "Tiramisu Clasico 4.50", "Tiramisu Pistacho 5.50",
-  "Tiramisu Nutella 5.50", "Tiramisu Lotus 5.50",
-  "Pizza Nutella 7.00",
+  "Misu Clasico (Tiramisu) 5.00", "Misu Especial (Tiramisu) 6.00",
+  "Ferrero Rocher 7.00", "Baba Napoletano 5.00",
+  "Pizza Nutella 9.00",
   "Tartufo Bianco 5.00", "Tartufo Nero 5.00",
   "Tartufo Pistacchio 5.00", "Tartufo Limoncello 5.00",
   // BEBIDAS
   "Estrella Galicia 3.00", "Heineken 3.00",
-  "Peroni 4.00", "Refresco 2.50", "Agua 1.80"
+  "Peroni 4.00", "Refresco 2.00", "Agua 1.50"
 ];
 
 const INFO_RISTORANTE =
@@ -55,11 +57,13 @@ const INFO_RISTORANTE =
   "9. El Ultimo 10 (Atún y Cebolla) 14€\n" +
   "10. El Mago de Zadar (Vegetariana) 13.50€\n" +
   "11. El Maestro (Inferno) 13.50€\n" +
-  "12. Parmazola (Parma y Gorgonzola) 16.50€\n\n" +
-  "POSTRES: Tiramisú Clásico 4.50€, Tiramisú Pistacho 5.50€, Tiramisú Nutella 5.50€,\n" +
-  "Tiramisú Lotus 5.50€, Pizza Nutella 7€,\n" +
+  "12. Parmazola (Parma y Gorgonzola) 16.50€\n" +
+  "13. La Joya (Carbonara) 15€\n" +
+  "14. La Pinturicchio (La Ahumada) 15€\n\n" +
+  "POSTRES: Misú Clásico (Tiramisú) 5€, Misú Especial (Tiramisú) 6€, Ferrero Rocher 7€,\n" +
+  "Babá Napoletano 5€, Pizza Nutella 9€,\n" +
   "Tartufo Bianco 5€, Tartufo Nero 5€, Tartufo Pistacchio 5€, Tartufo Limoncello 5€\n" +
-  "BEBIDAS: Estrella Galicia/Heineken 3€, Peroni 4€, Refresco 2.50€, Agua 1.80€\n\n" +
+  "BEBIDAS: Estrella Galicia/Heineken 3€, Peroni 4€, Refresco 2€, Agua 1.50€\n\n" +
   "ALÉRGENOS: solo menciona alérgenos si el cliente pregunta o declara una alergia.";
 
 const COSTO_CONSEGNA = 2.50;
@@ -68,10 +72,14 @@ const NUMEROS_WHITELIST = ["41767011848", "34614267535"];
 
 // Mappature nomi comuni → nomi ufficiali menu
 const ABBINAMENTI_NOMI =
-  "diavola/diabla=El Gaucho, margherita/clasica=El Pelusa, bufala=Zizou, marinara=O Rei, " +
-  "vegetariana=El Mago de Zadar, prosciutto/jamon=El Divino Codino, champinones=La Pulga, " +
-  "cuatro quesos=Il Tulipano Nero, atun=El Ultimo 10, caprichosa=Il Gladiatore, inferno=El Maestro, " +
-  "parmazola/parma gorgonzola=Parmazola, " +
+  "margherita/margarita/clasica=El Pelusa, bufalina/bufala=Zizou, marinara=O Rei, " +
+  "inferno=El Maestro, diavola/diabla=El Gaucho, prosciutto/jamon=El Divino Codino, " +
+  "prosciutto e funghi/jamon y champinones/champinones=La Pulga, " +
+  "quattro formaggi/cuatro quesos=Il Tulipano Nero, vegetariana=El Mago de Zadar, " +
+  "tonno e cipolla/tonno/atun=El Ultimo 10, capricciosa/caprichosa=Il Gladiatore, " +
+  "carbonara=La Joya, parmazola/parma gorgonzola/magicbox=Parmazola, " +
+  "ahumada/affumicata/provola=La Pinturicchio, " +
+  "tiramisu/misu=Misu Clásico, baba=Babá Napoletano, ferrero/rocher=Ferrero Rocher, " +
   "coca/cola/fanta=Refresco, cerveza/estrella=Estrella Galicia, heineken=Heineken, agua=Agua";
 
 module.exports = { MENU_LISTA, INFO_RISTORANTE, NUMEROS_WHITELIST, ABBINAMENTI_NOMI, COSTO_CONSEGNA };
