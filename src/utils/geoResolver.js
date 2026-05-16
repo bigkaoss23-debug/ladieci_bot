@@ -154,6 +154,20 @@ async function googleGeocode(direccion) {
   const lat = loc.lat, lon = loc.lng;
   if (!coordInRoquetas(lat, lon)) return { ok: false, error: "google_low_quality" };
 
+  // Se la direccion contiene una locality esplicita (es. "Aguadulce"), verifica
+  // che compaia nel formatted_address. Evita che il constraint locality:Roquetas
+  // forzi un match su una via omonima dentro Roquetas ignorando la località reale.
+  const localityInQuery = (() => {
+    const cleaned = limpiaPerGeocode(direccion);
+    if (!cleaned.includes(',')) return null;
+    const after = cleaned.split(',').slice(1).join(',').trim();
+    return (after.length >= 5 && /^[a-záéíóúüñ\s]+$/i.test(after)) ? after.toLowerCase() : null;
+  })();
+  if (localityInQuery) {
+    const fa = (r.formatted_address || "").toLowerCase();
+    if (!fa.includes(localityInQuery)) return { ok: false, error: "google_locality_mismatch" };
+  }
+
   return { ok: true, lat, lon, locationType };
 }
 
@@ -259,13 +273,26 @@ async function photonGeocode(direccion) {
   const base = cleaned.replace(/\s+\d+\s*$/, "").trim();
   const bbox = "-2.67,36.72,-2.59,36.79";
   const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(base)}&limit=5&bbox=${bbox}`;
+
+  const localityInQuery = (() => {
+    if (!cleaned.includes(',')) return null;
+    const after = cleaned.split(',').slice(1).join(',').trim();
+    return (after.length >= 5 && /^[a-záéíóúüñ\s]+$/i.test(after)) ? after.toLowerCase() : null;
+  })();
+
   try {
     const r = await fetchTimeout(url);
     if (!r.ok) return null;
     const d = await r.json();
-    const hit = (d?.features || []).find(f =>
-      (f.properties?.city || "").toLowerCase().includes("roquetas")
-    );
+    const hit = (d?.features || []).find(f => {
+      if (!(f.properties?.city || "").toLowerCase().includes("roquetas")) return false;
+      if (localityInQuery) {
+        // Verifica che la locality esplicita compaia in almeno una proprietà Photon
+        const props = Object.values(f.properties || {}).join(" ").toLowerCase();
+        if (!props.includes(localityInQuery)) return false;
+      }
+      return true;
+    });
     if (!hit?.geometry?.coordinates) return null;
     const [lon, lat] = hit.geometry.coordinates;
     if (!coordInRoquetas(lat, lon)) return null;
