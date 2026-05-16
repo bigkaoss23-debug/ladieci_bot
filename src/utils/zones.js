@@ -201,8 +201,14 @@ function limpiaPerGeocode(indirizzo) {
   let s = String(indirizzo).trim();
   // Rimuovi tutto dopo indicatori appartamento espliciti
   s = s.replace(/[\s,]+(?:escalera?|esc\b\.?|piso\b|planta\b|puerta\b|pta\b\.?|bloque?\b|blq\b\.?|portal\b|apto\b\.?|apartamento\b|int(?:erior)?\b|letra\b|izq(?:uierda)?\b|dcha?\b|derecha\b).*$/gi, '');
-  // Se c'è una virgola prendi solo la prima parte (es. "Calle Real 15, 3ºB" → "Calle Real 15")
-  if (s.includes(',')) s = s.split(',')[0];
+  // Taglia alla prima virgola SOLO se quello che segue è un dettaglio appartamento
+  // (inizia con cifra, simbolo grado, o è ≤4 char tipo "B", "1A").
+  // NON tagliare se è un nome di luogo (es. "Aguadulce", "Almería") — altrimenti
+  // Nominatim ignora la località e geocodifica la via dentro Roquetas de Mar.
+  if (s.includes(',')) {
+    const afterComma = s.split(',').slice(1).join(',').trim();
+    if (/^\d|[ºª°]/.test(afterComma) || afterComma.length <= 4) s = s.split(',')[0];
+  }
   // Rimuovi identificatore finale tipo "15 3ºA" o "15 1ºIzq"
   s = s.replace(/(\d+)\s+\d*[ºª°]\s*[a-z]*\s*$/i, '$1');
   return s.trim();
