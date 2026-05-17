@@ -165,9 +165,9 @@ app.post("/api", async (req, res) => {
     } else if (action === "updateOrden") {
       result = await modificaOrdine(req.body.id, req.body);
     } else if (action === "updateEstado") {
-      // Accetta campi pagamento/timing/repartidor in unica scrittura atomica
+      // Accetta campi pagamento/timing/repartidor/descuento in unica scrittura atomica
       const extras = {};
-      for (const k of ["metodo_pago","cobrado","ya_pagado","hora_entrega","hora_salida","repartidor","llegado","cucina_check"]) {
+      for (const k of ["metodo_pago","cobrado","ya_pagado","hora_entrega","hora_salida","repartidor","llegado","cucina_check","descuento_tipo","descuento_valor"]) {
         if (req.body[k] !== undefined) extras[k] = req.body[k];
       }
       result = await cambiaStato(req.body.id, req.body.estado, extras);
@@ -175,12 +175,16 @@ app.post("/api", async (req, res) => {
       // LISTO → EN_ENTREGA — registra hora_salida atomicamente
       result = await cambiaStato(req.body.id, "EN_ENTREGA", { hora_salida: Date.now() });
     } else if (action === "marcarEntregado") {
-      // EN_ENTREGA/LISTO → RETIRADO — registra hora_entrega + cobrado + metodo_pago atomicamente
-      result = await cambiaStato(req.body.id, "RETIRADO", {
+      // EN_ENTREGA/LISTO → RETIRADO — registra hora_entrega + cobrado + metodo_pago atomicamente.
+      // Eventuale descuento applicato al momento del incasso.
+      const extras = {
         hora_entrega: Date.now(),
         cobrado: req.body.cobrado !== false,
         metodo_pago: req.body.metodo_pago || ""
-      });
+      };
+      if (req.body.descuento_tipo  !== undefined) extras.descuento_tipo  = req.body.descuento_tipo;
+      if (req.body.descuento_valor !== undefined) extras.descuento_valor = req.body.descuento_valor;
+      result = await cambiaStato(req.body.id, "RETIRADO", extras);
     } else if (action === "asignarRepartidor") {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { repartidor: req.body.repartidor || null });
       result = { success: true };

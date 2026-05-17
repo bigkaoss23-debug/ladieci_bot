@@ -3,7 +3,7 @@
 // ===============================================================
 
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
-const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, direccionToCacheKey } = require("../utils/helpers");
+const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
 const { calcolaFornoOut, simulateDriverSchedule } = require("../utils/zones");
 
 // Fallback per chi chiama creaOrdine/modificaOrdine senza passare forno_out
@@ -143,7 +143,14 @@ async function creaOrdine(params) {
   const itemsFinali = itemsRaw.filter(i => i.n !== "Entrega a domicilio");
   const tipoConsegna = params.tipo_consegna || "RITIRO";
   const deliveryFee = deliveryFeeFor(tipoConsegna);
-  const totale = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
+  const totaleBase = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
+  // Descuento (€ fisso o % sul totale finale). Server-side autoritativo: ignoriamo
+  // descuento_importe passato dal client e lo ricalcoliamo da tipo+valor.
+  const descTipo  = params.descuento_tipo  || null;
+  const descValor = (params.descuento_valor != null) ? Number(params.descuento_valor) : null;
+  const desc = aplicarDescuento(totaleBase, descTipo, descValor);
+  const totale = desc.totale;
+  const descuentoImporte = desc.importe;
 
   // forno_out: se non passato (operatore manuale), calcola cascade-aware
   let fornoOut = params.forno_out;
@@ -243,7 +250,10 @@ async function creaOrdine(params) {
       geo_source:           params.geo_source           || null,
       forzado:        params.forzado        || false,
       ya_pagado:      params.ya_pagado      || false,
-      metodo_pago:    params.metodo_pago    || ""
+      metodo_pago:    params.metodo_pago    || "",
+      descuento_tipo:    (descTipo && descuentoImporte > 0) ? descTipo  : null,
+      descuento_valor:   (descTipo && descuentoImporte > 0) ? descValor : null,
+      descuento_importe: descuentoImporte > 0 ? descuentoImporte : null
     });
 
     // Successo: sbInsert ritorna array con il record inserito
@@ -300,17 +310,29 @@ async function modificaOrdine(ordenId, updates) {
   if (updates.forzado        !== undefined) upd.forzado        = updates.forzado === true;
   if (updates.cliente_id     !== undefined) upd.cliente_id     = updates.cliente_id || null;
 
-  // Se items o tipo_consegna cambiano, ricalcola delivery_fee + totale.
+  // Se descuento_tipo/descuento_valor sono passati, applichiamo il nuovo sconto.
+  // Server-side autoritativo: ignoriamo descuento_importe del client.
+  const descPassed = (updates.descuento_tipo !== undefined) || (updates.descuento_valor !== undefined);
+
+  // Se items, tipo_consegna o descuento cambiano, ricalcola delivery_fee + totale.
   // Se hora, tipo_consegna o durata_andata_min cambiano, ricalcola forno_out.
   // Servono i valori attuali del DB per le parti non aggiornate.
-  if (upd.items || upd.tipo_consegna !== undefined || upd.hora !== undefined || upd.durata_andata_min !== undefined) {
+  if (upd.items || upd.tipo_consegna !== undefined || upd.hora !== undefined || upd.durata_andata_min !== undefined || descPassed) {
     const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
     const ord = rows?.[0];
     if (ord) {
       const itemsFinali = upd.items || (ord.items || []).filter(i => i.n !== "Entrega a domicilio");
       const tipoConsegna = upd.tipo_consegna !== undefined ? upd.tipo_consegna : (ord.tipo_consegna || "RITIRO");
       upd.delivery_fee = deliveryFeeFor(tipoConsegna);
-      upd.totale       = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
+      const totaleBase = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
+      // Descuento corrente (post-modifica): merge tra passati e DB. `null` esplicito → rimuove.
+      const descTipo  = (updates.descuento_tipo  !== undefined) ? (updates.descuento_tipo || null) : (ord.descuento_tipo  || null);
+      const descValor = (updates.descuento_valor !== undefined) ? Number(updates.descuento_valor) || 0 : Number(ord.descuento_valor) || 0;
+      const desc = aplicarDescuento(totaleBase, descTipo, descValor);
+      upd.totale            = desc.totale;
+      upd.descuento_tipo    = (descTipo && desc.importe > 0) ? descTipo  : null;
+      upd.descuento_valor   = (descTipo && desc.importe > 0) ? descValor : null;
+      upd.descuento_importe = desc.importe > 0 ? desc.importe : null;
 
       if (upd.tipo_consegna !== undefined || upd.hora !== undefined || upd.durata_andata_min !== undefined) {
         const horaFinal = upd.hora || ord.hora;
@@ -349,6 +371,26 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   if (extras.repartidor   !== undefined) upd.repartidor   = extras.repartidor || null;
   if (extras.llegado      !== undefined) upd.llegado      = extras.llegado === true;
   if (extras.cucina_check !== undefined) upd.cucina_check = extras.cucina_check;
+
+  // Descuento applicato al RETIRADO (cliente davanti, operatore incassa): ricalcoliamo totale.
+  // Funziona anche se chiamato con stato diverso da RETIRADO — applica e basta.
+  const descPassed = (extras.descuento_tipo !== undefined) || (extras.descuento_valor !== undefined);
+  if (descPassed) {
+    const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
+    const ord = rows?.[0];
+    if (ord) {
+      const itemsFinali = (ord.items || []).filter(i => i.n !== "Entrega a domicilio");
+      const tipoConsegna = ord.tipo_consegna || "RITIRO";
+      const totaleBase = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
+      const descTipo  = (extras.descuento_tipo  !== undefined) ? (extras.descuento_tipo || null) : (ord.descuento_tipo  || null);
+      const descValor = (extras.descuento_valor !== undefined) ? Number(extras.descuento_valor) || 0 : Number(ord.descuento_valor) || 0;
+      const desc = aplicarDescuento(totaleBase, descTipo, descValor);
+      upd.totale            = desc.totale;
+      upd.descuento_tipo    = (descTipo && desc.importe > 0) ? descTipo  : null;
+      upd.descuento_valor   = (descTipo && desc.importe > 0) ? descValor : null;
+      upd.descuento_importe = desc.importe > 0 ? desc.importe : null;
+    }
+  }
 
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
   if (nuovoStato === "EN_COCINA") {

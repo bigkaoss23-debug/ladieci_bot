@@ -24,6 +24,21 @@ function calcolaTotaleOrdine(items = [], tipoConsegna = "RITIRO") {
   return Math.round((calcolaTotale(items) + deliveryFeeFor(tipoConsegna)) * 100) / 100;
 }
 
+// Sconto cliente: € fisso o % sul totale finale.
+// Mirror del helper frontend (src/constants.js). Sorgente autoritativa sul backend.
+function aplicarDescuento(totaleBase, tipo, valor) {
+  const base = Number(totaleBase) || 0;
+  const v    = Number(valor)      || 0;
+  if (!tipo || v <= 0 || base <= 0) return { totale: base, importe: 0 };
+  let importe = 0;
+  if (tipo === "EURO")    importe = v;
+  if (tipo === "PERCENT") importe = (base * v) / 100;
+  if (importe > base) importe = base;
+  importe = Math.round(importe * 100) / 100;
+  const totale = Math.round((base - importe) * 100) / 100;
+  return { totale, importe };
+}
+
 function isBevanda(n = "") {
   n = n.toLowerCase();
   return ["cerveza","heineken","estrella","peroni","refresco","agua","cola","coca"].some(k => n.includes(k));
@@ -136,16 +151,22 @@ function buildResumen(items = []) {
   }).join("\n");
 }
 
-function buildMsgRicevuto(primo, items, total, hora, tipoConsegna, costoConsegna, direccion, introOverride) {
+function buildMsgRicevuto(primo, items, total, hora, tipoConsegna, costoConsegna, direccion, introOverride, descuentoImporte = 0) {
   const costo = costoConsegna || 0;
-  const totaleFinale = Math.round((total + costo) * 100) / 100;
+  const subtotalConConsegna = Math.round((total + costo) * 100) / 100;
+  const desc = Math.max(0, Number(descuentoImporte) || 0);
+  const totaleFinale = Math.round((subtotalConConsegna - desc) * 100) / 100;
   const pizzaItems = items.filter(i => i.n !== "Entrega a domicilio");
 
   let msg = (introOverride || introConferma(primo)) + "\n\n";
   msg += buildResumen(pizzaItems) + "\n\n";
 
-  if (costo > 0) {
-    msg += `💰 *Total: ${totaleFinale.toFixed(2)}€*  🛵 Delivery: ${costo.toFixed(2)}€\n`;
+  if (desc > 0) {
+    msg += `Subtotal: ${subtotalConConsegna.toFixed(2)}€${costo > 0 ? `  🛵 Delivery: ${costo.toFixed(2)}€` : ""}\n`;
+    msg += `Descuento: -${desc.toFixed(2)}€\n`;
+    msg += `💰 *Total: ${totaleFinale.toFixed(2)}€*\n`;
+  } else if (costo > 0) {
+    msg += `💰 *Total: ${subtotalConConsegna.toFixed(2)}€*  🛵 Delivery: ${costo.toFixed(2)}€\n`;
   } else {
     msg += `💰 *Total: ${total.toFixed(2)}€*\n`;
   }
@@ -324,7 +345,7 @@ function direccionToCacheKey(s) {
 }
 
 module.exports = {
-  rand, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine,
+  rand, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento,
   isBevanda, isDesert, mergeItems, mergeItemsBevande,
   buildResumen, buildUpsell, buildMsgRicevuto, introChiediOra, ctaRisposta,
   appendChat, updateConvDati, createConv, getConversazione, upsertWaMsg,
