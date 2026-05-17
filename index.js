@@ -260,6 +260,12 @@ app.post("/api", async (req, res) => {
       // Cliente arrivato (RITIRO) — segna flag llegado
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { llegado: req.body.llegado !== false });
       result = { success: true };
+    } else if (action === "setUiOffset") {
+      // Snooze visivo per-card DOMICILIO: sposta countdown +N min senza toccare hora/forno_out.
+      // Reset naturale a chiudiServizio (ordine va in storico, ui_offset_min escluso da buildStoricoPayload).
+      const off = Math.max(0, Math.min(20, parseInt(req.body.offset_min) || 0));
+      await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { ui_offset_min: off });
+      result = { success: true, ui_offset_min: off };
     } else if (action === "resolveAddress") {
       const { risolviIndirizzo } = require("./src/utils/geoResolver");
       const { direccion, tel, tipoConsegna, forceRefresh } = req.body;
