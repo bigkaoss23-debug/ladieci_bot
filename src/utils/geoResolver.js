@@ -60,21 +60,48 @@ async function loadFromCache(direccion) {
   try {
     const rows = await sbSelect("geo_cache", `direccion_key=eq.${encodeURIComponent(key)}&limit=1`);
     const row = rows?.[0];
-    if (!row || row.lat == null || row.lon == null || !row.zona) return null;
-    if (row.durata_andata_min == null) return null; // cache incompleta → miss
-    // Bump hit_count best-effort, non blocca.
-    // PATCH, non upsert: `zona` è NOT NULL → INSERT-on-conflict fallirebbe sul path INSERT.
-    sbUpdate("geo_cache",
-      `direccion_key=eq.${encodeURIComponent(key)}`,
-      { hit_count: (row.hit_count || 0) + 1 }
-    ).catch(e => console.warn("[geoResolver] hit_count bump:", e?.message || e));
-    // "Blindata" = almeno 1 ordine consegnato a questo indirizzo → autorità sopra Google.
-    // n_ordini_consegnati viene incrementato in chiudiServizio (servizio.js) sugli ordini archiviati.
-    const blindata = (row.n_ordini_consegnati || 0) >= 1;
+    if (row && row.lat != null && row.lon != null && row.zona && row.durata_andata_min != null) {
+      // Bump hit_count best-effort, non blocca.
+      // PATCH, non upsert: `zona` è NOT NULL → INSERT-on-conflict fallirebbe sul path INSERT.
+      sbUpdate("geo_cache",
+        `direccion_key=eq.${encodeURIComponent(key)}`,
+        { hit_count: (row.hit_count || 0) + 1 }
+      ).catch(e => console.warn("[geoResolver] hit_count bump:", e?.message || e));
+      // "Blindata" = almeno 1 ordine consegnato a questo indirizzo → autorità sopra Google.
+      // n_ordini_consegnati viene incrementato in chiudiServizio (servizio.js) sugli ordini archiviati.
+      const blindata = (row.n_ordini_consegnati || 0) >= 1;
+      return {
+        zona: row.zona, lat: row.lat, lon: row.lon,
+        durataAndataMin: row.durata_andata_min ?? null,
+        source: row.source || "nominatim",
+        cached: true,
+        blindata
+      };
+    }
+    // ─── Fallback "stessa via" ────────────────────────────────
+    // Miss esatto. Provo a recuperare un'altra riga sulla stessa via:
+    // estraggo il prefisso "tipo + nome via" (rimuovo il numero civico finale)
+    // e cerco righe con direccion_key ILIKE 'prefisso%' che abbiano dato Google
+    // completo (lat/lon + durata). Tra i match, preferisco quella più "blindata"
+    // (n_ordini_consegnati DESC), poi più usata (hit_count), poi più recente.
+    // Razionale: dentro la stessa via, i tempi macchina dalla pizzeria variano
+    // di 1-2 min — molto più affidabile dell'haversine × 1.70 (vedi Bug A,
+    // ordine #001 Avenida Playa Serena: 23 min haversine vs ~10 min reali).
+    const streetKey = key.replace(/\s+\d.*$/, "").trim();
+    if (!streetKey || streetKey.length < 5 || streetKey === key) return null;
+    const streetRows = await sbSelect("geo_cache",
+      `direccion_key=ilike.${encodeURIComponent(streetKey + "%")}` +
+      `&lat=not.is.null&lon=not.is.null&durata_andata_min=not.is.null` +
+      `&order=n_ordini_consegnati.desc,hit_count.desc,updated_at.desc&limit=1`
+    );
+    const best = streetRows?.[0];
+    if (!best || !best.zona) return null;
+    console.warn(`[geoResolver] cache street-fallback: "${key}" → matched "${best.direccion_key}" (zona ${best.zona}, ${best.durata_andata_min}min, source=${best.source}, consegnati=${best.n_ordini_consegnati || 0})`);
+    const blindata = (best.n_ordini_consegnati || 0) >= 1;
     return {
-      zona: row.zona, lat: row.lat, lon: row.lon,
-      durataAndataMin: row.durata_andata_min ?? null,
-      source: row.source || "nominatim",
+      zona: best.zona, lat: best.lat, lon: best.lon,
+      durataAndataMin: best.durata_andata_min,
+      source: "cache-street",
       cached: true,
       blindata
     };

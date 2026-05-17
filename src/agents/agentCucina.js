@@ -161,13 +161,15 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
 
   if (giriSameZona.length > 0) {
     const slotAss = slot10(giriSameZona[0].horaMin);
-    const forno_out = calcolaFornoOut({
+    const res = calcolaFornoOut({
       tipoConsegna: "DOMICILIO",
       hora: slotAss,
       durataAndataMin: tempoGiroRichiesto,
       driverLiberoMin: sim.driverLiberoMin
     });
-    return { slotAssegnato: slotAss, slotRichiesto, zonaCompleta: false, driverInGiro, forno_out };
+    // Se calcolaFornoOut ha slittato, allineiamo anche lo slot: l'invariante
+    // hora=forno_out+andata vale per il consumatore dell'output (orchestrator).
+    return { slotAssegnato: res.hora_finale || slotAss, slotRichiesto, zonaCompleta: false, driverInGiro, forno_out: res.forno_out };
   }
 
   // ── Priorità 2: primo slot vuoto >= minMin con spazio in zona ──
@@ -176,13 +178,13 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
   for (let min = minMin; min <= 23 * 60; min += 10) {
     const ora = slot10(min);
     if ((slotCount[`${zonaId}|${ora}`] || 0) >= zona.maxOrdiniPerGiro) continue;
-    const forno_out = calcolaFornoOut({
+    const res = calcolaFornoOut({
       tipoConsegna: "DOMICILIO",
       hora: ora,
       durataAndataMin: tempoGiroRichiesto,
       driverLiberoMin: sim.driverLiberoMin
     });
-    return { slotAssegnato: ora, slotRichiesto, zonaCompleta: false, driverInGiro, forno_out };
+    return { slotAssegnato: res.hora_finale || ora, slotRichiesto, zonaCompleta: false, driverInGiro, forno_out: res.forno_out };
   }
 
   // Tutti gli slot pieni stasera

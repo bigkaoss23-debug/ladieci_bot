@@ -8,8 +8,9 @@ const { calcolaFornoOut, simulateDriverSchedule } = require("../utils/zones");
 
 // Fallback per chi chiama creaOrdine/modificaOrdine senza passare forno_out
 // (es. operatore manuale via dashboard). Riusa lo stesso sistema cascade del bot.
+// Ritorna { forno_out, hora_finale, slittato } — vedi calcolaFornoOut in zones.js.
 async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zona }) {
-  if (!hora) return null;
+  if (!hora) return { forno_out: null, hora_finale: null, slittato: false };
   if (tipoConsegna !== "DOMICILIO" || !zona || !durataAndataMin) {
     return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin });
   }
@@ -26,7 +27,9 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
   const newSlot = slot10L(toMinL(hora));
   const giroEsistente = sim.giri.find(g => g.zona === zona && g.slot === newSlot);
   if (giroEsistente) {
-    return toHL(giroEsistente.partenzaMin);
+    // Aggregazione: condividiamo forno_out del giro. hora resta quella richiesta
+    // perché il driver consegna comunque entro la finestra del giro esistente.
+    return { forno_out: toHL(giroEsistente.partenzaMin), hora_finale: hora, slittato: false };
   }
 
   return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin: sim.driverLiberoMin });
@@ -152,15 +155,23 @@ async function creaOrdine(params) {
   const totale = desc.totale;
   const descuentoImporte = desc.importe;
 
-  // forno_out: se non passato (operatore manuale), calcola cascade-aware
+  // forno_out + hora coerenti: se non passato forno_out (operatore manuale),
+  // calcola cascade-aware. Se il driver costringe a slittare, hora avanza con lui
+  // (invariante DB: hora = forno_out + andata per DOMICILIO).
   let fornoOut = params.forno_out;
+  let horaFinale = params.hora;
   if (fornoOut === undefined || fornoOut === null) {
-    fornoOut = await calcolaFornoOutFallback({
+    const res = await calcolaFornoOutFallback({
       tipoConsegna,
       hora: params.hora,
       durataAndataMin: params.durata_andata_min,
       zona: params.zona
     });
+    fornoOut = res.forno_out;
+    horaFinale = res.hora_finale || params.hora;
+    if (res.slittato) {
+      console.warn(`[creaOrdine] hora slittata per driver impegnato: richiesta=${params.hora} → finale=${horaFinale} (forno_out=${fornoOut})`);
+    }
   }
 
   // ═══ Idempotency check ═══
@@ -229,7 +240,7 @@ async function creaOrdine(params) {
       items: itemsFinali,
       nota: params.nota || "",
       nota_cucina: params.nota_cucina || "",
-      hora: params.hora || "",
+      hora: horaFinale || params.hora || "",
       forno_out: fornoOut,
       estado: params.estado || "POR_CONFIRMAR",
       cucina_check: params.cucina_check || null,
@@ -338,9 +349,16 @@ async function modificaOrdine(ordenId, updates) {
         const horaFinal = upd.hora || ord.hora;
         const durataFinal = upd.durata_andata_min !== undefined ? upd.durata_andata_min : ord.durata_andata_min;
         const zonaFinal = upd.zona !== undefined ? upd.zona : ord.zona;
-        upd.forno_out = await calcolaFornoOutFallback({
+        const res = await calcolaFornoOutFallback({
           tipoConsegna, hora: horaFinal, durataAndataMin: durataFinal, zona: zonaFinal
         });
+        upd.forno_out = res.forno_out;
+        // Propaga hora_finale se il driver ha forzato uno slittamento — preserva
+        // l'invariante hora = forno_out + andata anche dopo una modifica.
+        if (res.slittato && res.hora_finale) {
+          upd.hora = res.hora_finale;
+          console.warn(`[modificaOrdine ${ordenId}] hora slittata per driver impegnato: ${horaFinal} → ${res.hora_finale} (forno_out=${res.forno_out})`);
+        }
       }
     }
   }

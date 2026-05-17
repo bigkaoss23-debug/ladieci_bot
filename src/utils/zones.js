@@ -331,14 +331,31 @@ function simulateDriverSchedule(orders, options = {}) {
 // Regola: pizza esce il più tardi possibile MA non prima che il driver sia libero.
 // Anticipo = pizza fredda sul bancone (peggio). Ritardo = driver aspetta in pizzeria (ok).
 //   forno_out = max(hora_consegna − durata_andata, driver_libero)
+//
+// Invariante DB per DOMICILIO: hora = forno_out + durata_andata, SEMPRE.
+// Se driver_libero costringe forno_out oltre (hora − andata), allora anche `hora`
+// slitta in avanti. Senza questa propagazione si scriveva forno_out > hora — il
+// pizzaiolo vedeva la pizza uscire DOPO la sua consegna (bug regressione 685749b).
+// Ritorno: { forno_out, hora_finale, slittato }. `slittato=true` segnala al
+// chiamante che ha promesso al cliente un orario diverso da quello richiesto.
 function calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin = 0 }) {
-  if (!hora) return null;
-  if (tipoConsegna !== "DOMICILIO" || !durataAndataMin) return hora; // RITIRO: forno_out = hora
+  if (!hora) return { forno_out: null, hora_finale: null, slittato: false };
+  // RITIRO o durata mancante: forno_out = hora, niente slittamento possibile.
+  if (tipoConsegna !== "DOMICILIO" || !durataAndataMin) {
+    return { forno_out: hora, hora_finale: hora, slittato: false };
+  }
   const toMin = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
   const toH = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
-  const fornoNaiveMin = toMin(hora) - durataAndataMin;
+  const horaMin = toMin(hora);
+  const fornoNaiveMin = horaMin - durataAndataMin;
   const fornoRealMin = Math.max(fornoNaiveMin, driverLiberoMin || 0);
-  return toH(Math.max(0, fornoRealMin));
+  const slittato = fornoRealMin > fornoNaiveMin;
+  const horaFinalMin = slittato ? fornoRealMin + durataAndataMin : horaMin;
+  return {
+    forno_out:   toH(Math.max(0, fornoRealMin)),
+    hora_finale: toH(Math.max(0, horaFinalMin)),
+    slittato
+  };
 }
 
 // ─── Proposta per un nuovo ordine (cascade-aware + aggregation same-zone-slot) ─
