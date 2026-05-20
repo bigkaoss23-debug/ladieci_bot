@@ -60,7 +60,11 @@ async function loadFromCache(direccion) {
   try {
     const rows = await sbSelect("geo_cache", `direccion_key=eq.${encodeURIComponent(key)}&limit=1`);
     const row = rows?.[0];
-    if (row && row.lat != null && row.lon != null && row.zona && row.durata_andata_min != null) {
+    // Bug B (17/05/2026): righe con lat/lon validi ma durata null (es. Nominatim
+    // che non fornisce ETA) erano trattate come miss totale → cascade rifaceva
+    // geocoding inutilmente. Ora le accettiamo: lat/lon servono comunque per la
+    // zona + haversine. durata=null verrà ricalcolata su haversine dal consumer.
+    if (row && row.lat != null && row.lon != null && row.zona) {
       // Bump hit_count best-effort, non blocca.
       // PATCH, non upsert: `zona` è NOT NULL → INSERT-on-conflict fallirebbe sul path INSERT.
       sbUpdate("geo_cache",
@@ -344,12 +348,14 @@ function keywordZona(direccion) {
 // ─── Persist post-resolve in geo_cache ────────────────────────
 async function saveToCache(direccion, payload) {
   // payload: {zona, lat, lon, durataAndataMin, source}
-  // Salviamo solo se abbiamo lat/lon E zona E direccion ha un numero civico.
-  // "Calle Cuba" senza numero non va in cache (edge case C): il match per quel
-  // cliente vive su clientes.direccion_confermata_il, non in geo_cache.
+  // Salviamo se abbiamo lat/lon E zona.
+  // Bug C (17/05/2026): in passato bloccavamo indirizzi senza numero civico —
+  // risultato: "Avenida Playa Serena" rifaceva la stessa cascata geocode fallita
+  // ogni serata. Ora cachiamo anche le "via-level entries": le coordinate sono
+  // il centroide della via (Google), zona corretta via polygon. Il match esatto
+  // su civico specifico vince comunque grazie a n_ordini_consegnati DESC
+  // nel street-fallback (loadFromCache).
   if (!payload.lat || !payload.lon || !payload.zona) return;
-  const hasNumber = /\d/.test(direccionToCacheKey(direccion));
-  if (!hasNumber) return;
   const key = direccionToCacheKey(direccion);
   if (!key || key.length < 5) return;
   try {
