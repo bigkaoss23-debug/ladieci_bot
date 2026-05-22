@@ -5,9 +5,9 @@ process.env.SUPABASE_KEY = "mock";
 let rispostaGenerata = null;
 let messaggioInviato = null;
 
-require.cache[require.resolve("./src/utils/supabase")] = {
-  id: require.resolve("./src/utils/supabase"),
-  filename: require.resolve("./src/utils/supabase"),
+require.cache[require.resolve("../src/utils/supabase")] = {
+  id: require.resolve("../src/utils/supabase"),
+  filename: require.resolve("../src/utils/supabase"),
   loaded: true,
   exports: {
     sbSelect: async (table, q) => {
@@ -20,9 +20,9 @@ require.cache[require.resolve("./src/utils/supabase")] = {
   }
 };
 
-require.cache[require.resolve("./src/utils/claude")] = {
-  id: require.resolve("./src/utils/claude"),
-  filename: require.resolve("./src/utils/claude"),
+require.cache[require.resolve("../src/utils/claude")] = {
+  id: require.resolve("../src/utils/claude"),
+  filename: require.resolve("../src/utils/claude"),
   loaded: true,
   exports: {
     chiamaClaude: async (system, user, cfg, maxTokens) => {
@@ -38,11 +38,11 @@ require.cache[require.resolve("./src/utils/claude")] = {
   }
 };
 
-const { gestisci } = require("./src/agents/orchestrator");
+const { gestisci } = require("../src/agents/orchestrator");
 
 async function main() {
   // Mock invia per catturare il messaggio
-  const agentWA = require("./src/agents/agentWhatsapp");
+  const agentWA = require("../src/agents/agentWhatsapp");
   const origInvia = agentWA.invia;
   // Patch temporanea
   Object.defineProperty(agentWA, "invia", {
@@ -89,10 +89,10 @@ async function main() {
   }
 
   // Test aggiuntivo: verifica che l'import sia corretto
-  const orchModule = require("./src/agents/orchestrator");
+  const orchModule = require("../src/agents/orchestrator");
   console.log("\n════ Verifica import ════");
   console.log("generaRisposta importata in orchestrator:", 
-    require("./src/agents/agentWhatsapp").generaRisposta !== undefined ? "✅ sì" : "❌ no");
+    require("../src/agents/agentWhatsapp").generaRisposta !== undefined ? "✅ sì" : "❌ no");
 }
 
 main().catch(e => { console.error("ERR:", e.message); });
