@@ -68,31 +68,48 @@ async function main() {
   console.log("Messaggio:", ctx.testo);
   console.log("════════════════════════════════════════\n");
 
+  let result = null;
+  let raised = null;
   try {
-    const result = await gestisci(ctx);
+    result = await gestisci(ctx);
     console.log("\nRisultato:", JSON.stringify(result));
-    
-    if (result.stato === "COMPLETATO") {
-      console.log("\n✅ FLUSSO 3 ora risponde correttamente alle domande delivery");
-      console.log("   Risposta generata e inviata al cliente.");
-    } else if (result.stato === "IN_TRATTAMENTO") {
-      console.log("\n❌ Ancora senza risposta - qualcosa non ha funzionato");
-    }
   } catch(e) {
-    // gestisci chiama supabase — alcuni mock potrebbero fallire
-    // ma il percorso fino a generaRisposta è quello che conta
+    raised = e;
     console.log("\nNota:", e.message);
-    if (rispostaGenerata) {
-      console.log("\n✅ generaRisposta() È STATA CHIAMATA — risposta generata:");
-      console.log("   " + rispostaGenerata);
-    }
+  }
+
+  // Comportamento atteso (post-evoluzione orchestrator):
+  // - FLUSSO 3 per ia.tipo="domanda" deve produrre una risposta automatica
+  //   (la mock chiamaClaude la setta in `rispostaGenerata`).
+  // - stato finale può essere "COMPLETATO" oppure "IN_TRATTAMENTO":
+  //     COMPLETATO    → conf ≥ SOGLIA_CONF e nessuna ia.hora/direccion
+  //     IN_TRATTAMENTO → la risposta è stata inviata MA va in review umana
+  //                      (es. conf bassa o ia.hora/direccion presenti).
+  //   Vedi orchestrator.js FLUSSO 3 — `statoF3` ternary.
+  // - Entrambi gli esiti significano "risposta delivery generata e inviata".
+  const VALID_STATI = new Set(["COMPLETATO", "IN_TRATTAMENTO"]);
+  const success = !raised
+    && result && result.flusso === 3
+    && VALID_STATI.has(result.stato)
+    && typeof rispostaGenerata === "string" && rispostaGenerata.length > 0;
+
+  if (success) {
+    console.log("\n✅ FLUSSO 3 ha generato e inviato la risposta delivery (stato=" + result.stato + ")");
+    console.log("   Risposta: " + rispostaGenerata);
+  } else {
+    console.log("\n❌ FLUSSO 3 non ha prodotto la risposta attesa.");
+    console.log("   raised=" + (raised && raised.message) +
+      " result=" + JSON.stringify(result) +
+      " rispostaGenerata=" + JSON.stringify(rispostaGenerata));
+    process.exit(1);
   }
 
   // Test aggiuntivo: verifica che l'import sia corretto
-  const orchModule = require("../src/agents/orchestrator");
   console.log("\n════ Verifica import ════");
-  console.log("generaRisposta importata in orchestrator:", 
-    require("../src/agents/agentWhatsapp").generaRisposta !== undefined ? "✅ sì" : "❌ no");
+  const generaRispostaImportata = require("../src/agents/agentWhatsapp").generaRisposta !== undefined;
+  console.log("generaRisposta importata in orchestrator:",
+    generaRispostaImportata ? "✅ sì" : "❌ no");
+  if (!generaRispostaImportata) process.exit(1);
 }
 
-main().catch(e => { console.error("ERR:", e.message); });
+main().catch(e => { console.error("ERR:", e.message); process.exit(1); });
