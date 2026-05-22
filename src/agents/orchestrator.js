@@ -164,6 +164,15 @@ async function gestisci(ctx) {
 
   // --- FLUSSO 2: modifica ordine in cucina ---
   if (statoOrd.haOrdine) {
+    // Guardia: ordini già in/oltre cucina non vanno modificati automaticamente dal bot.
+    // Forziamo handoff operatore (Preguntas) invece di applicare aggiungiItems e mandare
+    // un riepilogo "actualizado" al cliente senza review umana.
+    const STATI_BLOCCATI_MODIFICA_AUTO = ["EN_COCINA", "LISTO", "EN_ENTREGA", "RETIRADO", "COMPLETADO"];
+    if (STATI_BLOCCATI_MODIFICA_AUTO.includes(statoOrd.estado)) {
+      const horaBloc = ia.hora || (conv ? conv.hora : statoOrd.hora) || "";
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, ia.items || [], horaBloc, null, false, waMsgId);
+      return { flusso: 2, stato: "IN_TRATTAMENTO", ordenId: statoOrd.ordenId, motivo: "modificacion_orden_en_cocina" };
+    }
     const itemsConv = conv ? (conv.items || []) : statoOrd.items;
     const horaF2 = ia.hora || (conv ? conv.hora : statoOrd.hora) || "";
     const mergedItems = hasItems ? mergeItemsBevande(itemsConv, ia.items) : itemsConv;
