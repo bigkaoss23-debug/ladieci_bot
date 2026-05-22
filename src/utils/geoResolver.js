@@ -108,7 +108,7 @@ async function loadFromCache(direccion) {
     if (!streetKey || streetKey.length < 5 || streetKey === key) return null;
     const streetRows = await sbSelect("geo_cache",
       `direccion_key=ilike.${encodeURIComponent(streetKey + "%")}` +
-      `&lat=not.is.null&lon=not.is.null&durata_andata_min=not.is.null` +
+      `&lat=not.is.null&lon=not.is.null` +
       `&order=n_ordini_consegnati.desc,hit_count.desc,updated_at.desc&limit=1`
     );
     const best = streetRows?.[0];
