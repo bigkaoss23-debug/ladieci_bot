@@ -39,6 +39,19 @@ const {
 // per round-trip driver).
 const GEOCODER_TIMEOUT_MS = 4000;
 
+// ─── Util: rimozione numero civico terminale ──────────────────
+// "Calle Lursena, 12"   → "Calle Lursena"
+// "Calle Lursena 12"    → "Calle Lursena"
+// "C/ Lursena 12B"      → "C/ Lursena"
+// "Av. España, 250-A"   → "Av. España"
+// "Calle 14 de Abril 5" → "Calle 14 de Abril"  (strippa solo terminale)
+// "Calle Lursena"       → "Calle Lursena"  (no-op)
+// Pattern conservativo: separatore (virgola/spazio) + digits + opzionale -/lettera SOLO in coda.
+function stripHouseNumber(s) {
+  if (!s || typeof s !== "string") return s;
+  return s.replace(/[,\s]+\d+\s*[\-/]?\s*[A-Za-zºª°]?\s*$/u, "").trim();
+}
+
 // ─── Util: fetch con timeout ──────────────────────────────────
 async function fetchTimeout(url, opts = {}, ms = GEOCODER_TIMEOUT_MS) {
   const ctrl = new AbortController();
@@ -490,8 +503,20 @@ async function risolviIndirizzo({ direccion, tel = null, tipoConsegna = "DOMICIL
   }
 
   // ── Step 3: Google (se attivo) ────────────────────────────
+  // Retry chirurgico DELIVERY-ETA-02: se l'indirizzo con civico fallisce,
+  // riprova SOLO Google con civico strippato. Caso reale "Calle Lursena, 12"
+  // (Las Marinas) → Google ZERO_RESULTS/partial_match con civico, ma matcha
+  // la via base senza numero. Più affidabile del fallback keyword (zero coords).
   if (googleEnabled) {
-    const g = await googleGeocode(direccion);
+    let g = await googleGeocode(direccion);
+    if (!g.ok) {
+      const stripped = stripHouseNumber(direccion);
+      if (stripped && stripped !== direccion && stripped.length >= 5) {
+        console.log(`[geoResolver] google retry sin civico: "${direccion}" → "${stripped}" (motivo: ${g.error})`);
+        const g2 = await googleGeocode(stripped);
+        if (g2.ok) g = g2;
+      }
+    }
     if (g.ok) {
       const { zona, fuoriZona } = classifyByCoord(g.lat, g.lon, direccion);
       const dm = await googleDistanceMatrix(g.lat, g.lon);
@@ -548,5 +573,6 @@ module.exports = {
   loadFromCache, loadFromCliente, saveToCache,
   nominatimGeocode, photonGeocode, keywordZona,
   haversineDurataAndata,
-  getGeoProvider
+  getGeoProvider,
+  stripHouseNumber,
 };
