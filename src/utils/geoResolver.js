@@ -159,7 +159,22 @@ async function loadFromCliente(tel, direccion) {
 // Accetta SOLO location_type ROOFTOP o RANGE_INTERPOLATED.
 // GEOMETRIC_CENTER (centro via) / APPROXIMATE (livello città) → rifiutati,
 // cascata cade a Nominatim/Photon.
-async function googleGeocode(direccion) {
+// Predicato puro: dato il location_type di Google e la modalità "approximate",
+// decide se accettare il risultato.
+// - Modalità default (allowApproximate=false): solo ROOFTOP / RANGE_INTERPOLATED
+//   sono accettati. Usato per geocode con civico, dove vogliamo precisione.
+// - Modalità approximate (allowApproximate=true): accetta anche GEOMETRIC_CENTER
+//   (baricentro di via). Usato SOLO nel retry stripped (senza civico): è normale
+//   che Google restituisca GEOMETRIC_CENTER per "Calle Lucena" perché senza
+//   civico non c'è un punto preciso. Tradeoff: ±2-3 min di precisione vs
+//   fallback hardcoded zona.tempoGiro (es. 30 min) che è molto peggio.
+function isAcceptableLocationType(locationType, allowApproximate = false) {
+  if (locationType === "ROOFTOP" || locationType === "RANGE_INTERPOLATED") return true;
+  if (allowApproximate && locationType === "GEOMETRIC_CENTER") return true;
+  return false;
+}
+
+async function googleGeocode(direccion, opts = {}) {
   const KEY = process.env.GOOGLE_MAPS_API_KEY;
   if (!KEY) return { ok: false, error: "google_disabled" };
 
@@ -190,8 +205,10 @@ async function googleGeocode(direccion) {
   const locationType = r?.geometry?.location_type;
   if (!loc || loc.lat == null || loc.lng == null) return { ok: false, error: "google_error" };
 
-  // Filtro qualità: solo ROOFTOP / RANGE_INTERPOLATED sono affidabili per tempo
-  if (locationType !== "ROOFTOP" && locationType !== "RANGE_INTERPOLATED") {
+  // Filtro qualità: ROOFTOP / RANGE_INTERPOLATED sempre OK.
+  // Nel retry stripped (allowApproximate=true) accetta anche GEOMETRIC_CENTER —
+  // è il baricentro di via, normale per query senza civico.
+  if (!isAcceptableLocationType(locationType, opts.allowApproximate)) {
     return { ok: false, error: "google_low_quality" };
   }
 
@@ -513,7 +530,9 @@ async function risolviIndirizzo({ direccion, tel = null, tipoConsegna = "DOMICIL
       const stripped = stripHouseNumber(direccion);
       if (stripped && stripped !== direccion && stripped.length >= 5) {
         console.log(`[geoResolver] google retry sin civico: "${direccion}" → "${stripped}" (motivo: ${g.error})`);
-        const g2 = await googleGeocode(stripped);
+        // allowApproximate: senza civico GEOMETRIC_CENTER è accettabile
+        // (baricentro via; durata Google ± 2-3 min vs fallback zona 30 min).
+        const g2 = await googleGeocode(stripped, { allowApproximate: true });
         if (g2.ok) g = g2;
       }
     }
@@ -575,4 +594,5 @@ module.exports = {
   haversineDurataAndata,
   getGeoProvider,
   stripHouseNumber,
+  isAcceptableLocationType,
 };
