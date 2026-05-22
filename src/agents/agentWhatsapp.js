@@ -20,6 +20,33 @@ const KEYWORDS_ZONA_ADDRESS = [
   "cervantes", "colón", "colon"
 ];
 
+// Sanitize defensiva al punto di iniezione: anche se cfg["REGOLE_APPRESE"]
+// contiene regole non filtrate (es. scritte direttamente in DB, eredità
+// pre-`f4e4226`, drift schema), le rimuoviamo prima di entrare nel
+// systemPrompt. Coerente con il filtro applicato in promozione in
+// agenteMiglioramento.approvaSuggerimento.
+//   - input null/undefined/"" → ""
+//   - una regola per riga; trim, skip righe vuote
+//   - cap per riga 200 char, cap totale 20 righe
+//   - denylist case-insensitive su frasi tipiche di prompt injection
+const REGOLE_DENYLIST = /ignora\s+reglas|ignore\s+previous|olvida\s+(las\s+)?reglas|confirma\s+todo|conf\s*=|tipo\s*=|tipo_consegna|EN_COCINA|sin\s+operador|bypass|no\s+pedir\s+confirma|\bsystem\b|\bJSON\b/i;
+const REGOLE_MAX_LINE = 200;
+const REGOLE_MAX_LINES = 20;
+function sanitizeRegoleAppreseForPrompt(input) {
+  if (input == null) return "";
+  const raw = String(input);
+  if (!raw.trim()) return "";
+  const clean = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    if (REGOLE_DENYLIST.test(t)) continue;
+    clean.push(t.length > REGOLE_MAX_LINE ? t.slice(0, REGOLE_MAX_LINE) : t);
+    if (clean.length >= REGOLE_MAX_LINES) break;
+  }
+  return clean.join("\n");
+}
+
 function preDetectaDireccion(testo) {
   if (RE_TIPOS_VIA.test(testo)) return true;
   const lower = testo.toLowerCase();
@@ -98,7 +125,7 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
     "Si dice solo 'refresco' sin especificar → sub=''.\n\n" +
     "NÚMEROS MENÚ: 1=El Pelusa, 2=Zizou, 3=O Rei, 4=Il Gladiatore, 5=El Gaucho,\n" +
     "6=El Divino Codino, 7=La Pulga, 8=Il Tulipano Nero, 9=El Ultimo 10, 10=El Mago de Zadar, 11=El Maestro.\n\n" +
-    (cfg["REGOLE_APPRESE"] ? "REGLAS APRENDIDAS — APLICAR SIEMPRE:\n" + cfg["REGOLE_APPRESE"] + "\n\n" : "") +
+    ((() => { const r = sanitizeRegoleAppreseForPrompt(cfg["REGOLE_APPRESE"]); return r ? "REGLAS APRENDIDAS — APLICAR SIEMPRE:\n" + r + "\n\n" : ""; })()) +
     (direccionPreDetectada
       ? "⚠️ DIRECCIÓN DETECTADA AUTOMÁTICAMENTE: el sistema ha identificado un tipo de vía\n" +
         "(calle, avenida, plaza, paseo, urb, etc.) o nombre de zona en el mensaje.\n" +
@@ -306,4 +333,4 @@ function rilevaTonoCliente(testo) {
   return ["usted","podria","quisiera","por favor","disculpe"].some(k => t.includes(k)) ? "formale" : "informale";
 }
 
-module.exports = { interpreta, generaRisposta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion };
+module.exports = { interpreta, generaRisposta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion, sanitizeRegoleAppreseForPrompt };

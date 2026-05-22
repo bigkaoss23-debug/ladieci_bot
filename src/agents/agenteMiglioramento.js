@@ -103,11 +103,17 @@ async function approvaSuggerimento(id, stato) {
 
   if (stato === "approvato") {
     const approvati = await sbSelect("suggerimenti", "stato=eq.approvato&order=ts.asc") || [];
-    const regole = (Array.isArray(approvati) ? approvati : []).map((s, i) => {
+    const DENYLIST = /ignora|olvida|system|tipo_consegna|conf\s*=|tipo\s*=|EN_COCINA|sin\s+operador|JSON/i;
+    const filtrate = [];
+    for (const s of (Array.isArray(approvati) ? approvati : [])) {
       let testo = s.testo || "";
       try { if (s.motivazione?.startsWith("{")) { const p = JSON.parse(s.motivazione); testo = p.m ? `${testo} (${p.m})` : testo; } } catch {}
-      return `${i + 1}. ${testo}`;
-    }).join("\n");
+      testo = sanitize(testo).slice(0, 200);
+      if (!testo) continue;
+      if (DENYLIST.test(testo)) { console.warn("[bot-ia] regola scartata", s.id); continue; }
+      filtrate.push(testo);
+    }
+    const regole = filtrate.map((t, i) => `${i + 1}. ${t}`).join("\n");
     await sbUpsert("config", { chiave: "REGOLE_APPRESE", valore: regole });
   }
 
