@@ -367,6 +367,138 @@ app.get("/version", (_, res) => {
   });
 });
 
+// ── /status (OPS-HEALTH-01-BE-MIN) ──────────────────────────────
+// Endpoint operativo: aggregate read-only su Supabase per fornire
+// all'operatore un colpo d'occhio sulla salute del servizio. Whitelist
+// esplicita dei campi — niente segreti, niente payload utenti, solo
+// timestamp/conteggi. Cache 5s in-memory + timeout 1s sulle query DB
+// per non martellare e per non bloccare in caso di Supabase lento.
+let STATUS_CACHE = { ts: 0, payload: null };
+const STATUS_CACHE_MS = 5000;
+const STATUS_DB_TIMEOUT_MS = 1000;
+
+function _withTimeout(p, ms, label) {
+  return new Promise((resolve, reject) => {
+    const tid = setTimeout(() => reject(new Error(label)), ms);
+    Promise.resolve(p).then(
+      v => { clearTimeout(tid); resolve(v); },
+      e => { clearTimeout(tid); reject(e); }
+    );
+  });
+}
+
+function _ageMinFromIso(iso) {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / 60000);
+}
+
+function _levelFromAge(ageMin, greenMax = 60) {
+  if (ageMin == null) return "yellow";
+  return ageMin <= greenMax ? "green" : "yellow";
+}
+
+function _worstLevel(levels) {
+  if (levels.includes("red")) return "red";
+  if (levels.includes("yellow")) return "yellow";
+  return "green";
+}
+
+async function _loadStatusChecks() {
+  const todayUtcMidnight = new Date(new Date().setUTCHours(0, 0, 0, 0)).toISOString();
+  let dbCheck = { ok: false, level: "red", latencyMs: null };
+  let waIn = { lastAt: null, ageMin: null, level: "yellow" };
+  let waProc = { lastAt: null, ageMin: null, level: "yellow" };
+  let ordini = { lastCreatedAt: null, todayCount: 0, level: "green" };
+
+  const t0 = Date.now();
+  try {
+    const [waInRows, waProcRows, ordTodayRows] = await _withTimeout(
+      Promise.all([
+        sbSelect("wa_msgs", "order=ts.desc&limit=1"),
+        sbSelect("wa_msgs", "stato=in.(IN_TRATTAMENTO,COMPLETATO)&order=ts.desc&limit=1"),
+        sbSelect("ordenes", `created_at=gte.${encodeURIComponent(todayUtcMidnight)}&order=created_at.desc&limit=200`),
+      ]),
+      STATUS_DB_TIMEOUT_MS,
+      "db_timeout"
+    );
+    dbCheck = { ok: true, level: "green", latencyMs: Date.now() - t0 };
+
+    if (Array.isArray(waInRows) && waInRows[0]?.ts) {
+      const iso = new Date(Number(waInRows[0].ts)).toISOString();
+      const a = _ageMinFromIso(iso);
+      waIn = { lastAt: iso, ageMin: a, level: _levelFromAge(a) };
+    }
+    if (Array.isArray(waProcRows) && waProcRows[0]?.ts) {
+      const iso = new Date(Number(waProcRows[0].ts)).toISOString();
+      const a = _ageMinFromIso(iso);
+      waProc = { lastAt: iso, ageMin: a, level: _levelFromAge(a) };
+    }
+    if (Array.isArray(ordTodayRows)) {
+      ordini.todayCount = ordTodayRows.length;
+      ordini.lastCreatedAt = ordTodayRows[0]?.created_at || null;
+      // todayCount=0 in mattina/post-chiusura non è un'emergenza → resta green.
+      ordini.level = "green";
+    }
+  } catch (e) {
+    dbCheck = {
+      ok: false,
+      level: "red",
+      latencyMs: Date.now() - t0,
+      error: String(e?.message || e).slice(0, 80),
+    };
+  }
+
+  return { dbCheck, waIn, waProc, ordini };
+}
+
+app.get("/status", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const now = Date.now();
+  if (STATUS_CACHE.payload && now - STATUS_CACHE.ts < STATUS_CACHE_MS) {
+    return res.json(STATUS_CACHE.payload);
+  }
+  const sha = process.env.RAILWAY_GIT_COMMIT_SHA || "unknown";
+  const commit = sha === "unknown" ? "unknown" : sha.slice(0, 7);
+  const backend = { ok: true, level: "green" };
+  try {
+    const { dbCheck, waIn, waProc, ordini } = await _loadStatusChecks();
+    const overall = _worstLevel([backend.level, dbCheck.level, waIn.level, waProc.level, ordini.level]);
+    const payload = {
+      ok: overall !== "red",
+      level: overall,
+      service: process.env.RAILWAY_SERVICE_NAME || "ladieci-bot",
+      commit,
+      uptimeSec: Math.floor((Date.now() - BOOT_TIME) / 1000),
+      checks: {
+        backend,
+        database: dbCheck,
+        whatsappInbound: waIn,
+        whatsappProcessed: waProc,
+        ordini,
+      },
+      checkedAt: new Date().toISOString(),
+    };
+    STATUS_CACHE = { ts: now, payload };
+    res.json(payload);
+  } catch (e) {
+    // Fallback estremo: anche se loadStatusChecks lancia (non dovrebbe — gestisce
+    // internamente), restituiamo JSON valido con level=red.
+    res.json({
+      ok: false,
+      level: "red",
+      service: process.env.RAILWAY_SERVICE_NAME || "ladieci-bot",
+      commit,
+      uptimeSec: Math.floor((Date.now() - BOOT_TIME) / 1000),
+      checks: {
+        backend: { ok: false, level: "red", error: String(e?.message || e).slice(0, 80) },
+      },
+      checkedAt: new Date().toISOString(),
+    });
+  }
+});
+
 app.listen(PORT, () => console.log(`La Dieci Bot running on port ${PORT}`));
 
 // ─── Messaggio operatore di fine chiusura (summary completa) ────────────────
