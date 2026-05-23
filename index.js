@@ -346,6 +346,27 @@ app.post("/api", async (req, res) => {
 // Health check
 app.get("/health", (_, res) => res.json({ ok: true, ts: Date.now() }));
 
+// Boot time marker per `/version` (uptime e diagnostica deploy live).
+const BOOT_TIME = Date.now();
+
+// Endpoint diagnostica: espone commit/branch/deploy live di Railway senza segreti.
+// Whitelist esplicita dei campi — MAI process.env completo, MAI token/key.
+app.get("/version", (_, res) => {
+  const sha = process.env.RAILWAY_GIT_COMMIT_SHA || "unknown";
+  res.json({
+    ok: true,
+    service: process.env.RAILWAY_SERVICE_NAME || "ladieci-bot",
+    env: process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV || "unknown",
+    commit: sha === "unknown" ? "unknown" : sha.slice(0, 7),
+    commitFull: sha,
+    branch: process.env.RAILWAY_GIT_BRANCH || "unknown",
+    deploymentId: process.env.RAILWAY_DEPLOYMENT_ID || "unknown",
+    version: process.env.npm_package_version || "unknown",
+    bootTime: new Date(BOOT_TIME).toISOString(),
+    uptimeSec: Math.floor((Date.now() - BOOT_TIME) / 1000),
+  });
+});
+
 app.listen(PORT, () => console.log(`La Dieci Bot running on port ${PORT}`));
 
 // ─── Messaggio operatore di fine chiusura (summary completa) ────────────────
