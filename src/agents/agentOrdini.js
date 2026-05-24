@@ -5,6 +5,7 @@
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
 const { calcolaFornoOut, simulateDriverSchedule } = require("../utils/zones");
+const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
 
 // Fallback per chi chiama creaOrdine/modificaOrdine senza passare forno_out
 // (es. operatore manuale via dashboard). Riusa lo stesso sistema cascade del bot.
@@ -169,6 +170,11 @@ async function creaOrdine(params) {
   const totale = desc.totale;
   const descuentoImporte = desc.importe;
 
+  const requestedHoraGuard = validateClosingTime(params, params.hora);
+  if (!requestedHoraGuard.success) {
+    return requestedHoraGuard;
+  }
+
   // forno_out + hora coerenti: se non passato forno_out (operatore manuale),
   // calcola cascade-aware. Se il driver costringe a slittare, hora avanza con lui
   // (invariante DB: hora = forno_out + andata per DOMICILIO).
@@ -186,6 +192,10 @@ async function creaOrdine(params) {
     if (res.slittato) {
       console.warn(`[creaOrdine] hora slittata per driver impegnato: richiesta=${params.hora} → finale=${horaFinale} (forno_out=${fornoOut})`);
     }
+  }
+  const finalHoraGuard = validateClosingTime(params, horaFinale || params.hora);
+  if (!finalHoraGuard.success) {
+    return finalHoraGuard;
   }
 
   // ═══ Idempotency check ═══
@@ -319,6 +329,10 @@ async function creaOrdine(params) {
 const MODIFICA_TERMINAL_STATES = new Set(["EN_ENTREGA", "RETIRADO", "COMPLETADO"]);
 
 async function modificaOrdine(ordenId, updates) {
+  if (updates.hora !== undefined && horaToMinStrict(updates.hora) == null) {
+    return validateClosingTime(updates, updates.hora);
+  }
+
   // Guardia server-side: se l'ordine è in uno stato terminale, rifiuta
   // l'operazione PRIMA di costruire `upd` o emettere update. Best-effort
   // sul fetch: se sbSelect fallisce/non torna estado, cade nel path legacy
@@ -362,6 +376,8 @@ async function modificaOrdine(ordenId, updates) {
   // Se descuento_tipo/descuento_valor sono passati, applichiamo il nuovo sconto.
   // Server-side autoritativo: ignoriamo descuento_importe del client.
   const descPassed = (updates.descuento_tipo !== undefined) || (updates.descuento_valor !== undefined);
+  let horaFinalGuard = upd.hora || null;
+  let closingGuardParams = updates;
 
   // Se items, tipo_consegna o descuento cambiano, ricalcola delivery_fee + totale.
   // Se hora, tipo_consegna o durata_andata_min cambiano, ricalcola forno_out.
@@ -372,6 +388,14 @@ async function modificaOrdine(ordenId, updates) {
     if (ord) {
       const itemsFinali = upd.items || (ord.items || []).filter(i => i.n !== "Entrega a domicilio");
       const tipoConsegna = upd.tipo_consegna !== undefined ? upd.tipo_consegna : (ord.tipo_consegna || "RITIRO");
+      horaFinalGuard = upd.hora || ord.hora || null;
+      closingGuardParams = {
+        ...ord,
+        ...updates,
+        nota: updates.nota !== undefined ? updates.nota : ord.nota,
+        nota_cucina: updates.nota_cucina !== undefined ? updates.nota_cucina : ord.nota_cucina,
+        forzado: updates.forzado !== undefined ? updates.forzado === true : ord.forzado === true,
+      };
       upd.delivery_fee = deliveryFeeFor(tipoConsegna);
       const totaleBase = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
       // Descuento corrente (post-modifica): merge tra passati e DB. `null` esplicito → rimuove.
@@ -395,10 +419,15 @@ async function modificaOrdine(ordenId, updates) {
         // l'invariante hora = forno_out + andata anche dopo una modifica.
         if (res.slittato && res.hora_finale) {
           upd.hora = res.hora_finale;
+          horaFinalGuard = res.hora_finale;
           console.warn(`[modificaOrdine ${ordenId}] hora slittata per driver impegnato: ${horaFinal} → ${res.hora_finale} (forno_out=${res.forno_out})`);
         }
       }
     }
+  }
+  if (horaFinalGuard !== null) {
+    const finalHoraGuard = validateClosingTime(closingGuardParams, horaFinalGuard);
+    if (!finalHoraGuard.success) return finalHoraGuard;
   }
 
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);

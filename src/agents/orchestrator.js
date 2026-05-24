@@ -12,6 +12,7 @@ const { creaOrdine, modificaOrdine, aggiungiItems } = require("./agentOrdini");
 const { NUMEROS_WHITELIST, COSTO_CONSEGNA } = require("../config");
 const { ZONE_DELIVERY, calcolaTempoGiro } = require("../utils/zones");
 const { risolviIndirizzo } = require("../utils/geoResolver");
+const { isHoraDentroHorario } = require("../utils/closingTime");
 
 // Thin wrapper su risolviIndirizzo per i 2 chiamanti orchestrator.
 // Restituisce shape allargato {zona, lat, lon, durataAndataMin, durataRitornoMin, source, fuoriZona}.
@@ -36,7 +37,7 @@ function isOraValida(hora, tipoConsegna) {
   const [h, m] = String(hora).split(":").map(Number);
   const min = h * 60 + (m || 0);
   const minMin = tipoConsegna === "DOMICILIO" ? (20 * 60) : (19 * 60 + 30);
-  return min >= minMin && min <= 23 * 60;
+  return min >= minMin && isHoraDentroHorario(hora);
 }
 
 function updateConvStato(waId, nuovoStato) {
@@ -61,6 +62,10 @@ function msgFueraHorario(primo, items, tipoConsegna) {
   const modo = tipoConsegna === "DOMICILIO" ? "Los repartos a domicilio" : "El horno";
   const verbo = tipoConsegna === "DOMICILIO" ? "arrancan" : "arranca";
   return `Ey ${primo}!\n\n${buildResumen(items)}\n\n¡Casi! ${modo} ${verbo} a las *${horaMin}* (miércoles a domingo). ¿Para qué hora lo apunto? (entre *${horaMin}* y *23:00*)\n*El Bot La Dieci* 🇮🇹🍕`;
+}
+
+function msgCierreServicio(primo) {
+  return `Lo siento, ${primo}. No podemos aceptar pedidos después de las 23:00.\n\n¿Te lo preparo para otro horario dentro del servicio?\n*La Dieci* 🇮🇹🍕`;
 }
 
 // Genera messaggio slot-spostato per il caso delivery (zona piena o driver in giro)
@@ -309,6 +314,16 @@ async function gestisci(ctx) {
       }
     }
 
+    if (!isHoraDentroHorario(horaFinale)) {
+      if (!conv) await createConv(waId, nombre, allItems, horaFinale, "aperta");
+      else await updateConvDati(waId, allItems, horaFinale);
+      const msgCierre = msgCierreServicio(primo);
+      await appendChat(waId, "bot", msgCierre);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, horaFinale, msgCierre, false, waMsgId);
+      if (autoOn) await invia(waId, msgCierre, config);
+      return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "fuera_horario_cierre" };
+    }
+
     // ── Generazione messaggio ────────────────────────────────────
     const tempoGiro1  = tempoAndataDa(zonaRes1, zonaObj1);
     const costoConse1 = tipoConsegna === "DOMICILIO" ? COSTO_CONSEGNA : 0;
@@ -448,6 +463,15 @@ async function gestisci(ctx) {
         oraCambiataOra  = true;
         oraHoraFinale   = caricoDeliveryOra.slotAssegnato;
       }
+    }
+
+    if (!isHoraDentroHorario(oraHoraFinale)) {
+      await updateConvDati(waId, oraItems, oraHoraFinale);
+      const msgCierreOra = msgCierreServicio(primo);
+      await appendChat(waId, "bot", msgCierreOra);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, msgCierreOra, false, waMsgId);
+      if (autoOn) await invia(waId, msgCierreOra, config);
+      return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "fuera_horario_cierre" };
     }
 
     // ── Generazione messaggio ────────────────────────────────────
