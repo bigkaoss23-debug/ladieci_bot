@@ -436,6 +436,23 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
     });
   }
 
+  // ─── PASSO 9.5: soft-dissolve manual giros ────────────────────
+  // DELIVERY-MANUAL-GIRO-01 P1C.1 hook: detach every order still attached
+  // to a manual giro and soft-dissolve every still-active giro BEFORE
+  // PASSO 10 wipes ordenes rows. Lazy require to avoid the circular dep
+  // (manualGiros.js imports madridDateStr from this very file). Best-effort:
+  // failures are logged but MUST NOT block the closure flow.
+  let manualGirosClose = { dissolved_count: 0, detached_count: 0, errors: [] };
+  try {
+    const { softDissolveActiveManualGirosForClose } = require("../agents/manualGiros");
+    manualGirosClose = await softDissolveActiveManualGirosForClose();
+    if (Array.isArray(manualGirosClose.errors) && manualGirosClose.errors.length) {
+      console.warn(`[chiudiServizio ${source}] manual_giros soft-dissolve partial errors:`, manualGirosClose.errors);
+    }
+  } catch (e) {
+    console.warn(`[chiudiServizio ${source}] manual_giros soft-dissolve failed:`, e?.message || e);
+  }
+
   // ─── PASSO 10: cleanup ordenes/conv/wa_msgs ───────────────────
   await sbDelete("conv",    "stato_ordine=in.(ritirata,confermata,chiusa)");
   await sbDelete("wa_msgs", "stato=in.(COMPLETATO,COCINA)");
@@ -459,7 +476,9 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
     summary,
     conv_archiviate: convOk,
     ordini_storico:  storicoOk,
-    backupOk:        !!bkp?.success
+    backupOk:        !!bkp?.success,
+    manual_giros_dissolved:      manualGirosClose.dissolved_count || 0,
+    manual_giro_orders_detached: manualGirosClose.detached_count  || 0
   };
 }
 

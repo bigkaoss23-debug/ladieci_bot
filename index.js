@@ -6,6 +6,13 @@ const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentO
 const { invia } = require("./src/agents/agentWhatsapp");
 const { chiudiServizio, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
+const {
+  getManualGiros,
+  createManualGiro,
+  addOrderToManualGiro,
+  removeOrderFromManualGiro,
+  dissolveManualGiro,
+} = require("./src/agents/manualGiros");
 
 const app = express();
 app.use(express.json());
@@ -121,6 +128,14 @@ app.get("/api", async (req, res) => {
       const regex = preDetectaDireccion(testo);
       const tipoConsegna = (ia.tipo_consegna === "DOMICILIO" || regex) ? "DOMICILIO" : "RITIRO";
       result = { ia, regex_match: regex, tipoConsegna_calcolato: tipoConsegna };
+    } else if (action === "getManualGiros") {
+      // DELIVERY-MANUAL-GIRO-01 P1C.1: list active manual giros for a
+      // service day. Default = today (Madrid TZ) and only non-dissolved.
+      // ?day=YYYY-MM-DD overrides the day; ?onlyActive=false includes dissolved.
+      result = await getManualGiros({
+        day: req.query.day,
+        onlyActive: req.query.onlyActive !== "false",
+      });
     } else {
       result = { error: "unknown action: " + action };
     }
@@ -332,6 +347,19 @@ app.post("/api", async (req, res) => {
       }
     } else if (action === "parseOrdineDaRisposta") {
       result = { success: true };
+    } else if (action === "createManualGiro") {
+      // DELIVERY-MANUAL-GIRO-01 P1C.1: body { order_ids: ["#A","#B",...] }.
+      // Returns { ok, giro:{id,seq,...,order_ids}, moved_from } or { ok:false, error }.
+      result = await createManualGiro(req.body.order_ids);
+    } else if (action === "addOrderToManualGiro") {
+      // body { giro_id, order_id }
+      result = await addOrderToManualGiro(req.body.giro_id, req.body.order_id);
+    } else if (action === "removeOrderFromManualGiro") {
+      // body { order_id }. Triggers auto-dissolve on prev giro when <2 active remain.
+      result = await removeOrderFromManualGiro(req.body.order_id);
+    } else if (action === "dissolveManualGiro") {
+      // body { giro_id }. Detaches all members and soft-dissolves the giro.
+      result = await dissolveManualGiro(req.body.giro_id);
     } else {
       result = { error: "unknown action: " + action };
     }

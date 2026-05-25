@@ -6,6 +6,7 @@ const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/s
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
 const { calcolaFornoOut, simulateDriverSchedule } = require("../utils/zones");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
+const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
 
 // Fallback per chi chiama creaOrdine/modificaOrdine senza passare forno_out
 // (es. operatore manuale via dashboard). Riusa lo stesso sistema cascade del bot.
@@ -477,7 +478,37 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     }
   }
 
+  // DELIVERY-MANUAL-GIRO-01 P1C.1: capture prev manual_giro_id BEFORE
+  // the estado update so the auto-dissolve hook below can detect when
+  // this status change moves the order out of its giro. Single targeted
+  // SELECT to keep overhead minimal; result is cached locally.
+  let _prevManualGiroId = null;
+  try {
+    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=manual_giro_id`);
+    _prevManualGiroId = _prev?.[0]?.manual_giro_id || null;
+  } catch (e) {
+    console.warn("[manualGiros] prev fetch in cambiaStato failed:", e?.message || e);
+  }
+
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
+
+  // DELIVERY-MANUAL-GIRO-01 P1C.1: if the order was in a manual giro
+  // and the new status leaves the selectable set, detach + auto-dissolve.
+  // Best-effort: any failure here MUST NOT roll back the estado change
+  // nor surface to the caller — it's a downstream consistency hook.
+  if (_prevManualGiroId && isStatusLeavingGiro(nuovoStato)) {
+    try {
+      await sbUpdate(
+        "ordenes",
+        `id=eq.${encodeURIComponent(ordenId)}`,
+        { manual_giro_id: null }
+      );
+      await autoDissolveIfBelowThreshold(_prevManualGiroId);
+    } catch (e) {
+      console.warn(`[manualGiros] auto-dissolve hook for ${_prevManualGiroId} after cambiaStato failed:`, e?.message || e);
+    }
+  }
+
   if (nuovoStato === "EN_COCINA") {
     const ord1 = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
     if (ord1?.[0]?.wa_id) {
