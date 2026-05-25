@@ -13,12 +13,18 @@ const db = {
 
 let FAKE_TODAY = "2026-05-25";
 let collideOnceOnInsert = false; // forces 1 UNIQUE-violation retry path
+const observedSelectQueries = [];
 
 function resetDb() {
   db.manual_giros = [];
   db.ordenes = [];
   FAKE_TODAY = "2026-05-25";
   collideOnceOnInsert = false;
+  observedSelectQueries.length = 0;
+}
+
+function simulateUrlSearch(query) {
+  return new URL(`https://example.test/rest/v1/ordenes?select=*&${query}`).search.slice(1);
 }
 
 // Minimal PostgREST-ish query parser. Supports the operators actually
@@ -32,12 +38,12 @@ function parseQuery(query) {
     const eq = p.indexOf("=");
     if (eq < 0) continue;
     const k = p.slice(0, eq);
-    const v = p.slice(eq + 1);
+    const v = decodeURIComponent(p.slice(eq + 1));
     if (k === "select") continue;
     if (k === "order") { order = v; continue; }
     if (k === "limit") { limit = Number(v); continue; }
     if (v.startsWith("eq.")) {
-      filters.push({ field: k, op: "eq", val: decodeURIComponent(v.slice(3)) });
+      filters.push({ field: k, op: "eq", val: v.slice(3) });
     } else if (v.startsWith("in.(") && v.endsWith(")")) {
       const inner = v.slice(4, -1);
       const vals = [];
@@ -56,7 +62,7 @@ function parseQuery(query) {
         }
       }
       vals.push(cur);
-      filters.push({ field: k, op: "in", val: vals.map(x => decodeURIComponent(x)) });
+      filters.push({ field: k, op: "in", val: vals });
     } else if (v === "is.null") {
       filters.push({ field: k, op: "isnull" });
     } else if (v === "not.is.null") {
@@ -88,7 +94,8 @@ require.cache[supabasePath] = {
   loaded: true,
   exports: {
     sbSelect: async (table, query = "") => {
-      const { filters, order, limit } = parseQuery(query);
+      observedSelectQueries.push({ table, query });
+      const { filters, order, limit } = parseQuery(simulateUrlSearch(query));
       let rows = db[table].filter(r => rowMatches(r, filters)).map(r => ({ ...r }));
       if (order) {
         const [field, dir] = order.split(".");
@@ -237,10 +244,21 @@ function seedGiro(g) {
   });
 
   await t("encodeIdList: CSV-quoted with escaped inner quotes", async () => {
-    assert.strictEqual(mg.encodeIdList(["#001", "#002"]), '"#001","#002"');
-    assert.strictEqual(mg.encodeIdList([`a"b`]), '"a""b"');
+    assert.strictEqual(mg.encodeIdList(["#001", "#002"]), '"%23001","%23002"');
+    assert.strictEqual(mg.encodeIdList([`a"b`]), '"a%22%22b"');
     assert.strictEqual(mg.encodeIdList([]), "");
     assert.strictEqual(mg.encodeIdList(null), "");
+  });
+
+  await t("validateManualGiroOrders: # ids remain intact through URL parsing", async () => {
+    seedOrder({ id: "#001" });
+    seedOrder({ id: "#002" });
+    const res = await mg.validateManualGiroOrders(["#001", "#002"]);
+    assert.strictEqual(res.ok, true);
+    assert.deepStrictEqual(res.uniqIds, ["#001", "#002"]);
+    const q = observedSelectQueries.find(x => x.table === "ordenes")?.query || "";
+    assert.ok(q.includes('id=in.("%23001","%23002")'), q);
+    assert.strictEqual(new URL(`https://example.test/rest/v1/ordenes?select=*&${q}`).hash, "");
   });
 
   await t("encodeEqValue: URL-encodes", async () => {

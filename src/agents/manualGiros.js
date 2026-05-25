@@ -75,11 +75,12 @@ function isStatusLeavingGiro(nuovoStato) {
 }
 
 // PostgREST in.(…) literal builder for text ids that may contain
-// special characters (e.g. "#001"). Each value is double-quoted and
-// inner double quotes are doubled per PostgREST CSV quoting rules.
+// special characters (e.g. "#001"). Each value is CSV-quoted for
+// PostgREST and URL-encoded inside the quotes so "#" cannot become
+// a URL fragment before the request reaches Supabase.
 function encodeIdList(ids) {
   return (ids || [])
-    .map(id => `"${String(id).replace(/"/g, '""')}"`)
+    .map(id => `"${encodeURIComponent(String(id).replace(/"/g, '""'))}"`)
     .join(",");
 }
 
