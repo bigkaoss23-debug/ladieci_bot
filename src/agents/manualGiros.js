@@ -134,6 +134,14 @@ async function validateManualGiroOrders(orderIds) {
   return { ok: true, orders: rows, uniqIds };
 }
 
+async function verifyOrdersAttachedToGiro(orderIds, giroId) {
+  const rows = await sbSelect(
+    "ordenes",
+    `id=in.(${encodeIdList(orderIds)})&manual_giro_id=eq.${encodeEqValue(giroId)}&select=id,manual_giro_id`
+  );
+  return Array.isArray(rows) && rows.length === orderIds.length;
+}
+
 // Counts active members of a giro (members still in a selectable state).
 async function countActiveMembers(giroId) {
   const rows = await sbSelect(
@@ -214,9 +222,13 @@ async function createManualGiro(orderIds) {
     `id=in.(${encodeIdList(valid.uniqIds)})`,
     { manual_giro_id: inserted.id }
   );
-  if (!Array.isArray(attachRes)) {
-    // Rollback: hard-delete the just-inserted row (never visible to
-    // anyone since attach failed).
+  const attached = Array.isArray(attachRes)
+    ? attachRes.length === valid.uniqIds.length
+    : await verifyOrdersAttachedToGiro(valid.uniqIds, inserted.id);
+  if (!attached) {
+    // Rollback: detach anything that may have been partially updated,
+    // then hard-delete the just-inserted giro.
+    await sbUpdate("ordenes", `manual_giro_id=eq.${encodeEqValue(inserted.id)}`, { manual_giro_id: null }).catch(() => {});
     await sbDelete("manual_giros", `id=eq.${encodeEqValue(inserted.id)}`).catch(() => {});
     return { ok: false, status: 500, error: "attach_failed", details: attachRes };
   }
@@ -286,7 +298,10 @@ async function addOrderToManualGiro(giroId, orderId) {
     `id=eq.${encodeEqValue(orderId)}`,
     { manual_giro_id: giroId }
   );
-  if (!Array.isArray(updRes)) {
+  const attached = Array.isArray(updRes)
+    ? updRes.length > 0
+    : await verifyOrdersAttachedToGiro([orderId], giroId);
+  if (!attached) {
     return { ok: false, status: 500, error: "attach_failed", details: updRes };
   }
 
@@ -381,22 +396,30 @@ async function getManualGiros({ day, onlyActive = true } = {}) {
 async function softDissolveActiveManualGirosForClose() {
   const result = { detached_count: 0, dissolved_count: 0, errors: [] };
   try {
-    const detached = await sbUpdate(
+    const attachedRows = await sbSelect(
+      "ordenes",
+      "manual_giro_id=not.is.null&select=id"
+    );
+    result.detached_count = Array.isArray(attachedRows) ? attachedRows.length : 0;
+    await sbUpdate(
       "ordenes",
       "manual_giro_id=not.is.null",
       { manual_giro_id: null }
     );
-    result.detached_count = Array.isArray(detached) ? detached.length : 0;
   } catch (e) {
     result.errors.push({ step: "detach_orders", message: e?.message || String(e) });
   }
   try {
-    const dissolved = await sbUpdate(
+    const activeGiros = await sbSelect(
+      "manual_giros",
+      "dissolved_at=is.null&select=id"
+    );
+    result.dissolved_count = Array.isArray(activeGiros) ? activeGiros.length : 0;
+    await sbUpdate(
       "manual_giros",
       "dissolved_at=is.null",
       { dissolved_at: new Date().toISOString() }
     );
-    result.dissolved_count = Array.isArray(dissolved) ? dissolved.length : 0;
   } catch (e) {
     result.errors.push({ step: "soft_dissolve_giros", message: e?.message || String(e) });
   }

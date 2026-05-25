@@ -14,6 +14,7 @@ const db = {
 let FAKE_TODAY = "2026-05-25";
 let collideOnceOnInsert = false; // forces 1 UNIQUE-violation retry path
 const observedSelectQueries = [];
+const observedUpdateQueries = [];
 
 function resetDb() {
   db.manual_giros = [];
@@ -21,6 +22,7 @@ function resetDb() {
   FAKE_TODAY = "2026-05-25";
   collideOnceOnInsert = false;
   observedSelectQueries.length = 0;
+  observedUpdateQueries.length = 0;
 }
 
 function simulateUrlSearch(query) {
@@ -138,7 +140,8 @@ require.cache[supabasePath] = {
       return [{ ...row }];
     },
     sbUpdate: async (table, query, data) => {
-      const { filters } = parseQuery(query);
+      observedUpdateQueries.push({ table, query, data });
+      const { filters } = parseQuery(simulateUrlSearch(query));
       const updated = [];
       for (const r of db[table]) {
         if (rowMatches(r, filters)) {
@@ -146,10 +149,10 @@ require.cache[supabasePath] = {
           updated.push({ ...r });
         }
       }
-      return updated;
+      return "";
     },
     sbDelete: async (table, query) => {
-      const { filters } = parseQuery(query);
+      const { filters } = parseQuery(simulateUrlSearch(query));
       const kept = [];
       const removed = [];
       for (const r of db[table]) {
@@ -281,6 +284,19 @@ function seedGiro(g) {
     assert.strictEqual(db.manual_giros.length, 1);
     assert.strictEqual(db.ordenes.find(o => o.id === "#A").manual_giro_id, "mg_260525_1");
     assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, "mg_260525_1");
+  });
+
+  await t("createManualGiro: attach UPDATE supports # ids with PostgREST empty body", async () => {
+    seedOrder({ id: "#001" });
+    seedOrder({ id: "#002" });
+    const res = await mg.createManualGiro(["#001", "#002"]);
+    assert.strictEqual(res.ok, true);
+    assert.deepStrictEqual(res.giro.order_ids, ["#001", "#002"]);
+    const q = observedUpdateQueries.find(x => x.table === "ordenes" && x.query.startsWith("id=in."))?.query || "";
+    assert.strictEqual(q, 'id=in.("%23001","%23002")');
+    assert.strictEqual(new URL(`https://example.test/rest/v1/ordenes?select=*&${q}`).hash, "");
+    assert.strictEqual(db.ordenes.find(o => o.id === "#001").manual_giro_id, "mg_260525_1");
+    assert.strictEqual(db.ordenes.find(o => o.id === "#002").manual_giro_id, "mg_260525_1");
   });
 
   await t("createManualGiro: < 2 orders rejected", async () => {
