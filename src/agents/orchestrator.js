@@ -13,6 +13,9 @@ const { NUMEROS_WHITELIST, COSTO_CONSEGNA } = require("../config");
 const { ZONE_DELIVERY, calcolaTempoGiro } = require("../utils/zones");
 const { risolviIndirizzo } = require("../utils/geoResolver");
 const { isHoraDentroHorario } = require("../utils/closingTime");
+const { isDireccionConcretaParaDelivery } = require("../utils/addressGuard");
+
+const MSG_DIRECCION_VAGA = "Para domicilio necesitamos la dirección completa: calle, número y piso si lo hay. Pásanos esos datos y lo revisamos enseguida. 🛵";
 
 // Thin wrapper su risolviIndirizzo per i 2 chiamanti orchestrator.
 // Restituisce shape allargato {zona, lat, lon, durataAndataMin, durataRitornoMin, source, fuoriZona}.
@@ -342,6 +345,20 @@ async function gestisci(ctx) {
       return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "sin_direccion" };
     }
 
+    // ── WA-ADDRESS-GUARD-01: blocca direcciones vaghe PRIMA del geocoder ──
+    // Evita hit imprecisi Nominatim/Photon su query libere e geo_cache contaminata.
+    if (tipoConsegna === "DOMICILIO") {
+      const guard = isDireccionConcretaParaDelivery(direccion);
+      if (!guard.ok) {
+        if (!conv) await createConv(waId, nombre, allItems, horaFinale, "aperta");
+        else await updateConvDati(waId, allItems, horaFinale);
+        await appendChat(waId, "bot", MSG_DIRECCION_VAGA);
+        await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, horaFinale, MSG_DIRECCION_VAGA, false, waMsgId);
+        if (autoOn) await invia(waId, MSG_DIRECCION_VAGA, config);
+        return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: `direccion_vaga:${guard.motivo}` };
+      }
+    }
+
     // ── Geocoding zona (sempre prima del messaggio) ──────────────
     const zonaRes1 = await resolveZona(direccion, tipoConsegna, waId);
     const zonaObj1 = tipoConsegna === "DOMICILIO" ? ZONE_DELIVERY.find(z => z.id === zonaRes1.zona) : null;
@@ -492,6 +509,18 @@ async function gestisci(ctx) {
       await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, msgAckNoAddrOra, false, waMsgId);
       if (autoOn) await invia(waId, msgAckNoAddrOra, config);
       return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "sin_direccion" };
+    }
+
+    // ── WA-ADDRESS-GUARD-01: blocca direcciones vaghe (branch "Ora") ──
+    if (tipoConsegnaOra === "DOMICILIO") {
+      const guardOra = isDireccionConcretaParaDelivery(direccionOra);
+      if (!guardOra.ok) {
+        await updateConvDati(waId, oraItems, oraHoraFinale);
+        await appendChat(waId, "bot", MSG_DIRECCION_VAGA);
+        await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, MSG_DIRECCION_VAGA, false, waMsgId);
+        if (autoOn) await invia(waId, MSG_DIRECCION_VAGA, config);
+        return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: `direccion_vaga:${guardOra.motivo}` };
+      }
     }
 
     // ── Geocoding zona ───────────────────────────────────────────
