@@ -99,6 +99,33 @@ async function gestisci(ctx) {
     return { flusso: "modifica_complessa", stato: "IN_TRATTAMENTO" };
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // SAFETY GUARD: intent di cancellazione su ordine/conv esistente
+  // → handoff operatore: NO cancellazione automatica, NO reply libero Claude.
+  // Motivo: l'IA classifica a volte "Cancela el pedido por favor." come
+  // tipo="domanda" (non "modifica_complessa"). In quel caso il Flusso 3
+  // chiamerebbe generaRisposta (Claude) che hallucina conferme di cancellazione
+  // ("Hemos cancelado tu pedido #006") senza nessuna operazione in DB.
+  // Questo guard intercetta PRIMA di qualunque flusso automatico quando:
+  //   - il testo contiene un verbo di cancellazione esplicita;
+  //   - esiste già un ordine attivo (statoOrd.haOrdine) o una conv `confermata`.
+  // L'ordine resta intatto (POR_CONFIRMAR), ordine_ref preservato in wa_msgs.
+  // Regex restrittiva: NON include "quita/quitar" perché sono modifiche
+  // legittime gestite dal Flusso 2B (correccion).
+  // ═══════════════════════════════════════════════════════════
+  if (!isWhitelist) {
+    const CANCEL_RE = /\b(cancela|cancelar|cancelaci[oó]n|cancelad[oa]|anula|anular|anulad[oa]|olv[ií]dalo|d[eé]jalo|dejalo)\b/i;
+    const hasCancelIntent = CANCEL_RE.test(testo || "");
+    const hasExistingOrderContext = Boolean(statoOrd?.haOrdine || (conv && conv.stato_ordine === "confermata"));
+    if (hasCancelIntent && hasExistingOrderContext) {
+      const msgCancelGuard = "Recibido. Lo pasamos al equipo para revisarlo y te respondemos enseguida. 🙏";
+      await appendChat(waId, "bot", msgCancelGuard);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, conv ? (conv.items || []) : [], conv ? (conv.hora || "") : "", msgCancelGuard, false, waMsgId);
+      if (autoOn) await invia(waId, msgCancelGuard, config);
+      return { flusso: "cancel_guard", stato: "IN_TRATTAMENTO", motivo: "cancel_intent_operator_review" };
+    }
+  }
+
   // --- FLUSSO 2B: aggiunta a ordine confermato ---
   if (!statoOrd.haOrdine && !isWhitelist && conv && conv.stato_ordine === "confermata" && hasItems && (tipo === "ordine" || tipo === "correccion")) {
     const chatHistory = conv.chat || [];
