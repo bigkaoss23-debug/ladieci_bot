@@ -203,6 +203,37 @@ async function gestisci(ctx) {
   }
 
   // ═══════════════════════════════════════════════════════════
+  // SAFETY GUARD: allergie / intolleranze / note alimentari sensibili
+  // → handoff operatore: NO ordine automatico, NO cliente, NO upsell.
+  // Si applica PRIMA del Flusso 1 per intercettare ordini "chiari" che
+  // contengono dichiarazione di allergia (food-safety prima dell'automazione).
+  // Detection RESTRITTIVA: keyword cibo-sensibile + (contesto dichiarativo
+  // OPPURE intent ordinativo). Domande puramente informative ("¿tenéis info
+  // sobre alérgenos?") restano nel branch domanda perché non hanno items e
+  // tipicamente non hanno contesto dichiarativo ("soy", "tengo", ecc.).
+  // ═══════════════════════════════════════════════════════════
+  if (!isWhitelist) {
+    const FOOD_SAFETY_KW_RE = /\b(al[eé]rgic[oa]s?|alergia|alergias|intoleran(?:te|cia)|cel[ií]ac[oa]s?|celiaqu[ií]a|sin\s+gluten|frutos?\s+secos|nueces|cacahuet(?:e|es)|man[ií]|lactosa|huevos?|mariscos?|crust[aá]ceos?)\b/i;
+    const DECLARATION_CTX_RE = /\b(soy|somos|es|tengo|tenemos|tiene|sufro|sufrimos|padezco|padecemos|mi\s+(?:hij[oa]|pareja|madre|padre|amig[oa]|familiar)\s+(?:es|tiene|sufre|padece)|para\s+(?:una|un)\s+(?:persona|cliente|comensal))\b/i;
+    const textoComb = `${testo || ""} \n ${ia.nota || ""}`;
+    const hasFoodSafetyKw = FOOD_SAFETY_KW_RE.test(textoComb);
+    const hasDeclarationCtx = DECLARATION_CTX_RE.test(textoComb);
+    const hasOrderIntent = hasItems || tipo === "ordine";
+    const allergiaDetectata = hasFoodSafetyKw && (hasDeclarationCtx || hasOrderIntent);
+    if (allergiaDetectata) {
+      const items0 = ia.items || [];
+      const hora0  = ia.hora || "";
+      if (!conv) await createConv(waId, nombre, items0, hora0, "in_attesa");
+      else { await updateConvDati(waId, items0, hora0); await updateConvStato(waId, "in_attesa"); }
+      const msgSafe = "Gracias por avisarnos. Por seguridad, pasamos tu pedido al equipo para revisar ingredientes y alérgenos antes de confirmarlo. Te respondemos enseguida.\n*La Dieci* 🇮🇹🍕";
+      await appendChat(waId, "bot", msgSafe);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, items0, hora0, msgSafe, false, waMsgId);
+      if (autoOn) await invia(waId, msgSafe, config);
+      return { flusso: "allergy_safe", stato: "IN_TRATTAMENTO", motivo: "allergia_dichiarata" };
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
   // FLUSSO 1: ordine nuovo chiaro
   // ═══════════════════════════════════════════════════════════
   if (tipo === "ordine" && hasItems && conf >= SOGLIA_CONF) {
