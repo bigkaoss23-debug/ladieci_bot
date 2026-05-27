@@ -72,12 +72,12 @@ function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 function introConferma(primo) {
   return rand([
-    `${primo}, el horno ya está en marcha. 🔥`,
-    `Anotado, ${primo}. El pizzaiolo ya tiene la masa lista.`,
-    `${primo}, esta noche va a salir bien. 🍕`,
-    `¡Hecho, ${primo}! El horno ya está caliente y tu pedido en marcha.`,
-    `${primo}, el pizzaiolo ya tiene los ojos en tu pedido. 👀🍕`,
-    `Todo confirmado, ${primo}. El horno no para esta noche. 🔥`
+    `${primo}, hemos apuntado tu pedido y se lo pasamos al equipo para confirmarlo. 🍕`,
+    `Anotado, ${primo}. Lo pasamos al equipo para confirmarlo.`,
+    `Hemos recibido tu pedido, ${primo}. Lo pasamos al equipo para confirmarlo. 🍕`,
+    `${primo}, tu pedido está apuntado. Se lo pasamos al equipo para confirmarlo.`,
+    `Pedido apuntado, ${primo}. El equipo lo revisa y te confirmamos enseguida. 🍕`,
+    `Recibido, ${primo}. Lo pasamos al equipo para confirmarlo en cocina. 🍕`
   ]);
 }
 

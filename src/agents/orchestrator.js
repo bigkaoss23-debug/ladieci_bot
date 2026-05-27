@@ -92,7 +92,10 @@ async function gestisci(ctx) {
 
   // --- MODIFICA COMPLESSA ---
   if (tipo === "modifica_complessa") {
-    await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, conv ? (conv.items || []) : [], conv ? (conv.hora || "") : "", null, false, waMsgId);
+    const msgAckMod = "Recibido. Lo pasamos al equipo para revisarlo y te respondemos enseguida. 🙏";
+    await appendChat(waId, "bot", msgAckMod);
+    await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, conv ? (conv.items || []) : [], conv ? (conv.hora || "") : "", msgAckMod, false, waMsgId);
+    if (autoOn) await invia(waId, msgAckMod, config);
     return { flusso: "modifica_complessa", stato: "IN_TRATTAMENTO" };
   }
 
@@ -305,7 +308,10 @@ async function gestisci(ctx) {
     if (tipoConsegna === "DOMICILIO" && !direccion) {
       if (!conv) await createConv(waId, nombre, allItems, horaFinale, "aperta");
       else await updateConvDati(waId, allItems, horaFinale);
-      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, horaFinale, null, false, waMsgId);
+      const msgAckNoAddr = "¿Adónde te lo llevamos? Pásanos la dirección completa (calle, número y piso si lo hay) y lo revisamos enseguida. 🍕";
+      await appendChat(waId, "bot", msgAckNoAddr);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, horaFinale, msgAckNoAddr, false, waMsgId);
+      if (autoOn) await invia(waId, msgAckNoAddr, config);
       return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "sin_direccion" };
     }
 
@@ -318,7 +324,10 @@ async function gestisci(ctx) {
     if (fueraDeZona) {
       if (!conv) await createConv(waId, nombre, allItems, horaFinale, "in_attesa");
       else { await updateConvDati(waId, allItems, horaFinale); await updateConvStato(waId, "in_attesa"); }
-      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, horaFinale, null, false, waMsgId);
+      const msgAckOutZone = "Gracias. Vamos a comprobar la zona de entrega con el equipo y te respondemos enseguida. 🛵";
+      await appendChat(waId, "bot", msgAckOutZone);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, horaFinale, msgAckOutZone, false, waMsgId);
+      if (autoOn) await invia(waId, msgAckOutZone, config);
       return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "fuera_de_zona" };
     }
 
@@ -451,7 +460,10 @@ async function gestisci(ctx) {
     // ── Domicilio senza indirizzo → Preguntas ───────────────────
     if (tipoConsegnaOra === "DOMICILIO" && !direccionOra) {
       await updateConvDati(waId, oraItems, oraHoraFinale);
-      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, null, false, waMsgId);
+      const msgAckNoAddrOra = "¿Adónde te lo llevamos? Pásanos la dirección completa (calle, número y piso si lo hay) y lo revisamos enseguida. 🍕";
+      await appendChat(waId, "bot", msgAckNoAddrOra);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, msgAckNoAddrOra, false, waMsgId);
+      if (autoOn) await invia(waId, msgAckNoAddrOra, config);
       return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "sin_direccion" };
     }
 
@@ -471,7 +483,10 @@ async function gestisci(ctx) {
       });
       await updateConvDati(waId, oraItems, oraHoraFinale);
       await updateConvStato(waId, "in_attesa");
-      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, null, false, waMsgId);
+      const msgAckOutZoneOra = "Gracias. Vamos a comprobar la zona de entrega con el equipo y te respondemos enseguida. 🛵";
+      await appendChat(waId, "bot", msgAckOutZoneOra);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, msgAckOutZoneOra, false, waMsgId);
+      if (autoOn) await invia(waId, msgAckOutZoneOra, config);
       return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "fuera_de_zona" };
     }
 
