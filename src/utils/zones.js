@@ -406,26 +406,67 @@ function proposeForNewOrder(orders, newOrder, options = {}) {
     };
   }
 
-  // Strategia conservativa: il driver fa prima tutti gli esistenti, poi il nuovo.
-  // Non perturba ordini già confermati. L'operatore può forzare se sa che c'è margine.
-  const rientroPrec = sim.driverLiberoMin;
+  // ── Slot-search (28/05/2026, ex-cascade-conservativa) ─────────────────────
+  // Replica 1:1 di src/zones.js frontend. Vedi commento esteso lì.
+  // I giri esistenti diventano intervalli occupati LOCALI [partenza,rientro] e
+  // cerchiamo il primo buco libero che ospiti il roundtrip del nuovo ordine.
+  // Una prenotazione cliente per le 23:00 NON blocca più gli slot tra now e 23:00.
+  const occupied = sim.giri.map(g => ({
+    start: g.partenzaMin,
+    end:   g.rientroMin,
+    zona:  g.zona,
+    horaStr: toH(g.horaMin),
+  }));
+  const occSorted = [...occupied].sort((a, b) => a.start - b.start);
 
-  const partTeorica = horaNewMin - tgNew;
-  const partReale = Math.max(rientroPrec, partTeorica);
-  const consegnaReale = partReale + tgNew;
-  const ok = consegnaReale <= horaNewMin;
-  const consegnaProposta = ok ? horaNewMin : Math.ceil(consegnaReale / 5) * 5;
+  const roundtripNew = tgNew + BUFFER_OPS_DRIVER_MIN + tgNew;
 
-  let motivo = null;
-  if (!ok) {
-    if (sim.giri.length === 0) {
-      motivo = `Driver libre solo desde ~${toH(rientroPrec)}`;
-    } else if (sim.giri.length === 1) {
-      const g = sim.giri[0];
-      motivo = `Driver en ${g.zona} ${toH(g.horaMin)} · vuelve ~${toH(g.rientroMin)}`;
-    } else {
-      motivo = `Driver ocupado hasta ~${toH(rientroPrec)} (${sim.giri.length} entregas en curso)`;
+  const nowMin = options.nowMin != null
+    ? options.nowMin
+    : (() => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); })();
+  const minPart = nowMin + 5;
+
+  const collides = (a, b) => occSorted.some(o => a < o.end && o.start < b);
+
+  const findFirstFreeStart = (fromMin, dur) => {
+    let cand = fromMin;
+    for (const o of occSorted) {
+      if (cand + dur <= o.start) return cand;
+      if (cand < o.end) cand = o.end;
     }
+    return cand;
+  };
+
+  const findBlocker = (a, b) => occSorted.find(o => a < o.end && o.start < b);
+
+  let ok, consegnaProposta, motivo = null;
+
+  if (horaNewMin != null) {
+    const partTeorica = horaNewMin - tgNew;
+    const partFeasible = partTeorica >= minPart;
+    const slotFree = !collides(partTeorica, partTeorica + roundtripNew);
+
+    if (partFeasible && slotFree) {
+      ok = true;
+      consegnaProposta = horaNewMin;
+    } else {
+      ok = false;
+      const fromMin = Math.max(minPart, partTeorica);
+      const firstFreePart = findFirstFreeStart(fromMin, roundtripNew);
+      consegnaProposta = Math.ceil((firstFreePart + tgNew) / 5) * 5;
+      if (!partFeasible) {
+        motivo = `Hora pedida muy pronta · mínimo ${toH(minPart + tgNew)} (cocina + andata)`;
+      } else {
+        const blocker = findBlocker(partTeorica, partTeorica + roundtripNew);
+        motivo = blocker
+          ? `Driver en ${blocker.zona} ${blocker.horaStr} · vuelve ~${toH(blocker.end)}`
+          : `Driver ocupado hasta ~${toH(firstFreePart)}`;
+      }
+    }
+  } else {
+    ok = true;
+    const firstFreePart = findFirstFreeStart(minPart, roundtripNew);
+    consegnaProposta = Math.ceil((firstFreePart + tgNew) / 5) * 5;
   }
 
   return {
