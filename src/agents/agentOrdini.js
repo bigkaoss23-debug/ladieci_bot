@@ -171,9 +171,20 @@ async function creaOrdine(params) {
   const totale = desc.totale;
   const descuentoImporte = desc.importe;
 
-  const requestedHoraGuard = validateClosingTime(params, params.hora);
-  if (!requestedHoraGuard.success) {
-    return requestedHoraGuard;
+  // Blocco hard orario chiusura: SOLO per il flusso bot WhatsApp automatico.
+  // Decisione prodotto: gli ordini manuali dell'operatore (dashboard) NON vengono
+  // mai bloccati per orario/chiusura. L'operatore può legittimamente fare e
+  // consegnare una pizza dopo le 23:00. I warning/flag restano (forzado, badge UI
+  // lato frontend, log) — qui togliamo solo il blocco hard che impediva il salvataggio.
+  // `operatorManual` viene impostato dai soli endpoint dashboard in index.js; le
+  // chiamate in-process dell'orchestrator (bot) lo lasciano falsy → restano prudenti.
+  const hardClosingGuard = params.operatorManual !== true;
+
+  if (hardClosingGuard) {
+    const requestedHoraGuard = validateClosingTime(params, params.hora);
+    if (!requestedHoraGuard.success) {
+      return requestedHoraGuard;
+    }
   }
 
   // forno_out + hora coerenti: se non passato forno_out (operatore manuale),
@@ -194,9 +205,11 @@ async function creaOrdine(params) {
       console.warn(`[creaOrdine] hora slittata per driver impegnato: richiesta=${params.hora} → finale=${horaFinale} (forno_out=${fornoOut})`);
     }
   }
-  const finalHoraGuard = validateClosingTime(params, horaFinale || params.hora);
-  if (!finalHoraGuard.success) {
-    return finalHoraGuard;
+  if (hardClosingGuard) {
+    const finalHoraGuard = validateClosingTime(params, horaFinale || params.hora);
+    if (!finalHoraGuard.success) {
+      return finalHoraGuard;
+    }
   }
 
   // ═══ Idempotency check ═══

@@ -155,7 +155,8 @@ app.post("/api", async (req, res) => {
     if (action === "cambiaStato") {
       result = await cambiaStato(req.body.id, req.body.estado);
     } else if (action === "creaOrdine") {
-      result = await creaOrdine(req.body);
+      // Dashboard operatore: niente blocco hard orario chiusura (vedi creaOrdine).
+      result = await creaOrdine({ ...req.body, operatorManual: true });
     } else if (action === "modificaOrdine") {
       result = await modificaOrdine(req.body.id, req.body);
     } else if (action === "aggiornaRispostaBot") {
@@ -296,7 +297,8 @@ app.post("/api", async (req, res) => {
     } else if (action === "createOrden") {
       const d = req.body.data || req.body;
       if (!d.waId && d.wa_id) d.waId = d.wa_id;
-      result = await creaOrdine(d);
+      // Dashboard operatore: niente blocco hard orario chiusura (vedi creaOrdine).
+      result = await creaOrdine({ ...d, operatorManual: true });
     } else if (action === "updateNotaCucina") {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { nota_cucina: req.body.nota_cucina });
       result = { success: true };
