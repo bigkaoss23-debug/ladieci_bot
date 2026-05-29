@@ -215,6 +215,7 @@ function seedGiro(g) {
     dissolved_at: g.dissolved_at || null,
     hora_ref: g.hora_ref || null,
     anchor_order_id: g.anchor_order_id || null,
+    entrega_ref: g.entrega_ref || null,
   };
   db.manual_giros.push(row);
   return row;
@@ -346,9 +347,46 @@ function seedGiro(g) {
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.giro.hora_ref, null);
     assert.strictEqual(res.giro.anchor_order_id, null);
+    assert.strictEqual(res.giro.entrega_ref, null);
     const row = db.manual_giros.find(g => g.id === res.giro.id);
     assert.strictEqual(row.hora_ref, null);
     assert.strictEqual(row.anchor_order_id, null);
+    assert.strictEqual(row.entrega_ref, null);
+  });
+
+  await t("createManualGiro: writes entrega_ref (normalized) separate from hora_ref", async () => {
+    seedOrder({ id: "#A" });
+    seedOrder({ id: "#B" });
+    const res = await mg.createManualGiro(["#A", "#B"], "17:49", "#B", "9:05");
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.giro.hora_ref, "17:49");
+    assert.strictEqual(res.giro.anchor_order_id, "#B");
+    assert.strictEqual(res.giro.entrega_ref, "09:05");
+    const row = db.manual_giros.find(g => g.id === res.giro.id);
+    assert.strictEqual(row.hora_ref, "17:49");
+    assert.strictEqual(row.entrega_ref, "09:05");
+  });
+
+  await t("createManualGiro: entrega_ref independent of hora_ref (only entrega set)", async () => {
+    seedOrder({ id: "#A" });
+    seedOrder({ id: "#B" });
+    const res = await mg.createManualGiro(["#A", "#B"], null, null, "18:12");
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.giro.hora_ref, null);
+    assert.strictEqual(res.giro.entrega_ref, "18:12");
+    const row = db.manual_giros.find(g => g.id === res.giro.id);
+    assert.strictEqual(row.hora_ref, null);
+    assert.strictEqual(row.entrega_ref, "18:12");
+  });
+
+  await t("createManualGiro: invalid entrega_ref rejected, no giro created", async () => {
+    seedOrder({ id: "#A" });
+    seedOrder({ id: "#B" });
+    const res = await mg.createManualGiro(["#A", "#B"], "17:49", "#B", "25:99");
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.error, "invalid_entrega_ref");
+    assert.strictEqual(db.manual_giros.length, 0);
+    assert.strictEqual(db.ordenes.find(o => o.id === "#A").manual_giro_id, null);
   });
 
   await t("createManualGiro: invalid hora_ref rejected, no giro created", async () => {
@@ -630,6 +668,20 @@ function seedGiro(g) {
     assert.strictEqual(list.length, 1);
     assert.strictEqual(list[0].hora_ref, "21:30");
     assert.strictEqual(list[0].anchor_order_id, "#A");
+  });
+
+  await t("getManualGiros: returns entrega_ref alongside hora_ref", async () => {
+    seedGiro({ id: "mg_260525_1", seq: 1, hora_ref: "17:49", anchor_order_id: "#B", entrega_ref: "18:12" });
+    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
+    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
+    const list = await mg.getManualGiros();
+    assert.strictEqual(list.length, 1);
+    assert.strictEqual(list[0].hora_ref, "17:49");
+    assert.strictEqual(list[0].entrega_ref, "18:12");
+    assert.strictEqual(list[0].anchor_order_id, "#B");
+    // entrega_ref must be in the select string for real PostgREST
+    const q = observedSelectQueries.find(x => x.table === "manual_giros")?.query || "";
+    assert.ok(q.includes("entrega_ref"), q);
   });
 
   await t("getManualGiros: onlyActive=false includes dissolved", async () => {

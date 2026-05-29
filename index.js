@@ -349,14 +349,16 @@ app.post("/api", async (req, res) => {
       result = { success: true };
     } else if (action === "createManualGiro") {
       // DELIVERY-MANUAL-GIRO-01: body { order_ids: ["#A","#B",...],
-      //   hora_ref?: "HH:MM" (orario operativo del giro),
-      //   anchor_order_id?: "#A" (provenienza scelta, audit) }.
-      // Returns { ok, giro:{id,seq,hora_ref,anchor_order_id,...,order_ids}, moved_from }
+      //   hora_ref?: "HH:MM" (orario operativo / uscita forno del giro),
+      //   anchor_order_id?: "#A" (provenienza scelta, audit),
+      //   entrega_ref?: "HH:MM" (target consegna/giro scelto dall'operatore) }.
+      // Returns { ok, giro:{id,seq,hora_ref,anchor_order_id,entrega_ref,...,order_ids}, moved_from }
       // or { ok:false, error }.
       result = await createManualGiro(
         req.body.order_ids,
         req.body.hora_ref ?? null,
-        req.body.anchor_order_id ?? null
+        req.body.anchor_order_id ?? null,
+        req.body.entrega_ref ?? null
       );
     } else if (action === "addOrderToManualGiro") {
       // body { giro_id, order_id }

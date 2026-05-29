@@ -205,11 +205,18 @@ async function autoDissolveIfBelowThreshold(giroId) {
 // approved "move silent" rule: orders already belonging to another
 // giro are moved into the new one, and each previous giro is checked
 // for auto-dissolve after the move so we never leave orphans.
-async function createManualGiro(orderIds, horaRef = null, anchorOrderId = null) {
+async function createManualGiro(orderIds, horaRef = null, anchorOrderId = null, entregaRef = null) {
   if (!isValidHoraRef(horaRef)) {
     return { ok: false, status: 400, error: "invalid_hora_ref", details: horaRef };
   }
+  // entrega_ref shares the HH:MM format with hora_ref (validated/normalized
+  // by the same helpers) but carries a different semantic: the operator-chosen
+  // delivery/giro target time, kept separate from the operational forno-exit time.
+  if (!isValidHoraRef(entregaRef)) {
+    return { ok: false, status: 400, error: "invalid_entrega_ref", details: entregaRef };
+  }
   const horaRefNorm = normalizeHoraRef(horaRef);
+  const entregaRefNorm = normalizeHoraRef(entregaRef);
   const anchorId = anchorOrderId != null && anchorOrderId !== "" ? String(anchorOrderId) : null;
 
   const valid = await validateManualGiroOrders(orderIds);
@@ -233,7 +240,8 @@ async function createManualGiro(orderIds, horaRef = null, anchorOrderId = null) 
       giro_day: giroDay,
       created_by: DEFAULT_CREATED_BY,
       hora_ref: horaRefNorm,
-      anchor_order_id: anchorId
+      anchor_order_id: anchorId,
+      entrega_ref: entregaRefNorm
     });
     if (Array.isArray(res) && res.length > 0) {
       inserted = res[0];
@@ -287,6 +295,7 @@ async function createManualGiro(orderIds, horaRef = null, anchorOrderId = null) 
       created_by: inserted.created_by,
       hora_ref: inserted.hora_ref ?? horaRefNorm,
       anchor_order_id: inserted.anchor_order_id ?? anchorId,
+      entrega_ref: inserted.entrega_ref ?? entregaRefNorm,
       order_ids: valid.uniqIds
     },
     moved_from: prevGiroIds.filter(p => p !== inserted.id)
@@ -404,7 +413,7 @@ async function getManualGiros({ day, onlyActive = true } = {}) {
   const filter = onlyActive ? "dissolved_at=is.null&" : "";
   const giros = await sbSelect(
     "manual_giros",
-    `${filter}giro_day=eq.${encodeURIComponent(giroDay)}&select=id,seq,giro_day,created_at,created_by,dissolved_at,hora_ref,anchor_order_id&order=seq.asc`
+    `${filter}giro_day=eq.${encodeURIComponent(giroDay)}&select=id,seq,giro_day,created_at,created_by,dissolved_at,hora_ref,anchor_order_id,entrega_ref&order=seq.asc`
   );
   if (!Array.isArray(giros) || giros.length === 0) return [];
 
