@@ -59,6 +59,29 @@ function generateManualGiroId(giroDayIso, seq) {
   return `mg_${yymmdd}_${seq}`;
 }
 
+// Validates the operator-chosen operational time of a giro.
+// Accepts "H:MM" / "HH:MM" 24h (00:00–23:59). null/undefined/"" are
+// treated as "no operational time" and are valid (returns true) so the
+// field stays optional and retro-compatible.
+function isValidHoraRef(s) {
+  if (s == null || s === "") return true;
+  if (typeof s !== "string") return false;
+  const m = s.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return false;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  return h >= 0 && h <= 23 && min >= 0 && min <= 59;
+}
+
+// Normalizes a valid hora_ref to canonical "HH:MM" (zero-padded). Pass
+// only values that already passed isValidHoraRef. Empty → null.
+function normalizeHoraRef(s) {
+  if (s == null || s === "") return null;
+  const m = String(s).trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  return `${String(Number(m[1])).padStart(2, "0")}:${m[2]}`;
+}
+
 // Eligibility check used by validate + create + add. The order must
 // be a DOMICILIO and currently in a state that the operator can act on.
 function isOrderEligibleForGiro(o) {
@@ -182,7 +205,13 @@ async function autoDissolveIfBelowThreshold(giroId) {
 // approved "move silent" rule: orders already belonging to another
 // giro are moved into the new one, and each previous giro is checked
 // for auto-dissolve after the move so we never leave orphans.
-async function createManualGiro(orderIds) {
+async function createManualGiro(orderIds, horaRef = null, anchorOrderId = null) {
+  if (!isValidHoraRef(horaRef)) {
+    return { ok: false, status: 400, error: "invalid_hora_ref", details: horaRef };
+  }
+  const horaRefNorm = normalizeHoraRef(horaRef);
+  const anchorId = anchorOrderId != null && anchorOrderId !== "" ? String(anchorOrderId) : null;
+
   const valid = await validateManualGiroOrders(orderIds);
   if (!valid.ok) return valid;
 
@@ -202,7 +231,9 @@ async function createManualGiro(orderIds) {
       id,
       seq,
       giro_day: giroDay,
-      created_by: DEFAULT_CREATED_BY
+      created_by: DEFAULT_CREATED_BY,
+      hora_ref: horaRefNorm,
+      anchor_order_id: anchorId
     });
     if (Array.isArray(res) && res.length > 0) {
       inserted = res[0];
@@ -254,6 +285,8 @@ async function createManualGiro(orderIds) {
       giro_day: inserted.giro_day,
       created_at: inserted.created_at,
       created_by: inserted.created_by,
+      hora_ref: inserted.hora_ref ?? horaRefNorm,
+      anchor_order_id: inserted.anchor_order_id ?? anchorId,
       order_ids: valid.uniqIds
     },
     moved_from: prevGiroIds.filter(p => p !== inserted.id)
@@ -371,7 +404,7 @@ async function getManualGiros({ day, onlyActive = true } = {}) {
   const filter = onlyActive ? "dissolved_at=is.null&" : "";
   const giros = await sbSelect(
     "manual_giros",
-    `${filter}giro_day=eq.${encodeURIComponent(giroDay)}&select=id,seq,giro_day,created_at,created_by,dissolved_at&order=seq.asc`
+    `${filter}giro_day=eq.${encodeURIComponent(giroDay)}&select=id,seq,giro_day,created_at,created_by,dissolved_at,hora_ref,anchor_order_id&order=seq.asc`
   );
   if (!Array.isArray(giros) || giros.length === 0) return [];
 
@@ -429,6 +462,8 @@ async function softDissolveActiveManualGirosForClose() {
 module.exports = {
   // pure helpers
   generateManualGiroId,
+  isValidHoraRef,
+  normalizeHoraRef,
   isOrderEligibleForGiro,
   isStatusLeavingGiro,
   encodeIdList,

@@ -213,6 +213,8 @@ function seedGiro(g) {
     created_at: g.created_at || new Date().toISOString(),
     created_by: g.created_by || "pin_dashboard",
     dissolved_at: g.dissolved_at || null,
+    hora_ref: g.hora_ref || null,
+    anchor_order_id: g.anchor_order_id || null,
   };
   db.manual_giros.push(row);
   return row;
@@ -244,6 +246,32 @@ function seedGiro(g) {
     assert.strictEqual(mg.isStatusLeavingGiro("CANCELADO"), true);
     assert.strictEqual(mg.isStatusLeavingGiro(""), true);
     assert.strictEqual(mg.isStatusLeavingGiro(null), true);
+  });
+
+  await t("isValidHoraRef: accepts HH:MM 24h and empty, rejects junk", async () => {
+    assert.strictEqual(mg.isValidHoraRef("21:30"), true);
+    assert.strictEqual(mg.isValidHoraRef("9:05"), true);
+    assert.strictEqual(mg.isValidHoraRef("00:00"), true);
+    assert.strictEqual(mg.isValidHoraRef("23:59"), true);
+    // empty / null = "no operational time" → valid (optional field)
+    assert.strictEqual(mg.isValidHoraRef(null), true);
+    assert.strictEqual(mg.isValidHoraRef(undefined), true);
+    assert.strictEqual(mg.isValidHoraRef(""), true);
+    // invalid
+    assert.strictEqual(mg.isValidHoraRef("25:99"), false);
+    assert.strictEqual(mg.isValidHoraRef("24:00"), false);
+    assert.strictEqual(mg.isValidHoraRef("21:60"), false);
+    assert.strictEqual(mg.isValidHoraRef("21h30"), false);
+    assert.strictEqual(mg.isValidHoraRef("abc"), false);
+    assert.strictEqual(mg.isValidHoraRef("2130"), false);
+    assert.strictEqual(mg.isValidHoraRef(2130), false);
+  });
+
+  await t("normalizeHoraRef: zero-pads hour, empty → null", async () => {
+    assert.strictEqual(mg.normalizeHoraRef("9:05"), "09:05");
+    assert.strictEqual(mg.normalizeHoraRef("21:30"), "21:30");
+    assert.strictEqual(mg.normalizeHoraRef(""), null);
+    assert.strictEqual(mg.normalizeHoraRef(null), null);
   });
 
   await t("encodeIdList: CSV-quoted with escaped inner quotes", async () => {
@@ -297,6 +325,41 @@ function seedGiro(g) {
     assert.strictEqual(new URL(`https://example.test/rest/v1/ordenes?select=*&${q}`).hash, "");
     assert.strictEqual(db.ordenes.find(o => o.id === "#001").manual_giro_id, "mg_260525_1");
     assert.strictEqual(db.ordenes.find(o => o.id === "#002").manual_giro_id, "mg_260525_1");
+  });
+
+  await t("createManualGiro: writes hora_ref + anchor_order_id (normalized)", async () => {
+    seedOrder({ id: "#A" });
+    seedOrder({ id: "#B" });
+    const res = await mg.createManualGiro(["#A", "#B"], "9:05", "#A");
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.giro.hora_ref, "09:05");
+    assert.strictEqual(res.giro.anchor_order_id, "#A");
+    const row = db.manual_giros.find(g => g.id === res.giro.id);
+    assert.strictEqual(row.hora_ref, "09:05");
+    assert.strictEqual(row.anchor_order_id, "#A");
+  });
+
+  await t("createManualGiro: retro-compatible without hora_ref → null fields", async () => {
+    seedOrder({ id: "#A" });
+    seedOrder({ id: "#B" });
+    const res = await mg.createManualGiro(["#A", "#B"]);
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.giro.hora_ref, null);
+    assert.strictEqual(res.giro.anchor_order_id, null);
+    const row = db.manual_giros.find(g => g.id === res.giro.id);
+    assert.strictEqual(row.hora_ref, null);
+    assert.strictEqual(row.anchor_order_id, null);
+  });
+
+  await t("createManualGiro: invalid hora_ref rejected, no giro created", async () => {
+    seedOrder({ id: "#A" });
+    seedOrder({ id: "#B" });
+    const res = await mg.createManualGiro(["#A", "#B"], "25:99");
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.error, "invalid_hora_ref");
+    assert.strictEqual(db.manual_giros.length, 0);
+    // orders untouched
+    assert.strictEqual(db.ordenes.find(o => o.id === "#A").manual_giro_id, null);
   });
 
   await t("createManualGiro: < 2 orders rejected", async () => {
@@ -557,6 +620,16 @@ function seedGiro(g) {
     const byId = Object.fromEntries(list.map(g => [g.id, g]));
     assert.deepStrictEqual(byId["mg_260525_1"].order_ids.sort(), ["#A", "#B"]);
     assert.deepStrictEqual(byId["mg_260525_2"].order_ids, ["#C"]);
+  });
+
+  await t("getManualGiros: returns hora_ref + anchor_order_id", async () => {
+    seedGiro({ id: "mg_260525_1", seq: 1, hora_ref: "21:30", anchor_order_id: "#A" });
+    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
+    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
+    const list = await mg.getManualGiros();
+    assert.strictEqual(list.length, 1);
+    assert.strictEqual(list[0].hora_ref, "21:30");
+    assert.strictEqual(list[0].anchor_order_id, "#A");
   });
 
   await t("getManualGiros: onlyActive=false includes dissolved", async () => {
