@@ -19,14 +19,16 @@ function slot10(ora) {
   const [hStr, mStr] = String(ora).split(":");
   let h = parseInt(hStr), m = parseInt(mStr || 0);
   const mArr = Math.round(m / 10) * 10;
-  if (mArr >= 60) { h += 1; return pad(h) + ":00"; }
-  return pad(h) + ":" + pad(mArr);
+  // Wrap orari post-mezzanotte: tollera input come "24:35" (legacy DB sporco)
+  // e ogni overflow generato dal carry mArr>=60.
+  if (mArr >= 60) { h += 1; return pad(((h % 24) + 24) % 24) + ":00"; }
+  return pad(((h % 24) + 24) % 24) + ":" + pad(mArr);
 }
 
 function tuttiSlotValidi() {
   const slots = [];
   for (let tot = 19 * 60 + 30; tot <= 23 * 60; tot += 10) {
-    slots.push(pad(Math.floor(tot / 60)) + ":" + pad(tot % 60));
+    slots.push(pad(Math.floor(tot/60)%24) + ":" + pad(tot % 60));
   }
   return slots;
 }
@@ -108,7 +110,7 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
     const [hh, mm] = String(h).split(":").map(Number);
     const m = hh * 60 + (mm || 0);
     const mArr = Math.round(m / 10) * 10;
-    const aH = Math.floor(mArr / 60), aM = mArr % 60;
+    const aH = Math.floor(mArr/60)%24, aM = mArr % 60;
     return `${z}|${String(aH).padStart(2,"0")}:${String(aM).padStart(2,"0")}`;
   };
   const slotCount = {};
@@ -150,7 +152,7 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
   minMin = Math.ceil(minMin / 10) * 10; // arrotonda al prossimo slot da 10 min
 
   const slotRichiesto = oraRichiesta;
-  const slot10 = (min) => `${String(Math.floor(min / 60)).padStart(2,"0")}:${String(min % 60).padStart(2,"0")}`;
+  const slot10 = (min) => `${String(Math.floor(min/60)%24).padStart(2,"0")}:${String(min % 60).padStart(2,"0")}`;
 
   // ── Priorità 1: slot "caldo" — stessa zona, stesso slot10, con spazio (aggregazione) ──
   // Cerco tra i giri esistenti uno con same-zone same-slot e count < max

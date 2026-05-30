@@ -24,7 +24,7 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
   // partenza del giro esistente, non driver_libero (che è DOPO quel giro e farebbe
   // uscire la pizza dopo la consegna promessa — es. forno 17:46 per delivery 17:40).
   const toMinL = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
-  const toHL   = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+  const toHL   = (m) => `${String(Math.floor(m/60)%24).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
   const slot10L = (min) => { const r = Math.round(min/10)*10; return toHL(r); };
   const newSlot = slot10L(toMinL(hora));
   const giroEsistente = sim.giri.find(g => g.zona === zona && g.slot === newSlot);
@@ -52,7 +52,7 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
 function planFornoOutSync(rows) {
   const sim = simulateDriverSchedule(rows || []);
   const toMinL = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
-  const toHL   = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+  const toHL   = (m) => `${String(Math.floor(m/60)%24).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
   const slot10L = (min) => { const r = Math.round(min/10)*10; return toHL(r); };
   const byKey = new Map();
   for (const g of sim.giri) byKey.set(`${g.zona}|${g.slot}`, toHL(g.partenzaMin));

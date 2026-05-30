@@ -278,7 +278,7 @@ function simulateDriverSchedule(orders, options = {}) {
   const toMin = (t) => { if (!t) return null; const [h,m]=String(t).split(":").map(Number); return h*60+(m||0); };
   const slot10 = (min) => {
     const mArr = Math.round(min / 10) * 10;
-    const h = Math.floor(mArr / 60), m = mArr % 60;
+    const h = Math.floor(mArr/60)%24, m = mArr % 60;
     return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
   };
 
@@ -345,7 +345,7 @@ function calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin 
     return { forno_out: hora, hora_finale: hora, slittato: false };
   }
   const toMin = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
-  const toH = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+  const toH = (m) => `${String(Math.floor(m/60)%24).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
   const horaMin = toMin(hora);
   const fornoNaiveMin = horaMin - durataAndataMin;
   const fornoRealMin = Math.max(fornoNaiveMin, driverLiberoMin || 0);
@@ -373,10 +373,10 @@ function calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin 
 //   }
 function proposeForNewOrder(orders, newOrder, options = {}) {
   const toMin = (t) => { if (!t) return null; const [h,m]=String(t).split(":").map(Number); return h*60+(m||0); };
-  const toH = (m) => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+  const toH = (m) => `${String(Math.floor(m/60)%24).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
   const slot10 = (min) => {
     const mArr = Math.round(min / 10) * 10;
-    const h = Math.floor(mArr / 60), m = mArr % 60;
+    const h = Math.floor(mArr/60)%24, m = mArr % 60;
     return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
   };
 
