@@ -4,14 +4,30 @@
 
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
-const { calcolaFornoOut, simulateDriverSchedule } = require("../utils/zones");
+const { calcolaFornoOut, simulateDriverSchedule, proposeForNewOrder } = require("../utils/zones");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
+
+// Ora attuale di Madrid in minuti dalla mezzanotte. proposeForNewOrder usa nowMin
+// per il pavimento "minPart" della slot-search: se non lo passiamo, ricade su
+// new Date() del server (TZ Railway = UTC) → buchi liberi calcolati con 2h di
+// sfasamento. Qui lo forziamo a Europe/Madrid. Null se l'ambiente non espone Intl.
+function nowMadridMinutes() {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    const h = Number(parts.find(p => p.type === "hour")?.value);
+    const m = Number(parts.find(p => p.type === "minute")?.value);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return h * 60 + m;
+  } catch (_) { return null; }
+}
 
 // Fallback per chi chiama creaOrdine/modificaOrdine senza passare forno_out
 // (es. operatore manuale via dashboard). Riusa lo stesso sistema cascade del bot.
 // Ritorna { forno_out, hora_finale, slittato } — vedi calcolaFornoOut in zones.js.
-async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zona }) {
+async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zona, zonaLat, zonaLon }) {
   if (!hora) return { forno_out: null, hora_finale: null, slittato: false };
   if (tipoConsegna !== "DOMICILIO" || !zona || !durataAndataMin) {
     return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin });
@@ -34,6 +50,35 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
     return { forno_out: toHL(giroEsistente.partenzaMin), hora_finale: hora, slittato: false };
   }
 
+  // ── Slot-search invece di driverLiberoMin come pavimento rigido ────────────
+  // BUG (live 31/05/2026): usare sim.driverLiberoMin (rientro dall'ULTIMO giro)
+  // come floor accodava ogni nuovo delivery dietro l'intero schedule — un ordine
+  // Q1 vicino (8 min) creato alle 20:38 finiva a forno_out 23:13 perché un manual
+  // giro Q5 consegnava alle 22:44. proposeForNewOrder fa una vera ricerca del primo
+  // buco libero compatibile col roundtrip e propone ~20:55. Ritorna SEMPRE una
+  // consegna fattibile (ok:true se l'ora richiesta va bene così com'è; ok:false se
+  // l'ha spostata al primo slot libero — entrambe proposte valide da usare).
+  // forno_out lo deriviamo da durataAndataMin (snapshot dell'ordine) per garantire
+  // l'invariante DB DOMICILIO: hora = forno_out + durata_andata_min.
+  const nowMin = nowMadridMinutes();
+  const propose = proposeForNewOrder(rows, {
+    hora, zona,
+    zona_lat: zonaLat ?? null,
+    zona_lon: zonaLon ?? null,
+    durata_andata_min: durataAndataMin,
+  }, nowMin != null ? { nowMin } : {});
+
+  if (propose && Number.isFinite(propose.consegnaPropostaMin)) {
+    const consegnaMin = propose.consegnaPropostaMin;
+    const fornoMin = consegnaMin - durataAndataMin;
+    return {
+      forno_out:   toHL(Math.max(0, fornoMin)),
+      hora_finale: toHL(Math.max(0, consegnaMin)),
+      slittato:    consegnaMin > toMinL(hora),
+    };
+  }
+
+  // Fallback storico: nessuno slot proposto → driver libero dopo l'intero schedule.
   return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin: sim.driverLiberoMin });
 }
 
@@ -197,7 +242,9 @@ async function creaOrdine(params) {
       tipoConsegna,
       hora: params.hora,
       durataAndataMin: params.durata_andata_min,
-      zona: params.zona
+      zona: params.zona,
+      zonaLat: params.zona_lat,
+      zonaLon: params.zona_lon
     });
     fornoOut = res.forno_out;
     horaFinale = res.hora_finale || params.hora;
@@ -425,8 +472,11 @@ async function modificaOrdine(ordenId, updates) {
         const horaFinal = upd.hora || ord.hora;
         const durataFinal = upd.durata_andata_min !== undefined ? upd.durata_andata_min : ord.durata_andata_min;
         const zonaFinal = upd.zona !== undefined ? upd.zona : ord.zona;
+        const zonaLatFinal = upd.zona_lat !== undefined ? upd.zona_lat : ord.zona_lat;
+        const zonaLonFinal = upd.zona_lon !== undefined ? upd.zona_lon : ord.zona_lon;
         const res = await calcolaFornoOutFallback({
-          tipoConsegna, hora: horaFinal, durataAndataMin: durataFinal, zona: zonaFinal
+          tipoConsegna, hora: horaFinal, durataAndataMin: durataFinal, zona: zonaFinal,
+          zonaLat: zonaLatFinal, zonaLon: zonaLonFinal
         });
         upd.forno_out = res.forno_out;
         // Propaga hora_finale se il driver ha forzato uno slittamento — preserva
@@ -575,4 +625,4 @@ async function getById(id) {
   return (rows && rows.length > 0) ? rows[0] : null;
 }
 
-module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, planFornoOutSync };
+module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, planFornoOutSync, calcolaFornoOutFallback };
