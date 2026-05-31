@@ -238,18 +238,37 @@ async function creaOrdine(params) {
   let fornoOut = params.forno_out;
   let horaFinale = params.hora;
   if (fornoOut === undefined || fornoOut === null) {
-    const res = await calcolaFornoOutFallback({
-      tipoConsegna,
-      hora: params.hora,
-      durataAndataMin: params.durata_andata_min,
-      zona: params.zona,
-      zonaLat: params.zona_lat,
-      zonaLon: params.zona_lon
-    });
-    fornoOut = res.forno_out;
-    horaFinale = res.hora_finale || params.hora;
-    if (res.slittato) {
-      console.warn(`[creaOrdine] hora slittata per driver impegnato: richiesta=${params.hora} → finale=${horaFinale} (forno_out=${fornoOut})`);
+    if (params.operatorManual === true) {
+      // ── HOTFIX 31/05/2026: ordini MANUALI = orario deterministico ──────────
+      // Decisione prodotto: il backend NON sposta MAI la hora scelta dall'operatore.
+      // Niente slot-search, niente slittamento driver. L'operatore vede 21:00 → il
+      // DB salva 21:00. Per DOMICILIO calcoliamo solo forno_out = hora − andata
+      // (driverLiberoMin=0 → nessun pavimento driver); per RITIRO forno_out = hora.
+      // calcolaFornoOut usa il formatter wrap-24h già fixato (00:16 − 8 → 00:08).
+      // Se durata manca, forno_out = hora (prudente, ma hora resta intatta).
+      const r = calcolaFornoOut({
+        tipoConsegna,
+        hora: params.hora,
+        durataAndataMin: params.durata_andata_min,
+        driverLiberoMin: 0,
+      });
+      fornoOut = r.forno_out;
+      horaFinale = params.hora; // mai spostata per ordini manuali
+    } else {
+      // Bot WhatsApp automatico: slot-search cascade-aware (può proporre slot/slittare).
+      const res = await calcolaFornoOutFallback({
+        tipoConsegna,
+        hora: params.hora,
+        durataAndataMin: params.durata_andata_min,
+        zona: params.zona,
+        zonaLat: params.zona_lat,
+        zonaLon: params.zona_lon
+      });
+      fornoOut = res.forno_out;
+      horaFinale = res.hora_finale || params.hora;
+      if (res.slittato) {
+        console.warn(`[creaOrdine] hora slittata per driver impegnato: richiesta=${params.hora} → finale=${horaFinale} (forno_out=${fornoOut})`);
+      }
     }
   }
   if (hardClosingGuard) {
