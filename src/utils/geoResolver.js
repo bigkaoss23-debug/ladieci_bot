@@ -447,7 +447,10 @@ function buildResult({ zona, lat, lon, durataAndataMin, source, cached, fuoriZon
   // - haversineMin: sempre calcolata se abbiamo lat/lon (raw, no cap zona)
   // - googleMin:   popolato solo se la riga è di origine Google (anche via cache)
   const haversineMin = (lat != null && lon != null) ? haversineDurataAndata(lat, lon) : null;
-  const googleMin = (source === "google" && durataAndataMin != null) ? durataAndataMin : null;
+  // googleMin popolato quando la durata è di origine Google, sia da geocode fresco
+  // (source "google") sia da arricchimento di una cache senza durata
+  // (source "google-from-cache-street" / "google-from-cache" / "google-from-cliente").
+  const googleMin = (typeof source === "string" && source.includes("google") && durataAndataMin != null) ? durataAndataMin : null;
   return {
     zona: zona || null,
     lat: lat ?? null, lon: lon ?? null,
@@ -481,6 +484,35 @@ async function getGeoProvider() {
 const LOCALITA_FUORI_ZONA = ["aguadulce", "almería", "almeria", "vícar", "vicar",
   "la mojonera", "mojonera", "el ejido", "ejido", "adra", "berja", "dalías", "dalias"];
 
+// ─── Enrichment: cache/cliente con coords ma SENZA durata → Google DM ─────
+// Decisione prodotto 31/05/2026: se la cache risolve coordinate+zona ma la durata
+// è null (riga Nominatim/Photon, o street-fallback su entry senza durata), NON
+// usare subito l'haversine come durata finale. Chiamiamo Google Distance Matrix
+// sulle coordinate GIÀ in cache (niente re-geocoding — preserva Bug B) per ottenere
+// la durata reale, la salviamo in cache (backfill sotto la key di questo indirizzo)
+// e la restituiamo con source "google-from-<orig>". Solo se Google è spento o
+// fallisce lasciamo durata=null → il consumer userà l'haversine (stima).
+async function enrichDurataFromGoogle(direccion, hit, googleEnabled) {
+  if (!hit || hit.durataAndataMin != null) return hit;   // già completa → nessun costo extra
+  if (hit.lat == null || hit.lon == null) return hit;    // niente coords → no Distance Matrix
+  if (!googleEnabled) return hit;                        // provider off → haversine al consumo
+  const dm = await googleDistanceMatrix(hit.lat, hit.lon);
+  if (!dm.ok) {
+    console.warn(`[geoResolver] enrich durata Google fallita (${dm.error}) per "${direccion}" — fallback haversine`);
+    return hit;                                          // google ko → durata resta null → haversine
+  }
+  const enrichedSource = `google-from-${hit.source || "cache"}`;
+  // Backfill: salviamo la durata reale sotto la cache-key di QUESTO indirizzo (es.
+  // "anade 35"), così la prossima volta è un hit esatto con durata. Non tocchiamo
+  // la riga street-level originale (key diversa) → cache esistente non rotta.
+  await saveToCache(direccion, {
+    zona: hit.zona, lat: hit.lat, lon: hit.lon,
+    durataAndataMin: dm.durataMin, source: enrichedSource
+  });
+  console.warn(`[geoResolver] enrich durata Google: "${direccion}" (${hit.source}) durata null → ${dm.durataMin}min, cached`);
+  return { ...hit, durataAndataMin: dm.durataMin, source: enrichedSource };
+}
+
 async function risolviIndirizzo({ direccion, tel = null, tipoConsegna = "DOMICILIO", forceRefresh = false } = {}) {
   if (tipoConsegna !== "DOMICILIO") return emptyResult();
   if (!direccion || String(direccion).trim().length < 5) return emptyResult("no_address");
@@ -502,7 +534,7 @@ async function risolviIndirizzo({ direccion, tel = null, tipoConsegna = "DOMICIL
   if (!forceRefresh) {
     const fromCache = await loadFromCache(direccion);
     if (fromCache) {
-      return buildResult(fromCache);
+      return buildResult(await enrichDurataFromGoogle(direccion, fromCache, googleEnabled));
     }
   } else {
     const peek = await loadFromCache(direccion);
@@ -595,4 +627,5 @@ module.exports = {
   getGeoProvider,
   stripHouseNumber,
   isAcceptableLocationType,
+  enrichDurataFromGoogle,
 };
