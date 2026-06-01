@@ -5,6 +5,7 @@
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
 const { calcolaFornoOut, simulateDriverSchedule, proposeForNewOrder } = require("../utils/zones");
+const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
 
@@ -216,6 +217,44 @@ async function creaOrdine(params) {
   const totale = desc.totale;
   const descuentoImporte = desc.importe;
 
+  // ── Step 2 anti-cerotto: geo/durata autoritativi (dashboard operatore) ──
+  // Per ordini operatore (operatorManual:true) il backend NON si fida di
+  // zona/durata/geo_source calcolati dal frontend: ri-risolve server-side con
+  // lo stesso engine (resolveDeliveryFields → risolviIndirizzo, include enrich
+  // Google). Il bot WhatsApp (operatorManual falsy) ha già risolto in
+  // orchestrator → mantiene i valori passati (path invariato, no doppia resolve).
+  // zona_manuale=true: override esplicito operatore, marcato e tracciato.
+  let geoFields = {
+    zona: params.zona ?? null,
+    zona_lat: params.zona_lat ?? null,
+    zona_lon: params.zona_lon ?? null,
+    durata_andata_min: params.durata_andata_min ?? null,
+    durata_google_min: params.durata_google_min ?? null,
+    durata_haversine_min: params.durata_haversine_min ?? null,
+    geo_source: params.geo_source ?? null,
+  };
+  if (params.operatorManual === true && tipoConsegna === "DOMICILIO" && params.direccion) {
+    try {
+      const r = await resolveDeliveryFields({
+        direccion: params.direccion,
+        tel: params.tel || null,
+        zona_manuale: params.zona_manuale === true,
+        zona: params.zona ?? null,
+      });
+      geoFields = {
+        zona: r.zona,
+        zona_lat: r.zona_lat,
+        zona_lon: r.zona_lon,
+        durata_andata_min: r.durata_andata_min,
+        durata_google_min: r.durata_google_min,
+        durata_haversine_min: r.durata_haversine_min,
+        geo_source: r.geo_source,
+      };
+    } catch (e) {
+      console.warn("[creaOrdine] resolveDeliveryFields fallita, uso fallback prudente:", e?.message || e);
+    }
+  }
+
   // Blocco hard orario chiusura: SOLO per il flusso bot WhatsApp automatico.
   // Decisione prodotto: gli ordini manuali dell'operatore (dashboard) NON vengono
   // mai bloccati per orario/chiusura. L'operatore può legittimamente fare e
@@ -249,7 +288,7 @@ async function creaOrdine(params) {
       const r = calcolaFornoOut({
         tipoConsegna,
         hora: params.hora,
-        durataAndataMin: params.durata_andata_min,
+        durataAndataMin: geoFields.durata_andata_min,
         driverLiberoMin: 0,
       });
       fornoOut = r.forno_out;
@@ -259,10 +298,10 @@ async function creaOrdine(params) {
       const res = await calcolaFornoOutFallback({
         tipoConsegna,
         hora: params.hora,
-        durataAndataMin: params.durata_andata_min,
-        zona: params.zona,
-        zonaLat: params.zona_lat,
-        zonaLon: params.zona_lon
+        durataAndataMin: geoFields.durata_andata_min,
+        zona: geoFields.zona,
+        zonaLat: geoFields.zona_lat,
+        zonaLon: geoFields.zona_lon
       });
       fornoOut = res.forno_out;
       horaFinale = res.hora_finale || params.hora;
@@ -302,9 +341,9 @@ async function creaOrdine(params) {
       nombre: params.nombre,
       direccion: params.direccion,
       direccion_note: params.direccion_note,
-      zona: params.zona,
-      zona_lat: params.zona_lat,
-      zona_lon: params.zona_lon
+      zona: geoFields.zona,
+      zona_lat: geoFields.zona_lat,
+      zona_lon: geoFields.zona_lon
     });
   }
 
@@ -355,14 +394,16 @@ async function creaOrdine(params) {
       totale:         totale,
       direccion:      params.direccion      || null,
       direccion_note: params.direccion_note || null,
-      zona:           params.zona           || null,
-      zona_lat:       params.zona_lat       || null,
-      zona_lon:       params.zona_lon       || null,
+      // Geo/durata: autoritativi server-side per ordini operatore (geoFields),
+      // valori orchestrator per il bot. Mai i valori grezzi dal frontend.
+      zona:           geoFields.zona           || null,
+      zona_lat:       geoFields.zona_lat       || null,
+      zona_lon:       geoFields.zona_lon       || null,
       zona_manuale:   params.zona_manuale   || false,
-      durata_andata_min:    params.durata_andata_min    ?? null,
-      durata_google_min:    params.durata_google_min    ?? null,
-      durata_haversine_min: params.durata_haversine_min ?? null,
-      geo_source:           params.geo_source           || null,
+      durata_andata_min:    geoFields.durata_andata_min    ?? null,
+      durata_google_min:    geoFields.durata_google_min    ?? null,
+      durata_haversine_min: geoFields.durata_haversine_min ?? null,
+      geo_source:           geoFields.geo_source           || null,
       forzado:        params.forzado        || false,
       ya_pagado:      params.ya_pagado      || false,
       metodo_pago:    params.metodo_pago    || "",
@@ -374,10 +415,10 @@ async function creaOrdine(params) {
     // Successo: sbInsert ritorna array con il record inserito
     if (Array.isArray(result) && result.length > 0) {
       // Best-effort: incrementa n_ordini_creati su geo_cache (segnale "operatore ha creduto all'indirizzo")
-      bumpGeoCacheCreated(params.direccion, params.geo_source);
+      bumpGeoCacheCreated(params.direccion, geoFields.geo_source);
       // Best-effort: aggiorna contatori cliente (total_pedidos, ultimo_pedido, auto-promote preferito).
       bumpClienteCounters(clienteIdResolved);
-      if (tipoConsegna === "DOMICILIO") await risincronizzaGiro(params.zona, params.hora);
+      if (tipoConsegna === "DOMICILIO") await risincronizzaGiro(geoFields.zona, horaFinale || params.hora);
       return { success: true, id: newId };
     }
 
@@ -432,6 +473,12 @@ async function modificaOrdine(ordenId, updates) {
     console.warn(`[modificaOrdine ${ordenId}] guardia estado fallita:`, e?.message || e);
   }
 
+  // Step 2 anti-cerotto: gli endpoint dashboard passano operatorManual:true.
+  // Per quel path il backend NON si fida dei campi geo/durata del client:
+  // li ri-risolve server-side nel blocco recalc. Il bot WhatsApp non passa
+  // direccion/geo a modificaOrdine (solo items/hora) → path invariato.
+  const isManual = updates.operatorManual === true;
+
   const upd = {};
   // Items: filtra sempre il fake item (sicurezza retrocompatibile con chiamate vecchie)
   if (updates.items) upd.items = updates.items.filter(i => i.n !== "Entrega a domicilio");
@@ -439,17 +486,22 @@ async function modificaOrdine(ordenId, updates) {
   if (updates.hora) upd.hora = updates.hora;
   if (updates.nota_cucina !== undefined) upd.nota_cucina = updates.nota_cucina;
   // ═══ Delivery/Zone fields ═══
+  // Input operatore (sempre applicati): tipo_consegna, direccion, note, flag manuale.
   if (updates.tipo_consegna  !== undefined) upd.tipo_consegna  = updates.tipo_consegna;
   if (updates.direccion      !== undefined) upd.direccion      = updates.direccion;
   if (updates.direccion_note !== undefined) upd.direccion_note = updates.direccion_note;
-  if (updates.zona           !== undefined) upd.zona           = updates.zona;
-  if (updates.zona_lat       !== undefined) upd.zona_lat       = updates.zona_lat;
-  if (updates.zona_lon       !== undefined) upd.zona_lon       = updates.zona_lon;
   if (updates.zona_manuale   !== undefined) upd.zona_manuale   = updates.zona_manuale;
-  if (updates.durata_andata_min    !== undefined) upd.durata_andata_min    = updates.durata_andata_min;
-  if (updates.durata_google_min    !== undefined) upd.durata_google_min    = updates.durata_google_min;
-  if (updates.durata_haversine_min !== undefined) upd.durata_haversine_min = updates.durata_haversine_min;
-  if (updates.geo_source           !== undefined) upd.geo_source           = updates.geo_source;
+  // Campi DERIVATI (zona, coords, durate, source): presi dal client SOLO per
+  // path legacy/bot. Per ordini operatore vengono ri-risolti server-side sotto.
+  if (!isManual) {
+    if (updates.zona           !== undefined) upd.zona           = updates.zona;
+    if (updates.zona_lat       !== undefined) upd.zona_lat       = updates.zona_lat;
+    if (updates.zona_lon       !== undefined) upd.zona_lon       = updates.zona_lon;
+    if (updates.durata_andata_min    !== undefined) upd.durata_andata_min    = updates.durata_andata_min;
+    if (updates.durata_google_min    !== undefined) upd.durata_google_min    = updates.durata_google_min;
+    if (updates.durata_haversine_min !== undefined) upd.durata_haversine_min = updates.durata_haversine_min;
+    if (updates.geo_source           !== undefined) upd.geo_source           = updates.geo_source;
+  }
   if (updates.forzado        !== undefined) upd.forzado        = updates.forzado === true;
   if (updates.cliente_id     !== undefined) upd.cliente_id     = updates.cliente_id || null;
 
@@ -462,7 +514,7 @@ async function modificaOrdine(ordenId, updates) {
   // Se items, tipo_consegna o descuento cambiano, ricalcola delivery_fee + totale.
   // Se hora, tipo_consegna o durata_andata_min cambiano, ricalcola forno_out.
   // Servono i valori attuali del DB per le parti non aggiornate.
-  if (upd.items || upd.tipo_consegna !== undefined || upd.hora !== undefined || upd.durata_andata_min !== undefined || descPassed) {
+  if (upd.items || upd.tipo_consegna !== undefined || upd.hora !== undefined || upd.direccion !== undefined || updates.durata_andata_min !== undefined || descPassed) {
     const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
     const ord = rows?.[0];
     if (ord) {
@@ -487,8 +539,44 @@ async function modificaOrdine(ordenId, updates) {
       upd.descuento_valor   = (descTipo && desc.importe > 0) ? descValor : null;
       upd.descuento_importe = desc.importe > 0 ? desc.importe : null;
 
-      if (upd.tipo_consegna !== undefined || upd.hora !== undefined || upd.durata_andata_min !== undefined) {
-        const horaFinal = upd.hora || ord.hora;
+      const horaFinal = upd.hora || ord.hora;
+      if (isManual) {
+        // ── Path operatore (dashboard): geo autoritativo + hora preservata ──
+        if (tipoConsegna === "DOMICILIO") {
+          let durataFinal = ord.durata_andata_min;
+          // Re-risoluzione solo se cambia indirizzo o tipo_consegna (geo affected).
+          const geoChanged = upd.direccion !== undefined || upd.tipo_consegna !== undefined;
+          const finalDireccion = upd.direccion !== undefined ? upd.direccion : ord.direccion;
+          if (geoChanged && finalDireccion) {
+            try {
+              const r = await resolveDeliveryFields({
+                direccion: finalDireccion,
+                tel: ord.tel || null,
+                zona_manuale: (upd.zona_manuale !== undefined ? upd.zona_manuale : ord.zona_manuale) === true,
+                zona: updates.zona ?? ord.zona ?? null,
+              });
+              durataFinal             = r.durata_andata_min;
+              upd.zona                = r.zona;
+              upd.zona_lat            = r.zona_lat;
+              upd.zona_lon            = r.zona_lon;
+              upd.durata_andata_min    = r.durata_andata_min;
+              upd.durata_google_min    = r.durata_google_min;
+              upd.durata_haversine_min = r.durata_haversine_min;
+              upd.geo_source           = r.geo_source;
+            } catch (e) {
+              console.warn(`[modificaOrdine ${ordenId}] resolveDeliveryFields fallita:`, e?.message || e);
+            }
+          }
+          // forno_out = hora − durata, driverLiberoMin=0 → hora MAI slittata.
+          const fo = calcolaFornoOut({ tipoConsegna: "DOMICILIO", hora: horaFinal, durataAndataMin: durataFinal, driverLiberoMin: 0 });
+          upd.forno_out = fo.forno_out;
+        } else {
+          // RITIRO: forno_out = hora.
+          const fo = calcolaFornoOut({ tipoConsegna, hora: horaFinal, durataAndataMin: null });
+          upd.forno_out = fo.forno_out;
+        }
+      } else if (upd.tipo_consegna !== undefined || upd.hora !== undefined || upd.durata_andata_min !== undefined) {
+        // ── Path bot/legacy: cascade-aware (può slittare hora) — invariato ──
         const durataFinal = upd.durata_andata_min !== undefined ? upd.durata_andata_min : ord.durata_andata_min;
         const zonaFinal = upd.zona !== undefined ? upd.zona : ord.zona;
         const zonaLatFinal = upd.zona_lat !== undefined ? upd.zona_lat : ord.zona_lat;

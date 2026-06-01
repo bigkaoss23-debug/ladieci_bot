@@ -89,6 +89,106 @@ function buildResult(over = {}) {
   };
 }
 
+// ── Risoluzione delivery autoritativa (server-side) ──────────────
+// FONTE UNICA usata sia da previewOrderTiming sia da creaOrdine/modificaOrdine.
+// Risolve l'indirizzo via risolviIndirizzo (stesso engine del bot, include
+// l'enrich Google) e ricava zona/durata/source. NON si fida di valori geo
+// calcolati dal client. Ritorna anche `warnings` (advisory) e l'oggetto
+// `resolved` grezzo per chi ne avesse bisogno.
+//
+// params: { direccion, tel, zona_manuale, zona, force_refresh }
+async function resolveDeliveryFields(params = {}) {
+  const warnings = [];
+  const out = {
+    zona: null,
+    zona_lat: null,
+    zona_lon: null,
+    durata_andata_min: null,
+    durata_google_min: null,
+    durata_haversine_min: null,
+    geo_source: null,
+    warnings,
+    resolved: null,
+  };
+
+  let resolved = null;
+  if (params.direccion) {
+    try {
+      resolved = await risolviIndirizzo({
+        direccion: params.direccion,
+        tel: params.tel || null,
+        tipoConsegna: "DOMICILIO",
+        forceRefresh: !!params.force_refresh,
+      });
+    } catch (e) {
+      warnings.push({ code: "resolve_error", message: "No se pudo resolver la dirección" });
+    }
+  } else {
+    warnings.push({ code: "no_direccion", message: "Falta dirección para DOMICILIO" });
+  }
+  out.resolved = resolved;
+
+  // Zona: resolver autoritativo; override manuale solo se esplicito.
+  let zona = resolved?.zona || null;
+  let zonaLat = resolved?.lat ?? null;
+  let zonaLon = resolved?.lon ?? null;
+  if (params.zona_manuale === true && params.zona) {
+    if (params.zona !== zona) {
+      warnings.push({
+        code: "zona_override_manual",
+        message: `Zona forzada por operador: ${params.zona}`,
+      });
+      // Coords del resolver appartengono a un'altra zona → scartate per non
+      // falsare l'haversine sul fallback durata.
+      zonaLat = null;
+      zonaLon = null;
+    }
+    zona = params.zona;
+  } else if (!zona && params.direccion) {
+    const kw = assegnaZonaDaKeyword(params.direccion);
+    if (kw) {
+      zona = kw.id;
+      warnings.push({ code: "zona_keyword", message: `Zona por keyword (sin geocode): ${kw.id}` });
+    } else {
+      warnings.push({ code: "zona_desconocida", message: "No se pudo asignar zona" });
+    }
+  }
+
+  const zonaObj = ZONE_DELIVERY.find((z) => z.id === zona) || null;
+
+  // Durate: solo server-side.
+  out.durata_google_min = resolved?.googleMin ?? null;
+  out.durata_haversine_min = resolved?.haversineMin ?? null;
+  let geoSource = resolved?.source || null;
+
+  // durata scelta: resolver (Google/cache) → haversine → fallback zona.
+  let durataAndataMin = resolved?.durataAndataMin ?? null;
+  if (durataAndataMin == null) {
+    if (out.durata_haversine_min != null) {
+      durataAndataMin = out.durata_haversine_min;
+      if (!geoSource) geoSource = "haversine";
+      warnings.push({
+        code: "durata_estimada",
+        message: "Duración estimada (haversine): Google no disponible",
+      });
+    } else if (zonaObj) {
+      durataAndataMin = zonaObj.tempoGiro;
+      if (!geoSource) geoSource = "zona_fallback";
+      warnings.push({
+        code: "durata_fallback_zona",
+        message: `Duración por defecto de zona ${zona} (${zonaObj.tempoGiro} min)`,
+      });
+    }
+  }
+
+  out.zona = zona;
+  out.zona_lat = zonaLat;
+  out.zona_lon = zonaLon;
+  out.durata_andata_min = durataAndataMin;
+  out.geo_source = geoSource;
+  return out;
+}
+
 // Trova un manual giro ATTIVO compatibile (stessa zona) a cui l'operatore
 // potrebbe aggregare il nuovo ordine. Advisory: non muove nulla.
 function findCompatibleManualGiro(manualGiros, activeOrders, zona, horaRichiestaMin) {
@@ -134,77 +234,17 @@ async function previewOrderTiming(params = {}) {
   }
 
   // ── DOMICILIO: risoluzione indirizzo autoritativa (server-side). ──
-  // NON usiamo durata/zona dal client come verità.
-  let resolved = null;
-  if (params.direccion) {
-    try {
-      resolved = await risolviIndirizzo({
-        direccion: params.direccion,
-        tel: params.tel || null,
-        tipoConsegna: "DOMICILIO",
-        forceRefresh: !!params.force_refresh,
-      });
-    } catch (e) {
-      warnings.push({ code: "resolve_error", message: "No se pudo resolver la dirección" });
-    }
-  } else {
-    warnings.push({ code: "no_direccion", message: "Falta dirección para DOMICILIO" });
-  }
-
-  // ── Zona: resolver autoritativo; override manuale solo se esplicito. ──
-  let zona = resolved?.zona || null;
-  let zonaLat = resolved?.lat ?? null;
-  let zonaLon = resolved?.lon ?? null;
-  if (params.zona_manuale === true && params.zona) {
-    if (params.zona !== zona) {
-      warnings.push({
-        code: "zona_override_manual",
-        message: `Zona forzada por operador: ${params.zona}`,
-      });
-    }
-    zona = params.zona;
-    // Coordenadas: si el operador fuerza una zona distinta, las coords del
-    // resolver podrían no pertenecerle → las descartamos para no falsear haversine.
-    if (resolved?.zona && resolved.zona !== params.zona) {
-      zonaLat = null;
-      zonaLon = null;
-    }
-  } else if (!zona && params.direccion) {
-    const kw = assegnaZonaDaKeyword(params.direccion);
-    if (kw) {
-      zona = kw.id;
-      warnings.push({ code: "zona_keyword", message: `Zona por keyword (sin geocode): ${kw.id}` });
-    } else {
-      warnings.push({ code: "zona_desconocida", message: "No se pudo asignar zona" });
-    }
-  }
-
-  const zonaObj = ZONE_DELIVERY.find((z) => z.id === zona) || null;
-
-  // ── Durate: solo server-side. ─────────────────────────────────────
-  const durataGoogleMin = resolved?.googleMin ?? null;
-  const durataHaversineMin = resolved?.haversineMin ?? null;
-  let geoSource = resolved?.source || null;
-
-  // durata scelta: resolver (Google/cache) → haversine → fallback zona.
-  let durataAndataMin = resolved?.durataAndataMin ?? null;
-  if (durataAndataMin == null) {
-    if (durataHaversineMin != null) {
-      durataAndataMin = durataHaversineMin;
-      if (!geoSource) geoSource = "haversine";
-      warnings.push({
-        code: "durata_estimada",
-        message: "Duración estimada (haversine): Google no disponible",
-      });
-    } else if (zonaObj) {
-      durataAndataMin = zonaObj.tempoGiro;
-      if (!geoSource) geoSource = "zona_fallback";
-      warnings.push({
-        code: "durata_fallback_zona",
-        message: `Duración por defecto de zona ${zona} (${zonaObj.tempoGiro} min)`,
-      });
-    }
-  }
+  // NON usiamo durata/zona dal client come verità. Fonte unica condivisa
+  // con creaOrdine/modificaOrdine: resolveDeliveryFields.
+  const geo = await resolveDeliveryFields(params);
+  warnings.push(...geo.warnings);
+  const zona = geo.zona;
+  const zonaLat = geo.zona_lat;
+  const zonaLon = geo.zona_lon;
+  const durataAndataMin = geo.durata_andata_min;
+  const durataGoogleMin = geo.durata_google_min;
+  const durataHaversineMin = geo.durata_haversine_min;
+  const geoSource = geo.geo_source;
 
   // ── forno_out server-side. Regola manuale: hora − durata, sin slittamento. ──
   const fo = calcolaFornoOut({
@@ -307,4 +347,4 @@ async function previewOrderTiming(params = {}) {
   });
 }
 
-module.exports = { previewOrderTiming, nowMadridMinutes };
+module.exports = { previewOrderTiming, resolveDeliveryFields, nowMadridMinutes };

@@ -159,7 +159,8 @@ app.post("/api", async (req, res) => {
       // Dashboard operatore: niente blocco hard orario chiusura (vedi creaOrdine).
       result = await creaOrdine({ ...req.body, operatorManual: true });
     } else if (action === "modificaOrdine") {
-      result = await modificaOrdine(req.body.id, req.body);
+      // Dashboard operatore: geo/durata ri-risolti server-side, hora preservata.
+      result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });
     } else if (action === "aggiornaRispostaBot") {
       await sbUpdate("wa_msgs", `id=eq.${req.body.id}`, { bot_risposta: req.body.bot_risposta });
       result = { success: true };
@@ -180,7 +181,8 @@ app.post("/api", async (req, res) => {
       await sbUpdate("wa_msgs", `id=eq.${req.body.id}`, upd);
       result = { success: true };
     } else if (action === "updateOrden") {
-      result = await modificaOrdine(req.body.id, req.body);
+      // Dashboard operatore: geo/durata ri-risolti server-side, hora preservata.
+      result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });
     } else if (action === "updateEstado") {
       // Accetta campi pagamento/timing/repartidor/descuento in unica scrittura atomica
       const extras = {};
