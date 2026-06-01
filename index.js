@@ -3,6 +3,7 @@ const express = require("express");
 const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert, sbInsert } = require("./src/utils/supabase");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
+const { previewOrderTiming } = require("./src/agents/previewTiming");
 const { invia } = require("./src/agents/agentWhatsapp");
 const { chiudiServizio, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
@@ -294,6 +295,11 @@ app.post("/api", async (req, res) => {
         tipoConsegna: tipoConsegna || "DOMICILIO",
         forceRefresh: !!forceRefresh
       });
+    } else if (action === "previewOrderTiming") {
+      // Step 1 anti-cerotto: timing delivery autoritativo (read-only, no DB write).
+      // Fonte unica per zona/durata/forno_out/hora/warning/giro destinata alla
+      // dashboard. NON si fida di durata/zona calcolate dal client.
+      result = await previewOrderTiming(req.body || {});
     } else if (action === "createOrden") {
       const d = req.body.data || req.body;
       if (!d.waId && d.wa_id) d.waId = d.wa_id;
