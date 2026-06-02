@@ -69,7 +69,7 @@ require.cache[claudePath] = {
 };
 
 // ─── Import moduli LIVE dopo i mock ─────────────────────────────────────────
-const { modificaOrdine, planFornoOutSync } = require("../src/agents/agentOrdini.js");
+const { modificaOrdine, planDriverScheduleSync } = require("../src/agents/agentOrdini.js");
 const { sanitizeRegoleAppreseForPrompt } = require("../src/agents/agentWhatsapp.js");
 
 // ============================================================================
@@ -145,45 +145,57 @@ async function runBC() {
 }
 
 // ============================================================================
-// Scenario D — planFornoOutSync cascade-aware
+// Scenario D — planDriverScheduleSync (DELIVERY-DRIVER-SCHEDULE-SEPARATION-01)
 // ============================================================================
+// Bug #2: la sync driver NON deve MAI scrivere forno_out. Deve produrre solo
+// i campi driver advisory separati.
 function runD() {
-  console.log("\n=== Scenario D (planFornoOutSync cascade) ===");
+  console.log("\n=== Scenario D (planDriverScheduleSync — driver/forno separation) ===");
 
-  // D-1: pre-aggregazione, nessuna drift → 0 update O2
+  const patchHasForno = (u) => u.some(x => x.patch && Object.prototype.hasOwnProperty.call(x.patch, "forno_out"));
+
+  // D-1: nessuna patch contiene MAI forno_out (regola assoluta).
   {
     const rows = [
       { id: "d1-o1", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q2", hora: "21:45", durata_andata_min: 8,  forno_out: "21:37" },
       { id: "d1-o2", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q3", hora: "22:00", durata_andata_min: 10, forno_out: "21:56" },
     ];
-    const u = planFornoOutSync(rows);
-    check("D-1 pre-aggregazione: 0 update O2", !u.find(x => x.id === "d1-o2"), JSON.stringify(u));
+    const u = planDriverScheduleSync(rows);
+    check("D-1 nessuna patch tocca forno_out", !patchHasForno(u), JSON.stringify(u));
+    check("D-1 patch contiene salida_driver_estimada",
+      u.every(x => Object.prototype.hasOwnProperty.call(x.patch, "salida_driver_estimada")), JSON.stringify(u));
   }
-  // D-2: post-aggregazione O3 same-zone-slot di O1 con tg maggiore → O2 downstream allineato
+
+  // D-2 (Bug #2 replay reale 2026-05-31): Q5 after-midnight.
+  // forno_out NON deve cambiare; le partenze driver vanno nei campi driver.
   {
     const rows = [
-      { id: "d2-o1", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q2", hora: "21:45", durata_andata_min: 8,  forno_out: "21:37" },
-      { id: "d2-o2", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q3", hora: "22:00", durata_andata_min: 10, forno_out: "21:56" },
-      { id: "d2-o3", tipo_consegna: "DOMICILIO", estado: "NUEVO",     zona: "Q2", hora: "21:45", durata_andata_min: 14, forno_out: null },
+      { id: "#012", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q5", hora: "00:11", durata_andata_min: 12, forno_out: "00:00" },
+      { id: "#006", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q5", hora: "00:22", durata_andata_min: 13, forno_out: "00:09" },
+      { id: "#007", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q5", hora: "00:25", durata_andata_min: 12, forno_out: "00:13" },
     ];
-    const u = planFornoOutSync(rows);
-    const o2 = u.find(x => x.id === "d2-o2");
-    check("D-2 post-aggregazione: O2 update emesso", !!o2, JSON.stringify(u));
-    check("D-2 post-aggregazione: O2 forno_out new = 22:02",
-      o2 && o2.forno_out_old === "21:56" && o2.forno_out_new === "22:02", JSON.stringify(o2));
+    const u = planDriverScheduleSync(rows);
+    check("D-2 nessuna patch tocca forno_out (Bug #2)", !patchHasForno(u), JSON.stringify(u));
+    const o6 = u.find(x => x.id === "#006");
+    const o7 = u.find(x => x.id === "#007");
+    check("D-2 #006 conflicto_driver true", o6 && o6.patch.conflicto_driver === true, JSON.stringify(o6));
+    check("D-2 #006 retraso > 0", o6 && o6.patch.retraso_estimado_min > 0, JSON.stringify(o6));
+    check("D-2 #006 salida driver dopo mezzanotte (~00:2x)", o6 && /^00:2/.test(o6.patch.salida_driver_estimada), JSON.stringify(o6));
+    check("D-2 #007 conflicto_driver true", o7 && o7.patch.conflicto_driver === true, JSON.stringify(o7));
+    check("D-2 #007 salida driver ~00:5x", o7 && /^00:5/.test(o7.patch.salida_driver_estimada), JSON.stringify(o7));
+    // #012 è il primo giro, consegna entro hora → nessun ritardo.
+    const o12 = u.find(x => x.id === "#012");
+    check("D-2 #012 conflicto_driver false", o12 && o12.patch.conflicto_driver === false, JSON.stringify(o12));
   }
-  // D-3: stati esclusi non vengono toccati (LISTO/EN_ENTREGA/RETIRADO/COMPLETADO/POR_CONFIRMAR)
+
+  // D-3: RITIRO mai schedulato (campi driver restano fuori dalla sync).
   {
-    for (const estadoLocked of ["LISTO", "EN_ENTREGA", "RETIRADO", "COMPLETADO", "POR_CONFIRMAR"]) {
-      const rows = [
-        { id: "d3-o1", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q2", hora: "21:45", durata_andata_min: 8,  forno_out: "21:37" },
-        { id: "d3-o2", tipo_consegna: "DOMICILIO", estado: estadoLocked, zona: "Q3", hora: "22:00", durata_andata_min: 10, forno_out: "STALE_99:99" },
-        { id: "d3-o3", tipo_consegna: "DOMICILIO", estado: "NUEVO",     zona: "Q2", hora: "21:45", durata_andata_min: 14, forno_out: null },
-      ];
-      const u = planFornoOutSync(rows);
-      const touched = u.find(x => x.id === "d3-o2");
-      check(`D-3 ${estadoLocked}: O2 NON toccato`, !touched, JSON.stringify(touched));
-    }
+    const rows = [
+      { id: "d3-o1", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q2", hora: "21:45", durata_andata_min: 8, forno_out: "21:37" },
+      { id: "d3-r1", tipo_consegna: "RITIRO",    estado: "EN_COCINA", hora: "21:50", forno_out: "21:50" },
+    ];
+    const u = planDriverScheduleSync(rows);
+    check("D-3 RITIRO non in updates", !u.find(x => x.id === "d3-r1"), JSON.stringify(u));
   }
 }
 

@@ -4,7 +4,7 @@
 
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
-const { calcolaFornoOut, simulateDriverSchedule, proposeForNewOrder } = require("../utils/zones");
+const { calcolaFornoOut, simulateDriverSchedule, computeDriverFields, proposeForNewOrder } = require("../utils/zones");
 const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
@@ -83,34 +83,33 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
   return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin: sim.driverLiberoMin });
 }
 
-// Schedule-sync: tutti gli ordini delivery attivi escono dal forno all'orario
-// di partenza del loro giro come ricalcolato dalla sim corrente. Risolve due
-// drift:
-//   1) sibling stesso giro con forno_out vecchio (max-durata cambiata)
-//   2) downstream giri spostati da un'aggregazione a monte che ha allungato
-//      tg del giro precedente (bug #4)
-// Limitato a ordini in NUEVO / EN_COCINA: pizze già in LISTO / EN_ENTREGA non
-// vengono mosse (sono già uscite dal forno). Best-effort: errori loggati,
-// non bloccano il flusso ordine.
+// Driver-schedule sync (DELIVERY-DRIVER-SCHEDULE-SEPARATION-01).
+// Ricalcola lo schedule driver corrente (service-day-aware) e produce le patch
+// dei SOLI campi driver advisory — NON tocca forno_out (cucina).
 //
-// Firma (zona, hora) mantenuta per compatibilità call-site: oggi non vengono
-// più usati per filtrare un giro target, ma è un dettaglio interno.
-function planFornoOutSync(rows) {
-  const sim = simulateDriverSchedule(rows || []);
-  const toMinL = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
-  const toHL   = (m) => `${String(Math.floor(m/60)%24).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
-  const slot10L = (min) => { const r = Math.round(min/10)*10; return toHL(r); };
-  const byKey = new Map();
-  for (const g of sim.giri) byKey.set(`${g.zona}|${g.slot}`, toHL(g.partenzaMin));
-  const SYNCABLE = new Set(["NUEVO", "EN_COCINA"]);
+// Risolve i drift dello schedule rider:
+//   1) sibling stesso giro con tg cambiata
+//   2) downstream giri spostati da un'aggregazione a monte (bug #4)
+//   3) Bug #2: la partenza driver post-mezzanotte NON sporca più forno_out;
+//      vive in salida_driver_estimada/entrega_estimada/retraso/conflicto.
+// Best-effort: errori loggati, non bloccano il flusso ordine.
+//
+// Ritorna [{ id, patch:{salida_driver_estimada, entrega_estimada,
+//   retraso_estimado_min, conflicto_driver} }] solo per gli ordini cambiati.
+function planDriverScheduleSync(rows) {
+  const fields = computeDriverFields(rows || []);
   const updates = [];
   for (const o of rows || []) {
     if (!o || o.tipo_consegna !== "DOMICILIO") continue;
-    if (!SYNCABLE.has(o.estado)) continue;
-    if (!o.zona || !o.hora) continue;
-    const want = byKey.get(`${o.zona}|${slot10L(toMinL(o.hora))}`);
-    if (!want || o.forno_out === want) continue;
-    updates.push({ id: o.id, forno_out_old: o.forno_out, forno_out_new: want });
+    const f = fields.get(o.id);
+    if (!f) continue;
+    const unchanged =
+      o.salida_driver_estimada === f.salida_driver_estimada &&
+      o.entrega_estimada === f.entrega_estimada &&
+      (o.retraso_estimado_min ?? null) === f.retraso_estimado_min &&
+      (o.conflicto_driver === true) === f.conflicto_driver;
+    if (unchanged) continue;
+    updates.push({ id: o.id, patch: { ...f } });
   }
   return updates;
 }
@@ -119,8 +118,8 @@ async function risincronizzaGiro(zona, hora) {
   if (!zona || !hora) return;
   try {
     const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
-    for (const u of planFornoOutSync(rows)) {
-      await sbUpdate("ordenes", `id=eq.${encodeURIComponent(u.id)}`, { forno_out: u.forno_out_new });
+    for (const u of planDriverScheduleSync(rows)) {
+      await sbUpdate("ordenes", `id=eq.${encodeURIComponent(u.id)}`, u.patch);
     }
   } catch (e) {
     console.warn("[risincronizzaGiro] fallita per", zona, hora, e?.message || e);
@@ -732,4 +731,4 @@ async function getById(id) {
   return (rows && rows.length > 0) ? rows[0] : null;
 }
 
-module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, planFornoOutSync, calcolaFornoOutFallback };
+module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, planDriverScheduleSync, calcolaFornoOutFallback };

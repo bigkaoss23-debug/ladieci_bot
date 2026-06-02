@@ -265,6 +265,41 @@ async function geocodificaEAssegnaZona(indirizzo) {
   return { zona: zonaKw, lat: null, lon: null, metodo: zonaKw ? "keyword" : null };
 }
 
+// ─── Service-day helpers (DELIVERY-DRIVER-SCHEDULE-SEPARATION-01) ─────────────
+// Il servizio pizzeria attraversa la mezzanotte: un ordine delle 00:22 è DOPO
+// uno delle 23:21, non prima. I confronti/sorting "naïve" (h*60+m) ordinano
+// 00:22 (=22) prima di 23:21 (=1401) e rompono lo schedule driver.
+//
+// Regola: se l'ora è nella coda post-mezzanotte (HH in [0,4)), aggiungiamo 1440
+// minuti così resta sulla stessa "service-day line" della serata.
+//   20:00 -> 1200   23:21 -> 1401   00:11 -> 1451   00:22 -> 1462   00:25 -> 1465
+//
+// Helper NUOVI ed espliciti: NON sostituiscono toMin altrove (closingTime,
+// proposeForNewOrder, agentCucina restano su clock-min). Usati solo dal path
+// driver-schedule (serviceDay:true).
+function toServiceDayMin(hhmm) {
+  if (!hhmm) return null;
+  const [h, m] = String(hhmm).split(":").map(Number);
+  if (!Number.isFinite(h)) return null;
+  let min = h * 60 + (m || 0);
+  if (h >= 0 && h < 4) min += 1440;
+  return min;
+}
+
+function fromServiceDayMin(min) {
+  if (min == null || !Number.isFinite(min)) return null;
+  const wrapped = ((Math.round(min) % 1440) + 1440) % 1440;
+  const h = Math.floor(wrapped / 60);
+  const m = wrapped % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function diffServiceDayMinutes(a, b) {
+  // b - a in service-day minutes (entrambi già in service-day min).
+  if (a == null || b == null) return null;
+  return b - a;
+}
+
 // ─── Simulazione schedule del driver (schedule-aware, cascade-safe) ──────────
 // COPIA 1:1 di ladieci-app33/src/zones.js (frontend). Tenere sincronizzati.
 //
@@ -274,8 +309,14 @@ async function geocodificaEAssegnaZona(indirizzo) {
 //
 // Aggregazione same-zone-slot10: ordini stessa zona stesso slot10(hora) vanno
 // in UN solo giro (driver fa più consegne in un trip), fino a maxOrdiniPerGiro.
+//
+// options.serviceDay (default false): se true usa toServiceDayMin per ordinare
+// e schedulare i giri (gestisce la coda post-mezzanotte). I caller esistenti
+// (proposeForNewOrder, agentCucina) NON passano il flag → comportamento
+// invariato. Solo il path driver-field sync lo attiva.
 function simulateDriverSchedule(orders, options = {}) {
-  const toMin = (t) => { if (!t) return null; const [h,m]=String(t).split(":").map(Number); return h*60+(m||0); };
+  const plainToMin = (t) => { if (!t) return null; const [h,m]=String(t).split(":").map(Number); return h*60+(m||0); };
+  const toMin = options.serviceDay ? toServiceDayMin : plainToMin;
   const slot10 = (min) => {
     const mArr = Math.round(min / 10) * 10;
     const h = Math.floor(mArr/60)%24, m = mArr % 60;
@@ -313,7 +354,9 @@ function simulateDriverSchedule(orders, options = {}) {
 
   const giri = Array.from(giriMap.values()).sort((a, b) => a.horaMin - b.horaMin);
 
-  let t = toMin(options.startTime || "00:00") || 0;
+  // startTime è un vincolo "driver non libero prima di" in clock-min; "00:00"
+  // (default) = nessun vincolo → 0. Mai passarlo per toServiceDayMin (00:00 → 1440).
+  let t = options.startTime ? (plainToMin(options.startTime) || 0) : 0;
   for (const g of giri) {
     const partTeorica = g.horaMin - g.tg;
     g.partenzaMin = Math.max(t, partTeorica);
@@ -324,6 +367,46 @@ function simulateDriverSchedule(orders, options = {}) {
   }
 
   return { giri, driverLiberoMin: t };
+}
+
+// ─── Driver schedule per-ordine (DELIVERY-DRIVER-SCHEDULE-SEPARATION-01) ──────
+// Sorgente UNICA della matematica driver. NON tocca forno_out.
+// Per ogni ordine DOMICILIO attivo calcola, dallo schedule driver corrente
+// (service-day-aware), i campi advisory separati:
+//   salida_driver_estimada  = partenza del giro a cui l'ordine appartiene
+//   entrega_estimada        = partenza + durata_andata (consegna del giro)
+//   retraso_estimado_min    = max(0, consegna − hora) in minuti service-day
+//   conflicto_driver        = retraso_estimado_min > 0
+// Ritorna Map<id, {salida_driver_estimada, entrega_estimada, retraso_estimado_min, conflicto_driver}>.
+// RITIRO e ordini senza zona/hora NON entrano nella map (campi → null/false dal caller).
+function computeDriverFields(orders, options = {}) {
+  const sim = simulateDriverSchedule(orders || [], { ...options, serviceDay: true });
+  const slot10 = (min) => {
+    const mArr = Math.round(min / 10) * 10;
+    const h = Math.floor(mArr / 60) % 24, m = mArr % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  };
+  // Indice giri per chiave zona|slot (stessa chiave usata in aggregazione).
+  const byKey = new Map();
+  for (const g of sim.giri) byKey.set(`${g.zona}|${g.slot}`, g);
+
+  const out = new Map();
+  for (const o of orders || []) {
+    if (!o || o.tipo_consegna !== "DOMICILIO" || !o.zona || !o.hora) continue;
+    if (["RETIRADO", "COMPLETATO", "POR_CONFIRMAR"].includes(o.estado)) continue;
+    const horaMin = toServiceDayMin(o.hora);
+    if (horaMin == null) continue;
+    const g = byKey.get(`${o.zona}|${slot10(horaMin)}`);
+    if (!g) continue;
+    const retraso = Math.max(0, diffServiceDayMinutes(horaMin, g.consegnaMin) || 0);
+    out.set(o.id, {
+      salida_driver_estimada: fromServiceDayMin(g.partenzaMin),
+      entrega_estimada: fromServiceDayMin(g.consegnaMin),
+      retraso_estimado_min: retraso,
+      conflicto_driver: retraso > 0,
+    });
+  }
+  return out;
 }
 
 // ─── Forno-out: quando la pizza deve uscire dal forno ────────────────────────
@@ -489,6 +572,10 @@ module.exports = {
   BUFFER_OPS_DRIVER_MIN,
   calcolaFornoOut,
   simulateDriverSchedule,
+  computeDriverFields,
+  toServiceDayMin,
+  fromServiceDayMin,
+  diffServiceDayMinutes,
   haversineKm,
   pointInPolygon,
   assegnaZonaDaCoord,
