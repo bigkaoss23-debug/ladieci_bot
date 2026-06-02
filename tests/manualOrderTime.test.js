@@ -75,21 +75,32 @@ async function manual({ tipo, hora, durata, zona }) {
     assert("forno_out = 00:08 (wrap 24h)", r?.forno_out === "00:08", `forno_out=${r?.forno_out}`);
   }
 
-  section("T3 — DOMICILIO tardi 23:55 / andata 8 → hora 23:55, forno 23:47");
+  section("T3 — DOMICILIO after-midnight negativo → wrap a sera precedente");
+  {
+    const a = await manual({ tipo: "DOMICILIO", hora: "00:05", durata: 13, zona: "Q5" });
+    assert("00:05 − 13 = 23:52", a?.forno_out === "23:52", `forno_out=${a?.forno_out}`);
+    const b = await manual({ tipo: "DOMICILIO", hora: "00:10", durata: 12, zona: "Q5" });
+    assert("00:10 − 12 = 23:58", b?.forno_out === "23:58", `forno_out=${b?.forno_out}`);
+    const c = await manual({ tipo: "DOMICILIO", hora: "00:11", durata: 12, zona: "Q5" });
+    assert("00:11 − 12 = 23:59", c?.forno_out === "23:59", `forno_out=${c?.forno_out}`);
+    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(JSON.stringify([a,b,c])), JSON.stringify([a,b,c]));
+  }
+
+  section("T4 — DOMICILIO tardi 23:55 / andata 8 → hora 23:55, forno 23:47");
   {
     const r = await manual({ tipo: "DOMICILIO", hora: "23:55", durata: 8, zona: "Q1" });
     assert("hora preservata 23:55", r?.hora === "23:55", `hora=${r?.hora}`);
     assert("forno_out = 23:47", r?.forno_out === "23:47", `forno_out=${r?.forno_out}`);
   }
 
-  section("T4 — RITIRO 21:00 → hora 21:00, forno 21:00");
+  section("T5 — RITIRO 21:00 → hora 21:00, forno 21:00");
   {
     const r = await manual({ tipo: "RITIRO", hora: "21:00" });
     assert("hora preservata 21:00", r?.hora === "21:00", `hora=${r?.hora}`);
     assert("forno_out = 21:00", r?.forno_out === "21:00", `forno_out=${r?.forno_out}`);
   }
 
-  section("T5 — DOMICILIO senza durata → hora intatta, forno = hora (prudente)");
+  section("T6 — DOMICILIO senza durata → hora intatta, forno = hora (prudente)");
   {
     const r = await manual({ tipo: "DOMICILIO", hora: "21:30", durata: null, zona: "Q1" });
     assert("hora preservata 21:30", r?.hora === "21:30", `hora=${r?.hora}`);

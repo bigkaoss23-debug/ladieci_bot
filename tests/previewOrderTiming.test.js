@@ -176,20 +176,32 @@ const hasWarn = (r, code) => r.warnings.some((w) => w.code === code);
   }
 
   // ═══════════════════════════════════════════════════════════════
-  section("T7 — Después de medianoche: hora 00:16 durata 8 → forno_out 00:08 (sin 24/25)");
+  section("T7 — Después de medianoche: hora - durata wrappa, no clamp 00:00");
   {
     STUB_ORDERS = []; STUB_GIROS = [];
     STUB_RESOLVED = {
       zona: "Q1", lat: 36.7718052, lon: -2.6090218,
-      durataAndataMin: 8, googleMin: 8, haversineMin: 9,
+      durataAndataMin: 12, googleMin: 12, haversineMin: 13,
       source: "google", cached: true, fuoriZona: false, error: null,
     };
-    const r = await previewOrderTiming({
-      tipo_consegna: "DOMICILIO", direccion: "Reino de España 46", hora: "00:16",
+    const a = await previewOrderTiming({
+      tipo_consegna: "DOMICILIO", direccion: "Reino de España 46", hora: "00:10",
     });
-    assert("forno_out = 00:08", r.forno_out === "00:08", `forno=${r.forno_out}`);
-    assert("hora_proposta = 00:16 (preservada)", r.hora_proposta === "00:16");
-    const allStr = JSON.stringify(r);
+    assert("00:10 − 12 = 23:58", a.forno_out === "23:58", `forno=${a.forno_out}`);
+    assert("hora_proposta = 00:10 (preservada)", a.hora_proposta === "00:10");
+
+    STUB_RESOLVED = {
+      zona: "Q5", lat: 36.7250966, lon: -2.6289733,
+      durataAndataMin: 13, googleMin: 13, haversineMin: 13,
+      source: "google", cached: true, fuoriZona: false, error: null,
+    };
+    const b = await previewOrderTiming({
+      tipo_consegna: "DOMICILIO", direccion: "Playa Serena", hora: "00:05",
+    });
+    assert("00:05 − 13 = 23:52", b.forno_out === "23:52", `forno=${b.forno_out}`);
+    assert("hora_proposta = 00:05 (preservada)", b.hora_proposta === "00:05");
+
+    const allStr = JSON.stringify([a, b]);
     assert("ningún campo contiene 24:/25:", !/\b2[4-9]:\d\d/.test(allStr), allStr);
   }
 

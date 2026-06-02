@@ -55,6 +55,7 @@ let resolveCalls = 0;
 const RESOLVE_MAP = {
   anade: { zona: "Q5", lat: 36.7238183, lon: -2.6395996, durataAndataMin: 12, googleMin: 12, haversineMin: 26, source: "google-from-cache-street", cached: true, fuoriZona: false, error: null },
   "playa serena": { zona: "Q5", lat: 36.7250966, lon: -2.6289733, durataAndataMin: 30, googleMin: 30, haversineMin: 31, source: "google", cached: true, fuoriZona: false, error: null },
+  "playa larga": { zona: "Q5", lat: 36.7250966, lon: -2.6289733, durataAndataMin: 13, googleMin: 13, haversineMin: 14, source: "google", cached: true, fuoriZona: false, error: null },
   reino: { zona: "Q1", lat: 36.7718052, lon: -2.6090218, durataAndataMin: 8, googleMin: 8, haversineMin: 9, source: "google", cached: true, fuoriZona: false, error: null },
 };
 require.cache[geoPath].exports.risolviIndirizzo = async ({ direccion }) => {
@@ -113,7 +114,21 @@ const lastInsert = () => INSERTED[INSERTED.length - 1];
   }
 
   // ═══════════════════════════════════════════════════════════════
-  section("T3 — updateOrden: cambio dirección → backend re-resuelve, hora manual intacta");
+  section("T3 — createOrden: 00:10 / durata 12 → forno_out 23:58, no clamp");
+  {
+    INSERTED = []; resolveCalls = 0;
+    await creaOrdine({
+      operatorManual: true, tipo_consegna: "DOMICILIO", direccion: "Anade 35",
+      hora: "00:10", items: [{ n: "Diavola", q: 1, p: 9 }],
+    });
+    const row = lastInsert();
+    assert("hora preservata 00:10", row.hora === "00:10", `hora=${row.hora}`);
+    assert("forno_out = 23:58", row.forno_out === "23:58", `forno=${row.forno_out}`);
+    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(JSON.stringify(row)), JSON.stringify(row));
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  section("T4 — updateOrden: cambio dirección → backend re-resuelve, hora manual intacta");
   {
     UPDATED = []; resolveCalls = 0;
     STORE["#010"] = {
@@ -135,7 +150,40 @@ const lastInsert = () => INSERTED[INSERTED.length - 1];
   }
 
   // ═══════════════════════════════════════════════════════════════
-  section("T4 — zona_manuale override: operador fuerza Q3, tracciato");
+  section("T5 — updateOrden: cambio hora 00:10 → forno_out 23:58");
+  {
+    UPDATED = []; resolveCalls = 0;
+    STORE["#011"] = {
+      id: "#011", estado: "EN_COCINA", tipo_consegna: "DOMICILIO",
+      hora: "21:30", direccion: "Anade 35", zona: "Q5", zona_lat: 36.72, zona_lon: -2.63,
+      durata_andata_min: 12, items: [{ n: "Margherita", q: 1, p: 7 }], tel: "699111222",
+    };
+    await modificaOrdine("#011", { operatorManual: true, hora: "00:10" });
+    const u = UPDATED.find(x => x.patch.forno_out !== undefined) || UPDATED[UPDATED.length - 1];
+    assert("hora patch = 00:10", u.patch.hora === "00:10", `hora=${u.patch.hora}`);
+    assert("forno_out = 23:58", u.patch.forno_out === "23:58", `forno=${u.patch.forno_out}`);
+    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(JSON.stringify(u.patch)), JSON.stringify(u.patch));
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  section("T6 — updateOrden: cambio indirizzo vicino a mezzanotte wrappa");
+  {
+    UPDATED = []; resolveCalls = 0;
+    STORE["#012"] = {
+      id: "#012", estado: "EN_COCINA", tipo_consegna: "DOMICILIO",
+      hora: "00:05", direccion: "Anade 35", zona: "Q5", zona_lat: 36.72, zona_lon: -2.63,
+      durata_andata_min: 12, items: [{ n: "Margherita", q: 1, p: 7 }], tel: "699111222",
+    };
+    await modificaOrdine("#012", { operatorManual: true, direccion: "Playa Larga 5" });
+    const u = UPDATED.find(x => x.patch.forno_out !== undefined) || UPDATED[UPDATED.length - 1];
+    assert("durata re-resuelta = 13", u.patch.durata_andata_min === 13, `durata=${u.patch.durata_andata_min}`);
+    assert("forno_out = 23:52", u.patch.forno_out === "23:52", `forno=${u.patch.forno_out}`);
+    assert("hora non riscritta", u.patch.hora === undefined, `hora=${u.patch.hora}`);
+    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(JSON.stringify(u.patch)), JSON.stringify(u.patch));
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  section("T7 — zona_manuale override: operador fuerza Q3, tracciato");
   {
     INSERTED = []; resolveCalls = 0;
     await creaOrdine({
@@ -150,7 +198,7 @@ const lastInsert = () => INSERTED[INSERTED.length - 1];
   }
 
   // ═══════════════════════════════════════════════════════════════
-  section("T5 — regresión BOT: operatorManual falsy → NO re-resuelve, usa valores pasados");
+  section("T8 — regresión BOT: operatorManual falsy → NO re-resuelve, usa valores pasados");
   {
     INSERTED = []; resolveCalls = 0;
     // El orchestrator (bot) ya resolvió y pasa zona/durata. creaOrdine NO debe re-resolver.

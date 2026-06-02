@@ -413,7 +413,8 @@ function computeDriverFields(orders, options = {}) {
 // Sorgente unica per backend (creaOrdine, getCaricoDelivery) e frontend.
 // Regola: pizza esce il più tardi possibile MA non prima che il driver sia libero.
 // Anticipo = pizza fredda sul bancone (peggio). Ritardo = driver aspetta in pizzeria (ok).
-//   forno_out = max(hora_consegna − durata_andata, driver_libero)
+//   forno_out = hora_consegna − durata_andata, con wrap modulo 24.
+//   Se driver_libero è un minuto positivo, può fare da pavimento cascade-aware.
 //
 // Invariante DB per DOMICILIO: hora = forno_out + durata_andata, SEMPRE.
 // Se driver_libero costringe forno_out oltre (hora − andata), allora anche `hora`
@@ -428,15 +429,20 @@ function calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin 
     return { forno_out: hora, hora_finale: hora, slittato: false };
   }
   const toMin = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
-  const toH = (m) => `${String(Math.floor(m/60)%24).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+  const wrapDayMin = (m) => ((m % 1440) + 1440) % 1440;
+  const toH = (m) => {
+    const w = wrapDayMin(m);
+    return `${String(Math.floor(w/60)).padStart(2,"0")}:${String(w%60).padStart(2,"0")}`;
+  };
   const horaMin = toMin(hora);
   const fornoNaiveMin = horaMin - durataAndataMin;
-  const fornoRealMin = Math.max(fornoNaiveMin, driverLiberoMin || 0);
+  const hasDriverFloor = Number.isFinite(driverLiberoMin) && driverLiberoMin > 0;
+  const fornoRealMin = hasDriverFloor ? Math.max(fornoNaiveMin, driverLiberoMin) : fornoNaiveMin;
   const slittato = fornoRealMin > fornoNaiveMin;
   const horaFinalMin = slittato ? fornoRealMin + durataAndataMin : horaMin;
   return {
-    forno_out:   toH(Math.max(0, fornoRealMin)),
-    hora_finale: toH(Math.max(0, horaFinalMin)),
+    forno_out:   toH(fornoRealMin),
+    hora_finale: toH(horaFinalMin),
     slittato
   };
 }

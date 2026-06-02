@@ -41,7 +41,11 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
   // partenza del giro esistente, non driver_libero (che è DOPO quel giro e farebbe
   // uscire la pizza dopo la consegna promessa — es. forno 17:46 per delivery 17:40).
   const toMinL = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
-  const toHL   = (m) => `${String(Math.floor(m/60)%24).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+  const wrapDayMinL = (m) => ((m % 1440) + 1440) % 1440;
+  const toHL   = (m) => {
+    const w = wrapDayMinL(m);
+    return `${String(Math.floor(w/60)).padStart(2,"0")}:${String(w%60).padStart(2,"0")}`;
+  };
   const slot10L = (min) => { const r = Math.round(min/10)*10; return toHL(r); };
   const newSlot = slot10L(toMinL(hora));
   const giroEsistente = sim.giri.find(g => g.zona === zona && g.slot === newSlot);
@@ -73,8 +77,8 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
     const consegnaMin = propose.consegnaPropostaMin;
     const fornoMin = consegnaMin - durataAndataMin;
     return {
-      forno_out:   toHL(Math.max(0, fornoMin)),
-      hora_finale: toHL(Math.max(0, consegnaMin)),
+      forno_out:   toHL(fornoMin),
+      hora_finale: toHL(consegnaMin),
       slittato:    consegnaMin > toMinL(hora),
     };
   }
