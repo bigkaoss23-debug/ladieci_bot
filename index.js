@@ -14,6 +14,7 @@ const {
   removeOrderFromManualGiro,
   dissolveManualGiro,
 } = require("./src/agents/manualGiros");
+const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
 
 const app = express();
 app.use(express.json());
@@ -54,6 +55,23 @@ app.post("/webhook", async (req, res) => {
 });
 
 // --- API DASHBOARD ---
+
+async function readShadowPreviewOrders(table, query) {
+  const base = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_KEY;
+  if (!base || !key) throw new Error("supabase_env_missing");
+  const res = await fetch(`${base}/rest/v1/${table}?${query}`, {
+    method: "GET",
+    headers: { apikey: key, Authorization: "Bearer " + key },
+  });
+  if (!res.ok) throw new Error(`shadow_preview_read_failed_${res.status}`);
+  const text = await res.text();
+  try { return JSON.parse(text); } catch { return []; }
+}
+
+app.get("/api/delivery/shadow-preview", (req, res) => {
+  return handleShadowPreviewReadOnly(req, res, { dbClient: readShadowPreviewOrders });
+});
 
 app.get("/api", async (req, res) => {
   const action = req.query.action;
