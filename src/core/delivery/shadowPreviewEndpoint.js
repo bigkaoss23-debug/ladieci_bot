@@ -47,7 +47,14 @@ function cleanLimit(limit) {
 
 function validateDate(date) {
   if (!date) return "missing_date";
-  if (!DATE_RE.test(String(date))) return "invalid_date";
+  const s = String(date);
+  if (!DATE_RE.test(s)) return "invalid_date";
+  // Shape ok, ma il calendario può essere impossibile (es. 2026-13-99, 2026-02-31):
+  // verificare che sia una data reale facendo un roundtrip ISO. Senza questo controllo
+  // il successivo new Date(...).toISOString() lancia "Invalid time value" → 500.
+  const parsed = new Date(`${s}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return "invalid_date";
+  if (parsed.toISOString().slice(0, 10) !== s) return "invalid_date";
   return null;
 }
 

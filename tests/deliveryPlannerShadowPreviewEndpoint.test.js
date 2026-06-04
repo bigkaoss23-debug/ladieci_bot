@@ -147,6 +147,30 @@ console.log("\n══ Handler / query ══");
   check("2b· date mancante produce errore pulito",
     missing.statusCode === 400 && missing.body.error === "missing_date",
     JSON.stringify(missing.body));
+
+  // Date validation: formato errato e calendario impossibile → 400 invalid_date.
+  // Risposta sempre pulita: no stacktrace, no PII, readOnly/writesEnabled/piiIncluded coerenti.
+  const invalidDates = ["bad-date", "2026/06/04", "2026-13-99", "2026-02-31"];
+  for (const bad of invalidDates) {
+    const r = mockRes();
+    await handleShadowPreviewReadOnly({ method: "GET", query: { date: bad } }, r, { dbClient: db });
+    check(`2d· date invalida "${bad}" → 400 invalid_date`,
+      r.statusCode === 400 &&
+        r.body && r.body.error === "invalid_date" &&
+        r.body.readOnly === true &&
+        r.body.safety && r.body.safety.writesEnabled === false &&
+        r.body.safety.piiIncluded === false &&
+        !/\bat\s+\w+\s*\(|Error:|\.js:\d+/.test(JSON.stringify(r.body)),
+      JSON.stringify(r.body));
+  }
+  // La validazione non rompe le date future valide.
+  const future = mockRes();
+  await handleShadowPreviewReadOnly({ method: "GET", query: { date: "2026-12-31" } }, future, { dbClient: db });
+  check("2e· date futura valida 2026-12-31 → 200 contract",
+    future.statusCode === 200 &&
+      future.body && future.body.version === "shadow-preview-contract-v1" &&
+      future.body.source && future.body.source.date === "2026-12-31",
+    JSON.stringify(future.body && { status: future.statusCode, version: future.body.version, date: future.body.source && future.body.source.date }));
 }
 
 console.log("\n══ Contract / safety ══");
