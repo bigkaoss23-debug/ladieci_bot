@@ -66,14 +66,14 @@ function group(preview, type, severity) {
 console.log("\n══ Grouping basics ══");
 {
   const preview = buildShadowPreviewForOperator(baseShadow({
-    diagnostics: [dirtyGeo("Q5"), dirtyGeo("Marina"), dirtyGeo("Q5")],
+    diagnostics: [dirtyGeo("Q5"), dirtyGeo("Q5"), dirtyGeo("Q5")],
   }));
   const dirty = group(preview, "dirty_geo");
   check("1· tre dirty geo diventano un solo gruppo",
     preview.groupedOperatorMessages.filter((item) => item.groupType === "dirty_geo").length === 1 &&
       dirty.count === 3,
     JSON.stringify(preview.groupedOperatorMessages));
-  check("2· titolo dirty geo aggrega Q5 / Marina",
+  check("2· titolo dirty geo Q5 usa alias Q5 / Marina",
     dirty.title === "Q5 / Marina: tiempo estimado poco fiable",
     JSON.stringify(dirty));
   check("3· hint dirty geo evita falso allarme operativo",
@@ -150,6 +150,43 @@ console.log("\n══ Fallback / privacy / status ══");
     _internal.groupOperatorMessages([], []).length === 0 &&
       buildShadowPreviewForOperator(baseShadow()).groupedOperatorMessages.length === 0,
     JSON.stringify(buildShadowPreviewForOperator(baseShadow())));
+}
+
+console.log("\n══ Dirty-geo wording zone-aware (fix 32) ══");
+{
+  const titleFor = (diags) => {
+    const g = group(buildShadowPreviewForOperator(baseShadow({ diagnostics: diags })), "dirty_geo");
+    return g ? g.title : null;
+  };
+  check("18· zona Q5 → alias Q5 / Marina",
+    titleFor([dirtyGeo("Q5")]) === "Q5 / Marina: tiempo estimado poco fiable",
+    titleFor([dirtyGeo("Q5")]));
+  check("19· zona Q2 → Q2 (no Q5 / Marina)",
+    titleFor([dirtyGeo("Q2")]) === "Q2: tiempo estimado poco fiable" &&
+      !/Q5 \/ Marina/.test(titleFor([dirtyGeo("Q2")])),
+    titleFor([dirtyGeo("Q2")]));
+  check("20· più zone → Varias zonas",
+    titleFor([dirtyGeo("Q1"), dirtyGeo("Q2")]) === "Varias zonas: tiempo estimado poco fiable",
+    titleFor([dirtyGeo("Q1"), dirtyGeo("Q2")]));
+  check("21· zona assente → titolo generico",
+    titleFor([dirtyGeo(undefined)]) === "Tiempo estimado poco fiable",
+    titleFor([dirtyGeo(undefined)]));
+  // Regressione reale FASE 6: il diagnostic dirty_geo porta sempre il tag "q5"
+  // (vedi diagnosticWording), ma la zona reale è Q2 → la zona deve vincere sul tag.
+  {
+    const preview = buildShadowPreviewForOperator(baseShadow({ diagnostics: [dirtyGeo("Q2")] }));
+    const dirty = group(preview, "dirty_geo");
+    const hasQ5Tag = (preview.operatorMessages[0].tags || []).includes("q5");
+    check("22· tag q5 presente ma zona Q2 vince nel titolo",
+      hasQ5Tag === true && dirty.title === "Q2: tiempo estimado poco fiable",
+      JSON.stringify({ tags: preview.operatorMessages[0].tags, title: dirty.title }));
+    check("23· nessuna PII nel gruppo zone-aware",
+      !/Persona Inventada|\+34000000000|Calle Falsa/.test(JSON.stringify(dirty)),
+      JSON.stringify(dirty));
+    check("24· status resta warning (non critical) col fix wording",
+      preview.status === "warning",
+      preview.status);
+  }
 }
 
 console.log("\n══ Static safety ══");

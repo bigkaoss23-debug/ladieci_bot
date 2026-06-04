@@ -128,6 +128,23 @@ function ovenGroupLevel(key) {
   return key === "hard" ? "critical" : "warning";
 }
 
+// Etichetta zona per il warning dirty-geo. La zona REALE del diagnostico vince
+// sul tag storico/generico "q5": se gli ordini sono in Q2 il titolo dice "Q2",
+// non "Q5 / Marina". Q5 conserva l'alias "Q5 / Marina" (Marina/Evershine).
+function formatZoneScopeForDirtyGeo(zones = []) {
+  const cleanZones = uniqueSorted((zones || []).filter(Boolean));
+  if (cleanZones.length === 0) return "";
+  if (cleanZones.length === 1) {
+    return cleanZones[0] === "Q5" ? "Q5 / Marina" : cleanZones[0];
+  }
+  return "Varias zonas";
+}
+
+function dirtyGeoTitle(zones = []) {
+  const scope = formatZoneScopeForDirtyGeo(zones);
+  return scope ? `${scope}: tiempo estimado poco fiable` : "Tiempo estimado poco fiable";
+}
+
 function groupOperatorMessages(operatorMessages = [], diagnostics = []) {
   const dirty = [];
   const rider = [];
@@ -147,14 +164,15 @@ function groupOperatorMessages(operatorMessages = [], diagnostics = []) {
 
   const groups = [];
   if (dirty.length) {
+    const dirtyZones = uniqueSorted(dirty.map((item) => item.diagnostic.zona));
     groups.push(makeGroup(
       "dirty_geo",
       "warning",
-      "Q5 / Marina: tiempo estimado poco fiable",
+      dirtyGeoTitle(dirtyZones),
       `${pluralOrden(dirty.length)} una estimación no-Google o poco fiable.`,
       "No lo interpretes como retraso real seguro. Verifica cuando el rider vuelve.",
       dirty,
-      { zones: uniqueSorted(dirty.map((item) => item.diagnostic.zona)) },
+      { zones: dirtyZones },
     ));
   }
   if (rider.length) {
