@@ -49,7 +49,7 @@ global.fetch = async (url) => {
   return { ok: false, json: async () => ({}) };
 };
 
-const { risolviIndirizzo } = require("../src/utils/geoResolver");
+const { risolviIndirizzo, enrichDurataFromGoogle, isFarDeliveryZone } = require("../src/utils/geoResolver");
 
 let passed = 0, failed = 0;
 const assert = (name, cond, detail = "") => {
@@ -92,6 +92,74 @@ const section = (s) => console.log(`\n── ${s} ──`);
     assert("durataAndataMin = 9 (dalla cache)", r.durataAndataMin === 9, `durata=${r.durataAndataMin}`);
     assert("nessuna chiamata Distance Matrix", fetchCalls === 0, `fetchCalls=${fetchCalls}`);
     assert("source invariato (nominatim)", r.source === "nominatim", `source=${r.source}`);
+  }
+
+  // ── GEO-CACHE-GOOGLE-REFRESH-FIX-37 — far-zone cache-street refresh ──
+  // Audit -36: ordine live #003 (Q5, cache-street, durata 10, google null) non
+  // chiamava Google perché la durata street-fallback era già non-null. Ora le zone
+  // lontane (Q5/Marina/Evershine) rinfrescano comunque; Q1/Q2/Q3 restano invariate.
+  const farHit = (over = {}) => ({
+    zona: "Q5", lat: 36.7238183, lon: -2.6395996,
+    durataAndataMin: 10, source: "cache-street", cached: true, blindata: false, ...over,
+  });
+
+  section("T4 (A) — Q5 cache-street durata NON null + Google OK → refresh google-from-cache-street");
+  {
+    DM_OK = true; upserted = null; fetchCalls = 0;
+    const r = await enrichDurataFromGoogle("Calle X 10", farHit(), true);
+    assert("Distance Matrix chiamata", fetchCalls === 1, `fetchCalls=${fetchCalls}`);
+    assert("durataAndataMin aggiornata a Google 11 (non più 10)", r.durataAndataMin === 11, `durata=${r.durataAndataMin}`);
+    assert("source = google-from-cache-street", r.source === "google-from-cache-street", `source=${r.source}`);
+    assert("source include 'google' → buildResult valorizza durata_google_min", r.source.includes("google"));
+    assert("backfill cache con durata 11", upserted?.durata_andata_min === 11 && upserted?.source === "google-from-cache-street",
+           `upserted=${JSON.stringify(upserted)}`);
+  }
+
+  section("T5 (B) — Q1 cache-street durata NON null → NESSUNA chiamata Google (invariato)");
+  {
+    DM_OK = true; upserted = null; fetchCalls = 0;
+    const r = await enrichDurataFromGoogle("Calle Y 2", farHit({ zona: "Q1", durataAndataMin: 2 }), true);
+    assert("Google NON chiamato", fetchCalls === 0, `fetchCalls=${fetchCalls}`);
+    assert("source resta cache-street", r.source === "cache-street", `source=${r.source}`);
+    assert("durata resta 2", r.durataAndataMin === 2, `durata=${r.durataAndataMin}`);
+    assert("nessun backfill", upserted === null, `upserted=${JSON.stringify(upserted)}`);
+  }
+
+  section("T6 (C) — Q5 cache-street durata NON null ma Google FALLISCE → resta cache-street, durata invariata");
+  {
+    DM_OK = false; upserted = null; fetchCalls = 0;
+    const r = await enrichDurataFromGoogle("Calle X 10", farHit(), true);
+    assert("Distance Matrix tentata", fetchCalls === 1, `fetchCalls=${fetchCalls}`);
+    assert("source resta cache-street", r.source === "cache-street", `source=${r.source}`);
+    assert("durata invariata = 10 (nessun crash)", r.durataAndataMin === 10, `durata=${r.durataAndataMin}`);
+    assert("nessun backfill su fallimento", upserted === null, `upserted=${JSON.stringify(upserted)}`);
+  }
+
+  section("T7 (D) — cache-street/null durata resta coperto (Q5, durata null, Google OK)");
+  {
+    DM_OK = true; upserted = null; fetchCalls = 0;
+    const r = await enrichDurataFromGoogle("Calle X", farHit({ durataAndataMin: null }), true);
+    assert("Google chiamato come prima", fetchCalls === 1, `fetchCalls=${fetchCalls}`);
+    assert("durata = 11 (Google)", r.durataAndataMin === 11, `durata=${r.durataAndataMin}`);
+    assert("source = google-from-cache-street", r.source === "google-from-cache-street", `source=${r.source}`);
+  }
+
+  section("T8 (E) — exact google hit durata non null in Q5 → NON refreshato");
+  {
+    DM_OK = true; upserted = null; fetchCalls = 0;
+    const r = await enrichDurataFromGoogle("Calle Z 5", farHit({ source: "google", durataAndataMin: 12 }), true);
+    assert("Google NON ri-chiamato", fetchCalls === 0, `fetchCalls=${fetchCalls}`);
+    assert("source resta google", r.source === "google", `source=${r.source}`);
+    assert("durata resta 12", r.durataAndataMin === 12, `durata=${r.durataAndataMin}`);
+  }
+
+  section("T9 — isFarDeliveryZone semantics");
+  {
+    assert("Q5 è far zone", isFarDeliveryZone("Q5") === true);
+    assert("Marina è far zone", isFarDeliveryZone("Marina") === true);
+    assert("Evershine è far zone", isFarDeliveryZone("evershine") === true);
+    assert("Q1 NON è far zone", isFarDeliveryZone("Q1") === false);
+    assert("Q2 NON è far zone", isFarDeliveryZone("Q2") === false);
   }
 
   console.log(`\n═══ RESULT: ${passed} passed, ${failed} failed ═══\n`);

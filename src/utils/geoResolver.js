@@ -484,6 +484,16 @@ async function getGeoProvider() {
 const LOCALITA_FUORI_ZONA = ["aguadulce", "almería", "almeria", "vícar", "vicar",
   "la mojonera", "mojonera", "el ejido", "ejido", "adra", "berja", "dalías", "dalias"];
 
+// ─── Zone "lontane" del cluster Q5 (Q5 / Marina / Evershine) ──────────────
+// Su queste vie lunghe (avenidas/paseos) la varianza di tempo macchina dentro la
+// stessa strada è massima, quindi il fallback "stessa via" cache-street va trattato
+// con prudenza extra. Semantica allineata a isFarDeliveryZone del shadow runner
+// (deliveryPlannerShadowReadOnly.js) usata dalla regola dirty_geo.
+function isFarDeliveryZone(zona) {
+  const z = String(zona || "");
+  return z === "Q5" || /marina|evershine/i.test(z);
+}
+
 // ─── Enrichment: cache/cliente con coords ma SENZA durata → Google DM ─────
 // Decisione prodotto 31/05/2026: se la cache risolve coordinate+zona ma la durata
 // è null (riga Nominatim/Photon, o street-fallback su entry senza durata), NON
@@ -492,14 +502,33 @@ const LOCALITA_FUORI_ZONA = ["aguadulce", "almería", "almeria", "vícar", "vica
 // la durata reale, la salviamo in cache (backfill sotto la key di questo indirizzo)
 // e la restituiamo con source "google-from-<orig>". Solo se Google è spento o
 // fallisce lasciamo durata=null → il consumer userà l'haversine (stima).
+//
+// REFRESH FAR-ZONE (GEO-CACHE-GOOGLE-REFRESH-FIX-37): il fallback "stessa via"
+// cache-street riusa la durata di un VICINO sulla stessa strada (key diversa).
+// In Q5/Marina/Evershine quel numero può essere ottimista e la provenienza Google
+// va persa (durata_google_min resta null → la shadow preview deve avvisare). Per
+// quelle zone ritentiamo Google Distance Matrix sulle coords GIÀ in cache ANCHE se
+// la durata è già presente, e se Google risponde rietichettiamo google-from-cache-street
+// con la durata reale. Per Q1/Q2/Q3 il comportamento è invariato (cache-street con
+// durata resta com'è: niente costo/rumore Google).
 async function enrichDurataFromGoogle(direccion, hit, googleEnabled) {
-  if (!hit || hit.durataAndataMin != null) return hit;   // già completa → nessun costo extra
+  if (!hit) return hit;
   if (hit.lat == null || hit.lon == null) return hit;    // niente coords → no Distance Matrix
   if (!googleEnabled) return hit;                        // provider off → haversine al consumo
+
+  const source = String(hit.source || "").toLowerCase();
+  const refreshFarCacheStreet =
+    source === "cache-street" && hit.durataAndataMin != null && isFarDeliveryZone(hit.zona);
+
+  // Early return: durata già completa e NON è un cache-street far-zone da rinfrescare.
+  if (hit.durataAndataMin != null && !refreshFarCacheStreet) return hit;
+
   const dm = await googleDistanceMatrix(hit.lat, hit.lon);
   if (!dm.ok) {
-    console.warn(`[geoResolver] enrich durata Google fallita (${dm.error}) per "${direccion}" — fallback haversine`);
-    return hit;                                          // google ko → durata resta null → haversine
+    // Google ko → durata INVARIATA: se era null il consumer usa haversine, se era
+    // un cache-street far-zone resta la durata cached (nessun ordine rotto).
+    console.warn(`[geoResolver] enrich durata Google fallita (${dm.error}) per "${direccion}" — fallback ${hit.durataAndataMin != null ? "durata cache" : "haversine"}`);
+    return hit;
   }
   const enrichedSource = `google-from-${hit.source || "cache"}`;
   // Backfill: salviamo la durata reale sotto la cache-key di QUESTO indirizzo (es.
@@ -509,7 +538,7 @@ async function enrichDurataFromGoogle(direccion, hit, googleEnabled) {
     zona: hit.zona, lat: hit.lat, lon: hit.lon,
     durataAndataMin: dm.durataMin, source: enrichedSource
   });
-  console.warn(`[geoResolver] enrich durata Google: "${direccion}" (${hit.source}) durata null → ${dm.durataMin}min, cached`);
+  console.warn(`[geoResolver] enrich durata Google: "${direccion}" (${hit.source}) durata ${hit.durataAndataMin ?? "null"} → ${dm.durataMin}min, cached`);
   return { ...hit, durataAndataMin: dm.durataMin, source: enrichedSource };
 }
 
@@ -628,4 +657,5 @@ module.exports = {
   stripHouseNumber,
   isAcceptableLocationType,
   enrichDurataFromGoogle,
+  isFarDeliveryZone,
 };
