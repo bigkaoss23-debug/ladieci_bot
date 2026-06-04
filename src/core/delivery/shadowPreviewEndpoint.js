@@ -22,7 +22,6 @@ const ORDER_SELECT_FIELDS = [
   "items",
   "manual_giro_id",
   "forzado",
-  "forzado_hora",
   "created_at",
   "geo_source",
   "durata_google_min",
