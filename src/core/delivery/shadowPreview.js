@@ -80,6 +80,119 @@ function addAction(actions, text) {
   if (text && !actions.includes(text)) actions.push(text);
 }
 
+function severityRank(level) {
+  if (level === "critical" || level === "high") return 0;
+  if (level === "warning") return 1;
+  return 2;
+}
+
+function pluralOrden(count) {
+  return count === 1 ? "1 orden usa" : `${count} órdenes usan`;
+}
+
+function pluralFranja(count) {
+  return count === 1 ? "1 franja" : `${count} franjas`;
+}
+
+function uniqueSorted(values) {
+  return [...new Set((values || []).filter(Boolean))].sort();
+}
+
+function makeGroup(groupType, level, title, message, operatorHint, items, extra = {}) {
+  const tags = uniqueSorted((items || []).flatMap((item) => item.message.tags || []));
+  return {
+    groupType,
+    level,
+    title,
+    message,
+    operatorHint,
+    count: (items || []).length,
+    tags,
+    ...extra,
+  };
+}
+
+function ovenGroupKey(message) {
+  if (message.title === "Horno lleno") return "hard";
+  if (message.title === "Horno muy cargado") return "serious";
+  return "soft";
+}
+
+function ovenGroupTitle(key) {
+  if (key === "hard") return "Horno lleno";
+  if (key === "serious") return "Horno muy cargado";
+  return "Horno ligeramente sobre capacidad";
+}
+
+function ovenGroupLevel(key) {
+  return key === "hard" ? "critical" : "warning";
+}
+
+function groupOperatorMessages(operatorMessages = [], diagnostics = []) {
+  const dirty = [];
+  const rider = [];
+  const oven = { soft: [], serious: [], hard: [] };
+  const fallback = [];
+
+  for (let i = 0; i < operatorMessages.length; i++) {
+    const message = operatorMessages[i];
+    const diagnostic = diagnostics[i] || {};
+    const tags = message.tags || [];
+    const item = { message, diagnostic };
+    if (tags.includes("rider_recovery") || tags.includes("future_replan")) rider.push(item);
+    else if (tags.includes("dirty_geo")) dirty.push(item);
+    else if (tags.includes("oven")) oven[ovenGroupKey(message)].push(item);
+    else fallback.push(item);
+  }
+
+  const groups = [];
+  if (dirty.length) {
+    groups.push(makeGroup(
+      "dirty_geo",
+      "warning",
+      "Q5 / Marina: tiempo estimado poco fiable",
+      `${pluralOrden(dirty.length)} una estimación no-Google o poco fiable.`,
+      "No lo interpretes como retraso real seguro. Verifica cuando el rider vuelve.",
+      dirty,
+      { zones: uniqueSorted(dirty.map((item) => item.diagnostic.zona)) },
+    ));
+  }
+  if (rider.length) {
+    groups.push(makeGroup(
+      "rider_recovery",
+      "info",
+      "Rider reajustable cuando vuelve",
+      "El sistema puede recalcular los próximos pedidos cuando el rider vuelva.",
+      "El pasado no se reescribe; el futuro se ajusta con la disponibilidad real.",
+      rider,
+    ));
+  }
+  for (const key of ["hard", "serious", "soft"]) {
+    const items = oven[key];
+    if (!items.length) continue;
+    groups.push(makeGroup(
+      "oven",
+      ovenGroupLevel(key),
+      key === "serious" ? `Horno: ${pluralFranja(items.length)} muy cargadas` : ovenGroupTitle(key),
+      `Hay ${pluralFranja(items.length)} con más pizzas que la capacidad nominal, contando también los retiros.`,
+      "Revisa si conviene mover o forzar manualmente.",
+      items,
+      { severity: key },
+    ));
+  }
+  if (fallback.length) {
+    groups.push(makeGroup(
+      "planner",
+      "info",
+      "Avisos del planner",
+      "Hay elementos que conviene revisar antes de confirmar cambios.",
+      "Revisa estos avisos antes de interpretar el plan como definitivo.",
+      fallback,
+    ));
+  }
+  return groups.sort((a, b) => severityRank(a.level) - severityRank(b.level) || a.title.localeCompare(b.title));
+}
+
 function buildSuggestedActions(messages, status) {
   const actions = [];
   for (const msg of messages || []) {
@@ -99,11 +212,13 @@ function buildShadowPreviewForOperator(shadowOutput = {}) {
   const status = previewStatus(shadowOutput);
   const diagnostics = Array.isArray(shadowOutput.diagnostics) ? shadowOutput.diagnostics : [];
   const operatorMessages = formatShadowDiagnosticsForOperator({ diagnostics });
+  const groupedOperatorMessages = groupOperatorMessages(operatorMessages, diagnostics);
   return {
     status,
     title: "Vista previa planner",
     summary: buildSummary(shadowOutput),
     operatorMessages,
+    groupedOperatorMessages,
     keyRisks: buildKeyRisks(operatorMessages, diagnostics),
     suggestedOperatorActions: buildSuggestedActions(operatorMessages, status),
     rawDiagnosticsHidden: true,
@@ -116,6 +231,7 @@ module.exports = {
   _internal: {
     previewStatus,
     buildSummary,
+    groupOperatorMessages,
     buildKeyRisks,
     buildSuggestedActions,
   },
