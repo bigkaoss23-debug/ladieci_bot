@@ -140,8 +140,8 @@ console.log("\n── 8. promise slot 10 + anchor ──");
     JSON.stringify(plan.trips[0].delivery_window));
 }
 
-// ── §13.9 — RITIRO occupa il forno e spinge il delivery ───────────────────────
-console.log("\n── 9. ritiro occupa forno ──");
+// ── §13.9 — RITIRO occupa il forno · soft overload (+1 tollerato, niente shift) ─
+console.log("\n── 9. ritiro occupa forno (soft overload) ──");
 {
   const plan = buildPlan({
     now: "17:00",
@@ -150,10 +150,11 @@ console.log("\n── 9. ritiro occupa forno ──");
       ord({ id: "DOM", zona: "Q1", hora: "20:05", andata_min: 5, n_pizze: 1 }),
     ],
   });
-  check("slot 20:00 occupato dal ritiro (4 pizze)", plan.ovenLoad[1200] === 4, String(plan.ovenLoad[1200]));
-  check("delivery spinto avanti per forno pieno → 20:10", plan.orders.DOM.forno_out === "20:10", plan.orders.DOM.forno_out);
+  // 4 (ritiro) + 1 (giro) = 5 → soft overload: NIENTE shift, il delivery resta a 20:00.
+  check("slot 20:00 = 5 pizze (4 ritiro + 1 giro, soft)", plan.ovenLoad[1200] === 5, String(plan.ovenLoad[1200]));
+  check("delivery NON spinto (soft overload) → resta 20:00", plan.orders.DOM.forno_out === "20:00", plan.orders.DOM.forno_out);
   const trip = plan.trips.find(t => t.id.includes("Q1"));
-  check("warning forno_pieno sul giro", trip && trip.warnings.includes("forno_pieno"), trip && JSON.stringify(trip.warnings));
+  check("warning forno_soft_overload (non forno_pieno)", trip && trip.warnings.includes("forno_soft_overload") && !trip.warnings.includes("forno_pieno"), trip && JSON.stringify(trip.warnings));
 }
 
 // ── §13.10 — After-midnight (edge noto, documentato) ──────────────────────────
@@ -246,8 +247,9 @@ console.log("\n── M4. consegna interna oltre la granularità promessa ──
     orders: [ord({ id: "Z", zona: "Q1", hora: "20:00", andata_min: 10 })],
   });
   const blk = plan.blocks[0];
-  check("entrega 20:20 (block lungo)", plan.orders.Z.entrega === "20:20", plan.orders.Z.entrega);
-  check("retraso = 10 calcolato su promessa+slot (NON sulla window)", plan.orders.Z.retraso === 10, String(plan.orders.Z.retraso));
+  // buffer ops driver = 3 (default): est.total = 10+3 = 13, scale = 30/13 → arrivo +23.
+  check("entrega 20:23 (block lungo, buffer 3)", plan.orders.Z.entrega === "20:23", plan.orders.Z.entrega);
+  check("retraso = 13 su promessa+slot (NON sulla window)", plan.orders.Z.retraso === 13, String(plan.orders.Z.retraso));
   check("issue cliente_fuera_slot (non nascosto dalla window)", blk.issues.some(i => i.type === "cliente_fuera_slot"), JSON.stringify(blk.issues));
   check("block segnalato incoerente", blk.coherent === false);
 }

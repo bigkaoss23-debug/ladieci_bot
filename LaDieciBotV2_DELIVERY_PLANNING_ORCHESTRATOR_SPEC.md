@@ -1,9 +1,10 @@
 # Delivery Planning Orchestrator — SPEC
 
-> Stato: **DECISIONI CHIUSE — pronto per linea di lavoro** (2026-06-04, rev.4 —
-> D1–D4 risolte vedi §14; **rev.4** aggiunge il *rider block / manual multi-zone route*,
-> vedi §7-bis). Engine puro in `core/delivery/planner.js` + test (61/61 PASS), nessun
-> consumatore live, nessun DB, nessun deploy.
+> Stato: **DECISIONI CHIUSE — pronto per linea di lavoro** (2026-06-04, rev.5 —
+> D1–D4 risolte vedi §14; **rev.4** *rider block / manual multi-zone route* (§7-bis);
+> **rev.5** *real rider events + prudent replanning + soft oven overload + buffer 3*
+> (§7-ter)). Engine puro in `core/delivery/planner.js` + test, nessun consumatore live,
+> nessun DB, nessun deploy.
 > Questo documento definisce la *logica*, non l'implementazione. Sostituisce la
 > direzione "un algoritmo unico che calcola tutto" con un **Coordinatore unico che
 > interroga agenti specializzati e propone opzioni; l'operatore decide; il backend
@@ -404,6 +405,101 @@ non **assolve** (coerente con I9). L'operatore può forzare; il costo resta trac
 
 ---
 
+## 7-ter. Real rider events & Prudent replanning (rev.5)
+
+> Aggiunto rev.5 (2026-06-04). Due concetti **separati**: (A) gli eventi reali del
+> rider come *trigger*, (B) il ricalcolo *prudente* che non rimescola l'operativo.
+> Solo `core/delivery/planner.js` + test. Nessun consumatore live.
+
+### 7c.1 Real rider events — trigger, non dipendenza assoluta
+
+Il sistema **non può contare** che driver/operatore premano sempre i bottoni. Gli
+eventi reali sono una **seconda agenda** che *corregge* la simulazione, non l'unica
+fonte. Eventi: `rider_left`, `rider_returned`, `rider_available`.
+
+```
+Evento reale ricevuto → aggiorna rider_available_from → ricalcola il servizio attivo.
+Se l'evento NON arriva → si continua con la simulazione.
+```
+
+Input snapshot (entrambe le forme accettate):
+```js
+driver_status: { available_from: "20:24", source: "operator_button" }
+// oppure
+driver_events: [
+  { type: "rider_left",     at: "20:03", source: "operator_button" },
+  { type: "rider_returned", at: "20:24", source: "operator_button" }
+]
+```
+
+- Se esiste un evento reale `rider_returned`/`rider_available` (o `driver_status`),
+  quel valore è il **pavimento di disponibilità** per lo scheduling **futuro**.
+- Se non esiste, si usa la **simulazione** (legacy `driver.libero_desde`).
+- **L'evento reale batte la simulazione solo per il FUTURO** (vedi 7c.2).
+
+### 7c.2 Prudent replanning — non muovere ciò che è già operativo
+
+> Frase guida: **il tempo recuperato non riscrive il passato operativo; migliora le
+> prossime decisioni.**
+
+Se il rider torna 5 minuti prima, il planner **NON** anticipa automaticamente le pizze
+già operative (caos in cucina). Regola:
+
+- Il tempo recuperato aggiorna la **timeline futura**.
+- **Non** anticipare ordini **SEMI-CONGELATI / CONGELATI DURI** (già in cucina/avviati):
+  restano protetti dal loro `salida` committato (floor operativo).
+- **Non** riscrivere orari già comunicati e operativamente avviati.
+- Gli **ordini nuovi** creati dopo il recupero **beneficiano** del tempo recuperato.
+- Gli ordini **futuri ancora movibili** possono migliorare, ma solo rispettando
+  congelamento / promesse / manual override.
+
+Esempio: stima rider libero 20:30; operatore preme "Rider tornato" 20:24. Un ordine
+già in cucina slittato a 20:35 **NON** viene anticipato; un nuovo ordine creato 20:25
+usa rider libero da **20:24**; un ordine futuro movibile può migliorare se non crea casino.
+
+### 7c.3 Operator rider-return button — semantica
+
+Il bottone **"Entregado"** lato pizzeria è semanticamente **debole**: l'operatore non
+sa con certezza se il cliente ha ricevuto la pizza. Il fatto **osservabile** in pizzeria
+è il **rider tornato / di ritorno / disponibile** → si usa il concetto
+**`rider_returned` / `rider_available`**, non solo `entregado`.
+
+- Se il driver usa l'app e preme *entregado* → evento `source: "driver_app"`.
+- Se l'operatore vede il rider tornare e preme "Rider tornato" → `source: "operator_button"`.
+- Stima senza bottoni → `source: "system_estimate"`.
+
+Il planner **conserva `source` + `confidence`** (driver_app 0.95 > operator_button 0.8 >
+system_estimate 0.5) e li espone in `plan.driver`.
+
+### 7c.4 Soft oven overload — non essere troppo rigidi
+
+Cap **nominale** forno = 4 pizze/slot, ma in pizzeria reale 1 pizza extra si gestisce
+(il pizzaiolo la mette subito dopo, taglia/impacchetta, recupera in 30–60 s). Soglie:
+
+| Carico slot | Banda | Azione |
+|---|---|---|
+| ≤ 4 | ok | nessuna |
+| 5 | **soft overload** | warning `forno_soft_overload`, **nessuno shift** |
+| 6–7 | **overload serio** | warning `forno_overload_serio`, **nessuno shift** |
+| ≥ 8 | **hard overload** | warning `forno_pieno` → **shift** / richiede decisione |
+
+Il `+1` dentro tolleranza operativa **non** sposta automaticamente il giro.
+
+### 7c.5 Driver buffer — default 3
+
+`BUFFER_OPS_DRIVER_MIN = 3` (non 5). `5+5+5` mangerebbe tutta la serata. Allineato anche
+alla logica vecchia (`zones.js` usa 3). Se 3 si rivelasse stretto, si porterà a 5.
+
+### 7c.6 `plan.driver` nel contratto di output
+```json
+"driver": { "available_from": "20:24", "source": "operator_button",
+            "confidence": 0.8, "real_event": true, "reason": "evento reale rider_returned" }
+```
+`real_event: true` ⇒ un evento reale ha aggiornato la timeline futura (warning dedicato
+in `plan.warnings`). `false` ⇒ si sta usando la stima.
+
+---
+
 ## 8. Contratto di output del Coordinatore
 
 La UI **non calcola** `No agregable` / `Usar giro`: li **legge** da qui.
@@ -500,6 +596,12 @@ i punti di decisione (preview/commit) sono sempre ricalcolati sul `now`.
 - [ ] `rider_overlaps` è vuoto: nessun block/trip rider sovrapposto.
 - [ ] ogni membro del block ha `forno_out = block_start` (I8) e `retraso` sulla promessa (I9).
 - [ ] un block incoerente espone `coherent:false` + `options` (mai "tutto ok" silenzioso).
+- [ ] un evento reale `rider_returned`/`available` fissa il pavimento rider per il FUTURO.
+- [ ] il tempo recuperato NON anticipa SEMI-CONGELATI/CONGELATI (floor `salida` committato).
+- [ ] gli ordini nuovi/movibili futuri beneficiano del rider tornato prima.
+- [ ] `plan.driver` conserva `source` + `confidence` (driver_app > operator_button > stima).
+- [ ] carico forno 5 = soft (warning, niente shift); 6–7 serio; ≥8 hard (shift/decisione).
+- [ ] `BUFFER_OPS_DRIVER_MIN` default = 3.
 
 ---
 
@@ -562,6 +664,22 @@ Ogni passo è isolato, reversibile, verificabile a fari spenti.
 | M7 | block + ordine automatico in zona diversa | `rider_overlaps` vuoto; l'automatico parte ≥ `block_end` |
 
 > Stato test: **61/61 PASS** (31 esistenti + 30 nuovi per il rider block).
+
+### 13-ter. Real rider events / Prudent replanning / Overload (rev.5)
+
+| # | Scenario | Atteso |
+|---|---|---|
+| R1 | rider_returned 20:24 (sim diceva 20:30) | nuovo ordine usa 20:24; senza evento resta 20:30 (system_estimate) |
+| R2 | semi-congelato salida 20:35 + rider torna 20:24 | NON anticipato: salida resta 20:35 (reason "protetto") |
+| R3 | rider_returned 20:38 (tardi) | movibili slittano + retraso esposto + warning rider event |
+| R4 | source `operator_button` | `plan.driver` conserva source/confidence 0.8/reason |
+| R5 | source `driver_app` | confidence 0.95 > operator_button (più affidabile) |
+| R6 | carico forno 5/4 | `forno_soft_overload`, nessuno shift |
+| R7 | carico forno ≥8 | `forno_pieno` + shift; 6–7 → `forno_overload_serio` senza shift |
+| R8 | default buffer | `bufferOpsDriverMin === 3` |
+
+> Stato test rev.5: planner **61** · AB fixtures **19** · real snapshot **10** ·
+> rider events/overload **26** — tutti PASS.
 
 ---
 

@@ -21,10 +21,15 @@
 
 // ── Default di dominio (sovrascrivibili dallo snapshot) ───────────────────────
 const DEFAULTS = {
-  forno: { slotMin: 10, maxPerSlot: 4 },   // §10: ≤4 pizze per slot 10-min
+  // Forno: cap NOMINALE 4/slot, ma overload "morbido" tollerato (§Soft oven overload):
+  //   ≤4        ok
+  //   5         soft overload  → warning, NESSUNO shift automatico
+  //   6–7       overload serio → warning serio, nessuno shift automatico
+  //   ≥8        hard overload  → shift / richiede decisione
+  forno: { slotMin: 10, maxPerSlot: 4, softOverloadMax: 5, seriousOverloadMax: 7 },
   margineCotturaMin: 5,                     // D1
   promiseSlotMin: 10,                       // D4: promessa a slot da 10 min
-  bufferOpsDriverMin: 5,                    // sosta/citofono/handoff al cliente
+  bufferOpsDriverMin: 3,                    // §Driver buffer: default 3 (era 5). 5+5+5 mangia la serata.
   defaultMaxOrdiniPerGiro: 3,
   giroRecommendationWindowMin: 20,          // entro quanto un giro è "raccomandato"
   giroAggregationMarginMin: 2,              // parità frontend: pizza nuova ≤ partenza+2
@@ -282,6 +287,11 @@ function buildRiderBlock(route, rawMembers, ctx) {
 //     id, type:"manual_route", order_ids:[...], route_order?:[...],
 //     block_start?, manual_duration_min?, created_by_operator?, force?
 //   }],
+//   // §Real rider events — eventi reali come TRIGGER (non dipendenza assoluta).
+//   // Se presenti, fissano il pavimento di disponibilità rider per il FUTURO;
+//   // se assenti, si usa la simulazione. Si conserva source/confidence.
+//   driver_status?: { available_from: "HH:MM", source?: "driver_app"|"operator_button"|"system_estimate" },
+//   driver_events?: [{ type:"rider_left"|"rider_returned"|"rider_available", at:"HH:MM", source? }],
 //   orders: [{
 //     id, tipo_consegna:"DOMICILIO"|"RITIRO", estado, zona,
 //     hora,                 // promessa cliente (fatto grezzo)
@@ -292,6 +302,40 @@ function buildRiderBlock(route, rawMembers, ctx) {
 //     forno_out?, salida_driver_estimada?, entrega_estimada?
 //   }]
 // }
+// Confidenza per source dell'evento reale (driver_app più affidabile della stima).
+const SOURCE_CONFIDENCE = { driver_app: 0.95, operator_button: 0.8, system_estimate: 0.5 };
+
+// Risolve la disponibilità del rider da eventi reali (trigger) o, in assenza, dalla
+// simulazione legacy. Ritorna { svc, available_from, source, confidence, reason, real }.
+//   real=true  → l'operatore/driver ha dichiarato un fatto (batte la stima per il FUTURO).
+//   real=false → nessun evento: si prosegue con la stima (snapshot.driver.libero_desde).
+function resolveRiderAvailability(snapshot) {
+  // 1) driver_status esplicito (snapshot puntuale).
+  const st = snapshot.driver_status;
+  if (st && st.available_from) {
+    const source = st.source || "operator_button";
+    return mkAvail(toSvc(st.available_from), st.available_from, source, "driver_status.available_from", true);
+  }
+  // 2) driver_events: prendi l'ultimo rider_returned/rider_available (per `at`).
+  const evs = (snapshot.driver_events || []).filter(
+    e => e && (e.type === "rider_returned" || e.type === "rider_available") && e.at
+  );
+  if (evs.length) {
+    const last = evs.reduce((a, b) => (toSvc(b.at) ?? -1) >= (toSvc(a.at) ?? -1) ? b : a);
+    const source = last.source || "operator_button";
+    return mkAvail(toSvc(last.at), last.at, source, `evento reale ${last.type}`, true);
+  }
+  // 3) Legacy / stima: snapshot.driver.libero_desde.
+  if (snapshot.driver && snapshot.driver.libero_desde) {
+    return mkAvail(toSvc(snapshot.driver.libero_desde), snapshot.driver.libero_desde,
+      "system_estimate", "stima simulazione (nessun evento reale)", false);
+  }
+  return { svc: null, available_from: null, source: "system_estimate", confidence: SOURCE_CONFIDENCE.system_estimate, reason: "nessun dato rider", real: false };
+}
+function mkAvail(svc, hhmm, source, reason, real) {
+  return { svc, available_from: hhmm, source, confidence: SOURCE_CONFIDENCE[source] ?? 0.5, reason, real };
+}
+
 function buildPlan(snapshot) {
   const cfg = {
     forno: { ...DEFAULTS.forno, ...(snapshot.forno || {}) },
@@ -334,11 +378,13 @@ function buildPlan(snapshot) {
   // Congelati duri + ritiri preoccupano gli slot forno coi loro valori committati.
   const driverWalls = []; // intervalli [partenza,rientro] del rider già impegnato
 
-  // Driver reale (rider già partito): pavimento di disponibilità.
-  let driverFreeBase = 0;
-  if (snapshot.driver && snapshot.driver.libero_desde) {
-    driverFreeBase = toSvc(snapshot.driver.libero_desde) ?? 0;
-  }
+  // ── §Real rider events — risoluzione disponibilità rider (trigger, non vincolo) ─
+  // Priorità: evento reale (rider_returned/available, il più recente) o driver_status
+  //   → pavimento di disponibilità per lo scheduling FUTURO, con source/confidence.
+  // Se manca ogni evento reale → simulazione (legacy snapshot.driver.libero_desde),
+  //   marcata source "system_estimate" (l'operatore non ha premuto nessun bottone).
+  const riderAvail = resolveRiderAvailability(snapshot);
+  let driverFreeBase = riderAvail.svc != null ? riderAvail.svc : 0;
 
   const tripBuckets = new Map();
 
@@ -446,10 +492,21 @@ function buildPlan(snapshot) {
     if (b.members.length > maxPerGiro(b.zona)) tw.push("giro_overflow");
     const anyForzado = b.members.some(m => !!m.forzado);
     const minCreated = Math.min(...b.members.map(m => new Date(m.created_at || 0).getTime() || 0));
+    // §Prudent replanning — pavimento "operativo" per i SEMI-CONGELATI: un ordine già
+    // in cucina con salida committata NON deve essere anticipato dal tempo recuperato.
+    // Il floor = max salida_driver_estimada committata dei membri semi-congelati.
+    let frozenFloor = -Infinity;
+    for (const m of b.members) {
+      if (classifyFreeze(m, nowSvc, cfg.margineCotturaMin) === "SEMI_CONGELATO") {
+        const committed = toSvc(m.salida_driver_estimada) ?? toSvc(m.forno_out);
+        if (committed != null) frozenFloor = Math.max(frozenFloor, committed);
+      }
+    }
     trips.push({
       key: b.key, zona: b.zona, manual_giro_id: b.manual_giro_id,
       members: b.members, tripHora, tg, pizze,
       forzado: anyForzado, minCreated, warnings: tw,
+      frozenFloor: Number.isFinite(frozenFloor) ? frozenFloor : null,
     });
   }
 
@@ -468,23 +525,42 @@ function buildPlan(snapshot) {
   driverWalls.sort((x, y) => x[0] - y[0]);
   for (const [, end] of driverWalls) driverFree = Math.max(driverFree, end);
 
+  const cap = cfg.forno.maxPerSlot;
+  const softMax = cfg.forno.softOverloadMax ?? (cap + 1);
+  const seriousMax = cfg.forno.seriousOverloadMax ?? (cap + 3);
+
   for (const t of trips) {
     const partTeorica = t.tripHora - t.tg;
-    let desiredDep = Math.max(driverFree, partTeorica);
+    // §Prudent replanning: i SEMI-CONGELATI non vengono anticipati sotto la loro
+    // salida committata, anche se il rider è tornato prima (tempo recuperato).
+    const floor = t.frozenFloor != null ? t.frozenFloor : -Infinity;
+    let desiredDep = Math.max(driverFree, partTeorica, floor);
 
-    // Gate forno: le pizze del giro escono allo slot di partenza; se pieno → slot
-    // successivo con spazio (= forno pieno → consegna più tardi). I8: forno_out=dep.
+    // §Soft oven overload — gate forno a SOGLIE (non più shift secco a cap+1):
+    //   ≤cap        ok
+    //   cap+1..soft soft overload   → NESSUN shift, warning morbido
+    //   ..serious   overload serio  → NESSUN shift, warning serio
+    //   >serious    hard overload   → shift in avanti finché rientra nel serio/cap
     let depSlot = slotStart(desiredDep, cfg.forno.slotMin);
     let movedForForno = false;
     let guard = 0;
-    while ((ovenLoad[depSlot] || 0) + t.pizze > cfg.forno.maxPerSlot && guard < 200) {
-      depSlot += cfg.forno.slotMin;
+    // sposta SOLO per hard overload e solo se uno slot successivo migliora davvero.
+    while ((ovenLoad[depSlot] || 0) + t.pizze > seriousMax && guard < 200) {
+      const next = depSlot + cfg.forno.slotMin;
+      if ((ovenLoad[next] || 0) >= (ovenLoad[depSlot] || 0)) break; // nessun miglioramento → stop
+      depSlot = next;
       movedForForno = true;
       guard++;
     }
     const departure = Math.max(desiredDep, depSlot);
     const fornoSlot = slotStart(departure, cfg.forno.slotMin);
-    ovenLoad[fornoSlot] = (ovenLoad[fornoSlot] || 0) + t.pizze;
+    const projected = (ovenLoad[fornoSlot] || 0) + t.pizze;
+    ovenLoad[fornoSlot] = projected;
+    // classifica l'overload risultante sullo slot di partenza
+    let overload = null;
+    if (projected > seriousMax) overload = "hard";
+    else if (projected > softMax) overload = "serio";
+    else if (projected > cap) overload = "soft";
 
     const rientro = departure + t.tg + cfg.bufferOpsDriverMin + t.tg;
     driverFree = rientro;
@@ -499,7 +575,11 @@ function buildPlan(snapshot) {
       const promessaSvc = toSvc(m.forzado_hora || m.hora);
       const retraso = Math.max(0, entregaSvc - (promessaSvc + tol));
       const reasons = [];
-      if (movedForForno) reasons.push("forno pieno: giro spostato avanti");
+      if (movedForForno) reasons.push("forno hard overload: giro spostato avanti");
+      else if (overload === "soft") reasons.push("forno soft overload (+1 tollerato, niente shift)");
+      else if (overload === "serio") reasons.push("forno overload serio (rivedere)");
+      const semiHeld = t.frozenFloor != null && departure <= t.frozenFloor;
+      if (semiHeld) reasons.push("semi-congelato protetto: non anticipato dal tempo recuperato");
       if (m.estado === "EN_COCINA") reasons.push("semi-congelato: già in cucina");
       if (m.forzado) reasons.push("forzato dall'operatore");
       ordersOut[m.id] = {
@@ -515,10 +595,15 @@ function buildPlan(snapshot) {
 
     t.departure = departure;
     t.forno_slot = fornoSlot;
+    t.overload = overload;
     t.delivery_window = [fromSvc(Math.min(...entregas)), fromSvc(Math.max(...entregas))];
     t.anchor = fromSvc(slotStart(t.tripHora, cfg.promiseSlotMin));
     t.rientro = rientro;
-    if (movedForForno) t.warnings.push("forno_pieno");
+    // §Soft oven overload — warning graduati (solo "hard" implica/segnala lo shift)
+    if (overload === "soft") t.warnings.push("forno_soft_overload");
+    else if (overload === "serio") t.warnings.push("forno_overload_serio");
+    else if (overload === "hard") t.warnings.push("forno_pieno");
+    if (movedForForno && !t.warnings.includes("forno_pieno")) t.warnings.push("forno_pieno");
   }
 
   const autoTrips = trips.map(t => ({
@@ -542,9 +627,22 @@ function buildPlan(snapshot) {
     }
   }
 
+  // §Real rider events — esponi la disponibilità rider usata (source/confidence)
+  // e, se è un evento reale, segnala che ha aggiornato la timeline futura.
+  if (riderAvail.real && riderAvail.available_from) {
+    warnings.push(`rider event applicato: disponibile da ${riderAvail.available_from} (${riderAvail.source})`);
+  }
+
   return {
     now: snapshot.now,
     config: cfg,
+    driver: {
+      available_from: riderAvail.available_from,
+      source: riderAvail.source,
+      confidence: riderAvail.confidence,
+      real_event: riderAvail.real,
+      reason: riderAvail.reason,
+    },
     trips: [...blocks, ...autoTrips],
     blocks,
     orders: ordersOut,
@@ -701,5 +799,5 @@ module.exports = {
   buildPlan,
   evaluateNewOrder,
   // esposti per i test:
-  _internal: { toSvc, fromSvc, slotStart, ceilTo, classifyFreeze, estimateRouteDuration, buildRiderBlock, DEFAULTS },
+  _internal: { toSvc, fromSvc, slotStart, ceilTo, classifyFreeze, estimateRouteDuration, buildRiderBlock, resolveRiderAvailability, SOURCE_CONFIDENCE, DEFAULTS },
 };

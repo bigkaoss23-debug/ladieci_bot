@@ -202,22 +202,23 @@ console.log("\n── AB6. Ritiro occupa forno ──");
   // VECCHIO: calcolaFornoOut non modella capacità forno; il ritiro non spinge il delivery.
   const foOldDom = calcolaFornoOut({ tipoConsegna: "DOMICILIO", hora: "20:05", durataAndataMin: 5 }).forno_out;
 
-  // NUOVO: capacità slot 4/10min condivisa con i ritiri → delivery spinto + warning.
+  // NUOVO: capacità slot modellata MA soft overload (+1 tollerato): 4+1=5 → niente
+  // shift automatico, solo warning forno_soft_overload (pizzaiolo recupera in 30-60s).
   const plan = buildPlan({ now: "17:00", orders });
   const trip = plan.trips.find(t => t.id.includes("Q1"));
 
   console.log(`    OLD forno_out DOM = ${foOldDom} (ignora i 4 pizze del ritiro nello slot 20:00)`);
   console.log(`    NEW forno_out DOM = ${plan.orders.DOM.forno_out} · warning=${j(trip?.warnings)}`);
 
-  check("OLD: forno_out DOM = 20:00 (nessuna capacità forno)", foOldDom === "20:00", foOldDom);
-  check("NEW: delivery spinto a 20:10 per forno pieno", plan.orders.DOM.forno_out === "20:10", plan.orders.DOM.forno_out);
-  check("NEW: warning forno_pieno", trip && trip.warnings.includes("forno_pieno"), j(trip?.warnings));
+  check("OLD: forno_out DOM = 20:00 (nessuna capacità forno, silenzioso)", foOldDom === "20:00", foOldDom);
+  check("NEW: forno_out DOM = 20:00 (soft overload, niente shift)", plan.orders.DOM.forno_out === "20:00", plan.orders.DOM.forno_out);
+  check("NEW: warning forno_soft_overload (visibile, non silenzioso)", trip && trip.warnings.includes("forno_soft_overload"), j(trip?.warnings));
 
   row("6 · Ritiro occupa forno",
-    `forno_out DOM=20:00 (capacità slot non modellata)`,
-    `forno_out DOM=20:10 + warning forno_pieno`,
-    "OLD ignora capacità forno (over-allocazione silenziosa); NEW la rispetta",
-    "MIGLIORAMENTO");
+    `forno_out DOM=20:00, capacità ignorata in SILENZIO`,
+    `forno_out DOM=20:00 + warning forno_soft_overload (visibile)`,
+    "OLD non vede la capacità; NEW la VEDE ma tollera +1 senza spostare",
+    "MIGLIORAMENTO (visibilità senza rigidità)");
 }
 
 // ===============================================================
