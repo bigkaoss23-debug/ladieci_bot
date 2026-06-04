@@ -117,6 +117,105 @@ console.log("\n══ Dirty geo timing ══");
     JSON.stringify(q1));
 }
 
+// ── Regola rilassata cache-street · task SHADOW-PREVIEW-DIRTY-GEO-RULE-FIX-34 ──
+// Caso reale: Q2 + cache-street + andata 6/8 NON deve generare warning dirty_geo.
+console.log("\n══ Dirty geo · cache-street zone/durata aware ══");
+{
+  // Caso A — Q2 cache-street durata realistica → NO dirty_geo (regressione del caso reale #001/#002)
+  const a = diagnosticsOf([
+    delivery({
+      id: "TEST_DIRTY_Q2_CACHE_OK",
+      zona: "Q2",
+      hora: "19:10",
+      andata_min: 6,
+      geo_source: "cache-street",
+      durata_google_min: null,
+      durata_haversine_min: 8,
+    }),
+  ]).filter((d) => d.type === "dirty_geo_timing");
+  check("A· Q2 cache-street andata 6 → NO dirty_geo", a.length === 0, JSON.stringify(a));
+
+  // Caso B — Q2 cache-street durata alta/sospetta → dirty_geo presente
+  const b = diagnosticsOf([
+    delivery({
+      id: "TEST_DIRTY_Q2_CACHE_HIGH",
+      zona: "Q2",
+      andata_min: 22,
+      geo_source: "cache-street",
+      durata_google_min: null,
+      durata_haversine_min: 22,
+    }),
+  ]).filter((d) => d.type === "dirty_geo_timing");
+  check("B· Q2 cache-street andata 22 → dirty_geo presente",
+    b.length === 1 && b[0].orderId === "TEST_DIRTY_Q2_CACHE_HIGH", JSON.stringify(b));
+
+  // Caso C — Q5 cache-street durata alta → dirty_geo presente (zona lontana resta prudente)
+  const c = diagnosticsOf([
+    delivery({
+      id: "TEST_DIRTY_Q5_CACHE_HIGH",
+      zona: "Q5",
+      andata_min: 28,
+      geo_source: "cache-street",
+      durata_google_min: null,
+      durata_haversine_min: 28,
+    }),
+  ]).filter((d) => d.type === "dirty_geo_timing");
+  check("C· Q5 cache-street andata 28 → dirty_geo presente", c.length === 1, JSON.stringify(c));
+
+  // Caso C2 — Q5 cache-street durata BASSA → dirty_geo presente comunque (zona lontana)
+  const c2 = diagnosticsOf([
+    delivery({
+      id: "TEST_DIRTY_Q5_CACHE_LOW",
+      zona: "Q5",
+      andata_min: 9,
+      geo_source: "cache-street",
+      durata_google_min: null,
+      durata_haversine_min: 9,
+    }),
+  ]).filter((d) => d.type === "dirty_geo_timing");
+  check("C2· Q5 cache-street andata 9 → dirty_geo presente (zona lontana resta prudente)",
+    c2.length === 1, JSON.stringify(c2));
+
+  // Caso D — Q5 google durata normale → NO dirty_geo
+  const d = diagnosticsOf([
+    delivery({
+      id: "TEST_DIRTY_Q5_GOOGLE_OK",
+      zona: "Q5",
+      andata_min: 13,
+      geo_source: "google",
+      durata_google_min: 13,
+      durata_haversine_min: 23,
+    }),
+  ]).filter((x) => x.type === "dirty_geo_timing");
+  check("D· Q5 google andata 13 → NO dirty_geo", d.length === 0, JSON.stringify(d));
+
+  // Caso E — source mancante + haversine >= 20 → dirty_geo presente
+  const e = diagnosticsOf([
+    delivery({
+      id: "TEST_DIRTY_Q2_NOSRC_HIGH",
+      zona: "Q2",
+      andata_min: 21,
+      geo_source: undefined,
+      durata_google_min: null,
+      durata_haversine_min: 21,
+    }),
+  ]).filter((x) => x.type === "dirty_geo_timing");
+  check("E· source mancante + haversine 21 → dirty_geo presente", e.length === 1, JSON.stringify(e));
+
+  // Caso F — source mancante + haversine basso → NO dirty_geo
+  const f = diagnosticsOf([
+    delivery({
+      id: "TEST_DIRTY_Q2_NOSRC_LOW",
+      zona: "Q2",
+      andata_min: 7,
+      geo_source: undefined,
+      durata_google_min: null,
+      durata_haversine_min: 7,
+    }),
+  ]).filter((x) => x.type === "dirty_geo_timing");
+  check("F· source mancante + haversine 7 → NO dirty_geo", f.length === 0, JSON.stringify(f));
+}
+
 console.log("\n══ Global oven slot warnings ══");
 {
   const soft = diagnosticsOf([pickup({ id: "TEST_DIAG_RIT_SOFT", hora: "20:30", n_pizze: 5 })])

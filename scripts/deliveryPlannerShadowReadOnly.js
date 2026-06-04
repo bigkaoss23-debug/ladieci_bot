@@ -101,6 +101,14 @@ function isGoogleSource(src) {
   return /^google(?:$|-)/i.test(String(src || ""));
 }
 
+// Zone "lontane" del cluster Q5 (Q5 / Marina / Evershine) dove la stima geo va
+// trattata con prudenza extra. Fuori da queste zone (Q1/Q2/Q3…) una cache-street
+// con durata realistica è considerata affidabile.
+function isFarDeliveryZone(zona) {
+  const z = String(zona || "");
+  return z === "Q5" || /marina|evershine/i.test(z);
+}
+
 function collectDirtyGeoDiagnostics(rawOrders, plan) {
   const diagnostics = [];
   const buffer = Number(plan && plan.config && plan.config.bufferOpsDriverMin) || 3;
@@ -112,11 +120,17 @@ function collectDirtyGeoDiagnostics(rawOrders, plan) {
     const googleMin = o.durata_google_min;
     const haversineMin = Number(o.durata_haversine_min);
     const nonGoogle = !isGoogleSource(geoSource);
-    const q5Marina = zona === "Q5" || /marina/i.test(zona);
+    const farZone = isFarDeliveryZone(zona);
     const cacheStreet = geoSource === "cache-street";
+    // cache-street è una cache a livello strada derivata da una geocodifica Google
+    // della stessa via (spesso "blindata" da consegne reali): NON è automaticamente
+    // sporca. È sospetta SOLO in zona lontana (Q5/Marina/Evershine) o quando la durata
+    // stessa è alta (andata >= 20). Per Q1/Q2/Q3 con durata realistica (andata < 20)
+    // non genera warning. Vedi audit SHADOW-PREVIEW-DIRTY-GEO-SOURCE-AUDIT-33.
+    const cacheStreetSuspect = cacheStreet && (farZone || (Number.isFinite(andata) && andata >= 20));
     const fallbackHigh = !geoSource && googleMin == null && Number.isFinite(haversineMin) && haversineMin >= 20;
-    const q5MarinaFallbackHigh = q5Marina && Number.isFinite(andata) && andata >= 20 && nonGoogle;
-    if (!cacheStreet && !fallbackHigh && !q5MarinaFallbackHigh) continue;
+    const farZoneFallbackHigh = farZone && Number.isFinite(andata) && andata >= 20 && nonGoogle;
+    if (!cacheStreetSuspect && !fallbackHigh && !farZoneFallbackHigh) continue;
 
     const n = plan && plan.orders ? plan.orders[o.id] : null;
     const estimatedRoundTrip = Number.isFinite(andata) ? (andata * 2) + buffer : null;
@@ -130,12 +144,12 @@ function collectDirtyGeoDiagnostics(rawOrders, plan) {
       geo_confidence: "low",
       estimate_suspect: true,
       estimated_round_trip_min: estimatedRoundTrip,
-      realistic_round_trip_hint_min: q5Marina ? 30 : null,
+      realistic_round_trip_hint_min: farZone ? 30 : null,
       planner_forno_out: n ? n.forno_out : null,
       planner_salida: n ? n.salida : null,
       planner_retraso: n ? n.retraso : null,
       input_dirty: true,
-      reason: q5Marina
+      reason: farZone
         ? "Q5/Marina usa durata fallback non-Google: possibile dato storico sporco"
         : "durata fallback non-Google alta: possibile dato storico sporco",
     });
