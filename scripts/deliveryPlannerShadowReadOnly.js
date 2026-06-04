@@ -89,6 +89,95 @@ const toMin = (hhmm) => {
   if (h < 6) h += 24; // night-service, allineato al planner
   return h * 60 + Number(m[2]);
 };
+const fromMin = (svc) => {
+  if (svc == null || !Number.isFinite(Number(svc))) return null;
+  let h = Math.floor(Number(svc) / 60);
+  const m = Number(svc) % 60;
+  if (h >= 24) h -= 24;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+};
+
+function isGoogleSource(src) {
+  return /^google(?:$|-)/i.test(String(src || ""));
+}
+
+function collectDirtyGeoDiagnostics(rawOrders, plan) {
+  const diagnostics = [];
+  for (const o of rawOrders || []) {
+    if (!o || o.tipo_consegna !== "DOMICILIO") continue;
+    const zona = String(o.zona || "");
+    const andata = Number(o.andata_min ?? o.durata_andata_min);
+    const geoSource = o.geo_source || null;
+    const googleMin = o.durata_google_min;
+    const haversineMin = Number(o.durata_haversine_min);
+    const nonGoogle = !isGoogleSource(geoSource);
+    const q5Marina = zona === "Q5" || /marina/i.test(zona);
+    const cacheStreet = geoSource === "cache-street";
+    const fallbackHigh = !geoSource && googleMin == null && Number.isFinite(haversineMin) && haversineMin >= 20;
+    const q5MarinaFallbackHigh = q5Marina && Number.isFinite(andata) && andata >= 20 && nonGoogle;
+    if (!cacheStreet && !fallbackHigh && !q5MarinaFallbackHigh) continue;
+
+    const n = plan && plan.orders ? plan.orders[o.id] : null;
+    diagnostics.push({
+      type: "dirty_geo_timing",
+      severity: "diagnostic",
+      orderId: o.id,
+      zona: o.zona || null,
+      andata_min: Number.isFinite(andata) ? andata : null,
+      geo_source: geoSource,
+      planner_forno_out: n ? n.forno_out : null,
+      planner_salida: n ? n.salida : null,
+      planner_retraso: n ? n.retraso : null,
+      input_dirty: true,
+      reason: q5Marina
+        ? "Q5/Marina usa durata fallback non-Google: possibile dato storico sporco"
+        : "durata fallback non-Google alta: possibile dato storico sporco",
+    });
+  }
+  return diagnostics;
+}
+
+function ovenDiagnosticSeverity(pizzas, capacity) {
+  if (pizzas >= capacity + 4) return "red";
+  if (pizzas >= capacity + 2) return "orange";
+  if (pizzas >= capacity + 1) return "yellow";
+  return null;
+}
+
+function ovenDiagnosticCode(pizzas, capacity) {
+  if (pizzas >= capacity + 4) return "forno_pieno";
+  if (pizzas >= capacity + 2) return "forno_overload_serio";
+  if (pizzas >= capacity + 1) return "forno_soft_overload";
+  return null;
+}
+
+function collectOvenSlotDiagnostics(plan) {
+  const diagnostics = [];
+  const capacity = Number(plan && plan.config && plan.config.forno && plan.config.forno.maxPerSlot) || 4;
+  const loads = plan && plan.ovenLoad ? plan.ovenLoad : {};
+  for (const [slotSvc, pizzasRaw] of Object.entries(loads)) {
+    const pizzas = Number(pizzasRaw) || 0;
+    const code = ovenDiagnosticCode(pizzas, capacity);
+    if (!code) continue;
+    diagnostics.push({
+      type: "global_oven_slot_warning",
+      code,
+      severity: ovenDiagnosticSeverity(pizzas, capacity),
+      slot: fromMin(Number(slotSvc)),
+      pizzas,
+      capacity,
+      reason: "Slot forno saturo anche considerando ritiri",
+    });
+  }
+  return diagnostics.sort((a, b) => toMin(a.slot) - toMin(b.slot));
+}
+
+function collectDiagnostics(rawOrders, plan) {
+  return [
+    ...collectDirtyGeoDiagnostics(rawOrders, plan),
+    ...collectOvenSlotDiagnostics(plan),
+  ];
+}
 
 // ── Esegue lo shadow su UNA fixture grezza ────────────────────────────────────
 // fixture: { fecha, orders:[...raw...], manual_giros?, driver?, now? }
@@ -160,6 +249,7 @@ function runShadow(fixture, opts = {}) {
   const tripWarnings = [];
   for (const t of plan.trips) for (const w of (t.warnings || [])) tripWarnings.push(`${t.id || t.zona}: ${w}`);
   const warnings = [...plan.warnings, ...tripWarnings];
+  const diagnostics = collectDiagnostics(rawOrders, plan);
 
   return {
     snapshotDate: fixture.fecha || null,
@@ -174,6 +264,7 @@ function runShadow(fixture, opts = {}) {
     derivedLeak,
     differences,
     warnings,
+    diagnostics,
     verdict: redOk ? "shadow_ok" : "shadow_red",
   };
 }
@@ -193,7 +284,17 @@ function runShadowAll(fixtures, opts = {}) {
   return { summary, reports };
 }
 
-module.exports = { normalizeRawOrders, assertNoDerivedInput, runShadow, runShadowAll, RAW_FIELDS, DERIVED_FIELDS };
+module.exports = {
+  normalizeRawOrders,
+  assertNoDerivedInput,
+  collectDiagnostics,
+  collectDirtyGeoDiagnostics,
+  collectOvenSlotDiagnostics,
+  runShadow,
+  runShadowAll,
+  RAW_FIELDS,
+  DERIVED_FIELDS,
+};
 
 // ── CLI READ-ONLY (le fixture sono caricate SOLO qui, mai a import-time) ───────
 if (require.main === module) {

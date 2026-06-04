@@ -68,6 +68,9 @@ function normalizeDbRow(row) {
     forzado: row.forzado === true,
     forzado_hora: row.forzado_hora || undefined,
     created_at: row.created_at || row.ts || undefined,
+    geo_source: row.geo_source || null,
+    durata_google_min: row.durata_google_min != null ? row.durata_google_min : null,
+    durata_haversine_min: row.durata_haversine_min != null ? row.durata_haversine_min : null,
     // ── baseline di confronto (MAI input: strip nel runner) ──
     forno_out_db: row.forno_out || null,
   };

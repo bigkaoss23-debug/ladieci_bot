@@ -82,10 +82,12 @@ function runNightShadow(ordini, opts = {}) {
     trips: rep.trips,
     riderOverlaps: rep.riderOverlaps,
     warningsCount: rep.warnings.length,
+    diagnosticsCount: rep.diagnostics.length,
     differencesCount: rep.differences.length,
     invariants: rep.invariants,
     verdict: rep.verdict,
     warnings: rep.warnings,
+    diagnostics: rep.diagnostics,
     differences: rep.differences.map((d) => ({
       orderId: d.orderId, zona: d.zona, type: d.type,
       old: d.old, planner: d.planner, retraso: d.retraso,
@@ -114,6 +116,7 @@ function runBackupShadow(nights, opts = {}) {
     deliveryOrders: done.reduce((s, r) => s + (r.deliveryOrders || 0), 0),
     pickupOrders: done.reduce((s, r) => s + (r.pickupOrders || 0), 0),
     totalDifferences: done.reduce((s, r) => s + (r.differencesCount || 0), 0),
+    totalDiagnostics: done.reduce((s, r) => s + (r.diagnosticsCount || 0), 0),
     allGreen: done.length > 0 && done.every((r) => r.verdict === "shadow_ok"),
     verdict: done.length > 0 && done.every((r) => r.verdict === "shadow_ok") ? "shadow_ok" : "shadow_red",
   };
