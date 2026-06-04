@@ -103,6 +103,7 @@ function isGoogleSource(src) {
 
 function collectDirtyGeoDiagnostics(rawOrders, plan) {
   const diagnostics = [];
+  const buffer = Number(plan && plan.config && plan.config.bufferOpsDriverMin) || 3;
   for (const o of rawOrders || []) {
     if (!o || o.tipo_consegna !== "DOMICILIO") continue;
     const zona = String(o.zona || "");
@@ -118,6 +119,7 @@ function collectDirtyGeoDiagnostics(rawOrders, plan) {
     if (!cacheStreet && !fallbackHigh && !q5MarinaFallbackHigh) continue;
 
     const n = plan && plan.orders ? plan.orders[o.id] : null;
+    const estimatedRoundTrip = Number.isFinite(andata) ? (andata * 2) + buffer : null;
     diagnostics.push({
       type: "dirty_geo_timing",
       severity: "diagnostic",
@@ -125,6 +127,10 @@ function collectDirtyGeoDiagnostics(rawOrders, plan) {
       zona: o.zona || null,
       andata_min: Number.isFinite(andata) ? andata : null,
       geo_source: geoSource,
+      geo_confidence: "low",
+      estimate_suspect: true,
+      estimated_round_trip_min: estimatedRoundTrip,
+      realistic_round_trip_hint_min: q5Marina ? 30 : null,
       planner_forno_out: n ? n.forno_out : null,
       planner_salida: n ? n.salida : null,
       planner_retraso: n ? n.retraso : null,
@@ -135,6 +141,22 @@ function collectDirtyGeoDiagnostics(rawOrders, plan) {
     });
   }
   return diagnostics;
+}
+
+function collectDirtyGeoRecoveryDiagnostics(dirtyDiagnostics, plan) {
+  if (!plan || !plan.driver || plan.driver.real_event !== true) return [];
+  return (dirtyDiagnostics || []).map((d) => ({
+    type: "dirty_geo_recovery",
+    severity: "diagnostic",
+    zona: d.zona,
+    geo_confidence: d.geo_confidence || "low",
+    estimate_suspect: d.estimate_suspect === true,
+    estimated_round_trip_min: d.estimated_round_trip_min,
+    realistic_round_trip_hint_min: d.realistic_round_trip_hint_min,
+    rider_available_from: plan.driver.available_from || null,
+    rider_event_source: plan.driver.source || null,
+    reason: "Timing Q5/Evershine non-Google sospetto; usa evento rider_returned per riallineare il futuro",
+  }));
 }
 
 function ovenDiagnosticSeverity(pizzas, capacity) {
@@ -173,14 +195,16 @@ function collectOvenSlotDiagnostics(plan) {
 }
 
 function collectDiagnostics(rawOrders, plan) {
+  const dirty = collectDirtyGeoDiagnostics(rawOrders, plan);
   return [
-    ...collectDirtyGeoDiagnostics(rawOrders, plan),
+    ...dirty,
+    ...collectDirtyGeoRecoveryDiagnostics(dirty, plan),
     ...collectOvenSlotDiagnostics(plan),
   ];
 }
 
 // ── Esegue lo shadow su UNA fixture grezza ────────────────────────────────────
-// fixture: { fecha, orders:[...raw...], manual_giros?, driver?, now? }
+// fixture: { fecha, orders:[...raw...], manual_giros?, driver?, driver_events?, driver_status?, now? }
 function runShadow(fixture, opts = {}) {
   const now = opts.now || fixture.now || "19:00";
   const rawOrders = fixture.orders || [];
@@ -192,6 +216,8 @@ function runShadow(fixture, opts = {}) {
     orders,
     manual_giros: fixture.manual_giros || [],
     driver: fixture.driver || null,
+    driver_events: fixture.driver_events || [],
+    driver_status: fixture.driver_status || null,
   };
   const plan = buildPlan(snapshot);
 
@@ -289,6 +315,7 @@ module.exports = {
   assertNoDerivedInput,
   collectDiagnostics,
   collectDirtyGeoDiagnostics,
+  collectDirtyGeoRecoveryDiagnostics,
   collectOvenSlotDiagnostics,
   runShadow,
   runShadowAll,
