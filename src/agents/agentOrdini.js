@@ -13,6 +13,7 @@ const {
   logOrderStateTransition,
   stateEventType,
 } = require("../utils/orderStateLogger");
+const { validateTransition } = require("../utils/orderStateMachine");
 
 // Ora attuale di Madrid in minuti dalla mezzanotte. proposeForNewOrder usa nowMin
 // per il pavimento "minPart" della slot-search: se non lo passiamo, ricade su
@@ -692,6 +693,23 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     tipoConsegnaActual = _prev?.[0]?.tipo_consegna || null;
   } catch (e) {
     console.warn("[cambiaStato] prev fetch failed:", e?.message || e);
+  }
+
+  // Guard transizioni di stato (ORDER-STATE-MACHINE-WIRE-GUARD-49): rifiuta stati
+  // sconosciuti ("EN_COCINA cambiaStato", "", null…) e salti illegali PRIMA di
+  // scrivere su `ordenes` o `orden_estado_logs`. estadoActual=null (ordine non
+  // trovato o fetch fallito) → semantica "create": gli stati malformati restano
+  // comunque rifiutati, ma la legalità della transizione non viene forzata
+  // (fail-open, coerente col commento "lo stato cambia comunque" qui sopra).
+  const _trans = validateTransition(estadoActual, nuovoStato);
+  if (!_trans.ok) {
+    return {
+      success: false,
+      error: "invalid_state_transition",
+      reason: _trans.reason,
+      estado_actual: estadoActual,
+      estado_solicitado: nuovoStato,
+    };
   }
 
   Object.assign(upd, buildStateTimestampPatch({
