@@ -28,6 +28,8 @@
 
 const { buildPlan } = require("../src/core/delivery/planner");
 
+const FROZEN_OR_TERMINAL_STATES = new Set(["EN_ENTREGA", "RETIRADO", "COMPLETADO", "COMPLETATO", "CANCELADO"]);
+
 // Campi GREZZI ammessi come input del planner (spec §4 "il derivato non alimenta
 // mai il derivato"). Tutto il resto della fixture è display/baseline e va scartato.
 const RAW_FIELDS = [
@@ -107,6 +109,15 @@ function isGoogleSource(src) {
 function isFarDeliveryZone(zona) {
   const z = String(zona || "");
   return z === "Q5" || /marina|evershine/i.test(z);
+}
+
+function isFrozenOrTerminalOrder(order) {
+  const estado = String(order && order.estado || "").toUpperCase();
+  return FROZEN_OR_TERMINAL_STATES.has(estado);
+}
+
+function isRecomputableDelivery(order) {
+  return order && order.tipo_consegna === "DOMICILIO" && !isFrozenOrTerminalOrder(order);
 }
 
 function collectDirtyGeoDiagnostics(rawOrders, plan) {
@@ -208,12 +219,33 @@ function collectOvenSlotDiagnostics(plan) {
   return diagnostics.sort((a, b) => toMin(a.slot) - toMin(b.slot));
 }
 
+function collectFrozenCommittedDiagnostics(rawOrders, plan) {
+  const diagnostics = [];
+  for (const o of rawOrders || []) {
+    if (!o || o.tipo_consegna !== "DOMICILIO" || !isFrozenOrTerminalOrder(o)) continue;
+    const n = plan && plan.orders ? plan.orders[o.id] : null;
+    const reasons = n && Array.isArray(n.reasons) ? n.reasons.join("; ") : "";
+    const hasFrozenArtifact = !n || !n.forno_out || /congelato duro|committ/i.test(reasons);
+    if (!hasFrozenArtifact) continue;
+    diagnostics.push({
+      type: "frozen_committed_order",
+      severity: "info",
+      orderId: o.id,
+      estado: o.estado || null,
+      zona: o.zona || null,
+      reason: "Pedido ya comprometido o terminal: excluido de invariantes que requieren recálculo",
+    });
+  }
+  return diagnostics;
+}
+
 function collectDiagnostics(rawOrders, plan) {
   const dirty = collectDirtyGeoDiagnostics(rawOrders, plan);
   return [
     ...dirty,
     ...collectDirtyGeoRecoveryDiagnostics(dirty, plan),
     ...collectOvenSlotDiagnostics(plan),
+    ...collectFrozenCommittedDiagnostics(rawOrders, plan),
   ];
 }
 
@@ -236,6 +268,7 @@ function runShadow(fixture, opts = {}) {
   const plan = buildPlan(snapshot);
 
   const delivery = rawOrders.filter((o) => o.tipo_consegna === "DOMICILIO");
+  const recomputableDelivery = delivery.filter(isRecomputableDelivery);
   const pickup = rawOrders.filter((o) => o.tipo_consegna === "RITIRO");
   const zones = [...new Set(delivery.map((o) => o.zona).filter(Boolean))].sort();
 
@@ -244,11 +277,11 @@ function runShadow(fixture, opts = {}) {
   const noInvalidTimeFormat = projections.every(
     (n) => !n.forno_out || isValidHHMM(n.forno_out),
   );
-  const noImpossibleFornoOut = delivery.every((o) => {
+  const noImpossibleFornoOut = recomputableDelivery.every((o) => {
     const n = plan.orders[o.id];
     return n && isValidHHMM(n.forno_out) && (toMin(n.entrega) - toMin(n.forno_out)) === (Number(o.andata_min) || 0);
   });
-  const noDriverBeforePizza = delivery.every((o) => {
+  const noDriverBeforePizza = recomputableDelivery.every((o) => {
     const n = plan.orders[o.id];
     return n && toMin(n.salida) >= toMin(n.forno_out);
   });
@@ -267,6 +300,7 @@ function runShadow(fixture, opts = {}) {
   const differences = [];
   for (const o of delivery) {
     const n = plan.orders[o.id];
+    if (isFrozenOrTerminalOrder(o)) continue;
     if (!n) continue;
     if (o.forno_out_db != null && n.forno_out !== o.forno_out_db) {
       const reasons = (n.reasons || []).join("; ");
