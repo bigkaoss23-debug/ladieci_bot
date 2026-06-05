@@ -77,6 +77,31 @@ function buildActions(status, groups) {
   return actions;
 }
 
+function cleanRiderChainItem(item = {}) {
+  return {
+    orderId: item.orderId || null,
+    level: item.level || "warning",
+    delayMin: Number(item.delayMin) || 0,
+    blockedByOrderId: item.blockedByOrderId || null,
+    blockedByZone: item.blockedByZone || null,
+    riderAvailableAt: item.riderAvailableAt || null,
+    reason: item.reason || "rider_unavailable_unknown_previous_order",
+    message: item.message || "",
+  };
+}
+
+function buildRiderChain(preview) {
+  return arrayOrEmpty(preview && preview.riderChain)
+    .map(cleanRiderChainItem)
+    .filter((item) => item.orderId)
+    .slice(0, 3);
+}
+
+function riderChainPriority(riderChain) {
+  const maxDelay = Math.max(0, ...arrayOrEmpty(riderChain).map((item) => Number(item.delayMin) || 0));
+  return maxDelay > 15 ? "high" : "medium";
+}
+
 function buildSummary(preview, groups) {
   const summary = preview && preview.summary ? preview.summary : {};
   return {
@@ -86,6 +111,7 @@ function buildSummary(preview, groups) {
     zones: unique(summary.zones),
     warningsCount: Number(summary.warningsCount) || 0,
     differencesCount: Number(summary.differencesCount) || 0,
+    riderChainCount: Number(summary.riderChainCount) || 0,
     groupedMessagesCount: groups.length,
   };
 }
@@ -94,6 +120,11 @@ function buildShadowPreviewContract({ preview, generatedAt, source, dates } = {}
   const safePreview = preview && typeof preview === "object" ? preview : {};
   const status = safeStatus(safePreview.status);
   const groups = arrayOrEmpty(safePreview.groupedOperatorMessages).map(contractGroup);
+  const riderChain = buildRiderChain(safePreview);
+  const actions = buildActions(status, groups);
+  if (riderChain.length > 0) {
+    addAction(actions, action("review_rider_chain", "Revisar cadena rider", "manual_check", riderChainPriority(riderChain)));
+  }
   return {
     version: VERSION,
     mode: "read_only",
@@ -103,7 +134,8 @@ function buildShadowPreviewContract({ preview, generatedAt, source, dates } = {}
     source: safeSource({ source, dates }),
     summary: buildSummary(safePreview, groups),
     groups,
-    actions: buildActions(status, groups),
+    riderChain,
+    actions,
     safety: {
       readOnly: true,
       writesEnabled: false,
@@ -124,5 +156,6 @@ module.exports = {
     contractGroup,
     buildActions,
     buildSummary,
+    buildRiderChain,
   },
 };

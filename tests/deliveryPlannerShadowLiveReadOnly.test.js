@@ -62,9 +62,14 @@ check("2c· countPizzas esclude 'Entrega a domicilio'", countPizzas([{ n: "Entre
 const n101 = normalizeDbRow(FAKE_ROWS[0]);
 check("3· normalize mappa fatti grezzi", n101.id === "#101" && n101.zona === "Q1" && n101.hora === "20:30" && n101.andata_min === 8 && n101.n_pizze === 2);
 check("3b· normalize conserva estado reale (EN_COCINA)", normalizeDbRow(FAKE_ROWS[1]).estado === "EN_COCINA");
-check("3c· normalize NON propaga salida/entrega/retraso/conflicto derivati",
-  !("salida_driver_estimada" in n101) && !("entrega_estimada" in n101) && !("retraso_estimado_min" in n101) && !("conflicto_driver" in n101));
-check("3d· baseline forno_out → forno_out_db (confronto, non input)", n101.forno_out_db === "20:22" && !("forno_out" in n101));
+check("3c· normalize conserva driver fields solo come baseline/reporting",
+  n101.salida_driver_estimada === "20:22" &&
+    n101.entrega_estimada === "20:30" &&
+    n101.retraso_estimado_min === 0 &&
+    n101.conflicto_driver === false,
+  JSON.stringify(n101));
+check("3d· baseline forno_out conservato per confronto/reporting",
+  n101.forno_out_db === "20:22" && n101.forno_out === "20:22");
 
 // ── 4. il runner shadow STRIPpa forno_out_db prima del planner (mai input) ────
 const rep = runShadowFromRows([FAKE_ROWS[0], FAKE_ROWS[1], FAKE_ROWS[2]], { date: "2026-05-30", now: "19:00" });
@@ -80,13 +85,16 @@ check("5· rowDate da created_at", rowDate(FAKE_ROWS[0]) === "2026-05-30");
 const day = filterByDate(FAKE_ROWS, "2026-05-30");
 check("5b· filterByDate scarta altri giorni (#999 fuori)", day.length === 3 && !day.some((r) => r.id === "#999"));
 
-// ── 6. buildSnapshot non ha campi derivati negli orders ───────────────────────
+// ── 6. buildSnapshot conserva baseline, ma il runner la strippa prima del planner ─
 const snap = buildSnapshotFromRows(day, { date: "2026-05-30", now: "19:00" });
 const leaked = [];
-for (const o of snap.orders) for (const d of ["forno_out", "salida_driver_estimada", "entrega_estimada", "retraso_estimado_min", "conflicto_driver"]) {
+const { normalizeRawOrders, assertNoDerivedInput } = require("../scripts/deliveryPlannerShadowReadOnly");
+for (const o of normalizeRawOrders(snap.orders)) for (const d of ["forno_out", "salida_driver_estimada", "entrega_estimada", "retraso_estimado_min", "conflicto_driver"]) {
   if (d in o) leaked.push(o.id + ":" + d);
 }
-check("6· snapshot orders senza campi derivati storici", leaked.length === 0, JSON.stringify(leaked));
+check("6· planner input senza campi derivati storici", leaked.length === 0, JSON.stringify(leaked));
+check("6b· assertNoDerivedInput verde sui normalized planner inputs",
+  assertNoDerivedInput(normalizeRawOrders(snap.orders)).length === 0);
 
 // ── 7. HARD READ-ONLY: lo script non contiene metodi di scrittura/RPC ─────────
 const src = fs.readFileSync(path.join(__dirname, "../scripts/deliveryPlannerShadowLiveReadOnly.js"), "utf8");

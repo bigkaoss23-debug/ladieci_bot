@@ -27,6 +27,7 @@
 "use strict";
 
 const { buildPlan } = require("../src/core/delivery/planner");
+const { explainRiderDelayChain } = require("../src/core/delivery/riderChainExplanation");
 
 const FROZEN_OR_TERMINAL_STATES = new Set(["EN_ENTREGA", "RETIRADO", "COMPLETADO", "COMPLETATO", "CANCELADO"]);
 
@@ -56,6 +57,14 @@ const DERIVED_FIELDS = [
   "retraso_driver_min",
   "conflicto_driver",
   "estado_db",
+];
+
+const RIDER_CHAIN_BASELINE_FIELDS = [
+  "salida_driver_estimada",
+  "entrega_estimada",
+  "retraso_estimado_min",
+  "conflicto_driver",
+  "forno_out",
 ];
 
 // ── Normalizza i FATTI GREZZI di uno snapshot ─────────────────────────────────
@@ -324,6 +333,9 @@ function runShadow(fixture, opts = {}) {
   for (const t of plan.trips) for (const w of (t.warnings || [])) tripWarnings.push(`${t.id || t.zona}: ${w}`);
   const warnings = [...plan.warnings, ...tripWarnings];
   const diagnostics = collectDiagnostics(rawOrders, plan);
+  const riderChain = explainRiderDelayChain(rawOrders, {
+    bufferMin: Number(plan && plan.config && plan.config.bufferOpsDriverMin) || 3,
+  });
 
   return {
     snapshotDate: fixture.fecha || null,
@@ -339,6 +351,7 @@ function runShadow(fixture, opts = {}) {
     differences,
     warnings,
     diagnostics,
+    riderChain,
     verdict: redOk ? "shadow_ok" : "shadow_red",
   };
 }
@@ -365,10 +378,12 @@ module.exports = {
   collectDirtyGeoDiagnostics,
   collectDirtyGeoRecoveryDiagnostics,
   collectOvenSlotDiagnostics,
+  explainRiderDelayChain,
   runShadow,
   runShadowAll,
   RAW_FIELDS,
   DERIVED_FIELDS,
+  RIDER_CHAIN_BASELINE_FIELDS,
 };
 
 // ── CLI READ-ONLY (le fixture sono caricate SOLO qui, mai a import-time) ───────
