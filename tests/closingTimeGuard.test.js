@@ -62,6 +62,7 @@ require.cache[supabasePath] = {
 };
 
 const { creaOrdine, modificaOrdine } = require("../src/agents/agentOrdini");
+const lastOrdenesWrite = () => [...writes].reverse().find(w => w.table === "ordenes");
 
 const validOverride = {
   forzado: true,
@@ -111,8 +112,8 @@ assert.strictEqual(hasValidClosingOverride(validOverride), true);
 
   res = await creaOrdine({ nombre: "Test", items: [], hora: "23:10", ...validOverride });
   assert.strictEqual(res.success, true);
-  assert.strictEqual(writes.at(-1).data.forzado, true);
-  assert.ok(writes.at(-1).data.nota.includes(FUERA_HORARIO_OVERRIDE_MARKER));
+  assert.strictEqual(lastOrdenesWrite().data.forzado, true);
+  assert.ok(lastOrdenesWrite().data.nota.includes(FUERA_HORARIO_OVERRIDE_MARKER));
 
   res = await creaOrdine({ nombre: "Test", items: [], hora: "23:10", forzado: true });
   assert.strictEqual(res.success, false);
@@ -138,9 +139,9 @@ assert.strictEqual(hasValidClosingOverride(validOverride), true);
 
   res = await modificaOrdine("#TEST", { hora: "23:10", ...validOverride });
   assert.strictEqual(res.success, true);
-  assert.strictEqual(writes.at(-1).type, "update");
-  assert.strictEqual(writes.at(-1).data.forzado, true);
-  assert.ok(writes.at(-1).data.nota.includes(FUERA_HORARIO_OVERRIDE_MARKER));
+  assert.strictEqual(lastOrdenesWrite().type, "update");
+  assert.strictEqual(lastOrdenesWrite().data.forzado, true);
+  assert.ok(lastOrdenesWrite().data.nota.includes(FUERA_HORARIO_OVERRIDE_MARKER));
 
   const orchestratorSrc = fs.readFileSync(path.join(__dirname, "../src/agents/orchestrator.js"), "utf8");
   assert.ok(orchestratorSrc.includes("No podemos aceptar pedidos después de las 23:00"));
