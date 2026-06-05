@@ -73,6 +73,11 @@ function normalizeDbRow(row) {
     durata_haversine_min: row.durata_haversine_min != null ? row.durata_haversine_min : null,
     // ── baseline di confronto (MAI input: strip nel runner) ──
     forno_out_db: row.forno_out || null,
+    forno_out: row.forno_out || null,
+    salida_driver_estimada: row.salida_driver_estimada || null,
+    entrega_estimada: row.entrega_estimada || null,
+    retraso_estimado_min: row.retraso_estimado_min != null ? row.retraso_estimado_min : null,
+    conflicto_driver: row.conflicto_driver === true,
   };
 }
 

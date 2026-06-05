@@ -24,7 +24,8 @@ function hasCriticalInvariant(shadowOutput) {
 function hasSignal(shadowOutput) {
   return count(shadowOutput && shadowOutput.diagnostics) > 0
     || count(shadowOutput && shadowOutput.warnings) > 0
-    || count(shadowOutput && shadowOutput.differences) > 0;
+    || count(shadowOutput && shadowOutput.differences) > 0
+    || count(shadowOutput && shadowOutput.riderChain) > 0;
 }
 
 function previewStatus(shadowOutput) {
@@ -46,6 +47,7 @@ function buildSummary(shadowOutput) {
     warningsCount: count(shadowOutput && shadowOutput.warnings),
     differencesCount: count(shadowOutput && shadowOutput.differences),
     diagnosticsCount: count(shadowOutput && shadowOutput.diagnostics),
+    riderChainCount: count(shadowOutput && shadowOutput.riderChain),
   };
 }
 
@@ -211,7 +213,7 @@ function groupOperatorMessages(operatorMessages = [], diagnostics = []) {
   return groups.sort((a, b) => severityRank(a.level) - severityRank(b.level) || a.title.localeCompare(b.title));
 }
 
-function buildSuggestedActions(messages, status) {
+function buildSuggestedActions(messages, status, riderChain = []) {
   const actions = [];
   for (const msg of messages || []) {
     const tags = msg.tags || [];
@@ -222,6 +224,7 @@ function buildSuggestedActions(messages, status) {
       addAction(actions, "Revisar si conviene mover o forzar manualmente");
     }
   }
+  if (count(riderChain) > 0) addAction(actions, "Revisar cadena rider");
   if (status === "critical") addAction(actions, "Revisar invariantes críticas antes de usar el plan");
   return actions;
 }
@@ -229,6 +232,7 @@ function buildSuggestedActions(messages, status) {
 function buildShadowPreviewForOperator(shadowOutput = {}) {
   const status = previewStatus(shadowOutput);
   const diagnostics = Array.isArray(shadowOutput.diagnostics) ? shadowOutput.diagnostics : [];
+  const riderChain = Array.isArray(shadowOutput.riderChain) ? shadowOutput.riderChain.slice(0, 3) : [];
   const operatorMessages = formatShadowDiagnosticsForOperator({ diagnostics });
   const groupedOperatorMessages = groupOperatorMessages(operatorMessages, diagnostics);
   return {
@@ -238,7 +242,8 @@ function buildShadowPreviewForOperator(shadowOutput = {}) {
     operatorMessages,
     groupedOperatorMessages,
     keyRisks: buildKeyRisks(operatorMessages, diagnostics),
-    suggestedOperatorActions: buildSuggestedActions(operatorMessages, status),
+    riderChain,
+    suggestedOperatorActions: buildSuggestedActions(operatorMessages, status, riderChain),
     rawDiagnosticsHidden: true,
     readOnly: true,
   };

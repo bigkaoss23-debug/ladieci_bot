@@ -74,11 +74,22 @@ function formatGlobalOvenSlotWarning(diagnostic) {
   });
 }
 
+function formatFrozenCommittedOrder() {
+  return baseMessage({
+    level: LEVELS.info,
+    title: "Pedido ya comprometido",
+    message: "Un pedido ya está en entrega o cerrado. No se recalcula como si fuera un pedido nuevo.",
+    operatorHint: "No es un bloqueo operativo. Revisa solo si esperabas que ese pedido siguiera planificable.",
+    tags: cleanTags(["frozen_committed", "planner"]),
+  });
+}
+
 function formatDiagnosticForOperator(diagnostic) {
   const type = diagnostic && diagnostic.type;
   if (type === "dirty_geo_timing") return formatDirtyGeoTiming(diagnostic);
   if (type === "dirty_geo_recovery") return formatDirtyGeoRecovery(diagnostic);
   if (type === "global_oven_slot_warning") return formatGlobalOvenSlotWarning(diagnostic);
+  if (type === "frozen_committed_order") return formatFrozenCommittedOrder(diagnostic);
   return baseMessage({});
 }
 
