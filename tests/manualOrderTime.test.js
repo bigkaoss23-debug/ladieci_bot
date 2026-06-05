@@ -83,7 +83,9 @@ async function manual({ tipo, hora, durata, zona }) {
     assert("00:10 − 12 = 23:58", b?.forno_out === "23:58", `forno_out=${b?.forno_out}`);
     const c = await manual({ tipo: "DOMICILIO", hora: "00:11", durata: 12, zona: "Q5" });
     assert("00:11 − 12 = 23:59", c?.forno_out === "23:59", `forno_out=${c?.forno_out}`);
-    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(JSON.stringify([a,b,c])), JSON.stringify([a,b,c]));
+    // Ignora i campi ISO-datetime (updated_at, *_at): contengono ":2X:" a seconda
+    // del wall-clock → falso positivo sul check anti-wrap.
+    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(JSON.stringify([a,b,c]).replace(/\d{4}-\d\d-\d\dT[\d:.]+Z?/g, "")), JSON.stringify([a,b,c]));
   }
 
   section("T4 — DOMICILIO tardi 23:55 / andata 8 → hora 23:55, forno 23:47");
