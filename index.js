@@ -172,7 +172,11 @@ app.post("/api", async (req, res) => {
     let result;
 
     if (action === "cambiaStato") {
-      result = await cambiaStato(req.body.id, req.body.estado);
+      result = await cambiaStato(req.body.id, req.body.estado, {
+        actor_type: req.body.actor_type || "operator",
+        actor_id: req.body.actor_id || null,
+        origin: req.body.origin || "dashboard",
+      });
     } else if (action === "creaOrdine") {
       // Dashboard operatore: niente blocco hard orario chiusura (vedi creaOrdine).
       result = await creaOrdine({ ...req.body, operatorManual: true });
@@ -207,17 +211,26 @@ app.post("/api", async (req, res) => {
       for (const k of ["metodo_pago","cobrado","ya_pagado","hora_entrega","hora_salida","repartidor","llegado","cucina_check","descuento_tipo","descuento_valor"]) {
         if (req.body[k] !== undefined) extras[k] = req.body[k];
       }
+      extras.actor_type = req.body.actor_type || "operator";
+      extras.actor_id = req.body.actor_id || null;
+      extras.origin = req.body.origin || "dashboard";
       result = await cambiaStato(req.body.id, req.body.estado, extras);
     } else if (action === "marcarEnEntrega") {
       // LISTO → EN_ENTREGA — registra hora_salida atomicamente
-      result = await cambiaStato(req.body.id, "EN_ENTREGA", { hora_salida: Date.now() });
+      result = await cambiaStato(req.body.id, "EN_ENTREGA", {
+        hora_salida: Date.now(),
+        actor_type: "rider",
+        origin: "entregas",
+      });
     } else if (action === "marcarEntregado") {
       // EN_ENTREGA/LISTO → RETIRADO — registra hora_entrega + cobrado + metodo_pago atomicamente.
       // Eventuale descuento applicato al momento del incasso.
       const extras = {
         hora_entrega: Date.now(),
         cobrado: req.body.cobrado !== false,
-        metodo_pago: req.body.metodo_pago || ""
+        metodo_pago: req.body.metodo_pago || "",
+        actor_type: "rider",
+        origin: "entregas",
       };
       if (req.body.descuento_tipo  !== undefined) extras.descuento_tipo  = req.body.descuento_tipo;
       if (req.body.descuento_valor !== undefined) extras.descuento_valor = req.body.descuento_valor;

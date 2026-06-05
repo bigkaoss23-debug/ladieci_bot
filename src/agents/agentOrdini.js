@@ -8,6 +8,11 @@ const { calcolaFornoOut, simulateDriverSchedule, computeDriverFields, proposeFor
 const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
+const {
+  buildStateTimestampPatch,
+  logOrderStateTransition,
+  stateEventType,
+} = require("../utils/orderStateLogger");
 
 // Ora attuale di Madrid in minuti dalla mezzanotte. proposeForNewOrder usa nowMin
 // per il pavimento "minPart" della slot-search: se non lo passiamo, ricade su
@@ -374,6 +379,15 @@ async function creaOrdine(params) {
 
     const newId = "#" + String(lastNum + 1).padStart(3, "0");
 
+    const estadoInicial = params.estado || "POR_CONFIRMAR";
+    const nowIso = new Date().toISOString();
+    const stateTimestamps = buildStateTimestampPatch({
+      from: null,
+      to: estadoInicial,
+      now: nowIso,
+      tipoConsegna,
+    });
+
     // INSERT puro: fallisce con 23505 su PK duplicata invece di sovrascrivere
     const result = await sbInsert("ordenes", {
       id: newId,
@@ -388,7 +402,8 @@ async function creaOrdine(params) {
       nota_cucina: params.nota_cucina || "",
       hora: horaFinale || params.hora || "",
       forno_out: fornoOut,
-      estado: params.estado || "POR_CONFIRMAR",
+      estado: estadoInicial,
+      ...stateTimestamps,
       cucina_check: params.cucina_check || null,
       ts: Date.now(),
       llegado: false,
@@ -421,6 +436,19 @@ async function creaOrdine(params) {
       bumpGeoCacheCreated(params.direccion, geoFields.geo_source);
       // Best-effort: aggiorna contatori cliente (total_pedidos, ultimo_pedido, auto-promote preferito).
       bumpClienteCounters(clienteIdResolved);
+      await logOrderStateTransition({
+        orderId: newId,
+        from: null,
+        to: estadoInicial,
+        eventType: "created",
+        actorType: params.operatorManual ? "operator" : "bot",
+        actorId: params.actor_id || null,
+        origin: params.operatorManual ? "dashboard" : "whatsapp",
+        metadata: {
+          tipo_consegna: tipoConsegna,
+          operator_manual: params.operatorManual === true,
+        },
+      });
       if (tipoConsegna === "DOMICILIO") await risincronizzaGiro(geoFields.zona, horaFinale || params.hora);
       return { success: true, id: newId };
     }
@@ -618,7 +646,7 @@ async function modificaOrdine(ordenId, updates) {
   return { success: true };
 }
 
-// extras: { metodo_pago, cobrado, hora_entrega, hora_salida, repartidor, llegado, cucina_check }
+// extras: { metodo_pago, cobrado, hora_entrega, hora_salida, repartidor, llegado, cucina_check, actor_type, actor_id, origin }
 // Scrittura atomica singola — niente cerotti, niente race tra metodo_pago e estado.
 async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   const upd = { estado: nuovoStato };
@@ -651,19 +679,47 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     }
   }
 
-  // DELIVERY-MANUAL-GIRO-01 P1C.1: capture prev manual_giro_id BEFORE
-  // the estado update so the auto-dissolve hook below can detect when
-  // this status change moves the order out of its giro. Single targeted
-  // SELECT to keep overhead minimal; result is cached locally.
+  // Capture current state + tipo before the update: serve sia per manual_giros
+  // sia per timestamp/log lifecycle. Best-effort: se il fetch fallisce, lo
+  // stato cambia comunque e il log usera' estado_from=null.
   let _prevManualGiroId = null;
+  let estadoActual = null;
+  let tipoConsegnaActual = null;
   try {
-    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=manual_giro_id`);
+    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,estado,manual_giro_id,tipo_consegna`);
     _prevManualGiroId = _prev?.[0]?.manual_giro_id || null;
+    estadoActual = _prev?.[0]?.estado || null;
+    tipoConsegnaActual = _prev?.[0]?.tipo_consegna || null;
   } catch (e) {
-    console.warn("[manualGiros] prev fetch in cambiaStato failed:", e?.message || e);
+    console.warn("[cambiaStato] prev fetch failed:", e?.message || e);
   }
 
+  Object.assign(upd, buildStateTimestampPatch({
+    from: estadoActual,
+    to: nuovoStato,
+    now: new Date().toISOString(),
+    tipoConsegna: tipoConsegnaActual,
+    extras,
+  }));
+
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
+
+  await logOrderStateTransition({
+    orderId: ordenId,
+    from: estadoActual,
+    to: nuovoStato,
+    eventType: stateEventType(estadoActual, nuovoStato, tipoConsegnaActual),
+    actorType: extras.actor_type || "operator",
+    actorId: extras.actor_id || null,
+    origin: extras.origin || "dashboard",
+    metadata: {
+      tipo_consegna: tipoConsegnaActual,
+      has_hora_salida: extras.hora_salida !== undefined,
+      has_hora_entrega: extras.hora_entrega !== undefined,
+      has_payment_update: extras.metodo_pago !== undefined || extras.cobrado !== undefined || extras.ya_pagado !== undefined,
+      has_discount_update: extras.descuento_tipo !== undefined || extras.descuento_valor !== undefined,
+    },
+  });
 
   // DELIVERY-MANUAL-GIRO-01 P1C.1: if the order was in a manual giro
   // and the new status leaves the selectable set, detach + auto-dissolve.
