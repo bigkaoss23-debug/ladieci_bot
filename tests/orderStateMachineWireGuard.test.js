@@ -87,9 +87,9 @@ const seed = (id, estado, tipo = "RITIRO") => { STORE[id] = { id, estado, tipo_c
     assert(`${label} → estado invariato (EN_COCINA)`, STORE["#202"].estado === "EN_COCINA");
   }
 
-  // ── 3) backward → rifiuto ──────────────────────────────────────────────────
+  // ── 3) backward → rifiuto (escluso l'undo operativo LISTO→EN_COCINA) ────────
   section("3) transizioni backward rifiutate");
-  for (const [from, to] of [["LISTO", "EN_COCINA"], ["EN_ENTREGA", "LISTO"], ["RETIRADO", "EN_COCINA"]]) {
+  for (const [from, to] of [["EN_ENTREGA", "LISTO"], ["EN_ENTREGA", "EN_COCINA"], ["RETIRADO", "EN_COCINA"]]) {
     reset(); seed("#203", from);
     const res = await cambiaStato("#203", to, {});
     assert(`${from} → ${to} rifiutata (illegal_transition)`,
@@ -97,6 +97,23 @@ const seed = (id, estado, tipo = "RITIRO") => { STORE[id] = { id, estado, tipo_c
       JSON.stringify(res));
     assert(`${from} → ${to}: nessun update/log`, ordenesUpdates().length === 0 && logInserts().length === 0);
     assert(`${from} → ${to}: estado invariato`, STORE["#203"].estado === from);
+  }
+
+  // ── 3B) undo operativo 49B: LISTO → EN_COCINA permesso e tracciato ─────────
+  section("3B) undo operativo LISTO → EN_COCINA");
+  {
+    reset();
+    // ordine già passato per LISTO: listo_at preesistente da preservare
+    STORE["#213"] = { id: "#213", estado: "LISTO", tipo_consegna: "RITIRO", manual_giro_id: null, listo_at: "2026-06-05T20:00:00.000Z" };
+    const res = await cambiaStato("#213", "EN_COCINA", { actor_type: "operator", origin: "dashboard" });
+    assert("success true", res.success === true, JSON.stringify(res));
+    assert("estado torna EN_COCINA", STORE["#213"].estado === "EN_COCINA");
+    assert("un update ordenes eseguito", ordenesUpdates().length === 1);
+    assert("en_cocina_at valorizzato", !!ordenesUpdates().at(-1).patch.en_cocina_at);
+    assert("listo_at NON cancellato dalla patch", !("listo_at" in ordenesUpdates().at(-1).patch));
+    assert("listo_at preservato nello store", STORE["#213"].listo_at === "2026-06-05T20:00:00.000Z");
+    assert("log append-only creato (sent_to_kitchen)", logInserts().length === 1 && logInserts()[0].row.event_type === "sent_to_kitchen");
+    assert("undo senza PII nel log", !/nombre|telefono|direccion|nota|tel/i.test(JSON.stringify(logInserts()[0].row)));
   }
 
   // ── 4) resurrezione da stato terminale duro → rifiuto ──────────────────────

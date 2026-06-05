@@ -64,6 +64,13 @@ ok("EN_COCINA", "CANCELADO");
 ok("LISTO", "CANCELADO");
 ok("EN_ENTREGA", "CANCELADO");
 
+// ── undo operativo 49B: LISTO → EN_COCINA consentito ─────────────────────────
+section("undo operativo (49B)");
+assert("LISTO→EN_COCINA reason=legal", validateTransition("LISTO", "EN_COCINA").reason === "legal");
+ok("LISTO", "EN_COCINA");                        // click LISTO accidentale → rimetti in cucina
+no("EN_ENTREGA", "LISTO", "illegal_transition"); // l'undo NON si estende oltre LISTO
+no("EN_ENTREGA", "EN_COCINA", "illegal_transition");
+
 // ── RIFIUTI (il cuore dell'hardening) ────────────────────────────────────────
 section("transizioni rifiutate");
 no("EN_COCINA", "EN_COCINA cambiaStato", "unknown_target_state");   // ← bug reale di oggi

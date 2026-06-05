@@ -33,6 +33,15 @@ const TERMINAL_STATES = new Set(["COMPLETADO", "COMPLETATO", "CANCELADO"]);
 // Stati da cui si può sempre cancellare.
 const CANCELLABLE_FROM = ["POR_CONFIRMAR", "NUEVO", "EN_COCINA", "LISTO", "EN_ENTREGA"];
 
+// Undo operativo consentito (49B): il pulsante LISTO della dashboard non ha
+// conferma, quindi l'operatore può marcarlo per sbaglio. Permettiamo di
+// rimettere l'ordine in cucina (LISTO → EN_COCINA). NON è un backward generico:
+// è l'UNICA eccezione, esplicita e tracciata nei log append-only. listo_at NON
+// viene cancellato qui (l'undo resta visibile nello storico).
+const OPERATIONAL_UNDO = {
+  LISTO: ["EN_COCINA"],
+};
+
 // Grafo del flusso "felice" (CANCELADO aggiunto sotto a ogni non-terminale).
 const FORWARD = {
   POR_CONFIRMAR: ["NUEVO", "EN_COCINA"],
@@ -49,10 +58,12 @@ const FORWARD = {
 };
 
 const LEGAL_TRANSITIONS = Object.fromEntries(
-  Object.entries(FORWARD).map(([from, tos]) => [
-    from,
-    CANCELLABLE_FROM.includes(from) ? Array.from(new Set([...tos, "CANCELADO"])) : tos,
-  ])
+  Object.entries(FORWARD).map(([from, tos]) => {
+    const extra = [];
+    if (CANCELLABLE_FROM.includes(from)) extra.push("CANCELADO");
+    if (OPERATIONAL_UNDO[from]) extra.push(...OPERATIONAL_UNDO[from]);
+    return [from, Array.from(new Set([...tos, ...extra]))];
+  })
 );
 
 function isKnownState(s) {
