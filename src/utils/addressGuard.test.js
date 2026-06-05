@@ -11,7 +11,6 @@ const passCases = [
   "C/ Lursena 5",
   "Av. España 250",
   "Paseo Marítimo 3",
-  "Calle Mayor",                    // street-level, accettabile
   "Urbanización Las Marinas, 4",
 ];
 
