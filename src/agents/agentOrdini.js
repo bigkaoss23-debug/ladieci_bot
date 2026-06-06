@@ -712,6 +712,15 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     };
   }
 
+  // SELF-LOOP NO-OP (live 2026-06-05, ordine #002): se lo stato richiesto è uguale
+  // a quello attuale (validateTransition → reason "noop"), il re-click NON deve
+  // rigenerare i timestamp lifecycle né scrivere un log di transizione ridondante
+  // (che falserebbe l'analytics del giro reale). buildStateTimestampPatch già non
+  // tocca i `*_at` su self-loop; qui completiamo: niente log, niente hook di stato.
+  // Eventuali extras espliciti (pagamento/sconto, già in `upd`) restano applicati —
+  // sono intento operatore, non corruzione di timeline.
+  const _isNoop = _trans.reason === "noop";
+
   Object.assign(upd, buildStateTimestampPatch({
     from: estadoActual,
     to: nuovoStato,
@@ -722,28 +731,32 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
 
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
 
-  await logOrderStateTransition({
-    orderId: ordenId,
-    from: estadoActual,
-    to: nuovoStato,
-    eventType: stateEventType(estadoActual, nuovoStato, tipoConsegnaActual),
-    actorType: extras.actor_type || "operator",
-    actorId: extras.actor_id || null,
-    origin: extras.origin || "dashboard",
-    metadata: {
-      tipo_consegna: tipoConsegnaActual,
-      has_hora_salida: extras.hora_salida !== undefined,
-      has_hora_entrega: extras.hora_entrega !== undefined,
-      has_payment_update: extras.metodo_pago !== undefined || extras.cobrado !== undefined || extras.ya_pagado !== undefined,
-      has_discount_update: extras.descuento_tipo !== undefined || extras.descuento_valor !== undefined,
-    },
-  });
+  // No-op (self-loop): nessun log di transizione — non c'è transizione. Evita
+  // log terminali duplicati che corromperebbero le metriche giro/lifecycle.
+  if (!_isNoop) {
+    await logOrderStateTransition({
+      orderId: ordenId,
+      from: estadoActual,
+      to: nuovoStato,
+      eventType: stateEventType(estadoActual, nuovoStato, tipoConsegnaActual),
+      actorType: extras.actor_type || "operator",
+      actorId: extras.actor_id || null,
+      origin: extras.origin || "dashboard",
+      metadata: {
+        tipo_consegna: tipoConsegnaActual,
+        has_hora_salida: extras.hora_salida !== undefined,
+        has_hora_entrega: extras.hora_entrega !== undefined,
+        has_payment_update: extras.metodo_pago !== undefined || extras.cobrado !== undefined || extras.ya_pagado !== undefined,
+        has_discount_update: extras.descuento_tipo !== undefined || extras.descuento_valor !== undefined,
+      },
+    });
+  }
 
   // DELIVERY-MANUAL-GIRO-01 P1C.1: if the order was in a manual giro
   // and the new status leaves the selectable set, detach + auto-dissolve.
   // Best-effort: any failure here MUST NOT roll back the estado change
   // nor surface to the caller — it's a downstream consistency hook.
-  if (_prevManualGiroId && isStatusLeavingGiro(nuovoStato)) {
+  if (!_isNoop && _prevManualGiroId && isStatusLeavingGiro(nuovoStato)) {
     try {
       await sbUpdate(
         "ordenes",
@@ -756,7 +769,7 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     }
   }
 
-  if (nuovoStato === "EN_COCINA") {
+  if (!_isNoop && nuovoStato === "EN_COCINA") {
     const ord1 = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
     if (ord1?.[0]?.wa_id) {
       await sbUpdate("wa_msgs", `ordine_ref=eq.${encodeURIComponent(ordenId)}&stato=not.in.(COMPLETATO,COCINA)`, { stato: "COCINA" });
@@ -767,7 +780,7 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
       await risincronizzaGiro(ord1[0].zona, ord1[0].hora);
     }
   }
-  if (nuovoStato === "RETIRADO") {
+  if (!_isNoop && nuovoStato === "RETIRADO") {
     const ord2 = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
     if (ord2?.[0]) {
       const ord = ord2[0];
@@ -786,7 +799,7 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
       }
     }
   }
-  return { success: true, id: ordenId, estado: nuovoStato };
+  return { success: true, id: ordenId, estado: nuovoStato, noop: _isNoop };
 }
 
 async function aggiungiItems(ordenId, newItems) {

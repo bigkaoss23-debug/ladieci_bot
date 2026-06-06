@@ -201,6 +201,86 @@ const reset = () => {
     assert("ordine aggiornato comunque a LISTO", STORE["#104"].estado === "LISTO");
   }
 
+  section("Helper — self-loop NON sovrascrive timestamp (live #002 2026-06-05)");
+  {
+    // buildStateTimestampPatch puro: from === to → solo updated_at, nessun *_at.
+    const retiradoLoop = buildStateTimestampPatch({
+      from: "RETIRADO",
+      to: "RETIRADO",
+      now: "2026-06-05T21:05:30.000Z",
+      tipoConsegna: "DOMICILIO",
+      extras: {},
+    });
+    assert("self-loop RETIRADO non valorizza retirado_at", retiradoLoop.retirado_at === undefined);
+    assert("self-loop RETIRADO non re-inietta hora_entrega", retiradoLoop.hora_entrega === undefined);
+    assert("self-loop RETIRADO tocca solo updated_at", Object.keys(retiradoLoop).join(",") === "updated_at");
+
+    const listoLoop = buildStateTimestampPatch({ from: "LISTO", to: "LISTO", now: "2026-06-05T20:22:00.000Z" });
+    assert("self-loop LISTO non valorizza listo_at", listoLoop.listo_at === undefined);
+
+    const cocinaLoop = buildStateTimestampPatch({ from: "EN_COCINA", to: "EN_COCINA", now: "2026-06-05T20:00:00.000Z" });
+    assert("self-loop EN_COCINA non valorizza en_cocina_at/confirmado_at",
+      cocinaLoop.en_cocina_at === undefined && cocinaLoop.confirmado_at === undefined);
+
+    // Transizione reale resta intatta (controllo di non-regressione).
+    const realTransition = buildStateTimestampPatch({ from: "EN_COCINA", to: "LISTO", now: "2026-06-05T20:21:00.000Z" });
+    assert("transizione reale EN_COCINA→LISTO valorizza listo_at", !!realTransition.listo_at);
+  }
+
+  section("cambiaStato — self-loop RETIRADO→RETIRADO è no-op idempotente (#002)");
+  {
+    reset();
+    // #002 live: già RETIRADO con retirado_at del primo ritiro reale (20:35:03).
+    STORE["#002"] = {
+      id: "#002", estado: "RETIRADO", tipo_consegna: "DOMICILIO",
+      manual_giro_id: null, retirado_at: "2026-06-05T20:35:03.000Z", wa_id: "wa#002",
+    };
+    const res = await cambiaStato("#002", "RETIRADO", { actor_type: "operator", origin: "dashboard" });
+    assert("cambiaStato self-loop ritorna success", res.success === true);
+    assert("cambiaStato self-loop flagga noop:true", res.noop === true);
+    assert("retirado_at NON sovrascritto (resta primo ritiro reale)",
+      STORE["#002"].retirado_at === "2026-06-05T20:35:03.000Z");
+    const updPatch = lastOrderUpdate()?.patch || {};
+    assert("patch self-loop non contiene retirado_at", updPatch.retirado_at === undefined);
+    assert("nessun log di transizione ridondante su self-loop", logs().length === 0);
+  }
+
+  section("cambiaStato — COMPLETADO/CANCELADO self-loop no-op, niente timestamp nuovo");
+  {
+    reset();
+    STORE["#C1"] = { id: "#C1", estado: "COMPLETADO", tipo_consegna: "RITIRO", manual_giro_id: null, completado_at: "2026-06-05T23:00:00.000Z" };
+    const r1 = await cambiaStato("#C1", "COMPLETADO", {});
+    assert("COMPLETADO→COMPLETADO noop", r1.success === true && r1.noop === true);
+    assert("completado_at preservato", STORE["#C1"].completado_at === "2026-06-05T23:00:00.000Z");
+
+    reset();
+    STORE["#X1"] = { id: "#X1", estado: "CANCELADO", tipo_consegna: "RITIRO", manual_giro_id: null, cancelado_at: "2026-06-05T19:00:00.000Z" };
+    const r2 = await cambiaStato("#X1", "CANCELADO", {});
+    assert("CANCELADO→CANCELADO noop", r2.success === true && r2.noop === true);
+    assert("cancelado_at preservato", STORE["#X1"].cancelado_at === "2026-06-05T19:00:00.000Z");
+    assert("no log su CANCELADO self-loop", logs().length === 0);
+  }
+
+  section("cambiaStato — EN_COCINA self-loop non resetta conv/items (hook saltato)");
+  {
+    reset();
+    STORE["#E1"] = { id: "#E1", estado: "EN_COCINA", tipo_consegna: "DOMICILIO", manual_giro_id: null, en_cocina_at: "2026-06-05T20:10:00.000Z", wa_id: "wa#E1", zona: "Q1", hora: "20:30" };
+    const r = await cambiaStato("#E1", "EN_COCINA", {});
+    assert("EN_COCINA→EN_COCINA noop", r.success === true && r.noop === true);
+    assert("en_cocina_at preservato", STORE["#E1"].en_cocina_at === "2026-06-05T20:10:00.000Z");
+    const convReset = UPDATES.some(u => u.table === "conv" && u.patch && Array.isArray(u.patch.items));
+    assert("hook EN_COCINA NON eseguito su self-loop (conv.items non resettato)", convReset === false);
+  }
+
+  section("cambiaStato — undo legittimo LISTO→EN_COCINA resta permesso e logga");
+  {
+    reset();
+    STORE["#U1"] = { id: "#U1", estado: "LISTO", tipo_consegna: "RITIRO", manual_giro_id: null, listo_at: "2026-06-05T20:21:00.000Z" };
+    const r = await cambiaStato("#U1", "EN_COCINA", { actor_type: "operator", origin: "dashboard" });
+    assert("undo LISTO→EN_COCINA success e NON noop", r.success === true && r.noop === false);
+    assert("undo logga la transizione reale", logs().length === 1 && logs()[0].estado_to === "EN_COCINA");
+  }
+
   section("Event type mapping");
   {
     assert("COMPLETADO -> completed", stateEventType("RETIRADO", "COMPLETADO", "RITIRO") === "completed");

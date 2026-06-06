@@ -103,6 +103,47 @@ console.log("\n══ Frozen/terminal artifacts non critical ══");
     JSON.stringify(contract));
 }
 
+console.log("\n══ Delivery in LISTO non genera critical (live #002 2026-06-05) ══");
+{
+  // Riproduce l'ordine #002 live: Q3 DOMICILIO LISTO, forno_out 20:23,
+  // entrega 20:30 (= ora cliente), retraso 0 → in realtà perfetto. Prima del fix
+  // lo shadow lo segnava critical perché LISTO non era escluso dalle invarianti.
+  const report = runShadow({
+    fecha: "2026-06-05",
+    now: "20:25",
+    orders: [
+      pizzaOrder({
+        id: "#002",
+        estado: "LISTO",
+        zona: "Q3",
+        hora: "20:30",
+        andata: 7,
+        forno: "20:23",
+        salida: "20:23",
+        entrega: "20:30",
+        retraso: 0,
+      }),
+    ],
+  });
+  const { preview, contract } = previewAndContract(report);
+  check("L1· LISTO hard-frozen non produce shadow_red",
+    report.verdict === "shadow_ok" && Object.values(report.invariants).every(Boolean),
+    JSON.stringify(report.invariants));
+  check("L1b· LISTO escluso da noImpossibleFornoOut (no proiezione null sotto invariante)",
+    report.invariants.noImpossibleFornoOut === true,
+    JSON.stringify(report.invariants));
+  check("L1c· LISTO non diventa critical e niente do_not_apply_plan",
+    preview.status !== "critical" && contract.status !== "critical" &&
+      !contract.actions.some((a) => a.id === "do_not_apply_plan"),
+    JSON.stringify({ preview: preview.status, actions: contract.actions }));
+  check("L1d· LISTO non conta come difference operativa",
+    report.differences.length === 0 && preview.summary.differencesCount === 0,
+    JSON.stringify(report.differences));
+  check("L1e· LISTO produce diagnostic info frozen_committed (coerenza)",
+    report.diagnostics.some((d) => d.type === "frozen_committed_order" && d.severity === "info" && d.orderId === "#002"),
+    JSON.stringify(report.diagnostics));
+}
+
 console.log("\n══ Mix pianificabile + terminale ══");
 {
   const report = runShadow({

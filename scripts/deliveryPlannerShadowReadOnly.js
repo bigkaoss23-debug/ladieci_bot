@@ -29,7 +29,13 @@
 const { buildPlan } = require("../src/core/delivery/planner");
 const { explainRiderDelayChain } = require("../src/core/delivery/riderChainExplanation");
 
-const FROZEN_OR_TERMINAL_STATES = new Set(["EN_ENTREGA", "RETIRADO", "COMPLETADO", "COMPLETATO", "CANCELADO"]);
+// Stati che il planner NON ricalcola: hard-frozen (parete, valori committati) +
+// terminali. DEVE includere LISTO: il planner lo classifica CONGELATO_DURO
+// (planner.js HARD_FROZEN_STATES = {LISTO, EN_ENTREGA, RETIRADO}) ed echeggia i
+// valori committati. In shadow quei valori derivati sono SCARTATI dall'input, quindi
+// la proiezione esce null/parete: un LISTO non va sottoposto alle invarianti di
+// ricalcolo (altrimenti → falso critical). Vedi delivery-planner-shadow-status.md.
+const FROZEN_OR_TERMINAL_STATES = new Set(["LISTO", "EN_ENTREGA", "RETIRADO", "COMPLETADO", "COMPLETATO", "CANCELADO"]);
 
 // Campi GREZZI ammessi come input del planner (spec §4 "il derivato non alimenta
 // mai il derivato"). Tutto il resto della fixture è display/baseline e va scartato.

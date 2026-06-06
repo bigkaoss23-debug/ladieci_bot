@@ -235,6 +235,54 @@ console.log("\n══ Contract / safety ══");
     JSON.stringify(FAKE_ROWS));
 }
 
+console.log("\n══ LISTO end-to-end via endpoint non è falso critical (live #002 2026-06-05) ══");
+{
+  // Ordine #002 live, forma reale: DOMICILIO Q3 in LISTO. Prima del fix runner lo
+  // shadow HTTP poteva diventare falso `critical` (LISTO non escluso dalle invarianti
+  // di ricalcolo). L'endpoint passa per lo stesso runShadow corretto: deve restare
+  // non-critical, con safety contract intatto e niente PII.
+  const listoRows = [{
+    id: "#002",
+    created_at: "2026-06-05T20:23:00+02:00",
+    tipo_consegna: "DOMICILIO",
+    estado: "LISTO",
+    zona: "Q3",
+    hora: "20:30",
+    durata_andata_min: 7,
+    geo_source: "google",
+    items: [pizza("Margherita", 1)],
+    forno_out: "20:23",
+    salida_driver_estimada: "20:23",
+    entrega_estimada: "20:30",
+    retraso_estimado_min: 0,
+    conflicto_driver: false,
+    nombre: "Cliente Real 002",
+    telefono: "+34999000002",
+    direccion: "Calle Secreta 2",
+  }];
+  const listo = await buildShadowPreviewResponse({
+    date: "2026-06-05",
+    rows: listoRows,
+    now: "20:25",
+    generatedAt: "2026-06-05T20:25:00.000Z",
+  });
+  const listoOut = JSON.stringify(listo);
+  check("L1· LISTO via endpoint NON è critical",
+    listo.status !== "critical",
+    listoOut);
+  check("L2· LISTO non produce do_not_apply_plan",
+    !listo.actions.some((a) => a.id === "do_not_apply_plan"),
+    JSON.stringify(listo.actions));
+  check("L3· contract safety intatto su LISTO",
+    listo.safety.readOnly === true &&
+      listo.safety.writesEnabled === false &&
+      listo.safety.piiIncluded === false,
+    JSON.stringify(listo.safety));
+  check("L4· nessuna PII del cliente LISTO nel contract",
+    !/Cliente Real 002|\+34999000002|Calle Secreta/.test(listoOut),
+    listoOut);
+}
+
 console.log("\n══ Errors / import / static safety ══");
 {
   const errRes = mockRes();

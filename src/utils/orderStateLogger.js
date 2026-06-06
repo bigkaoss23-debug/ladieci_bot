@@ -54,14 +54,22 @@ function sanitizeMetadata(metadata = {}) {
   return cleaned && typeof cleaned === "object" && !Array.isArray(cleaned) ? cleaned : {};
 }
 
+// SEMANTICA STATI DELIVERY (confermata live 05/06/2026):
+//   EN_ENTREGA = il rider ESCE dalla pizzeria (salida rider), NON è consegna.
+//   RETIRADO   = il rider TORNA in pizzeria (giro chiuso), NON è consegna cliente.
+// L'event_type storico "delivered" per RETIRADO+DOMICILIO è un NOME STORICO: il suo
+// significato operativo reale è "rider tornato / giro chiuso", non "consegnato al
+// cliente". Non rinominato qui perché radicato in consumer esistenti; le metriche
+// NUOVE usano la semantica corretta (vedi deliveryOperationalMetrics.js: la consegna
+// cliente è STIMATA = en_entrega_at + durata_andata_min, non retirado_at).
 function stateEventType(from, to, tipoConsegna) {
   if (!from) return "created";
   if (to === "EN_COCINA") {
     return from === "POR_CONFIRMAR" ? "confirmed" : "sent_to_kitchen";
   }
   if (to === "LISTO") return "marked_ready";
-  if (to === "EN_ENTREGA") return "sent_delivery";
-  if (to === "RETIRADO") return tipoConsegna === "DOMICILIO" ? "delivered" : "picked_up";
+  if (to === "EN_ENTREGA") return "sent_delivery"; // salida rider, non consegna
+  if (to === "RETIRADO") return tipoConsegna === "DOMICILIO" ? "delivered" : "picked_up"; // "delivered" = giro chiuso/rider tornato (nome storico)
   if (to === "COMPLETADO") return "completed";
   if (to === "CANCELADO") return "cancelled";
   return "state_changed";
@@ -69,6 +77,17 @@ function stateEventType(from, to, tipoConsegna) {
 
 function buildStateTimestampPatch({ from = null, to, now = new Date().toISOString(), tipoConsegna = null, extras = {} } = {}) {
   const patch = { updated_at: now };
+
+  // SELF-LOOP GUARD (live 2026-06-05, ordine #002): un re-click sullo STESSO stato
+  // (RETIRADO→RETIRADO ecc.) NON deve sovrascrivere i timestamp lifecycle già
+  // committati — altrimenti `retirado_at` (e l'analytics del giro reale) si corrompe.
+  // Se `from === to` l'ordine è GIÀ in quello stato: il suo `*_at` è stato valorizzato
+  // alla transizione originale e va lasciato intatto. Tocchiamo solo `updated_at`.
+  // I derivati legacy (hora_salida/hora_entrega) seguono la stessa regola: non
+  // re-iniettarli su un no-op. Le transizioni reali (from ≠ to) non sono toccate.
+  const isSelfLoop = from != null && String(from) === String(to);
+  if (isSelfLoop) return patch;
+
   const col = STATE_TIMESTAMP_COLUMNS[to];
   if (col) patch[col] = now;
 
