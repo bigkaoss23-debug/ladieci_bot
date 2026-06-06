@@ -78,6 +78,12 @@ function normalizeDbRow(row) {
     entrega_estimada: row.entrega_estimada || null,
     retraso_estimado_min: row.retraso_estimado_min != null ? row.retraso_estimado_min : null,
     conflicto_driver: row.conflicto_driver === true,
+    // ── observability ajuste operativo (NON input planner: solo metriche) ──
+    // ui_offset_min = snooze cucina (+5/+10) interpretato come ajuste_operativo_min;
+    // listo_at = timestamp reale. Usati SOLO da summarizeOperationalAdjustments nel
+    // runner per il confronto originale/operativo/reale. Il planner non li legge.
+    ui_offset_min: row.ui_offset_min != null ? row.ui_offset_min : null,
+    listo_at: row.listo_at || null,
   };
 }
 

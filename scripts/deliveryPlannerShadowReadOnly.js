@@ -28,6 +28,7 @@
 
 const { buildPlan } = require("../src/core/delivery/planner");
 const { explainRiderDelayChain } = require("../src/core/delivery/riderChainExplanation");
+const { summarizeOperationalAdjustments } = require("../src/core/delivery/operationalAdjustmentMetrics");
 
 // Stati che il planner NON ricalcola: hard-frozen (parete, valori committati) +
 // terminali. DEVE includere LISTO: il planner lo classifica CONGELATO_DURO
@@ -343,6 +344,12 @@ function runShadow(fixture, opts = {}) {
     bufferMin: Number(plan && plan.config && plan.config.bufferOpsDriverMin) || 3,
   });
 
+  // OBSERVABILITY ONLY: does not affect planner target time.
+  // Interpreta ui_offset_min come ajuste_operativo_min e confronta
+  // originale/operativo/reale sui DOMICILIO. Read-only, no PII, NON entra nel
+  // planner (il target resta hora/forzado_hora). Vedi operationalAdjustmentMetrics.js.
+  const operationalAdjustments = summarizeOperationalAdjustments(delivery, {});
+
   return {
     snapshotDate: fixture.fecha || null,
     now,
@@ -358,6 +365,7 @@ function runShadow(fixture, opts = {}) {
     warnings,
     diagnostics,
     riderChain,
+    operationalAdjustments,
     verdict: redOk ? "shadow_ok" : "shadow_red",
   };
 }

@@ -194,10 +194,12 @@ function summarizeOperationalAdjustments(orders = [], options = {}) {
       orderId: m.orderId,
       tipo: m.tipo,
       estado: m.estado,
+      zona: m.zona,
       hora_original: m.hora_original,
       hora_operativa: m.hora_operativa,
       ajuste_operativo_min: m.ajuste_operativo_min,
       classification: m.classification,
+      reasons: m.reasons,
     }));
 
   return {

@@ -283,6 +283,58 @@ console.log("\n══ LISTO end-to-end via endpoint non è falso critical (live 
     listoOut);
 }
 
+console.log("\n══ operationalAdjustments — observability ajuste operativo (read-only) ══");
+{
+  const D = "2026-06-06";
+  const ca = "2026-06-06T20:00:00+02:00";
+  const row = (over) => ({
+    created_at: ca, tipo_consegna: "DOMICILIO", estado: "LISTO", zona: "Q1",
+    hora: "21:30", durata_andata_min: 8, items: [pizza("Margherita", 1)], ...over,
+  });
+  const respFor = (rows) => buildShadowPreviewResponse({ date: D, rows, generatedAt: "2026-06-06T21:00:00.000Z" });
+
+  // OA1· assorbito (+5, listo 21:33 ≤ 21:35)
+  const absorbed = await respFor([row({ id: "#OA1", ui_offset_min: 5, listo_at: "2026-06-06T21:33:00" })]);
+  const oa1 = absorbed.operationalAdjustments;
+  check("OA1· contract include operationalAdjustments", !!oa1 && typeof oa1 === "object", JSON.stringify(oa1));
+  check("OA1· adjustedOrders = 1", oa1.adjustedOrders === 1, JSON.stringify(oa1));
+  check("OA1· absorbedAdjustments = 1", oa1.absorbedAdjustments === 1, JSON.stringify(oa1));
+  check("OA1· outsideMargin = 0", oa1.outsideMargin === 0, JSON.stringify(oa1));
+  check("OA1· maxAdjustmentMin = 5", oa1.maxAdjustmentMin === 5, JSON.stringify(oa1));
+
+  // OA2· nessun ajuste (offset 0/assente)
+  const none = await respFor([row({ id: "#OA2", ui_offset_min: 0, listo_at: "2026-06-06T21:30:00" })]);
+  const oa2 = none.operationalAdjustments;
+  check("OA2· adjustedOrders = 0", oa2.adjustedOrders === 0, JSON.stringify(oa2));
+  check("OA2· watchOrders = [] (summary vuoto-ma-presente)", Array.isArray(oa2.watchOrders) && oa2.watchOrders.length === 0, JSON.stringify(oa2));
+
+  // OA3· fuori margine (+10, listo 21:45 > 21:40)
+  const outside = await respFor([row({ id: "#OA3", ui_offset_min: 10, listo_at: "2026-06-06T21:45:00" })]);
+  const oa3 = outside.operationalAdjustments;
+  check("OA3· outsideMargin = 1", oa3.outsideMargin === 1, JSON.stringify(oa3));
+  check("OA3· watchOrders include classification outside_margin", oa3.watchOrders.some(w => w.classification === "outside_margin"), JSON.stringify(oa3.watchOrders));
+  check("OA3· watchOrders entry ha solo campi safe", (() => {
+    const w = oa3.watchOrders[0] || {};
+    const allowed = new Set(["orderId","tipo","estado","zona","hora_original","hora_operativa","ajuste_operativo_min","classification","reasons"]);
+    return Object.keys(w).every(k => allowed.has(k)) && w.hora_operativa === "21:40";
+  })(), JSON.stringify(oa3.watchOrders));
+
+  // OA4· no PII leak nel contract con campi cliente
+  const pii = await respFor([row({
+    id: "#OA4", ui_offset_min: 10, listo_at: "2026-06-06T21:45:00",
+    nombre: "Yoana Secreta", telefono: "+34666111222", direccion: "Calle Privada 9", wa_id: "wa-secret",
+  })]);
+  check("OA4· contract NON contiene PII", !/Yoana Secreta|\+34666111222|Calle Privada|wa-secret/.test(JSON.stringify(pii)), JSON.stringify(pii.operationalAdjustments));
+
+  // OA5· safety invariants invariati + nessuna nuova action
+  check("OA5· status non critical (ajuste è observability)", absorbed.status !== "critical" && outside.status !== "critical", JSON.stringify({a: absorbed.status, o: outside.status}));
+  check("OA5· safety contract intatto", absorbed.safety.readOnly === true && absorbed.safety.writesEnabled === false && absorbed.safety.piiIncluded === false && absorbed.safety.rawDiagnosticsHidden === true, JSON.stringify(absorbed.safety));
+  check("OA5· nessuna nuova action introdotta dall'ajuste", !absorbed.actions.some(a => /adjust|ajuste|operativ/i.test(a.id)), JSON.stringify(absorbed.actions));
+
+  // OA6· LISTO false-critical resta fixato anche con ui_offset_min presente
+  check("OA6· LISTO + ui_offset_min non genera critical", outside.status !== "critical" && !outside.actions.some(a => a.id === "do_not_apply_plan"), JSON.stringify({status: outside.status, actions: outside.actions}));
+}
+
 console.log("\n══ Errors / import / static safety ══");
 {
   const errRes = mockRes();

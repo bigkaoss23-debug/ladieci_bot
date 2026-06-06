@@ -31,6 +31,10 @@ const ORDER_SELECT_FIELDS = [
   "entrega_estimada",
   "retraso_estimado_min",
   "conflicto_driver",
+  // Observability ajuste operativo (read-only, non-PII): snooze +5/+10 e timestamp
+  // reale per il confronto originale/operativo/reale. NON alimentano il planner.
+  "ui_offset_min",
+  "listo_at",
 ];
 
 function addDays(date, days) {
@@ -113,6 +117,12 @@ async function buildShadowPreviewResponse({
   });
   return {
     ...contract,
+    // OBSERVABILITY ONLY: ajuste operativo (ui_offset_min) — non cambia il planner
+    // né le decisioni; summary safe (no PII) calcolato dal runner. Vuoto-ma-presente
+    // se nessun ordine ha ajuste. Vedi operationalAdjustmentMetrics.js.
+    operationalAdjustments: shadow && shadow.operationalAdjustments
+      ? shadow.operationalAdjustments
+      : { totalOrders: 0, adjustedOrders: 0, activeAdjustments: 0, absorbedAdjustments: 0, outsideMargin: 0, maxAdjustmentMin: 0, avgAdjustmentMin: 0, watchOrders: [] },
     source: {
       ...contract.source,
       type: source,
