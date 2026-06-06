@@ -124,7 +124,9 @@ const lastInsert = () => INSERTED[INSERTED.length - 1];
     const row = lastInsert();
     assert("hora preservata 00:10", row.hora === "00:10", `hora=${row.hora}`);
     assert("forno_out = 23:58", row.forno_out === "23:58", `forno=${row.forno_out}`);
-    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(JSON.stringify(row)), JSON.stringify(row));
+    // Solo i campi orario rilevanti: scansionare JSON.stringify(row) intero dava
+    // falso positivo quando i minuti di `updated_at` ISO cadono in 24–29 ("…:27:34").
+    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(`${row.hora || ""} ${row.forno_out || ""}`), `hora=${row.hora} forno=${row.forno_out}`);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -162,7 +164,7 @@ const lastInsert = () => INSERTED[INSERTED.length - 1];
     const u = UPDATED.find(x => x.patch.forno_out !== undefined) || UPDATED[UPDATED.length - 1];
     assert("hora patch = 00:10", u.patch.hora === "00:10", `hora=${u.patch.hora}`);
     assert("forno_out = 23:58", u.patch.forno_out === "23:58", `forno=${u.patch.forno_out}`);
-    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(JSON.stringify(u.patch)), JSON.stringify(u.patch));
+    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(`${u.patch.hora || ""} ${u.patch.forno_out || ""}`), `hora=${u.patch.hora} forno=${u.patch.forno_out}`);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -179,7 +181,7 @@ const lastInsert = () => INSERTED[INSERTED.length - 1];
     assert("durata re-resuelta = 13", u.patch.durata_andata_min === 13, `durata=${u.patch.durata_andata_min}`);
     assert("forno_out = 23:52", u.patch.forno_out === "23:52", `forno=${u.patch.forno_out}`);
     assert("hora non riscritta", u.patch.hora === undefined, `hora=${u.patch.hora}`);
-    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(JSON.stringify(u.patch)), JSON.stringify(u.patch));
+    assert("nessun 24/25", !/\b2[4-9]:\d\d/.test(`${u.patch.hora || ""} ${u.patch.forno_out || ""}`), `hora=${u.patch.hora} forno=${u.patch.forno_out}`);
   }
 
   // ═══════════════════════════════════════════════════════════════
