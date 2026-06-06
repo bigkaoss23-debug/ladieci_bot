@@ -180,5 +180,38 @@ section("T10 — return shape compatibile con callers esistenti");
          `keys=${keys.join(",")}`);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+section("T11 — NON aggregare su giro già partito (caso live 21:17)");
+// now=21:17. Giro Q1 esistente hora 21:20 (tg 15) → slot10 21:20, partenza
+// 21:20-15 = 21:05 < minPart (21:22): il driver è già uscito. Un nuovo Q1 a
+// 21:17 NON deve aggregarsi a quel giro né proporre 21:20 (passato/now).
+// Atteso: aggregato=false, ok=false (muy pronta), proposta futura > 21:17.
+{
+  const orders = [ord("#X", "Q1", "21:20", { tg: 15 })];
+  const newOrd = { zona: "Q1", hora: "21:17", durata_andata_min: 15 };
+  const r = proposeForNewOrder(orders, newOrd, { nowMin: 21*60 + 17 });
+  assert("aggregato = false (giro già partito)", r.aggregato === false,
+         `aggregato=${r.aggregato}`);
+  assert("ok = false (no hueco inmediato)", r.ok === false, `ok=${r.ok}`);
+  assert(`consegnaProposta futura, no 21:20/now (got ${r.consegnaPropostaH})`,
+         r.consegnaPropostaMin > 21*60 + 17 && r.consegnaPropostaMin !== 21*60 + 20,
+         `aspettato > 21:17 e != 21:20, ricevuto ${r.consegnaPropostaH}`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+section("T12 — aggregare ancora su giro FUTURO con lead sufficiente");
+// now=21:17. Giro Q1 esistente hora 21:50 (tg 15) → slot10 21:50, partenza
+// 21:50-15 = 21:35 >= minPart (21:22): ancora aggregabile. Nuovo Q1 a 21:50.
+// Atteso: aggregato=true, ok=true, consegna 21:50 (regola T5 preservata).
+{
+  const orders = [ord("#Y", "Q1", "21:50", { tg: 15 })];
+  const newOrd = { zona: "Q1", hora: "21:50", durata_andata_min: 15 };
+  const r = proposeForNewOrder(orders, newOrd, { nowMin: 21*60 + 17 });
+  assert("aggregato = true (giro futuro)", r.aggregato === true, `aggregato=${r.aggregato}`);
+  assert("ok = true", r.ok === true, `ok=${r.ok}`);
+  assert(`consegna coincide con giro 21:50 (got ${r.consegnaPropostaH})`,
+         r.consegnaPropostaH === "21:50");
+}
+
 console.log(`\n═══ RESULT: ${passed} passed, ${failed} failed ═══\n`);
 process.exit(failed > 0 ? 1 : 0);

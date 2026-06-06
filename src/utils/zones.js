@@ -478,8 +478,22 @@ function proposeForNewOrder(orders, newOrder, options = {}) {
 
   const sim = simulateDriverSchedule(orders, options);
 
+  // Floor temporale "now": stesso lead (now + 5) usato dallo slot-search più
+  // sotto, hoistato qui per poter gateare ANCHE il ramo aggregazione. minPart =
+  // primo minuto in cui un driver può ancora partire da pizzeria.
+  const nowMin = options.nowMin != null
+    ? options.nowMin
+    : (() => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); })();
+  const minPart = nowMin + 5;
+
+  // Aggregazione su giro esistente same-zone-slot, MA solo se quel giro non è
+  // già partito / in corso / troppo vicino alla partenza: se partenzaMin <
+  // minPart il driver è (quasi) uscito e non possiamo più infilarci una pizza
+  // nuova. In quel caso NON aggreghiamo: si cade nello slot-search, che proporrà
+  // il prossimo slot realmente futuro (evita "Primera hora disponible = now").
   const giroEsistente = sim.giri.find(g =>
     g.zona === newOrder.zona && g.slot === slotNew && g.count < zona.maxOrdiniPerGiro
+    && g.partenzaMin >= minPart
   );
 
   if (giroEsistente) {
@@ -509,11 +523,6 @@ function proposeForNewOrder(orders, newOrder, options = {}) {
   const occSorted = [...occupied].sort((a, b) => a.start - b.start);
 
   const roundtripNew = tgNew + BUFFER_OPS_DRIVER_MIN + tgNew;
-
-  const nowMin = options.nowMin != null
-    ? options.nowMin
-    : (() => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); })();
-  const minPart = nowMin + 5;
 
   const collides = (a, b) => occSorted.some(o => a < o.end && o.start < b);
 
