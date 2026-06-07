@@ -260,7 +260,8 @@ mostrata (non si spinge il cliente a ritardare).
 5. decisione `travelTimes` (proxy `andata_min` vs matrice) — **prerequisito** del
    route impact reale (§5 FINDING).
 6. **dispatcher action** in `index.js` — SOLO con autorizzazione esplicita.
-   Il frontend legge il contract, non calcola.
+   Il frontend legge il contract, non calcola. Dispatcher/wiring design:
+   vedi [PREMIUM_PLANNER_DISPATCHER_WIRING_DESIGN.md](PREMIUM_PLANNER_DISPATCHER_WIRING_DESIGN.md).
 7. rollout produzione **gated** (shadow/preview prima del live), come gli altri
    blocchi delivery.
 
