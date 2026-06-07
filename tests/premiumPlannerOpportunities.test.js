@@ -178,6 +178,10 @@ check("input.blocked overrides policy", oOverride.blocked === false);
 check("input.severity overrides policy", oOverride.severity === "warning");
 check("input.channel overrides derived", oOverride.channel === "sur");
 check("input.mapPath overrides derived", eqArr(oOverride.mapPath, ["A", "B"]));
+// regression: una chiave mapPath presente ma undefined (come la passa il bridge)
+// NON deve azzerare il default ["Pizzería", ...].
+check("mapPath key present+undefined → default (not [])",
+  eqArr(buildPremiumOpportunity({ kind: "crear", routeZones: ["Q2"], status: "compatible", mapPath: undefined }).mapPath, ["Pizzería", "Q2"]));
 
 console.log("══ buildPremiumOpportunities (list) ══");
 const list = buildPremiumOpportunities([

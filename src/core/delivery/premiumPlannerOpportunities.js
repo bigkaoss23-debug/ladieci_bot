@@ -98,9 +98,11 @@ function buildPremiumOpportunity(input = {}) {
   const routeZones = arr(input.routeZones).map((z) => str(z)).filter(Boolean);
 
   // channel + mapPath: config pura da deliveryChannels.
+  // mapPath: usa Array.isArray (non has): una chiave presente ma `undefined`
+  // — come la passa il bridge — NON deve azzerare il default ["Pizzería", …].
   const channel = input.channel != null ? str(input.channel) : routeChannel(routeZones);
-  const mapPath = has(input, "mapPath")
-    ? arr(input.mapPath).map((z) => str(z))
+  const mapPath = Array.isArray(input.mapPath)
+    ? input.mapPath.map((z) => str(z))
     : ["Pizzería", ...orderZonesByChannel(routeZones)];
 
   // severity + blocked: policy esplicita, override input se presente.
