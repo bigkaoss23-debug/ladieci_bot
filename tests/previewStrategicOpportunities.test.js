@@ -267,6 +267,149 @@ async function main() {
     check("safety.pii redacted", r.safety.pii === "redacted");
   }
 
+  // ── E2E. deps.loadSnapshot con snapshot fixture realistico ─────────────────
+  // Valida il percorso completo:
+  //   deps.loadSnapshot() → snapshot.orders → buildAnchorsFromSnapshot →
+  //   strategicOpportunities → routeImpact → bridge → mapper → contract.
+  // La fixture è DELIBERATAMENTE "sporca" (PII non sanitizzata dal loader): in
+  // produzione plannerSnapshot.normalizeOrder già strippa la PII, ma qui
+  // proviamo che ANCHE se il loader non sanitizzasse, l'adapter non la propaga.
+  console.log("\n══ E2E. snapshot loader fixture ══");
+
+  // Snapshot fixture realistico (shape plannerSnapshot.orders + PII grezza).
+  function e2eSnapshot() {
+    return {
+      now: "20:30",
+      orders: [
+        {
+          id: "ord-q5-2100", tipo_consegna: "DOMICILIO", estado: "EN_COCINA",
+          zona: "Q5", hora: "21:00", n_pizze: 2,
+          // PII grezza: NON deve mai apparire in output.
+          cliente_nombre: "Mario PII", telefono: "699000000", direccion: "Calle PII 123",
+        },
+        { id: "ord-q2-2030", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q2", hora: "20:30", n_pizze: 1 },
+        { id: "ord-ret-2040", tipo_consegna: "RITIRO", estado: "EN_COCINA", zona: null, hora: "20:40", n_pizze: 1 },
+        { id: "ord-done", tipo_consegna: "DOMICILIO", estado: "RETIRADO", zona: "Q5", hora: "20:00", n_pizze: 1 },
+      ],
+      manual_giros: [],
+    };
+  }
+
+  // Spy loader: conta le chiamate e cattura gli args.
+  function spyLoader(snapshot) {
+    const spy = { calls: 0, args: null };
+    const fn = async (args) => { spy.calls++; spy.args = args; return snapshot; };
+    return { spy, fn };
+  }
+
+  // PII E2E: valori e chiavi della fixture sporca che NON devono uscire.
+  function e2eNoPii(obj) {
+    const out = JSON.stringify(obj);
+    return !/Mario PII|699000000|Calle PII 123|cliente_nombre|telefono|direccion/i.test(out);
+  }
+
+  const e2eCurrentDraft = { id: "draft-q2", zona: "Q2", pizzas: 1, promised: "20:50", serviceMin: 2 };
+
+  // E2E-1 — happy path via loader.
+  {
+    const { spy, fn } = spyLoader(e2eSnapshot());
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: e2eCurrentDraft,
+      startTime: "20:35",
+      capacity: CAPACITY,
+      // NESSUN anchors, NESSUN snapshot → deve usare deps.loadSnapshot.
+    }, { loadSnapshot: fn });
+
+    check("E2E loader chiamato esattamente 1 volta", spy.calls === 1, `calls=${spy.calls}`);
+    check("E2E loader args includePii:false", spy.args && spy.args.includePii === false, JSON.stringify(spy.args));
+    check("E2E ok true", r.ok === true, JSON.stringify(r));
+    check("E2E source offline-readonly", r.source === "offline-readonly");
+    check("E2E opportunities include Q2→Q5", r.opportunities.some((o) =>
+      o.routeZones[0] === "Q2" && o.routeZones[1] === "Q5"), JSON.stringify(r.opportunities.map((o) => o.routeZones)));
+    const q5opp = r.opportunities.find((o) => o.routeZones[1] === "Q5");
+    check("E2E Q2→Q5 compatible (routeImpact)", q5opp && q5opp.status === "compatible", q5opp && q5opp.status);
+    check("E2E serviceLine contiene anchor Q5 generico", r.serviceLine.some((s) =>
+      s.id === "ord-q5-2100" && s.zone === "Q5" && s.promised === "21:00"), JSON.stringify(r.serviceLine));
+    check("E2E serviceLine senza campi PII", r.serviceLine.every((s) =>
+      !("cliente_nombre" in s) && !("telefono" in s) && !("direccion" in s)), JSON.stringify(r.serviceLine));
+    check("E2E firstAvailable + bestProposal presenti", !!r.firstAvailable && !!r.bestProposal, JSON.stringify({ fa: r.firstAvailable, bp: r.bestProposal }));
+    check("E2E nessuna PII nel JSON output", e2eNoPii(r), JSON.stringify(r));
+    check("E2E nessuno stacktrace", noStacktrace(r));
+  }
+
+  // E2E-2 — loader fallisce → ok false, blocker safe.
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: e2eCurrentDraft,
+      startTime: "20:35",
+      capacity: CAPACITY,
+    }, { loadSnapshot: async () => { throw new Error("network exploded /secret/path.js:99 token=abc"); } });
+
+    check("E2E loader throw → ok false", r.ok === false, JSON.stringify(r));
+    check("E2E loader throw → blocker snapshot_unavailable", r.error && r.error.code === "snapshot_unavailable", JSON.stringify(r.error));
+    check("E2E loader throw → safe (no stacktrace/secret)", noStacktrace(r) && !/network exploded|token=abc/.test(JSON.stringify(r)), JSON.stringify(r));
+  }
+
+  // E2E-3 — nessun loader e snapshot assente → missing_snapshot.
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: e2eCurrentDraft,
+      startTime: "20:35",
+      capacity: CAPACITY,
+      // NESSUN anchors, NESSUN snapshot, NESSUN deps.loadSnapshot.
+    }, {});
+    check("E2E no-data → ok false", r.ok === false, JSON.stringify(r));
+    check("E2E no-data → blocker missing_snapshot", r.error && r.error.code === "missing_snapshot", JSON.stringify(r.error));
+  }
+
+  // E2E-4 — filtering terminale/RITIRO: non diventano anchors.
+  {
+    const { fn } = spyLoader(e2eSnapshot());
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: e2eCurrentDraft,
+      startTime: "20:35",
+      capacity: CAPACITY,
+    }, { loadSnapshot: fn });
+    const ids = r.serviceLine.map((s) => s.id);
+    check("E2E RITIRO escluso (ord-ret-2040)", !ids.includes("ord-ret-2040"), JSON.stringify(ids));
+    check("E2E RETIRADO/terminale escluso (ord-done)", !ids.includes("ord-done"), JSON.stringify(ids));
+    check("E2E Q5 incluso (ord-q5-2100)", ids.includes("ord-q5-2100"), JSON.stringify(ids));
+    check("E2E nessun anchor con zona null", r.serviceLine.every((s) => typeof s.zone === "string" && s.zone.length > 0), JSON.stringify(r.serviceLine));
+  }
+
+  // E2E-5 — startTime obbligatorio anche col loader; loader NON chiamato.
+  {
+    const { spy, fn } = spyLoader(e2eSnapshot());
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: e2eCurrentDraft,
+      capacity: CAPACITY,
+      // NO startTime
+    }, { loadSnapshot: fn });
+    check("E2E missing startTime → ok false", r.ok === false, JSON.stringify(r));
+    check("E2E missing startTime → blocker missing_start_time",
+      (r.error && r.error.code === "missing_start_time") || r.blockers.some((b) => b.code === "missing_start_time"),
+      JSON.stringify(r));
+    check("E2E loader NON chiamato se startTime manca (fail-fast)", spy.calls === 0, `calls=${spy.calls}`);
+  }
+
+  // E2E-6 — FINDING B: anchor same-zone (Q2) degrada in modo sicuro (blocked),
+  // NON inventa un leg Q2->Q2=0. Comportamento documentato, non un crash.
+  {
+    const { fn } = spyLoader(e2eSnapshot());
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: e2eCurrentDraft,
+      startTime: "20:35",
+      capacity: CAPACITY,
+    }, { loadSnapshot: fn });
+    const sameZone = r.opportunities.find((o) => o.routeZones[0] === "Q2" && o.routeZones[1] === "Q2");
+    check("E2E same-zone Q2 anchor → opportunity blocked (safe-degradation)",
+      sameZone && sameZone.blocked === true && sameZone.status === "no_recomendado",
+      JSON.stringify(sameZone));
+    check("E2E same-zone Q2 → nessun routeEta finto (no leg 0)",
+      sameZone && Array.isArray(sameZone.routeEtas) && sameZone.routeEtas.length === 0,
+      JSON.stringify(sameZone && sameZone.routeEtas));
+  }
+
   console.log(`\n═══ RESULT: ${pass} passed, ${fail} failed ═══\n`);
   process.exit(fail > 0 ? 1 : 0);
 }
