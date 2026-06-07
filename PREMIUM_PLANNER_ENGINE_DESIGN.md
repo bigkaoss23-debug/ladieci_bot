@@ -226,8 +226,13 @@ Gli altri scenari restano documentati come test futuri.
 
 ## 16. Integration plan (future, non in questa fase)
 
-1. ✅ `deliveryChannels.js` puro + test (fase 1, questo blocco).
-2. Opportunity-shape mapper puro (`evaluateNewOrder.options` → opportunity) + test fixture.
+1. ✅ `deliveryChannels.js` puro + test (fase 1).
+2. ✅ `premiumPlannerOpportunities.js` puro — assembler/normalizer della
+   opportunity shape da input GIÀ calcolato (fixture) + test offline. Usa
+   `deliveryChannels` per `channel`/`mapPath`; policy esplicita status →
+   severity/blocked; `slipLabel`/`capacity`/`baseline` pass-through (nessuna
+   aritmetica). Non wired. Il bridge `evaluateNewOrder.options` → input del
+   mapper resta da fare (step 3).
 3. Strategic layer: ranking + baseline + `previewStrategicOpportunities` adapter read-only.
 4. `previewManualGiro` adapter read-only (route impact su giro candidato).
 5. Wiring endpoint in `index.js` (dispatcher) — solo quando autorizzato.
