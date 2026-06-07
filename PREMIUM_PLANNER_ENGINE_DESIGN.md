@@ -231,11 +231,20 @@ Gli altri scenari restano documentati come test futuri.
    opportunity shape da input GIÀ calcolato (fixture) + test offline. Usa
    `deliveryChannels` per `channel`/`mapPath`; policy esplicita status →
    severity/blocked; `slipLabel`/`capacity`/`baseline` pass-through (nessuna
-   aritmetica). Non wired. Il bridge `evaluateNewOrder.options` → input del
-   mapper resta da fare (step 3).
-3. Strategic layer: ranking + baseline + `previewStrategicOpportunities` adapter read-only.
-4. `previewManualGiro` adapter read-only (route impact su giro candidato).
-5. Wiring endpoint in `index.js` (dispatcher) — solo quando autorizzato.
-6. `applyManualGiro` con revalidate-on-apply su `manualGiros.js`.
+   aritmetica). Non wired.
+3. ✅ `premiumPlannerBridge.js` puro — traduce `evaluateNewOrder.options` →
+   input del mapper (kind/status/warning, `slipLabel` da `retraso`, baseline
+   dalla separata, capacity dal context) + test offline. Non wired.
+   **Limiti onesti (FINDINGS):** (a) `evaluateNewOrder` produce solo join
+   *same-zone* (`planner.js:713`) → le opportunità cross-zone "di passaggio"
+   sono future strategic-layer; (b) `option.retraso` è il ritardo del NUOVO
+   ordine sulla sua promessa (`planner.js:201`), non lo slittamento delle altre
+   fermate → gli ETA/slip a valle arrivano dal context fixture finché non
+   esiste il route-impact engine.
+4. Strategic layer: opportunità cross-zone per canale + route-impact (slip a
+   valle) + ranking + `previewStrategicOpportunities` adapter read-only.
+5. `previewManualGiro` adapter read-only (route impact su giro candidato).
+6. Wiring endpoint in `index.js` (dispatcher) — solo quando autorizzato.
+7. `applyManualGiro` con revalidate-on-apply su `manualGiros.js`.
 
 **No live wiring in questa fase.**
