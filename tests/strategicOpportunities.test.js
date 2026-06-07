@@ -125,21 +125,59 @@ console.log("══ 3. Q3 current + Q5 anchor → cross blocked ══");
   check("priority cross > compatibile", c.priority === 90);
 }
 
-// ── Scenario 4 — missing travel time → blocked, no crash ────────────────────
-console.log("══ 4. missing travel time → blocked ══");
+// ── Scenario 4a — deliveryLegs riempie i buchi (explicit parziale) ──────────
+// Prima dell'integrazione un Q2+Q5 con solo "Pizzería->Q2" era blocked. Ora
+// deliveryLegs riempie Q2->Q5 e Q5->Pizzería; l'esplicito vince per-tratta.
+console.log("══ 4a. deliveryLegs riempie i buchi (precedenza esplicita) ══");
 {
   const cands = buildStrategicCandidates({
     currentOrder: { id: "new-q2", zone: "Q2", label: "Pedido actual", pizzas: 1, promised: "20:50", serviceMin: 2 },
     anchors: [{ id: "tg-q5", zone: "Q5", label: "Las Marinas", promised: "21:00", pizzas: 2, serviceMin: 2 }],
-    startTime: "20:35",
-    travelTimes: { "Pizzería->Q2": 7 }, // mancano Q2->Q5 e Q5->Pizzería
-    capacity: { maxPizzas: 6, routeMinLimit: 30, pizzaQualityLimitMin: 30 },
+    startTime: "20:43",
+    travelTimes: { "Pizzería->Q2": 7 }, // SOLO primo leg; deliveryLegs riempie il resto
+    capacity: { maxPizzas: 6, routeMinLimit: 60, pizzaQualityLimitMin: 60 },
+  });
+  const c = cands[0];
+  check("non bloccato (deliveryLegs riempie)", c.blockedCandidate === false);
+  check("routeImpactInput presente", !!c.routeImpactInput);
+  check("explicit Pizzería->Q2=7 preservato (precedenza)", c.routeImpactInput.stops[0].travelFromPrevMin === 7);
+  check("Q2->Q5=10 da deliveryLegs", c.routeImpactInput.stops[1].travelFromPrevMin === 10);
+  check("Q5->Pizzería=15 da deliveryLegs", c.routeImpactInput.returnTravelMin === 15);
+}
+
+// ── Scenario 4b — senza travelTimes: deliveryLegs fornisce tutto ────────────
+console.log("══ 4b. senza travelTimes → deliveryLegs fornisce tutto ══");
+{
+  const cands = buildStrategicCandidates({
+    currentOrder: { id: "new-q2", zone: "Q2", label: "Pedido actual", pizzas: 1, promised: "20:50", serviceMin: 2 },
+    anchors: [{ id: "tg-q5", zone: "Q5", label: "Las Marinas", promised: "21:00", pizzas: 2, serviceMin: 2 }],
+    startTime: "20:43",
+    // NESSUN travelTimes esplicito
+    capacity: { maxPizzas: 6, routeMinLimit: 60, pizzaQualityLimitMin: 60 },
+  });
+  const c = cands[0];
+  check("non bloccato (tutto da deliveryLegs)", c.blockedCandidate === false);
+  check("routeImpactInput presente", !!c.routeImpactInput);
+  check("Pizzería->Q2=7", c.routeImpactInput.stops[0].travelFromPrevMin === 7);
+  check("Q2->Q5=10", c.routeImpactInput.stops[1].travelFromPrevMin === 10);
+}
+
+// ── Scenario 4c — cross senza explicit: deliveryLegs NON ha la tratta → blocked
+// deliveryLegs non definisce le tratte cross (Q3->Q5): resta missing → blocked,
+// routeImpactInput null. MAI un 0 fantasma.
+console.log("══ 4c. cross senza explicit → blocked/missing (no 0) ══");
+{
+  const cands = buildStrategicCandidates({
+    currentOrder: { id: "new-q3", zone: "Q3", label: "Pedido actual", pizzas: 1, promised: "20:50", serviceMin: 2 },
+    anchors: [{ id: "tg-q5", zone: "Q5", label: "Las Marinas", promised: "21:00", pizzas: 1, serviceMin: 2 }],
+    startTime: "20:20",
+    // NESSUN travelTimes esplicito; deliveryLegs NON ha Q3->Q5 (cross)
+    capacity: { maxPizzas: 6, routeMinLimit: 60, pizzaQualityLimitMin: 60 },
   });
   const c = cands[0];
   check("blockedCandidate true", c.blockedCandidate === true);
-  check("routeImpactInput null (no travel mancanti a routeImpact)", c.routeImpactInput === null);
-  check("reason elenca legs mancanti", /Q2->Q5/.test(c.reason) && /Q5->Pizzería/.test(c.reason), c.reason);
-  check("priority bassa (100)", c.priority === 100);
+  check("routeImpactInput null (cross leg mancante, no 0)", c.routeImpactInput === null);
+  check("reason elenca Q3->Q5 mancante", /Q3->Q5/.test(c.reason), c.reason);
 }
 
 // ── Scenario 5 — routeImpact integration (candidate.routeImpactInput) ───────
@@ -207,7 +245,8 @@ console.log("══ Purity ══");
   const src = fs.readFileSync(path.join(__dirname, "../src/core/delivery/strategicOpportunities.js"), "utf8");
   const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
   const reqs = (code.match(/require\(["']([^"']+)["']\)/g) || []).map((r) => r.replace(/require\(["']|["']\)/g, ""));
-  check("requires only deliveryChannels", reqs.length === 1 && reqs[0] === "./deliveryChannels", reqs.join(","));
+  const allowedReqs = new Set(["./deliveryChannels", "./deliveryLegs"]);
+  check("requires only pure config (deliveryChannels + deliveryLegs)", reqs.length === 2 && reqs.every((r) => allowedReqs.has(r)), reqs.join(","));
   check("no process.env", !/process\.env/.test(code));
   check("no fetch/supabase/router/db-verbs", !/\bfetch\b|supabase|express|\brouter\b|app\.(get|post|put|patch|delete)|\b(insert|update|delete)\s*\(/i.test(code));
 }

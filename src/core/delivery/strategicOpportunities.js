@@ -3,8 +3,12 @@
 // ===============================================================
 // Mattone PURO/offline del motore Premium Planner (vedi
 // PREMIUM_PLANNER_STRATEGIC_LAYER_DESIGN.md §A). NON wired a index.js,
-// nessun path live, nessun DB/fetch/env/router. Unica dipendenza: la config
-// pura `deliveryChannels` (sorgente di verità per il canale).
+// nessun path live, nessun DB/fetch/env/router. Dipendenze: solo config pure
+// `deliveryChannels` (canale) e `deliveryLegs` (travel inter-zona V1).
+//
+// TRAVEL TIMES: precedenza agli espliciti `input.travelTimes`; per i buchi si
+// usa `deliveryLegs` (matrice statica). Una tratta assente in entrambi (es.
+// cross-channel) resta MISSING → candidato bloccato, MAI un 0 fantasma.
 //
 // RUOLO: generare i CANDIDATI cross-zone "di passaggio" che il planner reale
 // NON produce (evaluateNewOrder fa solo join same-zone, planner.js:713).
@@ -37,6 +41,7 @@
 "use strict";
 
 const { routeChannel, orderZonesByChannel } = require("./deliveryChannels");
+const { buildTravelTimesForZones } = require("./deliveryLegs");
 
 // Nodo di partenza/rientro del rider. Coerente col mapPath del mapper
 // (`["Pizzería", ...]`) e con le chiavi travelTimes ("Pizzería->Q2").
@@ -62,6 +67,26 @@ function resolveTravelTime(from, to, travelTimes) {
   const tt = travelTimes || {};
   const key = makeTravelKey(from, to);
   return num(tt[key]);
+}
+
+// Merge travelTimes: gli ESPLICITI (input) hanno PRECEDENZA per-tratta sui
+// legs derivati da deliveryLegs (la matrice statica riempie solo i buchi).
+function mergeTravelTimes(explicit, legs) {
+  return { ...(legs || {}), ...(explicit || {}) };
+}
+
+// Risolve i travelTimes effettivi per una rotta: parte dai legs statici
+// (deliveryLegs.buildTravelTimesForZones) e lascia che gli espliciti dell'input
+// vincano per-tratta. deliveryLegs NON inventa: le tratte assenti (es. cross)
+// NON finiscono nel merge → restano "missing" a valle (mai 0).
+function resolveTravelTimesForCandidate(routeZones, context = {}) {
+  const legs = buildTravelTimesForZones(routeZones); // { ok, travelTimes, missing }
+  return mergeTravelTimes(context.travelTimes, legs.travelTimes);
+}
+
+// Reason testuale per le tratte mancanti (DRY tra buildCandidateForAnchor).
+function missingLegReason(missing) {
+  return `Tiempos de viaje incompletos: ${(missing || []).join(", ")}`;
 }
 
 // Canale della rotta: thin wrapper su deliveryChannels (fonte unica).
@@ -155,7 +180,13 @@ function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
 
   const mapPath = [PIZZERIA, ...routeZones];
 
-  const { routeImpactInput, missingLegs } = buildRouteImpactInputForCandidate(finalStops, context);
+  // Travel times effettivi: espliciti (input) con precedenza, deliveryLegs
+  // riempie i buchi. Le tratte assenti in entrambi restano missing (no 0).
+  const effectiveTravelTimes = resolveTravelTimesForCandidate(routeZones, context);
+  const { routeImpactInput, missingLegs } = buildRouteImpactInputForCandidate(
+    finalStops,
+    { ...context, travelTimes: effectiveTravelTimes }
+  );
 
   // Blocco strategico: cross/indecidibile, o dati di viaggio incompleti.
   const isCross = channel === "cross";
@@ -165,7 +196,7 @@ function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
 
   let reason;
   if (hasMissingTravel) {
-    reason = `Tiempos de viaje incompletos: ${missingLegs.join(", ")}`;
+    reason = missingLegReason(missingLegs);
   } else if (isCross) {
     reason = `Canales distintos (${routeZones.join("+")}): ruta no recomendada, forzable.`;
   } else if (isUndecidable) {
@@ -226,6 +257,9 @@ module.exports = {
   PIZZERIA,
   makeTravelKey,
   resolveTravelTime,
+  mergeTravelTimes,
+  resolveTravelTimesForCandidate,
+  missingLegReason,
   classifyCandidateChannel,
   buildRouteImpactInputForCandidate,
   buildCandidateForAnchor,
