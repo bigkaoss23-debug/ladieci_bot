@@ -243,6 +243,7 @@ Gli altri scenari restano documentati come test futuri.
    esiste il route-impact engine.
 4. Strategic layer: opportunità cross-zone per canale + route-impact (slip a
    valle) + ranking + `previewStrategicOpportunities` adapter read-only.
+   → design dedicato: [`PREMIUM_PLANNER_STRATEGIC_LAYER_DESIGN.md`](PREMIUM_PLANNER_STRATEGIC_LAYER_DESIGN.md).
 5. `previewManualGiro` adapter read-only (route impact su giro candidato).
 6. Wiring endpoint in `index.js` (dispatcher) — solo quando autorizzato.
 7. `applyManualGiro` con revalidate-on-apply su `manualGiros.js`.
