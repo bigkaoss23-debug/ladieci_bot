@@ -238,6 +238,61 @@ async function main() {
       JSON.stringify(deps.db.calls));
   }
 
+  console.log("\n══ Real evaluateNewOrder / realistic fake snapshot ══");
+  {
+    const db = writeGuardDb();
+    const r = await previewOrderPlanner({
+      tipo_consegna: "DOMICILIO",
+      direccion: "C. Delfin, 45-47",
+      hora: "17:53",
+      items: [{ id: "pizza-zizou", nombre: "Zizou", cantidad: 1, categoria: "pizza" }],
+      pizzas_count: 1,
+      now: "17:30",
+    }, {
+      now: () => "17:30",
+      db,
+      resolveDeliveryFields: async () => ({
+        zona: "Q2",
+        zona_lat: 36.7,
+        zona_lon: -2.6,
+        durata_andata_min: 6,
+        durata_google_min: 6,
+        durata_haversine_min: 7,
+        geo_source: "google",
+        warnings: [],
+      }),
+      loadPlannerSnapshot: async () => ({
+        now: "17:30",
+        orders: [
+          {
+            id: "#G1",
+            tipo_consegna: "DOMICILIO",
+            estado: "EN_COCINA",
+            zona: "Q2",
+            hora: "17:55",
+            andata_min: 6,
+            n_pizze: 1,
+          },
+        ],
+        manual_giros: [],
+        driver: null,
+        driver_events: [],
+        driver_status: null,
+      }),
+    });
+    check("real planner contract ok", hasTopLevelContractShape(r), JSON.stringify(r));
+    check("real planner returns requested/recommended time",
+      r.recommendation.requested_hora === "17:53" &&
+        r.recommendation.recommended_hora === "17:53",
+      JSON.stringify(r.recommendation));
+    check("real planner exposes compatible giro alternative",
+      r.giro.recommended === true &&
+        r.giro.can_attach === true &&
+        r.alternatives.some((item) => item.can_attach === true),
+      JSON.stringify({ giro: r.giro, alternatives: r.alternatives }));
+    check("real planner does not write DB", db.calls.length === 0, JSON.stringify(db.calls));
+  }
+
   console.log("\n══ Invalid params safe error ══");
   {
     const r = await previewOrderPlanner({
