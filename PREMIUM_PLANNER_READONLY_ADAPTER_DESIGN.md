@@ -98,20 +98,38 @@ zoneConfig? }` (tutte iniettabili; default ai moduli puri).
 anche i leg **inter-zona** (`"Q2->Q5"`, `"Q5->Pizzería"`), che **non sono
 memorizzati da nessuna parte** (grep confermato: nessuna matrice punto-punto).
 
-Opzioni per la fase implementativa (da decidere allora, non ora):
+Opzioni valutate:
 
-1. **Proxy `andata_min` (consigliato V1, coerente con `estimateRouteDuration`):**
-   `travel(Prev→Z) ≈ andata_min(Z)` (il salto che raggiunge Z ≈ andata pura a Z),
-   `travel(Z→Pizzería) ≈ andata_min(Z)`. Approssimazione dichiarata, **non**
-   Google. È lo stesso proxy già usato in `planner.js:estimateRouteDuration`.
-2. Matrice statica zona×zona in config (`ZONE_LEGS`) — più preciso, da popolare a
-   mano. Fuori scope V1.
-3. Google Distance Matrix — **escluso** in V1 (no routing reale, costo, write
-   cache).
+1. Proxy `andata_min` (`travel(Prev→Z) ≈ andata_min(Z)`) — coerente con
+   `planner.js:estimateRouteDuration`, ma confonde "Pizzería→Z" con "Z1→Z2".
+2. **Matrice statica `ZONE_LEGS` (SCELTA V1).**
+3. Google Distance Matrix — **escluso** in V1 (no routing reale, costo, write).
 
-L'adapter dovrà **costruire `travelTimes`** da una di queste fonti nel passo di
-normalizzazione (§6), marcando `geo_source`/assunzione nei warnings. Finché non
-deciso, è il principale blocco dati per il wiring.
+### DECISIONE V1 — `deliveryLegs.js` (matrice statica `ZONE_LEGS`) ✅
+
+Implementato [`src/core/delivery/deliveryLegs.js`](src/core/delivery/deliveryLegs.js)
+(puro/offline, zero-import, test `tests/deliveryLegs.test.js`):
+
+- `ZONE_LEGS` = matrice **direzionale** di stime operative (NON Google):
+  depot↔zone (Pizzería↔Q1..Q5), sur (Q1-Q2-Q5), oeste (Q3-Q4).
+- `getDeliveryLegMin(from,to)` → minuti, oppure **`null`** se la tratta non
+  esiste (REGOLA DURA: **mai 0 fantasma** — `routeImpact` tratterebbe 0 come leg
+  istantaneo).
+- `buildTravelTimesForZones(routeZones)` → `{ ok, travelTimes, missing[] }`: i
+  `travelTimes` pronti per `strategicOpportunities` (chiavi `"From->To"`,
+  depot=`HUB_LABEL="Pizzería"`); `ok:false` + `missing[]` se una tratta manca.
+- **Cross-channel assente di proposito** (Q5↔Q3, Q2↔Q4, …): il generator blocca
+  il candidato cross invece di inventare una rotta (coerente con
+  `deliveryChannels`: cross = no_recomendado).
+
+> **FINDING naming.** `deliveryLegs.HUB_LABEL = "Pizzería"` (nodo depot del grafo
+> travel) ≠ `deliveryChannels.HUB_ZONE = "Q1"` (zona Centro, hub di *canale*).
+> Concetti distinti; mantenerli separati.
+
+L'adapter futuro costruirà `travelTimes` via `buildTravelTimesForZones`,
+marcando `geo_source:"static_legs_v1"`/assunzione nei warnings. Una tratta
+mancante → candidato `blockedCandidate` (già gestito da `strategicOpportunities`),
+non un ETA finto.
 
 ### FINDING — driver availability non caricata
 
