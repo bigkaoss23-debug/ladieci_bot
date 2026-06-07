@@ -15,6 +15,8 @@ const {
   dissolveManualGiro,
 } = require("./src/agents/manualGiros");
 const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
+const { previewOrderPlanner } = require("./src/agents/previewOrderPlanner");
+const { createReadOnlyRestDb } = require("./src/core/delivery/readOnlyRestDb");
 
 const app = express();
 app.use(express.json());
@@ -333,6 +335,13 @@ app.post("/api", async (req, res) => {
       // Fonte unica per zona/durata/forno_out/hora/warning/giro destinata alla
       // dashboard. NON si fida di durata/zona calcolate dal client.
       result = await previewOrderTiming(req.body || {});
+    } else if (action === "previewOrderPlanner") {
+      // Nuevo Pedido Premium → planner backend (read-only). Fonte unica per
+      // disponibilità/lead-time/giri. NIENTE write: db read-only via sbSelect,
+      // resolver geo read-only/no-cache di default dentro previewOrderPlanner.
+      result = await previewOrderPlanner(req.body || {}, {
+        db: createReadOnlyRestDb({ sbSelect }),
+      });
     } else if (action === "createOrden") {
       const d = req.body.data || req.body;
       if (!d.waId && d.wa_id) d.waId = d.wa_id;
