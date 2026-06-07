@@ -54,6 +54,14 @@ function writeGuardDb() {
 }
 
 function baseDeps(overrides = {}) {
+  const snapshot = {
+    now: "20:00",
+    orders: [{ id: "#A", tipo_consegna: "DOMICILIO", estado: "NUEVO", zona: "Q2", hora: "20:00", andata_min: 8, n_pizze: 1 }],
+    manual_giros: [],
+    driver: null,
+    driver_events: [],
+    driver_status: null,
+  };
   return {
     now: () => "20:00",
     db: writeGuardDb(),
@@ -67,14 +75,7 @@ function baseDeps(overrides = {}) {
       geo_source: "google",
       warnings: [],
     }),
-    loadPlannerSnapshot: async () => ({
-      now: "20:00",
-      orders: [],
-      manual_giros: [],
-      driver: null,
-      driver_events: [],
-      driver_status: null,
-    }),
+    loadPlannerSnapshot: async () => snapshot,
     evaluateNewOrder: () => ({
       selected: {
         type: "separate",
@@ -160,6 +161,68 @@ async function main() {
       JSON.stringify(deps.db.calls));
   }
 
+  console.log("\n══ Snapshot loader integration ══");
+  {
+    let loaderArgs = null;
+    let plannerSnapshot = null;
+    let plannerNewOrder = null;
+    const deps = baseDeps({
+      now: () => "20:15",
+      loadPlannerSnapshot: async (args) => {
+        loaderArgs = args;
+        return {
+          now: "20:15",
+          orders: [{ id: "#S1", tipo_consegna: "DOMICILIO", estado: "NUEVO", zona: "Q2", hora: "20:00", andata_min: 8, n_pizze: 1 }],
+          manual_giros: [],
+          driver: null,
+          driver_events: [],
+          driver_status: null,
+        };
+      },
+      evaluateNewOrder: (snapshot, newOrder) => {
+        plannerSnapshot = snapshot;
+        plannerNewOrder = newOrder;
+        return {
+          selected: { type: "separate", hora: "20:30", forno_out: "20:22", salida: "20:22", status: "valid" },
+          recommended: null,
+          options: [],
+          proximo_slot: null,
+          warnings: [],
+          snapshot_now: snapshot.now,
+        };
+      },
+    });
+    const r = await previewOrderPlanner({
+      tipo_consegna: "DOMICILIO",
+      direccion: "C. Delfin, 45-47",
+      hora: "20:30",
+      date: "2026-06-07",
+      items: [{ id: "pizza-zizou", nombre: "Zizou", cantidad: 1, categoria: "pizza" }],
+      pizzas_count: 1,
+      now: "20:10",
+    }, deps);
+    check("snapshot loader called with db/date/now/includePii=false",
+      loaderArgs &&
+        loaderArgs.db === deps.db &&
+        loaderArgs.date === "2026-06-07" &&
+        loaderArgs.now === "20:15" &&
+        loaderArgs.includePii === false,
+      JSON.stringify(loaderArgs));
+    check("evaluateNewOrder receives loaded snapshot", plannerSnapshot && plannerSnapshot.now === "20:15", JSON.stringify(plannerSnapshot));
+    check("newOrder is clean planner input",
+      plannerNewOrder &&
+        plannerNewOrder.id === "__preview_new_order__" &&
+        plannerNewOrder.tipo_consegna === "DOMICILIO" &&
+        plannerNewOrder.zona === "Q2" &&
+        plannerNewOrder.hora === "20:30" &&
+        plannerNewOrder.andata_min === 8 &&
+        plannerNewOrder.n_pizze === 1 &&
+        !("direccion" in plannerNewOrder) &&
+        !("telefono" in plannerNewOrder),
+      JSON.stringify(plannerNewOrder));
+    check("contract still ok after snapshot integration", r.ok === true && r.recommendation.recommended_hora === "20:30", JSON.stringify(r));
+  }
+
   console.log("\n══ No-write guard ══");
   {
     const deps = baseDeps();
@@ -186,6 +249,22 @@ async function main() {
     check("invalid hora returns ok:false", r && r.ok === false, JSON.stringify(r));
     check("error keeps contract", r && r.contract === "nuevo-pedido-planner-preview-v1", JSON.stringify(r));
     check("error is safe: no stacktrace / no PII", hasNoStacktraceOrPii(r), JSON.stringify(r));
+  }
+
+  console.log("\n══ Missing snapshot deps safe error ══");
+  {
+    const r = await previewOrderPlanner({
+      tipo_consegna: "DOMICILIO",
+      direccion: "C. Delfin, 45-47",
+      hora: "20:30",
+      items: [],
+      pizzas_count: 0,
+    }, {
+      resolveDeliveryFields: baseDeps().resolveDeliveryFields,
+      evaluateNewOrder: baseDeps().evaluateNewOrder,
+    });
+    check("missing db/snapshot returns safe error", r && r.ok === false && r.error && r.error.code === "snapshot_unavailable", JSON.stringify(r));
+    check("snapshot error is safe", hasNoStacktraceOrPii(r), JSON.stringify(r));
   }
 
   console.log("\n══ RITIRO minimal ══");

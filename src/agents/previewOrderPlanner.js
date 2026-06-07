@@ -8,6 +8,9 @@
 // ===============================================================
 "use strict";
 
+const { loadPlannerSnapshot } = require("../core/delivery/plannerSnapshot");
+const { evaluateNewOrder } = require("../core/delivery/planner");
+
 const CONTRACT = "nuevo-pedido-planner-preview-v1";
 const SOURCE = "planner";
 const MODE = "read_only";
@@ -237,20 +240,23 @@ async function previewOrderPlanner(params = {}, deps = {}) {
   if (typeof deps.resolveDeliveryFields !== "function") {
     return safeError(params, tipoConsegna, "geo_resolver_unavailable", "No se pudo resolver la direccion");
   }
-  if (typeof deps.loadPlannerSnapshot !== "function" || typeof deps.evaluateNewOrder !== "function") {
-    return safeError(params, tipoConsegna, "planner_unavailable", "Planner no disponible");
-  }
-
   try {
     const geo = await deps.resolveDeliveryFields(params);
     if (!geo || !geo.zona || geo.durata_andata_min == null) {
       return safeError(params, tipoConsegna, "unresolved_geo", "No se pudo resolver la direccion");
     }
 
-    const snapshot = await deps.loadPlannerSnapshot({
-      params,
-      geo,
+    const loadSnapshot = typeof deps.loadPlannerSnapshot === "function"
+      ? deps.loadPlannerSnapshot
+      : loadPlannerSnapshot;
+    const runPlanner = typeof deps.evaluateNewOrder === "function"
+      ? deps.evaluateNewOrder
+      : evaluateNewOrder;
+    const snapshot = await loadSnapshot({
+      db: deps.db,
+      date: params.date,
       now: typeof deps.now === "function" ? deps.now() : params.now,
+      includePii: false,
     });
     const newOrder = {
       id: params.id || "__preview_new_order__",
@@ -262,9 +268,12 @@ async function previewOrderPlanner(params = {}, deps = {}) {
       n_pizze: Number.isFinite(Number(params.pizzas_count)) ? Number(params.pizzas_count) : 0,
       items: arrayOrEmpty(params.items),
     };
-    const plannerResult = deps.evaluateNewOrder(snapshot, newOrder);
+    const plannerResult = runPlanner(snapshot, newOrder);
     return mapPlannerResult(params, geo, plannerResult || {});
-  } catch (_) {
+  } catch (e) {
+    if (e && /db_client|snapshot/i.test(String(e.code || e.message || ""))) {
+      return safeError(params, tipoConsegna, "snapshot_unavailable", "Snapshot no disponible");
+    }
     return safeError(params, tipoConsegna, "planner_unavailable", "Planner no disponible");
   }
 }
