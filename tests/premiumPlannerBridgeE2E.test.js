@@ -161,6 +161,41 @@ console.log("══ Consistency: option reale → opportunity ══");
   check("ogni option → contract shape + status/kind coerenti", allOk);
 }
 
+// ── Scenario RI — option reale + routeImpactInput → ETA/slip da routeImpact ──
+// Il planner reale dà un join_giro same-zone (planner.js:713). Allegando un
+// routeImpactInput al context, l'Opportunity finale porta routeEtas/slipLabel
+// COMPUTATI dal route-impact engine (non dal retraso del planner). Cross-zone
+// "di passaggio" resta allo strategic layer futuro: qui provo solo il wiring.
+console.log("══ RI: option reale + routeImpactInput → ETA/slip computati ══");
+{
+  const v = evaluateNewOrder(
+    { now: "17:00", orders: [ord({ id: "G1", zona: "Q2", hora: "20:00", andata_min: 6, estado: "EN_COCINA" })] },
+    ord({ id: "NEW", zona: "Q2", hora: "20:00", andata_min: 6 })
+  );
+  const join = pick(v, "join_giro");
+  check("planner emette join_giro", !!join);
+  const opp = buildOpportunityFromPlannerOption(join, {
+    currentOrderZone: "Q2",
+    routeZones: ["Q2", "Q5"],
+    routeImpactInput: {
+      startTime: "20:43",
+      stops: [
+        { id: "NEW", zone: "Q2", label: "Pedido actual", isNew: true, promised: "20:50", pizzas: 1, serviceMin: 2, travelFromPrevMin: 7 },
+        { id: "q5", zone: "Q5", label: "Las Marinas", isNew: false, promised: "21:00", pizzas: 2, serviceMin: 2, travelFromPrevMin: 13 },
+      ],
+      returnTravelMin: 15,
+      capacity: { pizzas: 3, maxPizzas: 6, routeMinLimit: 60, pizzaQualityLimitMin: 60 },
+      toleranceMin: 0,
+    },
+  });
+  check("contract shape completa", hasContractShape(opp));
+  check("routeEtas da routeImpact (2 fermate)", opp.routeEtas.length === 2);
+  check("Q5 slipLabel '+5' computato", opp.routeEtas[1].slipLabel === "+5");
+  check("status ajuste da routeImpact", opp.status === "ajuste");
+  check("warning backend 'Q5 se mueve +5 min'", opp.warning === "Q5 se mueve +5 min");
+  check("channel sur (mapper)", opp.channel === "sur");
+}
+
 // ── Purity ──────────────────────────────────────────────────────────────────
 // Check the actual require() targets (not a self-regex, which would match the
 // purity strings written in this very file). The E2E pulls only the pure planner

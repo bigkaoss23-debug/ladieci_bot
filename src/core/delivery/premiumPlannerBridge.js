@@ -31,6 +31,15 @@
 const {
   buildPremiumOpportunity,
 } = require("./premiumPlannerOpportunities");
+// Route-impact engine (puro/offline, zero-import): quando il context porta un
+// `routeImpactInput`, il bridge delega A LUI il calcolo di routeEtas/capacity/
+// status/blocked/warning/explanation. Il bridge NON duplica la matematica slip:
+// la fa routeImpact. Import puro, nessun path live (vedi
+// PREMIUM_PLANNER_STRATEGIC_LAYER_DESIGN.md §B).
+const {
+  buildRouteImpact,
+  buildRouteImpactOpportunityFields,
+} = require("./routeImpact");
 
 // retraso (minuti, dal planner) → slipLabel "+N" | "". Backend math: OK qui.
 // Niente eta−promised: il planner ha già calcolato il ritardo.
@@ -103,17 +112,33 @@ function capacityFromContext(context = {}) {
   };
 }
 
+// Route-impact: se il context porta `routeImpactInput`, esegui il route-impact
+// engine puro e ritorna i campi GIÀ CALCOLATI pronti per il mapper. Altrimenti
+// null → il bridge resta sul comportamento fixture esistente (backward-compat).
+function routeImpactFieldsFromContext(context = {}) {
+  if (!context || context.routeImpactInput == null) return null;
+  const impact = buildRouteImpact(context.routeImpactInput);
+  return buildRouteImpactOpportunityFields(impact);
+}
+
 // Traduce UNA option planner (+ context fixture) nell'INPUT del mapper.
 // I campi che il planner non fornisce (routeEtas a valle, baseline,
 // capacity string, label) arrivano dal context: il bridge non li inventa.
+//
+// PRECEDENZA route-impact: se `context.routeImpactInput` esiste, i campi
+// COMPUTATI dal route-impact (routeEtas, capacity, status, blocked, warning,
+// explanation) BATTONO i corrispondenti campi fixture del context e la policy
+// status del planner. Senza `routeImpactInput` nulla cambia.
 function buildOpportunityInputFromPlannerOption(option = {}, context = {}) {
-  const status = statusFromPlannerOption(option, context);
+  const impact = routeImpactFieldsFromContext(context);
+
+  const status = impact ? impact.status : statusFromPlannerOption(option, context);
   const baseline = context.baseline
     || (typeof context.directEta === "string"
       ? { directEta: context.directEta, label: "Directa sin giro" }
       : undefined);
 
-  return {
+  const input = {
     id: context.id,
     kind: kindFromPlannerOption(option),
     giroId: option && option.giro_id != null ? option.giro_id : (context.giroId != null ? context.giroId : null),
@@ -121,20 +146,31 @@ function buildOpportunityInputFromPlannerOption(option = {}, context = {}) {
     currentOrderLabel: context.currentOrderLabel,
     routeZones: Array.isArray(context.routeZones) ? context.routeZones : [],
     mapPath: context.mapPath,
-    routeEtas: Array.isArray(context.routeEtas) ? context.routeEtas : [],
+    routeEtas: impact ? impact.routeEtas : (Array.isArray(context.routeEtas) ? context.routeEtas : []),
     baseline,
-    capacity: capacityFromContext(context),
+    capacity: impact ? impact.capacity : capacityFromContext(context),
     status,
     severity: context.severity,
-    warning: warningFromPlannerOption(option, status, context),
+    warning: impact ? impact.warning : warningFromPlannerOption(option, status, context),
     title: context.title,
     subtitle: context.subtitle,
     chip: context.chip,
-    explanation: context.explanation != null
-      ? context.explanation
-      : (option && option.reason != null ? option.reason : ""),
+    explanation: impact
+      ? impact.explanation
+      : (context.explanation != null
+        ? context.explanation
+        : (option && option.reason != null ? option.reason : "")),
     quickOptionId: context.quickOptionId,
   };
+
+  // blocked esplicito SOLO quando il route-impact è autoritativo: il suo
+  // `blocked` (es. no_recomendado per ruta larga = forzabile → false) deve
+  // battere la policy di default del mapper (BLOCKING_STATUSES marcherebbe
+  // no_recomendado come blocked=true). Senza routeImpact, il mapper deriva
+  // blocked dallo status come prima (invariato).
+  if (impact) input.blocked = impact.blocked;
+
+  return input;
 }
 
 // Comodità: option planner → Opportunity contract-ready (via mapper).
@@ -168,6 +204,7 @@ module.exports = {
   warningFromPlannerOption,
   baselineFromSeparateOption,
   capacityFromContext,
+  routeImpactFieldsFromContext,
   buildOpportunityInputFromPlannerOption,
   buildOpportunityFromPlannerOption,
   buildOpportunityInputsFromPlannerResult,

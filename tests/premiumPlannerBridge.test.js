@@ -24,6 +24,7 @@ const {
   warningFromPlannerOption,
   baselineFromSeparateOption,
   capacityFromContext,
+  routeImpactFieldsFromContext,
   buildOpportunityInputFromPlannerOption,
   buildOpportunityFromPlannerOption,
   buildOpportunitiesFromPlannerResult,
@@ -170,6 +171,154 @@ check("second is agregar (join_giro)", opps[1].kind === "agregar");
 check("both channel sur", opps[0].channel === "sur" && opps[1].channel === "sur");
 check("null plannerResult → []", eqArr(buildOpportunitiesFromPlannerResult(null, {}), []));
 
+// ── ROUTE-IMPACT INTEGRATION (context.routeImpactInput drives the fields) ─────
+console.log("══ RI-0: no routeImpactInput → comportamento invariato ══");
+{
+  // Identico a Scenario 1 (fixture context): senza routeImpactInput nulla cambia.
+  check("routeImpactFieldsFromContext(no input) → null", routeImpactFieldsFromContext(ctx1) === null);
+  const oppA = buildOpportunityFromPlannerOption(
+    { type: "join_giro", giro_id: "giro-q5-2100", status: "recommended", retraso: 0, reason: "más cercano y compatible" },
+    ctx1
+  );
+  check("status compatible (come prima)", oppA.status === "compatible");
+  check("routeEtas dal fixture (Q5 eta 21:00)", oppA.routeEtas[1].eta === "21:00");
+  check("capacity dal fixture (3/6)", oppA.capacity.pizzas === "3/6");
+  check("warning dal default planner (vuoto: reason positiva passthrough)", oppA.warning === "más cercano y compatible");
+}
+
+const riCtxBase = {
+  currentOrderZone: "Q2",
+  routeZones: ["Q2", "Q5"],
+  // fixture stantii: il routeImpact DEVE sovrascriverli.
+  routeEtas: [{ zone: "Q9", eta: "00:00", slips: true, slipLabel: "+99" }],
+  capacity: { pizzas: "9/9", routeMin: 999, limitMin: 1, state: "full" },
+};
+
+console.log("══ RI-1: routeImpact compatible (Q2→Q5, no slip) ══");
+{
+  const ctx = {
+    ...riCtxBase,
+    routeImpactInput: {
+      startTime: "20:43",
+      stops: [
+        { id: "new-q2", zone: "Q2", label: "Pedido actual", isNew: true, promised: "20:50", pizzas: 1, serviceMin: 2, travelFromPrevMin: 7 },
+        { id: "q5", zone: "Q5", label: "Las Marinas", isNew: false, promised: "21:00", pizzas: 2, serviceMin: 2, travelFromPrevMin: 8 },
+      ],
+      returnTravelMin: 15,
+      capacity: { pizzas: 3, maxPizzas: 6, routeMinLimit: 60, pizzaQualityLimitMin: 60 },
+      toleranceMin: 0,
+    },
+  };
+  const opp = buildOpportunityFromPlannerOption(
+    { type: "join_giro", giro_id: "giro-q5-2100", status: "recommended", retraso: 0, reason: "ignored by route impact" },
+    ctx
+  );
+  check("status compatible (da routeImpact)", opp.status === "compatible");
+  check("blocked false", opp.blocked === false);
+  check("warning vuoto (computato)", opp.warning === "");
+  check("routeEtas da impact (Q2 20:50)", opp.routeEtas[0].eta === "20:50" && opp.routeEtas[0].zone === "Q2");
+  check("routeEtas da impact (Q5 21:00 no slip)", opp.routeEtas[1].eta === "21:00" && opp.routeEtas[1].slips === false);
+  check("fixture stantio sovrascritto (no Q9)", !opp.routeEtas.some((e) => e.zone === "Q9"));
+  check("capacity da impact (3/6 ok)", opp.capacity.pizzas === "3/6" && opp.capacity.state === "ok");
+  check("channel sur (mapper dalle zone)", opp.channel === "sur");
+}
+
+console.log("══ RI-2: routeImpact ajuste (Q5 promised 21:00, eta 21:05) ══");
+{
+  const ctx = {
+    ...riCtxBase,
+    routeImpactInput: {
+      startTime: "20:43",
+      stops: [
+        { id: "new-q2", zone: "Q2", label: "Pedido actual", isNew: true, promised: "20:50", pizzas: 1, serviceMin: 2, travelFromPrevMin: 7 },
+        { id: "q5", zone: "Q5", label: "Las Marinas", isNew: false, promised: "21:00", pizzas: 2, serviceMin: 2, travelFromPrevMin: 13 },
+      ],
+      returnTravelMin: 15,
+      capacity: { pizzas: 3, maxPizzas: 6, routeMinLimit: 60, pizzaQualityLimitMin: 60 },
+      toleranceMin: 0,
+    },
+  };
+  const opp = buildOpportunityFromPlannerOption(
+    { type: "join_giro", giro_id: "giro-q5-2100", status: "recommended", retraso: 0 },
+    ctx
+  );
+  check("status ajuste", opp.status === "ajuste");
+  check("severity warning", opp.severity === "warning");
+  check("blocked false", opp.blocked === false);
+  check("Q5 slipLabel '+5' (computato da routeImpact)", opp.routeEtas[1].slipLabel === "+5" && opp.routeEtas[1].slips === true);
+  check("warning 'Q5 se mueve +5 min' (backend)", opp.warning === "Q5 se mueve +5 min");
+}
+
+console.log("══ RI-3: routeImpact capacity full (pizzas 7/6) → lleno ══");
+{
+  const ctx = {
+    ...riCtxBase,
+    routeImpactInput: {
+      startTime: "20:00",
+      stops: [
+        { id: "a", zone: "Q2", isNew: true, promised: "20:20", pizzas: 4, serviceMin: 2, travelFromPrevMin: 10 },
+        { id: "b", zone: "Q5", isNew: false, promised: "20:30", pizzas: 3, serviceMin: 2, travelFromPrevMin: 10 },
+      ],
+      returnTravelMin: 15,
+      capacity: { pizzas: 7, maxPizzas: 6, routeMinLimit: 60, pizzaQualityLimitMin: 60 },
+    },
+  };
+  const opp = buildOpportunityFromPlannerOption(
+    { type: "join_giro", giro_id: "giro-q5-2100", status: "valid", retraso: 0 },
+    ctx
+  );
+  check("status lleno", opp.status === "lleno");
+  check("blocked true", opp.blocked === true);
+  check("capacity 7/6 full", opp.capacity.pizzas === "7/6" && opp.capacity.state === "full");
+}
+
+console.log("══ RI-4: routeImpact ruta larga → no_recomendado (forzabile, blocked false) ══");
+{
+  const ctx = {
+    ...riCtxBase,
+    routeImpactInput: {
+      startTime: "20:00",
+      stops: [
+        { id: "a", zone: "Q2", isNew: true, promised: "20:20", pizzas: 1, serviceMin: 2, travelFromPrevMin: 20 },
+        { id: "b", zone: "Q5", isNew: false, promised: "20:42", pizzas: 2, serviceMin: 2, travelFromPrevMin: 20 },
+      ],
+      returnTravelMin: 15,
+      capacity: { pizzas: 3, maxPizzas: 6, routeMinLimit: 30, pizzaQualityLimitMin: 120 },
+    },
+  };
+  const opp = buildOpportunityFromPlannerOption(
+    { type: "join_giro", giro_id: "giro-q5-2100", status: "valid", retraso: 0 },
+    ctx
+  );
+  check("status no_recomendado", opp.status === "no_recomendado");
+  // FINDING chiave: routeImpact tratta no_recomendado (ruta larga) come FORZABILE
+  // → blocked=false. La policy di default del mapper (BLOCKING_STATUSES) lo
+  // marcherebbe true: il bridge passa il blocked esplicito di routeImpact, che vince.
+  check("blocked false (routeImpact esplicito batte mapper policy)", opp.blocked === false);
+  check("warning ruta larga", /Ruta demasiado larga/.test(opp.warning));
+}
+
+console.log("══ RI-5: bridge delega lo slip math a routeImpact (no duplicazione) ══");
+{
+  // Il bridge non calcola eta−promised: il '+5' arriva da routeImpact, non dal
+  // retraso del planner (qui retraso 0). Prova che lo slip è quello computato.
+  const ctx = {
+    routeZones: ["Q2", "Q5"],
+    routeImpactInput: {
+      startTime: "20:43",
+      stops: [
+        { id: "new-q2", zone: "Q2", isNew: true, promised: "20:50", pizzas: 1, serviceMin: 2, travelFromPrevMin: 7 },
+        { id: "q5", zone: "Q5", isNew: false, promised: "21:00", pizzas: 1, serviceMin: 2, travelFromPrevMin: 13 },
+      ],
+      returnTravelMin: 15,
+      capacity: { pizzas: 2, maxPizzas: 6, routeMinLimit: 60, pizzaQualityLimitMin: 60 },
+    },
+  };
+  const opp = buildOpportunityFromPlannerOption({ type: "join_giro", status: "valid", retraso: 0 }, ctx);
+  check("status ajuste pur con retraso 0 (slip da routeImpact)", opp.status === "ajuste");
+  check("slipLabel +5 da downstream, non da retraso", opp.routeEtas[1].slipLabel === "+5");
+}
+
 console.log("══ Purity / decoupling ══");
 const src = fs.readFileSync(path.join(__dirname, "../src/core/delivery/premiumPlannerBridge.js"), "utf8");
 check("no fetch()", !/\bfetch\s*\(/.test(src));
@@ -178,9 +327,11 @@ check("no supabase/sb usage", !/supabase|sbSelect|sbInsert|sbUpdate|sbDelete/i.t
 check("no DB write verbs", !/\b(insert|update|delete)\s*\(/i.test(src));
 check("no router/app wiring", !/router\.|app\.(post|put|patch|get)\b/.test(src));
 check("no eta−promised arithmetic", !/promised\s*[-+]|eta\s*-\s*/.test(src));
-check("requires only premiumPlannerOpportunities", (() => {
-  const reqs = (src.match(/require\(["'][^"']+["']\)/g) || []);
-  return reqs.length === 1 && /premiumPlannerOpportunities/.test(reqs[0]);
+check("requires only pure siblings (mapper + routeImpact)", (() => {
+  const reqs = (src.match(/require\(["']([^"']+)["']\)/g) || [])
+    .map((r) => r.replace(/require\(["']|["']\)/g, ""));
+  const allowed = new Set(["./premiumPlannerOpportunities", "./routeImpact"]);
+  return reqs.length === 2 && reqs.every((r) => allowed.has(r));
 })());
 
 console.log(`\n═══ RESULT: ${pass} passed, ${fail} failed ═══`);
