@@ -247,6 +247,7 @@ duplicazione.
 Flusso dati: **strategic layer** → candidate → **route-impact** → input già
 calcolato → **`premiumPlannerOpportunities`** → Opportunity contract →
 `previewStrategicOpportunities` / `previewManualGiro` (adapter read-only futuri).
+→ design adapter read-only: [`PREMIUM_PLANNER_READONLY_ADAPTER_DESIGN.md`](PREMIUM_PLANNER_READONLY_ADAPTER_DESIGN.md).
 
 > **FINDING (naming `canal` vs `channel`).** Mantenere l'invariante già stabilita:
 > `channel` (sur|oeste|cross, direzione rotta) ≠ `canal` (WA/MANUAL, sorgente
