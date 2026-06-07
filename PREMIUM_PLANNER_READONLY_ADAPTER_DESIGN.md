@@ -252,9 +252,9 @@ mostrata (non si spinge il cliente a ritardare).
 ## 12. Future wiring plan (gated, non in questa fase)
 
 1. ✅ moduli puri (channels, strategic, routeImpact, bridge, mapper) — fatti.
-2. **adapter module** `src/agents/previewStrategicOpportunities.js` (read-only,
-   deps-injected, write-guarded) — fase successiva, **solo** dopo audit/OK.
-3. **test offline** dell'adapter (§11) — insieme al modulo.
+2. ✅ **adapter module** `src/agents/previewStrategicOpportunities.js` (read-only,
+   deps-injected, write-guarded) — IMPLEMENTATO (variante offline, vedi §13).
+3. ✅ **test offline** dell'adapter (§11) — `tests/previewStrategicOpportunities.test.js`.
 4. estensione additiva `loadPlannerSnapshot` per driver availability (§5) — se
    serve `startTime` reale.
 5. decisione `travelTimes` (proxy `andata_min` vs matrice) — **prerequisito** del
@@ -265,3 +265,32 @@ mostrata (non si spinge il cliente a ritardare).
    blocchi delivery.
 
 **No live wiring in questa fase. Docs first.**
+
+## 13. Implementation note — variante OFFLINE (2026-06-07)
+
+L'adapter è stato implementato come **orchestratore offline da laboratorio**,
+con alcune **divergenze dichiarate** rispetto a §4/§8 (registrate qui per non
+lasciare drift doc↔codice):
+
+- **No geo, no planner reale.** Questa fase NON fa geo-resolution e NON chiama
+  `evaluateNewOrder`. Il `currentOrderDraft` porta la `zona` esplicita; la
+  baseline diretta (`firstAvailable`/`bestProposal`) è il **candidato diretto**
+  della catena strategica (`anchor=null`) valutato da `routeImpact`. La variante
+  "planner reale + geo" (§8.1) resta fase successiva. `source:"offline-readonly"`
+  (non `"planner"`).
+- **`startTime` esplicito obbligatorio.** Assente → blocker `missing_start_time`;
+  malformato → `invalid_start_time`. **Mai** `Date.now`/orario corrente/driver
+  availability inventata (risolve il FINDING §5 "driver non caricata" tagliando
+  il nodo invece di estendere il loader).
+- **Anchors** da `input.anchors` (sanitizzati) oppure da `snapshot.orders`
+  (DOMICILIO, non terminali, con zona+hora, escluso l'id del draft). Solo campi
+  non-PII; label generica `Pedido <zona>`.
+- **Riconciliazione cross-channel nell'adapter.** `routeImpact` non conosce il
+  canale: un candidato `cross` viene forzato a `no_recomendado`/`blocked` a valle
+  del bridge (il "wiring futuro" citato in §strategic è ora qui).
+- **Tratte mancanti** → Opportunity `blocked` con warning `missing_travel_times`,
+  senza `routeEtas` finti (mai 0 fantasma; coerente con `deliveryLegs`).
+- **Safety contract**: `{ readOnly:true, writes:false, pii:"redacted" }`.
+
+Resta valido tutto il §12: nessun wiring a `index.js`, nessuna dispatcher action,
+nessun endpoint, nessun DB write.
