@@ -1,0 +1,233 @@
+// ===============================================================
+// strategicOpportunities.js — Premium Planner strategic candidate generator
+// ===============================================================
+// Mattone PURO/offline del motore Premium Planner (vedi
+// PREMIUM_PLANNER_STRATEGIC_LAYER_DESIGN.md §A). NON wired a index.js,
+// nessun path live, nessun DB/fetch/env/router. Unica dipendenza: la config
+// pura `deliveryChannels` (sorgente di verità per il canale).
+//
+// RUOLO: generare i CANDIDATI cross-zone "di passaggio" che il planner reale
+// NON produce (evaluateNewOrder fa solo join same-zone, planner.js:713).
+// Esempio: ordine attuale Q2 + target futuro Q5 21:00 → candidato "Q2 entra
+// prima del Q5" nel canale sur, con un `routeImpactInput` PRONTO da passare a
+// `premiumPlannerBridge` (context.routeImpactInput) / `buildRouteImpact`.
+//
+// COSA FA:
+//   - classifica il canale della rotta (sur|oeste|cross) via deliveryChannels;
+//   - ordina le fermate secondo la sequenza operativa del canale;
+//   - assembla `routeImpactInput` (stops + travel + capacity limiti + pizze tot);
+//   - marca i candidati cross o senza dati di viaggio come `blockedCandidate`.
+//
+// COSA NON FA (resta a routeImpact / al resto della catena):
+//   - NON calcola ETA, slip, slipLabel, status finale, capacity.state;
+//   - NON applica nulla, NON crea giri, NON scrive DB, NON chiama endpoint;
+//   - NON inventa fermate (la rotta = zone di currentOrder + anchor, niente Q2
+//     fantasma se non è una fermata reale);
+//   - NON inventa tempi di viaggio: se un leg manca, blocca il candidato.
+//
+// FINDING (status cross-channel, vedi report): `routeImpact` NON conosce il
+// canale → per una rotta `cross` senza slip potrebbe dire "compatible". Il
+// "no_recomendado" cross è una decisione STRATEGICA: qui la portiamo come
+// `blockedCandidate=true` + `channel="cross"` + reason. La riconciliazione
+// (strategic blockedCandidate ↔ routeImpact status) è wiring futuro.
+//
+// NAMING: SEMPRE `channel` (sur|oeste|cross, direzione rotta). MAI `canal`
+// (sorgente WA/MANUAL): non pertinente qui.
+// ===============================================================
+"use strict";
+
+const { routeChannel, orderZonesByChannel } = require("./deliveryChannels");
+
+// Nodo di partenza/rientro del rider. Coerente col mapPath del mapper
+// (`["Pizzería", ...]`) e con le chiavi travelTimes ("Pizzería->Q2").
+const PIZZERIA = "Pizzería";
+
+function normZone(zone) {
+  return String(zone == null ? "" : zone).trim().toUpperCase();
+}
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Chiave di viaggio "from->to" (es. "Pizzería->Q2", "Q2->Q5", "Q5->Pizzería").
+function makeTravelKey(from, to) {
+  return `${from}->${to}`;
+}
+
+// Tempo di viaggio dall'input fixture, oppure null se assente/non numerico.
+// NON inventa: null è un segnale, non uno 0 silenzioso (routeImpact tratterebbe
+// uno 0 come leg istantaneo, falsando gli ETA).
+function resolveTravelTime(from, to, travelTimes) {
+  const tt = travelTimes || {};
+  const key = makeTravelKey(from, to);
+  return num(tt[key]);
+}
+
+// Canale della rotta: thin wrapper su deliveryChannels (fonte unica).
+//   "sur" | "oeste"  → compatibile
+//   "cross"          → canali misti (no_recomendado strategico)
+//   null             → indecidibile (zona sconosciuta / solo hub)
+function classifyCandidateChannel(routeZones) {
+  return routeChannel(routeZones);
+}
+
+// Assembla il routeImpactInput per una sequenza di fermate ordinate.
+// Ritorna { routeImpactInput, missingLegs[] }. Se manca anche un solo leg,
+// routeImpactInput=null e missingLegs elenca le chiavi mancanti (il candidato
+// verrà bloccato a monte: NON passiamo travel mancanti a routeImpact).
+function buildRouteImpactInputForCandidate(orderedStops, context = {}) {
+  const { startTime, travelTimes, capacity = {}, toleranceMin } = context;
+  const missingLegs = [];
+
+  let prev = PIZZERIA;
+  let totalPizzas = 0;
+  const stops = orderedStops.map((s) => {
+    const travel = resolveTravelTime(prev, s.zone, travelTimes);
+    if (travel == null) missingLegs.push(makeTravelKey(prev, s.zone));
+    totalPizzas += num(s.pizzas) || 0;
+    const stop = {
+      id: s.id,
+      zone: s.zone,
+      label: typeof s.label === "string" ? s.label : "",
+      isNew: s.isNew === true,
+      promised: typeof s.promised === "string" ? s.promised : null,
+      pizzas: num(s.pizzas) || 0,
+      serviceMin: num(s.serviceMin) || 0,
+      travelFromPrevMin: travel, // può essere null → blocco a valle
+    };
+    prev = s.zone;
+    return stop;
+  });
+
+  // Rientro dall'ultima zona alla pizzería.
+  const lastZone = orderedStops.length ? orderedStops[orderedStops.length - 1].zone : PIZZERIA;
+  const returnTravelMin = resolveTravelTime(lastZone, PIZZERIA, travelTimes);
+  if (returnTravelMin == null) missingLegs.push(makeTravelKey(lastZone, PIZZERIA));
+
+  if (missingLegs.length) {
+    return { routeImpactInput: null, missingLegs };
+  }
+
+  return {
+    routeImpactInput: {
+      startTime: typeof startTime === "string" ? startTime : null,
+      stops,
+      returnTravelMin,
+      capacity: {
+        pizzas: totalPizzas,
+        maxPizzas: num(capacity.maxPizzas),
+        routeMinLimit: num(capacity.routeMinLimit),
+        pizzaQualityLimitMin: num(capacity.pizzaQualityLimitMin),
+      },
+      toleranceMin: num(toleranceMin) || 0,
+    },
+    missingLegs: [],
+  };
+}
+
+// Costruisce UN candidato per (currentOrder, anchor). anchor=null → candidato
+// "crear" per il solo ordine attuale (nessuna fermata di passaggio).
+function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
+  const co = currentOrder || {};
+  const kind = anchor ? "agregar" : "crear";
+
+  // Descrittori fermata: currentOrder è il NUOVO stop; anchor è esistente.
+  const rawStops = [
+    { ...co, zone: normZone(co.zone), isNew: true, label: co.label || "Pedido actual" },
+  ];
+  if (anchor) {
+    rawStops.push({ ...anchor, zone: normZone(anchor.zone), isNew: false, label: anchor.label || "" });
+  }
+
+  const routeZonesUnordered = rawStops.map((s) => s.zone);
+  const channel = classifyCandidateChannel(routeZonesUnordered);
+
+  // Ordina le fermate secondo la sequenza del canale (sur: Q1→Q2→Q5,
+  // oeste: Q1→Q3→Q4). Per cross/indecidibile mantiene l'ordine d'ingresso.
+  const orderedZones = orderZonesByChannel(routeZonesUnordered);
+  const orderedStops = orderedZones.map((z) =>
+    rawStops.find((s) => s.zone === z)
+  ).filter(Boolean);
+  // Difesa: se l'ordinamento ha perso/duplicato zone, ricadi sull'ordine grezzo.
+  const finalStops = orderedStops.length === rawStops.length ? orderedStops : rawStops;
+  const routeZones = finalStops.map((s) => s.zone);
+
+  const mapPath = [PIZZERIA, ...routeZones];
+
+  const { routeImpactInput, missingLegs } = buildRouteImpactInputForCandidate(finalStops, context);
+
+  // Blocco strategico: cross/indecidibile, o dati di viaggio incompleti.
+  const isCross = channel === "cross";
+  const isUndecidable = channel === null;
+  const hasMissingTravel = missingLegs.length > 0;
+  const blockedCandidate = isCross || isUndecidable || hasMissingTravel;
+
+  let reason;
+  if (hasMissingTravel) {
+    reason = `Tiempos de viaje incompletos: ${missingLegs.join(", ")}`;
+  } else if (isCross) {
+    reason = `Canales distintos (${routeZones.join("+")}): ruta no recomendada, forzable.`;
+  } else if (isUndecidable) {
+    reason = `Canal indecidible para zonas ${routeZones.join("+")}.`;
+  } else if (anchor) {
+    reason = `${routeZones[0]} entra antes de ${anchor.label || anchor.zone} (canal ${channel}).`;
+  } else {
+    reason = `Pedido directo ${routeZones[0]} (canal ${channel}).`;
+  }
+
+  // priority: minore = migliore. Compatibile in-canale prima; cross dopo;
+  // dati mancanti/indecidibile ultimi. Ranking grezzo (placeholder dichiarato).
+  let priority;
+  if (hasMissingTravel || isUndecidable) priority = 100;
+  else if (isCross) priority = 90;
+  else priority = 10;
+
+  return {
+    id: `cand-${kind}-${routeZones.join("-").toLowerCase()}${anchor ? `-${anchor.id}` : ""}`,
+    kind,
+    anchorId: anchor ? anchor.id : null,
+    channel: channel || "cross", // null indecidibile → trattato come cross lato UI
+    routeZones,
+    mapPath,
+    routeImpactInput, // null se travel incompleti
+    reason,
+    priority,
+    blockedCandidate,
+  };
+}
+
+// Genera la lista di candidati strategici dall'input.
+//   - un candidato "agregar" per ogni anchor;
+//   - se nessun anchor, un candidato "crear" per il solo ordine attuale.
+// Ordinati per priority (compatibili prima).
+function buildStrategicCandidates(input = {}) {
+  const currentOrder = input.currentOrder || {};
+  const anchors = Array.isArray(input.anchors) ? input.anchors : [];
+  const context = {
+    startTime: input.startTime,
+    travelTimes: input.travelTimes,
+    capacity: input.capacity,
+    toleranceMin: input.toleranceMin,
+  };
+
+  const candidates = anchors.length
+    ? anchors.map((a) => buildCandidateForAnchor(currentOrder, a, context))
+    : [buildCandidateForAnchor(currentOrder, null, context)];
+
+  // Sort stabile per priority (tie-break sull'ordine d'ingresso).
+  return candidates
+    .map((c, i) => ({ c, i }))
+    .sort((p, q) => p.c.priority - q.c.priority || p.i - q.i)
+    .map((x) => x.c);
+}
+
+module.exports = {
+  PIZZERIA,
+  makeTravelKey,
+  resolveTravelTime,
+  classifyCandidateChannel,
+  buildRouteImpactInputForCandidate,
+  buildCandidateForAnchor,
+  buildStrategicCandidates,
+};
