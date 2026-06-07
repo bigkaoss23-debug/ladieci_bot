@@ -339,6 +339,70 @@ async function main() {
     check("RITIRO has no recommended giro", r.giro.recommended === false, JSON.stringify(r.giro));
   }
 
+  console.log("\n══ Default read-only geo resolver (no injected resolveDeliveryFields) ══");
+  {
+    // Airtight no-write: stub the supabase writers to throw so any geo_cache
+    // write attempt by the default wrapper would surface here. Restored after.
+    const supa = require("../src/utils/supabase");
+    const orig = { sbUpsert: supa.sbUpsert, sbUpdate: supa.sbUpdate, sbInsert: supa.sbInsert, sbDelete: supa.sbDelete };
+    let cacheWrites = 0;
+    supa.sbUpsert = async () => { cacheWrites++; throw new Error("unexpected_geo_cache_upsert"); };
+    supa.sbUpdate = async () => { cacheWrites++; throw new Error("unexpected_geo_cache_update"); };
+    supa.sbInsert = async () => { cacheWrites++; throw new Error("unexpected_geo_cache_insert"); };
+    supa.sbDelete = async () => { cacheWrites++; throw new Error("unexpected_geo_cache_delete"); };
+
+    const selectCalls = [];
+    const cacheRow = {
+      direccion_key: "calle lucena 5", direccion_orig: "Calle Lucena 5", zona: "Q2",
+      lat: 36.764, lon: -2.614, durata_andata_min: 9, source: "google",
+      hit_count: 3, n_ordini_consegnati: 2,
+    };
+    const db = writeGuardDb();
+    let r;
+    try {
+      r = await previewOrderPlanner({
+        tipo_consegna: "DOMICILIO",
+        direccion: "Calle Lucena 5",
+        hora: "20:30",
+        items: [],
+        pizzas_count: 1,
+        now: "20:00",
+      }, {
+        now: () => "20:00",
+        db,
+        // NO resolveDeliveryFields → previewOrderPlanner must fall back to the
+        // built-in read-only/no-cache resolver, fed by this injected sbSelect.
+        sbSelect: async (table, query = "") => {
+          selectCalls.push({ table, query });
+          if (table === "geo_cache" && /direccion_key=eq\.calle%20lucena%205/i.test(query)) return [cacheRow];
+          return [];
+        },
+        loadPlannerSnapshot: async () => ({
+          now: "20:00", orders: [], manual_giros: [], driver: null, driver_events: [], driver_status: null,
+        }),
+        evaluateNewOrder: () => ({
+          selected: { type: "separate", hora: "20:30", forno_out: "20:22", salida: "20:22", status: "valid" },
+          recommended: null, options: [], proximo_slot: null, warnings: [], snapshot_now: "20:00",
+        }),
+      });
+    } finally {
+      supa.sbUpsert = orig.sbUpsert; supa.sbUpdate = orig.sbUpdate; supa.sbInsert = orig.sbInsert; supa.sbDelete = orig.sbDelete;
+    }
+
+    check("default resolver: contract shape ok", r && r.ok === true && hasTopLevelContractShape(r), JSON.stringify(r));
+    check("default resolver: NOT geo_resolver_unavailable",
+      !(r && r.error && r.error.code === "geo_resolver_unavailable"), JSON.stringify(r && r.error));
+    check("default resolver: zona resolved from read-only cache", r && r.geo && r.geo.zona === "Q2", JSON.stringify(r && r.geo));
+    check("default resolver: contract/source/mode preserved",
+      r && r.contract === "nuevo-pedido-planner-preview-v1" && r.source === "planner" && r.mode === "read_only",
+      JSON.stringify(r && { c: r.contract, s: r.source, m: r.mode }));
+    check("default resolver: NO geo_cache write attempted", cacheWrites === 0, `cacheWrites=${cacheWrites}`);
+    check("default resolver: planner db only selects", db.calls.every((c) => c.op === "select"), JSON.stringify(db.calls));
+    check("default resolver: read-only cache lookup issued on geo_cache",
+      selectCalls.some((c) => c.table === "geo_cache"), JSON.stringify(selectCalls));
+    check("default resolver: no PII in output", hasNoStacktraceOrPii(r), JSON.stringify(r));
+  }
+
   console.log(`\n═══ RESULT: ${pass} passed, ${fail} failed ═══\n`);
   process.exit(fail > 0 ? 1 : 0);
 }

@@ -10,6 +10,7 @@
 
 const { loadPlannerSnapshot } = require("../core/delivery/plannerSnapshot");
 const { evaluateNewOrder } = require("../core/delivery/planner");
+const { resolveDeliveryFieldsReadOnly } = require("./resolveDeliveryFieldsReadOnly");
 
 const CONTRACT = "nuevo-pedido-planner-preview-v1";
 const SOURCE = "planner";
@@ -237,11 +238,15 @@ async function previewOrderPlanner(params = {}, deps = {}) {
   if (!params.direccion) {
     return safeError(params, tipoConsegna, "missing_direccion", "Falta direccion para domicilio");
   }
-  if (typeof deps.resolveDeliveryFields !== "function") {
-    return safeError(params, tipoConsegna, "geo_resolver_unavailable", "No se pudo resolver la direccion");
-  }
+  // Resolver geo: injected override se presente, altrimenti il wrapper
+  // read-only/no-cache di default (mai scrive geo_cache). Le deps vengono
+  // inoltrate così il wrapper può ricevere sbSelect/geocoder iniettabili nei
+  // test; ignora qualsiasi writer.
+  const resolveGeo = typeof deps.resolveDeliveryFields === "function"
+    ? deps.resolveDeliveryFields
+    : resolveDeliveryFieldsReadOnly;
   try {
-    const geo = await deps.resolveDeliveryFields(params);
+    const geo = await resolveGeo(params, deps);
     if (!geo || !geo.zona || geo.durata_andata_min == null) {
       return safeError(params, tipoConsegna, "unresolved_geo", "No se pudo resolver la direccion");
     }
