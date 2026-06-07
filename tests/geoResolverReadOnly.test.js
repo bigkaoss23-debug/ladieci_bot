@@ -254,6 +254,93 @@ async function main() {
     check("no nombre/tel/wa_id in output", !leaksPii(r, null));
   }
 
+  // ── 8. Q5 / Las Marinas — cache hit read-only ─────────────────────────
+  // Far-delivery zone (tempoGiro 30). Blindata (n_ordini_consegnati>=1) →
+  // alta confidence, durata dalla cache, zero write.
+  section("8 — Q5/Marina cache hit read-only");
+  writeAttempts = [];
+  {
+    const Q5_ROW = {
+      direccion_key: "avenida playa serena 12", direccion_orig: "Avenida Playa Serena 12",
+      zona: "Q5", lat: 36.7313, lon: -2.6352, durata_andata_min: 30,
+      source: "google", hit_count: 5, n_ordini_consegnati: 3,
+    };
+    const calls = [];
+    const r = await resolveDeliveryFieldsReadOnly(
+      { direccion: "Avenida Playa Serena 12", tel: SECRET_TEL },
+      { sbSelect: async (table, query = "") => { calls.push({ table, query }); return table === "geo_cache" ? [Q5_ROW] : []; } },
+    );
+    check("Q5 cache: resolver shape", hasResolverShape(r));
+    check("Q5 cache: zona = Q5", r && r.zona === "Q5", r && `zona=${r.zona}`);
+    check("Q5 cache: durata_andata_min = 30", r && r.durata_andata_min === 30, r && `durata=${r.durata_andata_min}`);
+    check("Q5 cache: geo_source = google", r && r.geo_source === "google", r && `src=${r.geo_source}`);
+    check("Q5 cache: confidence high (blindata)", r && r.confidence === "high", r && `conf=${r.confidence}`);
+    check("Q5 cache: cache read issued (read-only)", calls.some((c) => c.table === "geo_cache"));
+    check("Q5 cache: NO write attempted", writeAttempts.length === 0, JSON.stringify(writeAttempts));
+    check("Q5 cache: no PII leaked", !leaksPii(r, "Avenida Playa Serena 12"));
+  }
+
+  // ── 9. Q5 / Marina — fresh geocode (no cache), no persist ─────────────
+  // Geocoder mockato ritorna coordinate dentro il poligono Q5; durata da
+  // haversine (range sensato, non minuto-esatto). Nessun saveToCache/upsert.
+  section("9 — Q5/Marina fresh geocode does not persist");
+  writeAttempts = [];
+  {
+    // Coord nel poligono Q5 (assegnaZonaDaCoord → Q5).
+    const Q5_COORD = { lat: 36.7314, lon: -2.6352 };
+    const r = await resolveDeliveryFieldsReadOnly(
+      { direccion: "Calle del Golf 7, Las Marinas", tel: SECRET_TEL },
+      {
+        sbSelect: async () => [],                       // cache miss
+        loadFromCliente: async () => null,              // no cliente hit
+        nominatimGeocode: async () => ({ ...Q5_COORD }), // geocoder → Q5
+      },
+    );
+    check("Q5 fresh: zona = Q5 (from coord)", r && r.zona === "Q5", r && `zona=${r.zona}`);
+    check("Q5 fresh: geo_source = nominatim", r && r.geo_source === "nominatim", r && `src=${r.geo_source}`);
+    check("Q5 fresh: durata in sensible range (8..45)",
+      r && Number.isFinite(r.durata_andata_min) && r.durata_andata_min >= 8 && r.durata_andata_min <= 45,
+      r && `durata=${r.durata_andata_min}`);
+    check("Q5 fresh: haversine durata exposed", r && r.durata_haversine_min != null);
+    check("Q5 fresh: NO saveToCache / write attempted", writeAttempts.length === 0, JSON.stringify(writeAttempts));
+    check("Q5 fresh: no PII leaked", !leaksPii(r, "Calle del Golf 7, Las Marinas"));
+  }
+
+  // ── 10. previewOrderPlanner compat with Q5 address ────────────────────
+  section("10 — previewOrderPlanner Q5 compatibility");
+  writeAttempts = [];
+  {
+    let previewOrderPlanner;
+    try { ({ previewOrderPlanner } = require("../src/agents/previewOrderPlanner")); }
+    catch (_) { previewOrderPlanner = null; }
+    check("previewOrderPlanner available", typeof previewOrderPlanner === "function");
+
+    if (typeof previewOrderPlanner === "function") {
+      const Q5_ROW = {
+        direccion_key: "avenida playa serena 12", zona: "Q5", lat: 36.7313, lon: -2.6352,
+        durata_andata_min: 30, source: "google", hit_count: 5, n_ordini_consegnati: 3,
+      };
+      const snapshot = { now: "20:00", orders: [], manual_giros: [], driver: null, driver_events: [], driver_status: null };
+      const r = await previewOrderPlanner(
+        { tipo_consegna: "DOMICILIO", direccion: "Avenida Playa Serena 12", tel: SECRET_TEL, hora: "21:00", pizzas_count: 2 },
+        {
+          now: () => "20:00",
+          db: { select: async () => [], insert: blockWrite("insert"), update: blockWrite("update"), upsert: blockWrite("upsert"), delete: blockWrite("delete") },
+          resolveDeliveryFields: resolveDeliveryFieldsReadOnly,
+          sbSelect: async (table) => (table === "geo_cache" ? [Q5_ROW] : []),
+          loadPlannerSnapshot: async () => snapshot,
+          evaluateNewOrder: () => ({ selected: null, recommended: null, options: [], proximo_slot: null, warnings: [], snapshot_now: "20:00" }),
+        },
+      );
+      check("Q5 preview: contract = nuevo-pedido-planner-preview-v1", r && r.contract === "nuevo-pedido-planner-preview-v1", r && `contract=${r.contract}`);
+      check("Q5 preview: source = planner", r && r.source === "planner");
+      check("Q5 preview: mode = read_only", r && r.mode === "read_only");
+      check("Q5 preview: geo.zona = Q5", r && r.geo && r.geo.zona === "Q5", r && JSON.stringify(r.geo));
+      check("Q5 preview: NO geo_cache write", writeAttempts.length === 0, JSON.stringify(writeAttempts));
+      check("Q5 preview: no PII leaked", !leaksPii(r, "Avenida Playa Serena 12"));
+    }
+  }
+
   console.log(`\n═══ RESULT: ${pass} passed, ${fail} failed ═══`);
   process.exit(fail === 0 ? 0 : 1);
 }
