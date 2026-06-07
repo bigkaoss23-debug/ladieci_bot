@@ -149,9 +149,18 @@ function sanitizeAnchor(raw = {}) {
 // Costruisce gli anchor dallo snapshot read-only: DOMICILIO, non terminali, con
 // zona e hora, esclusa la bozza corrente. Solo campi non-PII (lo snapshot stesso
 // è già no-PII via plannerSnapshot/readOnlyDbAdapter).
+//
+// FILTRO same-zone (A1): se `opts.currentOrderZone` è fornita, gli ordini della
+// STESSA zona del current draft NON diventano anchor strategici. Lo strategic
+// Premium layer serve le opportunità cross-zone / "di passaggio"; la
+// consolidazione same-zone è dominio del planner classico (`evaluateNewOrder`).
+// Senza un leg "Q2->Q2" in deliveryLegs, un anchor same-zone degraderebbe a
+// `blocked/missing_travel_times` (rotta [Q2,Q2]) — confuso lato UI. Meglio non
+// generarlo. Se `currentOrderZone` è assente → nessun filtro (backward-compat).
 function buildAnchorsFromSnapshot(snapshot = {}, opts = {}) {
   const orders = Array.isArray(snapshot.orders) ? snapshot.orders : [];
   const currentId = opts.currentOrderId != null ? String(opts.currentOrderId) : null;
+  const currentZone = opts.currentOrderZone != null ? normZone(opts.currentOrderZone) : null;
   const out = [];
   for (const o of orders) {
     if (!o) continue;
@@ -162,6 +171,8 @@ function buildAnchorsFromSnapshot(snapshot = {}, opts = {}) {
     const zone = normZone(o.zona != null ? o.zona : o.zone);
     if (!zone) continue;
     if (currentId != null && String(o.id) === currentId) continue;
+    // same-zone del current → dominio del planner classico, non strategic.
+    if (currentZone != null && zone === currentZone) continue;
     const anchor = sanitizeAnchor(o);
     if (anchor) out.push(anchor);
   }
@@ -347,7 +358,10 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
     if (!snapshot) {
       return safeError(currentOrder, "missing_snapshot", "Falta snapshot o loadSnapshot");
     }
-    anchors = buildAnchorsFromSnapshot(snapshot, { currentOrderId: currentOrder.id });
+    anchors = buildAnchorsFromSnapshot(snapshot, {
+      currentOrderId: currentOrder.id,
+      currentOrderZone: currentOrder.zone, // A1: scarta anchor same-zone (planner classico)
+    });
   }
 
   // Moduli iniettabili (default ai mattoni puri).

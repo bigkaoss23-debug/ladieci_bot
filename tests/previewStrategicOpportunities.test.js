@@ -26,7 +26,7 @@ try {
   throw e;
 }
 
-const { previewStrategicOpportunities } = mod;
+const { previewStrategicOpportunities, buildAnchorsFromSnapshot } = mod;
 
 let pass = 0, fail = 0;
 function check(label, cond, extra = "") {
@@ -373,6 +373,7 @@ async function main() {
     const ids = r.serviceLine.map((s) => s.id);
     check("E2E RITIRO escluso (ord-ret-2040)", !ids.includes("ord-ret-2040"), JSON.stringify(ids));
     check("E2E RETIRADO/terminale escluso (ord-done)", !ids.includes("ord-done"), JSON.stringify(ids));
+    check("E2E same-zone Q2 escluso (ord-q2-2030, A1)", !ids.includes("ord-q2-2030"), JSON.stringify(ids));
     check("E2E Q5 incluso (ord-q5-2100)", ids.includes("ord-q5-2100"), JSON.stringify(ids));
     check("E2E nessun anchor con zona null", r.serviceLine.every((s) => typeof s.zone === "string" && s.zone.length > 0), JSON.stringify(r.serviceLine));
   }
@@ -392,8 +393,10 @@ async function main() {
     check("E2E loader NON chiamato se startTime manca (fail-fast)", spy.calls === 0, `calls=${spy.calls}`);
   }
 
-  // E2E-6 — FINDING B: anchor same-zone (Q2) degrada in modo sicuro (blocked),
-  // NON inventa un leg Q2->Q2=0. Comportamento documentato, non un crash.
+  // E2E-6 — A1: anchor same-zone (Q2) ESCLUSO dallo strategic adapter.
+  // Prima (FINDING B) degradava a blocked/missing_travel_times [Q2,Q2]; ora la
+  // consolidazione same-zone resta dominio del planner classico → niente
+  // opportunity Premium [Q2,Q2], niente missing_travel_times spurio.
   {
     const { fn } = spyLoader(e2eSnapshot());
     const r = await previewStrategicOpportunities({
@@ -402,12 +405,26 @@ async function main() {
       capacity: CAPACITY,
     }, { loadSnapshot: fn });
     const sameZone = r.opportunities.find((o) => o.routeZones[0] === "Q2" && o.routeZones[1] === "Q2");
-    check("E2E same-zone Q2 anchor → opportunity blocked (safe-degradation)",
-      sameZone && sameZone.blocked === true && sameZone.status === "no_recomendado",
-      JSON.stringify(sameZone));
-    check("E2E same-zone Q2 → nessun routeEta finto (no leg 0)",
-      sameZone && Array.isArray(sameZone.routeEtas) && sameZone.routeEtas.length === 0,
-      JSON.stringify(sameZone && sameZone.routeEtas));
+    check("E2E A1: nessuna opportunity same-zone [Q2,Q2]", !sameZone, JSON.stringify(r.opportunities.map((o) => o.routeZones)));
+    check("E2E A1: nessun warning missing_travel_times spurio", !r.warnings.some((w) => w.code === "missing_travel_times"), JSON.stringify(r.warnings));
+    check("E2E A1: nessuna opportunity blocked residua", r.opportunities.every((o) => o.blocked !== true), JSON.stringify(r.opportunities.map((o) => ({ z: o.routeZones, b: o.blocked }))));
+    check("E2E A1: Q2→Q5 cross-zone resta presente e compatible",
+      r.opportunities.some((o) => o.routeZones[0] === "Q2" && o.routeZones[1] === "Q5" && o.status === "compatible"),
+      JSON.stringify(r.opportunities.map((o) => ({ z: o.routeZones, s: o.status }))));
+  }
+
+  // E2E-7 — buildAnchorsFromSnapshot: filtro same-zone + backward-compat.
+  {
+    const snap = e2eSnapshot();
+    // con currentOrderZone Q2 → l'anchor Q2 (ord-q2-2030) è filtrato, Q5 resta.
+    const filtered = buildAnchorsFromSnapshot(snap, { currentOrderZone: "Q2" });
+    check("buildAnchors A1: same-zone Q2 filtrato", filtered.every((a) => a.id !== "ord-q2-2030"), JSON.stringify(filtered.map((a) => a.id)));
+    check("buildAnchors A1: Q5 mantenuto", filtered.some((a) => a.id === "ord-q5-2100" && a.zone === "Q5"), JSON.stringify(filtered.map((a) => a.id)));
+    check("buildAnchors A1: confronto zona case-insensitive", buildAnchorsFromSnapshot(snap, { currentOrderZone: "q2" }).every((a) => a.zone !== "Q2"), "lowercase q2 deve filtrare Q2");
+    // senza currentOrderZone → backward-compat: same-zone NON filtrato.
+    const legacy = buildAnchorsFromSnapshot(snap, {});
+    check("buildAnchors backward-compat: senza currentOrderZone tiene Q2", legacy.some((a) => a.id === "ord-q2-2030"), JSON.stringify(legacy.map((a) => a.id)));
+    check("buildAnchors: terminali/RITIRO sempre esclusi", legacy.every((a) => a.id !== "ord-done" && a.id !== "ord-ret-2040"), JSON.stringify(legacy.map((a) => a.id)));
   }
 
   console.log(`\n═══ RESULT: ${pass} passed, ${fail} failed ═══\n`);
