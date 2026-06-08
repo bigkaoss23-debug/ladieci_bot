@@ -71,6 +71,42 @@ check("nessun nuovo app.post non richiesto (un solo /api POST)",
   (src.match(/app\.post\(["']\/api["']/g) || []).length === 1,
   String((src.match(/app\.post\(/g) || []).length) + " app.post totali");
 
+// ── Part 1b: auth gate comune + error hardening (source-inspection) ───────────
+// NB: index.js fa app.listen() e lancia scheduler/Supabase/WhatsApp al require →
+// non importabile in un test. Come previewOrderPlannerIndex, verifichiamo il
+// wiring via ispezione statica della sorgente.
+console.log("\n── index.js auth gate + error hardening ──");
+
+// Auth: middleware globale su /api → 401 unauthorized. previewStrategicOpportunities
+// vive sotto app.post("/api") quindi EREDITA lo stesso gate (nessuna scorciatoia).
+check("auth middleware app.use(\"/api\", …) presente",
+  /app\.use\(\s*["']\/api["']\s*,/.test(src));
+check("auth gate confronta x-api-key/_k con DASHBOARD_API_KEY",
+  /req\.headers\[["']x-api-key["']\]\s*\|\|\s*req\.query\._k/.test(src) && /DASHBOARD_API_KEY/.test(src));
+check("auth gate risponde 401 { error: \"unauthorized\" }",
+  /status\(401\)\.json\(\{\s*error:\s*["']unauthorized["']\s*\}\)/.test(src));
+// L'auth middleware è registrato PRIMA del POST /api handler (ordine express).
+check("auth middleware registrato prima di app.post(\"/api\")",
+  src.indexOf('app.use("/api"') !== -1 &&
+  src.indexOf('app.use("/api"') < src.indexOf('app.post("/api"'),
+  `useIdx=${src.indexOf('app.use("/api"')} postIdx=${src.indexOf('app.post("/api"')}`);
+
+// Error hardening: i catch 500 (GET+POST) NON devono ritornare e.message raw.
+const fiveHundreds = src.match(/status\(500\)\.json\([^;]*?\)/g) || [];
+check("almeno 2 catch 500 presenti (GET + POST)", fiveHundreds.length >= 2, JSON.stringify(fiveHundreds));
+check("nessun 500 ritorna e.message/err.message/.stack raw al client",
+  fiveHundreds.every((s) => !/e\.message|err\.message|\.stack/.test(s)), JSON.stringify(fiveHundreds));
+check("ogni 500 ritorna { error: \"internal_error\" }",
+  fiveHundreds.every((s) => /error:\s*["']internal_error["']/.test(s)), JSON.stringify(fiveHundreds));
+// Le RISPOSTE 500 (target dell'hardening) non espongono stack/env/token/internals.
+// (Lo scope è la risposta d'errore; gli endpoint diagnostici /version espongono
+// SOLO metadati Railway whitelistati, non sono qui in oggetto.)
+check("i 500 non espongono e.message/.stack/env/token/supabase",
+  fiveHundreds.every((s) => !/e\.message|err\.message|\.stack|process\.env|token|apikey|supabase/i.test(s)),
+  JSON.stringify(fiveHundreds));
+// L'errore controllato unauthorized resta intatto (non sostituito da internal_error).
+check("unauthorized controllato preservato", /error:\s*["']unauthorized["']/.test(src));
+
 // ── Part 2: integration con la stessa closure del dispatcher ──────────────────
 // Replica ESATTA della deps closure usata in index.js, con sbSelect FAKE.
 function dispatcherDeps(sbSelect) {

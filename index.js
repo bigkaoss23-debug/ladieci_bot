@@ -165,8 +165,10 @@ app.get("/api", async (req, res) => {
 
     res.json(result);
   } catch (e) {
+    // Log server-side (dettaglio resta nei log, MAI al client).
     console.error("API GET error:", e);
-    res.status(500).json({ error: e.message });
+    // Hardening: niente e.message raw al client (no leak di path/SQL/Supabase/env).
+    res.status(500).json({ error: "internal_error" });
   }
 });
 
@@ -456,8 +458,10 @@ app.post("/api", async (req, res) => {
 
     res.json(result);
   } catch (e) {
+    // Log server-side (dettaglio resta nei log, MAI al client).
     console.error("API POST error:", e);
-    res.status(500).json({ error: e.message });
+    // Hardening: niente e.message raw al client (no leak di path/SQL/Supabase/env).
+    res.status(500).json({ error: "internal_error" });
   }
 });
 
