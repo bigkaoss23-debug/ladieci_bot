@@ -203,6 +203,59 @@ console.log("══ Mapper hand-off ══");
   check("capacity senza flag interni", !("_pizzasFull" in fields.capacity) && !("_durationOver" in fields.capacity));
 }
 
+// ── Regression: capacità mancante NON deve diventare 0/lleno (null≠0) ────────
+// Bug: Number(null)===0, Number("")===0 → Number.isFinite(Number(x)) trattava
+// null/"" come 0 → maxPizzas 0 → ogni rotta con pizze>0 usciva "full"/lleno.
+console.log("══ Regression: capacità mancante (null≠0) ══");
+{
+  // maxPizzas null/undefined/""/NaN → NON full, stato "desconocida".
+  for (const [label, mp] of [["null", null], ["undefined", undefined], ["empty-string", ""], ["NaN", NaN]]) {
+    const cap = classifyCapacity({ pizzas: 3, maxPizzas: mp }, 36, false);
+    check(`maxPizzas ${label} → NON full`, cap.state !== "full" && cap._pizzasFull === false, JSON.stringify(cap));
+    check(`maxPizzas ${label} → state desconocida`, cap.state === "desconocida", JSON.stringify(cap));
+    check(`maxPizzas ${label} → pizzas senza denominatore "3"`, cap.pizzas === "3", cap.pizzas);
+  }
+  // maxPizzas 0 NUMERICO reale → capacità zero → full se pizze>0.
+  const zero = classifyCapacity({ pizzas: 3, maxPizzas: 0 }, 36, false);
+  check("maxPizzas 0 reale → full (3>0)", zero.state === "full" && zero._pizzasFull === true, JSON.stringify(zero));
+  // 0 pizze e maxPizzas 0 → NON full (0 non supera 0).
+  const zeroZero = classifyCapacity({ pizzas: 0, maxPizzas: 0 }, 10, false);
+  check("0 pizze / maxPizzas 0 → NON full", zeroZero._pizzasFull === false, JSON.stringify(zeroZero));
+  // capacità reale piena resta full.
+  const realFull = classifyCapacity({ pizzas: 7, maxPizzas: 6 }, 36, false);
+  check("7/6 reale → full", realFull.state === "full" && realFull._pizzasFull === true, JSON.stringify(realFull));
+  // limite noto e rispettato resta ok.
+  const okCap = classifyCapacity({ pizzas: 3, maxPizzas: 6, routeMinLimit: 60 }, 36, false);
+  check("3/6 con limiti noti → ok", okCap.state === "ok", JSON.stringify(okCap));
+  // routeMinLimit null non deve forzare durationOver.
+  const noLimit = classifyCapacity({ pizzas: 3, maxPizzas: 6, routeMinLimit: null }, 999, false);
+  check("routeMinLimit null → NON durationOver", noLimit._durationOver === false, JSON.stringify(noLimit));
+
+  // chiamata "scalare" difensiva: classifyCapacity(null) non deve crashare né full.
+  check("classifyCapacity(null) → NON full", classifyCapacity(null)._pizzasFull === false);
+}
+
+// ── Regression: buildRouteImpact Q2→Q5 SENZA capacity → niente lleno falso ────
+console.log("══ Regression: buildRouteImpact senza capacity ══");
+{
+  // Stessa rotta del wiring (Q2→Q5) ma con capacity {} (nessun limite noto):
+  // pizzaQualityLimitMin null NON deve diventare 0 (→ no_recomendado falso),
+  // maxPizzas null NON deve diventare 0 (→ lleno falso). Atteso: compatible.
+  const impact = buildRouteImpact({
+    startTime: "20:35",
+    stops: [
+      { id: "new-q2", zone: "Q2", isNew: true, promised: "20:50", pizzas: 1, serviceMin: 2, travelFromPrevMin: 7 },
+      { id: "q5", zone: "Q5", isNew: false, promised: "21:00", pizzas: 2, serviceMin: 2, travelFromPrevMin: 10 },
+    ],
+    returnTravelMin: 15,
+    capacity: {}, // nessun limite → tutto ignoto
+  });
+  check("status compatible (non lleno/no_recomendado)", impact.status === "compatible", impact.status);
+  check("blocked false", impact.blocked === false, String(impact.blocked));
+  check("capacity.state desconocida (non full)", impact.capacity.state === "desconocida", JSON.stringify(impact.capacity));
+  check("nessuno slip (rotta puntuale)", impact.routeEtas.every((e) => e.slips === false));
+}
+
 // ── Purity: nessun require (modulo a zero dipendenze) ────────────────────────
 console.log("══ Purity ══");
 {

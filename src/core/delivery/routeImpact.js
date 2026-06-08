@@ -60,6 +60,23 @@ function num(v, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// Limite numerico VALIDO o null. CRITICO: `Number(null)===0`, `Number("")===0`,
+// `Number(false)===0` sono trappole — `Number.isFinite(Number(x))` tratterebbe
+// null/""/false come 0, e un limite 0 fa scattare "full"/"over" falsi.
+// Qui SOLO numeri reali (e stringhe numeriche) sono limiti; null/undefined/""/
+// non-numerico → null = "limite assente / sconosciuto". Uno 0 NUMERICO reale
+// resta 0 (capacità zero reale → resta lleno se le pizze superano 0).
+function finiteLimit(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (s === "") return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null; // null, undefined, boolean, object, array, …
+}
+
 // ── slipLabel: minuti (>0) → "+N", altrimenti "". Calcolato QUI (backend). ─────
 function formatSlipLabel(minutes) {
   const n = Number(minutes);
@@ -116,22 +133,28 @@ function computeRouteEtas(stops, context = {}) {
 }
 
 // ── Capacity: classifica pizze + durata. Limiti dall'INPUT (vedi §2). ─────────
-// state: "full" se pizze oltre il max (capacità rider piena);
-//        "tight" se la durata supera il limite o la qualità è a rischio;
-//        "ok" altrimenti.
+// state: "full"        se pizze oltre il max (capacità rider piena, limite NOTO);
+//        "tight"       se la durata supera il limite o la qualità è a rischio;
+//        "desconocida" se il limite pizze è assente/sconosciuto (NON lo trattiamo
+//                      come 0 → niente "lleno" falso quando manca il dato);
+//        "ok"          limite noto e rispettato.
+// REGOLA: `null`/assente NON è `0`. Un `maxPizzas` mancante = capacità ignota,
+// non capacità zero. Solo un `0` numerico reale resta capacità zero (→ full).
 function classifyCapacity(capacityInput = {}, routeMin = null, qualityExceeded = false) {
   const c = capacityInput || {};
   const pizzas = num(c.pizzas, 0);
-  const maxPizzas = Number.isFinite(Number(c.maxPizzas)) ? Number(c.maxPizzas) : null;
-  const limitMin = Number.isFinite(Number(c.routeMinLimit)) ? Number(c.routeMinLimit) : null;
-  const rm = Number.isFinite(Number(routeMin)) ? Number(routeMin) : null;
+  const maxPizzas = finiteLimit(c.maxPizzas);
+  const limitMin = finiteLimit(c.routeMinLimit);
+  const rm = finiteLimit(routeMin);
 
   const pizzasFull = maxPizzas != null && pizzas > maxPizzas;
   const durationOver = limitMin != null && rm != null && rm > limitMin;
 
-  let state = "ok";
+  let state;
   if (pizzasFull) state = "full";
   else if (durationOver || qualityExceeded) state = "tight";
+  else if (maxPizzas == null) state = "desconocida"; // limite pizze ignoto, non "lleno"
+  else state = "ok";
 
   return {
     pizzas: maxPizzas != null ? `${pizzas}/${maxPizzas}` : `${pizzas}`,
@@ -217,10 +240,10 @@ function buildRouteImpact(input = {}) {
       : null;
 
   // Pizza-quality (proxy, §3): tempo max in transito = ultima eta − start.
+  // finiteLimit: un `pizzaQualityLimitMin` null/assente NON è 0 (altrimenti
+  // qualsiasi transito > 0 farebbe "no_recomendado" falso).
   const capIn = input.capacity || {};
-  const qualityLimit = Number.isFinite(Number(capIn.pizzaQualityLimitMin))
-    ? Number(capIn.pizzaQualityLimitMin)
-    : null;
+  const qualityLimit = finiteLimit(capIn.pizzaQualityLimitMin);
   const worstTransitMin =
     startMin != null && lastEtaMin != null ? lastEtaMin - startMin : null;
   const qualityExceeded =
