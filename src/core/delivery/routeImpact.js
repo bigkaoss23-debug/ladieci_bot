@@ -285,6 +285,11 @@ function buildRouteImpactOpportunityFields(impact = {}) {
     blocked: impact.blocked === true,
     warning: typeof impact.warning === "string" ? impact.warning : "",
     explanation: typeof impact.explanation === "string" ? impact.explanation : "",
+    // Additivo (routeTimeline v2): rientro rider e durata giro, GIÀ calcolati da
+    // buildRouteImpact ma in precedenza scartati. Necessari al mapper timeline
+    // (nodo return + margine). Non rompe i consumatori v1 (campi extra ignorati).
+    driverReturn: typeof impact.driverReturn === "string" ? impact.driverReturn : null,
+    routeMin: Number.isFinite(impact.routeMin) ? impact.routeMin : null,
   };
 }
 

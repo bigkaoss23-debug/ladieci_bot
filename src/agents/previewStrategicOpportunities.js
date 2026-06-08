@@ -34,6 +34,7 @@ const {
 const { buildRouteImpact } = require("../core/delivery/routeImpact");
 const { buildOpportunityFromPlannerOption } = require("../core/delivery/premiumPlannerBridge");
 const { buildPremiumOpportunity } = require("../core/delivery/premiumPlannerOpportunities");
+const { buildRouteTimeline } = require("../core/delivery/routeTimeline");
 
 const CONTRACT = "premium-planner-strategic-preview-v1";
 const SOURCE = "offline-readonly";
@@ -202,6 +203,39 @@ function blockedOpportunity(cand, currentOrder, code, message) {
   });
 }
 
+// Stops minimi per disegnare una linea BLOCCATA (tratte mancanti / cross non
+// viabile) senza inventare orari: zone dal candidato, isNew = zona del current.
+function buildBlockedStops(cand, currentOrder) {
+  const zones = Array.isArray(cand.routeZones) ? cand.routeZones : [];
+  return zones.map((z) => ({
+    zone: z,
+    label: z === currentOrder.zone ? currentOrder.label : `Pedido ${z}`,
+    isNew: z === currentOrder.zone,
+    promised: z === currentOrder.zone ? currentOrder.promised : null,
+  }));
+}
+
+// Allega (additivo) `routeTimeline` v2 a una opportunity già costruita. Il mapper
+// è puro; riceve l'impact COMPLETO (driverReturn incluso) o null se bloccata.
+function attachRouteTimeline(opp, cand, currentOrder, impact) {
+  opp.routeTimeline = buildRouteTimeline({
+    proposalId: opp.id,
+    startTime: cand.routeImpactInput ? cand.routeImpactInput.startTime : null,
+    routeImpact: impact || null,
+    stops: cand.routeImpactInput
+      ? cand.routeImpactInput.stops
+      : buildBlockedStops(cand, currentOrder),
+    baseline: opp.baseline,
+    kind: opp.kind,
+    channel: cand.channel,
+    status: opp.status,
+    blocked: opp.blocked,
+    warning: opp.warning,
+    explanation: opp.explanation,
+  });
+  return opp;
+}
+
 // Mappa UN candidato strategico → Opportunity contract-ready.
 // Ritorna { opp, blockedReason } oppure null se il candidato va scartato
 // (cross con includeCrossZone=false).
@@ -213,13 +247,15 @@ function mapCandidateToOpportunity(cand, currentOrder, ctx = {}) {
 
   // Tratte di viaggio mancanti → bloccato, no ETA fantasma.
   if (cand.routeImpactInput == null) {
+    const blockedOpp = blockedOpportunity(
+      cand,
+      currentOrder,
+      "missing_travel_times",
+      cand.reason || "Tiempos de viaje incompletos"
+    );
+    attachRouteTimeline(blockedOpp, cand, currentOrder, null);
     return {
-      opp: blockedOpportunity(
-        cand,
-        currentOrder,
-        "missing_travel_times",
-        cand.reason || "Tiempos de viaje incompletos"
-      ),
+      opp: blockedOpp,
       blockedReason: "missing_travel_times",
     };
   }
@@ -241,6 +277,12 @@ function mapCandidateToOpportunity(cand, currentOrder, ctx = {}) {
     routeImpactInput: cand.routeImpactInput,
   });
 
+  // Impact COMPLETO (con driverReturn/routeMin) per il mapper timeline. È una
+  // ricomputazione pura/offline dello stesso input già usato dal bridge: serve
+  // perché il bridge espone solo il subset opportunity (storicamente senza
+  // driverReturn). Niente IO, niente Date.now.
+  const fullImpact = buildRouteImpact(cand.routeImpactInput);
+
   // RICONCILIAZIONE cross-channel: routeImpact NON conosce il canale e potrebbe
   // dire "compatible" su una rotta cross. La decisione strategica (cross =
   // no_recomendado) vince: l'adapter forza lo status a valle del bridge.
@@ -249,9 +291,11 @@ function mapCandidateToOpportunity(cand, currentOrder, ctx = {}) {
     opp.severity = "blocked";
     opp.blocked = true;
     if (!opp.warning) opp.warning = cand.reason || "Canales distintos: ruta no recomendada";
+    attachRouteTimeline(opp, cand, currentOrder, fullImpact);
     return { opp, blockedReason: "cross_channel" };
   }
 
+  attachRouteTimeline(opp, cand, currentOrder, fullImpact);
   return { opp, blockedReason: null };
 }
 
