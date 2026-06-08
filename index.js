@@ -18,6 +18,7 @@ const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPrevi
 const { previewOrderPlanner } = require("./src/agents/previewOrderPlanner");
 const { createReadOnlyRestDb } = require("./src/core/delivery/readOnlyRestDb");
 const { previewStrategicOpportunities } = require("./src/agents/previewStrategicOpportunities");
+const { previewManualGiroRoute } = require("./src/agents/previewManualGiroRoute");
 const { loadPlannerSnapshot } = require("./src/core/delivery/plannerSnapshot");
 
 const app = express();
@@ -374,6 +375,28 @@ app.post("/api", async (req, res) => {
           ...args,
           db: createReadOnlyRestDb({ sbSelect }),
         }),
+      });
+    } else if (action === "previewManualGiroRoute") {
+      // Premium Planner manual giro route preview (read-only, LAB). L'operatore
+      // propone una SEQUENZA di tappe (selectedStops) e il backend calcola la
+      // `routeTimeline` v2 con i mattoni PURI (deliveryChannels + deliveryLegs +
+      // routeImpact + buildRouteTimeline) → contract
+      // `premium-planner-manual-giro-route-preview-v1`. SOLO preview: niente
+      // write, niente apply, niente manual_giros, niente PII, niente Date.now.
+      //
+      // Nessun DB qui: l'action è pura sui dati dell'input. Sicurezza input: si
+      // inoltrano SOLO i campi della rotta proposta (no snapshot/anchors injection,
+      // no PII). startTime resta ESPLICITO → `missing_start_time` se assente.
+      const mg = req.body || {};
+      result = previewManualGiroRoute({
+        startTime: mg.startTime,
+        currentOrderDraft: mg.currentOrderDraft,
+        selectedStops: mg.selectedStops,
+        selectedZones: mg.selectedZones,
+        includeReturn: mg.includeReturn,
+        includeCrossZone: mg.includeCrossZone,
+        capacity: mg.capacity,
+        toleranceMin: mg.toleranceMin,
       });
     } else if (action === "createOrden") {
       const d = req.body.data || req.body;
