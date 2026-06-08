@@ -17,6 +17,8 @@ const {
 const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
 const { previewOrderPlanner } = require("./src/agents/previewOrderPlanner");
 const { createReadOnlyRestDb } = require("./src/core/delivery/readOnlyRestDb");
+const { previewStrategicOpportunities } = require("./src/agents/previewStrategicOpportunities");
+const { loadPlannerSnapshot } = require("./src/core/delivery/plannerSnapshot");
 
 const app = express();
 app.use(express.json());
@@ -341,6 +343,35 @@ app.post("/api", async (req, res) => {
       // resolver geo read-only/no-cache di default dentro previewOrderPlanner.
       result = await previewOrderPlanner(req.body || {}, {
         db: createReadOnlyRestDb({ sbSelect }),
+      });
+    } else if (action === "previewStrategicOpportunities") {
+      // Premium Planner strategic preview (read-only, LAB). Espone la catena
+      // offline previewStrategicOpportunities → contract
+      // `premium-planner-strategic-preview-v1`. SOLO preview: niente write,
+      // niente apply, niente manual_giros, niente PII.
+      //
+      // loadSnapshot iniettato via closure read-only (loadPlannerSnapshot +
+      // createReadOnlyRestDb): l'adapter resta puro/senza loader default e il DB
+      // è solo `select` (allowlist, no PII, no wildcard). startTime resta input
+      // ESPLICITO: l'adapter ritorna `missing_start_time` se assente — qui NON si
+      // usa Date.now né si inventa disponibilità rider.
+      //
+      // Sicurezza input: NON inoltriamo `snapshot`/`anchors` dal client — gli
+      // anchor derivano SOLO dallo snapshot read-only (no injection di ordini).
+      const sp = req.body || {};
+      result = await previewStrategicOpportunities({
+        currentOrderDraft: sp.currentOrderDraft,
+        startTime: sp.startTime,
+        date: sp.serviceDate || sp.date || null,
+        now: sp.now || null,
+        includeCrossZone: sp.includeCrossZone,
+        capacity: sp.capacity,
+        toleranceMin: sp.toleranceMin,
+      }, {
+        loadSnapshot: (args) => loadPlannerSnapshot({
+          ...args,
+          db: createReadOnlyRestDb({ sbSelect }),
+        }),
       });
     } else if (action === "createOrden") {
       const d = req.body.data || req.body;
