@@ -237,6 +237,33 @@ console.log("══ 7. crear (no anchors) ══");
   check("routeZones [Q2]", eqArr(c.routeZones, ["Q2"]));
   check("channel sur", c.channel === "sur");
   check("routeImpactInput 1 stop", c.routeImpactInput.stops.length === 1 && c.routeImpactInput.stops[0].isNew === true);
+
+  // REGRESSIÓN "+5 fantasma": en un giro NUEVO la salida del rider se calcula
+  // hacia atrás desde lo prometido (20:50 − viaje 7 = 20:43), NO se hereda el
+  // startTime crudo (20:35). Así la entrega cae EXACTA sobre lo prometido y el
+  // slip es 0, en vez de inventar un retraso = tiempo de viaje con pizzería vacía.
+  check("crear: salida = prometido − viaje (20:43)", c.routeImpactInput.startTime === "20:43", c.routeImpactInput.startTime);
+  const impactCrear = buildRouteImpact(c.routeImpactInput);
+  const dCrear = impactCrear.routeEtas[0];
+  check("crear: entrega = prometido (20:50)", dCrear.eta === "20:50", dCrear.eta);
+  check("crear: sin slip fantasma", dCrear.slips === false && (!dCrear.slipLabel || dCrear.slipLabel === "+0"), JSON.stringify(dCrear.slipLabel));
+}
+
+// ── Scenario crear hora == prometido (caso real del modal) ───────────────────
+// El frontend manda UN solo valor como startTime Y como promised (hora del
+// draft). Antes esto producía slip = +viaje siempre. Tras el fix, slip 0.
+console.log("══ 7b. crear hora == prometido (bug real modal) ══");
+{
+  const c = buildStrategicCandidates({
+    currentOrder: { id: "new-q2", zone: "Q2", label: "Pedido actual", pizzas: 1, promised: "20:50" },
+    anchors: [],
+    startTime: "20:50", // == promised (lo que manda el modal V1)
+    travelTimes: { "Pizzería->Q2": 7, "Q2->Pizzería": 7 },
+    capacity: { maxPizzas: 6, routeMinLimit: 30, pizzaQualityLimitMin: 30 },
+  })[0];
+  check("salida recalculada a 20:43 (no 20:50)", c.routeImpactInput.startTime === "20:43", c.routeImpactInput.startTime);
+  const d = buildRouteImpact(c.routeImpactInput).routeEtas[0];
+  check("entrega 20:50 sin slip", d.eta === "20:50" && d.slips === false, `${d.eta}/${JSON.stringify(d.slipLabel)}`);
 }
 
 // ── Purity ───────────────────────────────────────────────────────────────────

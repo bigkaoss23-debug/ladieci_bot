@@ -55,6 +55,26 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Conversioni orario ↔ minuti. SPECCHIO ESATTO di routeImpact.js:toMin/fromMin
+// (incl. la normalizzazione night-service `h<6 → +24`): la salida del rider che
+// calcoliamo qui finisce nello stesso orologio di routeImpact, quindi DEVE usare
+// la stessa aritmetica o i giri dopo mezzanotte slittano. Non importiamo
+// routeImpact per non rompere la regola "deps minime" dichiarata in testa al file.
+function toMin(hhmm) {
+  if (hhmm == null) return null;
+  const m = String(hhmm).trim().match(/^(\d{1,2}):([0-5]\d)$/);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h < 6) h += 24; // night-service normalization
+  return h * 60 + min;
+}
+function fromMin(min) {
+  if (min == null || !Number.isFinite(min)) return null;
+  const w = ((Math.round(min) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(w / 60)).padStart(2, "0")}:${String(w % 60).padStart(2, "0")}`;
+}
+
 // Chiave di viaggio "from->to" (es. "Pizzería->Q2", "Q2->Q5", "Q5->Pizzería").
 function makeTravelKey(from, to) {
   return `${from}->${to}`;
@@ -183,9 +203,29 @@ function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
   // Travel times effettivi: espliciti (input) con precedenza, deliveryLegs
   // riempie i buchi. Le tratte assenti in entrambi restano missing (no 0).
   const effectiveTravelTimes = resolveTravelTimesForCandidate(routeZones, context);
+
+  // ── Salida del rider para un giro NUEVO (crear) ──────────────────────────
+  // En "crear" el rider NO está ya en ruta: su salida es una variable libre. La
+  // fijamos hacia atrás desde la hora prometida del pedido nuevo
+  //   salida = prometido − viaje(pizzería→zona)
+  // para que la entrega caiga EXACTA sobre lo prometido (slip 0), en lugar de
+  // heredar startTime = prometido y generar un retraso fantasma igual al tiempo
+  // de viaje (bug "+5 con pizzería vacía"). En "agregar" NO se toca: ahí la
+  // salida la fija el giro EXISTENTE y el slip resultante es real y significativo.
+  // Si falta el promised o el primer leg, se mantiene el startTime original.
+  let effectiveStartTime = context.startTime;
+  if (kind === "crear" && finalStops.length) {
+    const firstStop = finalStops[0];
+    const firstLegMin = resolveTravelTime(PIZZERIA, firstStop.zone, effectiveTravelTimes);
+    const promisedMin = toMin(firstStop.promised);
+    if (firstLegMin != null && promisedMin != null) {
+      effectiveStartTime = fromMin(promisedMin - firstLegMin);
+    }
+  }
+
   const { routeImpactInput, missingLegs } = buildRouteImpactInputForCandidate(
     finalStops,
-    { ...context, travelTimes: effectiveTravelTimes }
+    { ...context, travelTimes: effectiveTravelTimes, startTime: effectiveStartTime }
   );
 
   // Blocco strategico: cross/indecidibile, o dati di viaggio incompleti.
