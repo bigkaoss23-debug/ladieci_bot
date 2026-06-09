@@ -477,6 +477,75 @@ async function main() {
     check("E2E adapter: EN_COCINA presente in serviceLine", slIds.includes("q5-encocina"), JSON.stringify(slIds));
   }
 
+  // E2E-9 — proposals[] additive (selector wired read-only).
+  console.log("\n══ E2E-9. proposals[] additive ══");
+  {
+    const snap = {
+      now: "20:30",
+      orders: [
+        // EN_ENTREGA escluso a monte (guard) → non deve comparire nei proposals.
+        { id: "q5-enentrega", tipo_consegna: "DOMICILIO", estado: "EN_ENTREGA", zona: "Q5", hora: "21:00", n_pizze: 2 },
+        // anchor candidabile cross-zone (sur) per generare un insertion.
+        { id: "q5-encocina", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q5", hora: "21:05", n_pizze: 1 },
+      ],
+      manual_giros: [],
+    };
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "draft-q2", zona: "Q2", pizzas: 1, promised: "20:50", serviceMin: 2 },
+      startTime: "20:35",
+      snapshot: snap,
+      travelTimes: { "Pizzería->Q2": 7, "Q2->Q5": 10, "Q5->Pizzería": 15 },
+      capacity: CAPACITY,
+    });
+
+    // A — proposals[] presente.
+    check("A: proposals[] presente", Array.isArray(r.proposals), JSON.stringify(r.proposals));
+    check("A: proposalContract presente", r.proposalContract === "premium-planner-proposal-selection-v1", String(r.proposalContract));
+    // B — opportunities[] resta presente e invariato (additive-only).
+    check("B: opportunities[] ancora presente", Array.isArray(r.opportunities) && r.opportunities.length >= 1, JSON.stringify(r.opportunities.map((o) => o.routeZones)));
+    check("B: contract preview invariato", r.contract === "premium-planner-strategic-preview-v1");
+    // C — max 4.
+    check("C: proposals max 4", r.proposals.length <= 4, String(r.proposals.length));
+    // D — direct presente (bestProposal valido).
+    check("D: direct presente", r.proposals.some((p) => p.kind === "direct"), JSON.stringify(r.proposals.map((p) => p.kind)));
+    // E — kind validi mappati dal selector.
+    const validKinds = new Set(["direct", "insertion", "alternative", "not_recommended"]);
+    check("E: kind tutti validi", r.proposals.every((p) => validKinds.has(p.kind)), JSON.stringify(r.proposals.map((p) => p.kind)));
+    check("E: rank 1-based contiguo", r.proposals.map((p) => p.rank).join(",") === r.proposals.map((_, i) => i + 1).join(","), JSON.stringify(r.proposals.map((p) => p.rank)));
+    // F — EN_ENTREGA escluso anche dai proposals.
+    check("F: nessuna proposal referenzia EN_ENTREGA", !/q5-enentrega/.test(JSON.stringify(r.proposals)), JSON.stringify(r.proposals));
+    // H — additive non rompe: campi storici ancora lì.
+    check("H: firstAvailable + bestProposal + serviceLine intatti",
+      "firstAvailable" in r && "bestProposal" in r && Array.isArray(r.serviceLine));
+  }
+
+  // E2E-9b — fallback safe: nessun anchor → proposals = solo direct, no throw.
+  console.log("\n══ E2E-9b. fallback safe senza opportunities ══");
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { zona: "Q2", pizzas: 1, promised: "20:50", serviceMin: 2 },
+      startTime: "20:35",
+      anchors: [],
+      capacity: CAPACITY,
+    });
+    check("G: ok true", r.ok === true);
+    check("G: opportunities vuoto", r.opportunities.length === 0);
+    check("G: proposals presente (solo direct atteso)", Array.isArray(r.proposals) && r.proposals.every((p) => p.kind === "direct"), JSON.stringify(r.proposals.map((p) => p.kind)));
+  }
+
+  // E2E-9c — path di errore: proposals additive anche su ok:false.
+  console.log("\n══ E2E-9c. proposals[] additive su errore ══");
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { zona: "Q2", pizzas: 1, promised: "20:50" },
+      // NO startTime → safeError
+      capacity: CAPACITY,
+    });
+    check("err ok false", r.ok === false);
+    check("err proposals[] presente (vuoto)", Array.isArray(r.proposals) && r.proposals.length === 0, JSON.stringify(r.proposals));
+    check("err proposalContract presente", r.proposalContract === "premium-planner-proposal-selection-v1");
+  }
+
   console.log(`\n═══ RESULT: ${pass} passed, ${fail} failed ═══\n`);
   process.exit(fail > 0 ? 1 : 0);
 }

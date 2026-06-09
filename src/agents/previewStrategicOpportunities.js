@@ -7,7 +7,11 @@
 //     → strategicOpportunities (candidati cross-zone "di passaggio")
 //     → routeImpact (ETA/slip/status, via bridge)
 //     → premiumPlannerBridge → premiumPlannerOpportunities (contract Opportunity)
+//     → deliveryProposalSelector (max 4 proposals[] dai dati già assemblati)
 //   → response contract `premium-planner-strategic-preview-v1`.
+//
+// proposals[] è ADDITIVE: si affianca a opportunities[] (mai sostituirlo né
+// rimuoverlo). Fallback safe: se il selector lancia, proposals=[] + warning.
 //
 // NON è wired a index.js, NON è una dispatcher action, NON è un endpoint live.
 // Read-only, deps iniettate, write-guarded, no PII — sullo stesso pattern di
@@ -35,6 +39,7 @@ const { buildRouteImpact } = require("../core/delivery/routeImpact");
 const { buildOpportunityFromPlannerOption } = require("../core/delivery/premiumPlannerBridge");
 const { buildPremiumOpportunity } = require("../core/delivery/premiumPlannerOpportunities");
 const { buildRouteTimeline } = require("../core/delivery/routeTimeline");
+const { selectDeliveryProposals, CONTRACT: PROPOSAL_CONTRACT } = require("../core/delivery/deliveryProposalSelector");
 
 const CONTRACT = "premium-planner-strategic-preview-v1";
 const SOURCE = "offline-readonly";
@@ -112,6 +117,9 @@ function safeError(currentOrder, code, message) {
     firstAvailable: null,
     bestProposal: null,
     opportunities: [],
+    // proposals[] additive: sempre presente (anche su errore) → lista vuota.
+    proposals: [],
+    proposalContract: PROPOSAL_CONTRACT,
     serviceLine: [],
     warnings: [],
     blockers: [{ code, message }],
@@ -349,7 +357,8 @@ function buildStrategicPreviewResponse({
   opportunities,
   warnings,
 }) {
-  return {
+  const warningsOut = Array.isArray(warnings) ? warnings.slice() : [];
+  const response = {
     ok: true,
     contract: CONTRACT,
     source: SOURCE,
@@ -370,10 +379,28 @@ function buildStrategicPreviewResponse({
       promised: a.promised,
       pizzas: a.pizzas,
     })),
-    warnings: Array.isArray(warnings) ? warnings : [],
+    warnings: warningsOut,
     blockers: [],
     safety: safetyBlock(),
   };
+
+  // proposals[] ADDITIVE: il selector puro sceglie max 4 proposte dai dati GIÀ
+  // assemblati (firstAvailable/bestProposal/opportunities). NON tocca né rimuove
+  // opportunities[]: è un campo nuovo accanto. Fallback safe: se il selector
+  // lancia, proposals=[] + warning, la preview resta intatta.
+  response.proposalContract = PROPOSAL_CONTRACT;
+  try {
+    const selection = selectDeliveryProposals(response);
+    response.proposals = Array.isArray(selection.proposals) ? selection.proposals : [];
+  } catch (_) {
+    response.proposals = [];
+    warningsOut.push({
+      code: "proposal_selection_unavailable",
+      message: "No se pudieron derivar las propuestas (preview intacta)",
+    });
+  }
+
+  return response;
 }
 
 // ── adapter principale ────────────────────────────────────────────────────────
