@@ -53,6 +53,17 @@ const TERMINAL_STATES = new Set([
   "ENTREGADO",
 ]);
 
+// Stati che NON permettono l'inserimento PRIMA dell'anchor nel suo giro:
+// terminali (ordine chiuso) + EN_ENTREGA (rider GIÀ partito → fisicamente
+// impossibile anteporre una fermata). EN_ENTREGA NON è terminale (l'ordine è
+// vivo, rider in strada): per questo una lista dedicata, non un'estensione di
+// TERMINAL_STATES. POR_CONFIRMAR / EN_COCINA / LISTO restano candidabili: il
+// rider non è ancora uscito (la partenza è la transizione LISTO → EN_ENTREGA).
+const NON_INSERTABLE_ANCHOR_STATES = new Set([
+  ...TERMINAL_STATES,
+  "EN_ENTREGA",
+]);
+
 // Ordine di "bontà" degli status per il ranking finale (minore = meglio).
 const STATUS_RANK = { compatible: 0, ajuste: 1, no_recomendado: 2, lleno: 3 };
 
@@ -147,7 +158,8 @@ function sanitizeAnchor(raw = {}) {
   };
 }
 
-// Costruisce gli anchor dallo snapshot read-only: DOMICILIO, non terminali, con
+// Costruisce gli anchor dallo snapshot read-only: DOMICILIO, inseribili (non
+// terminali e rider non ancora partito — vedi NON_INSERTABLE_ANCHOR_STATES), con
 // zona e hora, esclusa la bozza corrente. Solo campi non-PII (lo snapshot stesso
 // è già no-PII via plannerSnapshot/readOnlyDbAdapter).
 //
@@ -168,7 +180,9 @@ function buildAnchorsFromSnapshot(snapshot = {}, opts = {}) {
     const tipo = String(o.tipo_consegna || "DOMICILIO").trim().toUpperCase();
     if (tipo !== "DOMICILIO") continue;
     const estado = String(o.estado || "").trim().toUpperCase();
-    if (TERMINAL_STATES.has(estado)) continue;
+    // Esclude terminali + EN_ENTREGA (rider già partito): non si può anteporre
+    // una fermata a un giro già uscito. Vedi NON_INSERTABLE_ANCHOR_STATES.
+    if (NON_INSERTABLE_ANCHOR_STATES.has(estado)) continue;
     const zone = normZone(o.zona != null ? o.zona : o.zone);
     if (!zone) continue;
     if (currentId != null && String(o.id) === currentId) continue;
@@ -487,5 +501,5 @@ module.exports = {
   mapCandidateToOpportunity,
   rankOpportunities,
   buildStrategicPreviewResponse,
-  _internal: { CONTRACT, SOURCE, MODE, DEFAULT_SERVICE_MIN, TERMINAL_STATES },
+  _internal: { CONTRACT, SOURCE, MODE, DEFAULT_SERVICE_MIN, TERMINAL_STATES, NON_INSERTABLE_ANCHOR_STATES },
 };

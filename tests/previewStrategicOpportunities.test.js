@@ -427,6 +427,56 @@ async function main() {
     check("buildAnchors: terminali/RITIRO sempre esclusi", legacy.every((a) => a.id !== "ord-done" && a.id !== "ord-ret-2040"), JSON.stringify(legacy.map((a) => a.id)));
   }
 
+  // E2E-8 — EN_ENTREGA guard: rider già partito NON è candidabile per
+  // inserimento prima; stati pre-partenza (EN_COCINA/LISTO/POR_CONFIRMAR)
+  // restano candidabili; terminali sempre esclusi.
+  console.log("\n══ E2E-8. EN_ENTREGA anchor guard ══");
+  {
+    const snap = {
+      now: "20:30",
+      orders: [
+        // rider GIÀ partito → deve essere escluso (il bug che chiudiamo).
+        { id: "q5-enentrega", tipo_consegna: "DOMICILIO", estado: "EN_ENTREGA", zona: "Q5", hora: "21:00", n_pizze: 2 },
+        // pre-partenza → restano candidabili (rider non uscito).
+        { id: "q5-encocina", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q5", hora: "21:05", n_pizze: 1 },
+        { id: "q5-listo", tipo_consegna: "DOMICILIO", estado: "LISTO", zona: "Q5", hora: "21:10", n_pizze: 1 },
+        { id: "q5-porconf", tipo_consegna: "DOMICILIO", estado: "POR_CONFIRMAR", zona: "Q5", hora: "21:15", n_pizze: 1 },
+        // terminale → escluso (già coperto, qui per non-regressione).
+        { id: "q5-retirado", tipo_consegna: "DOMICILIO", estado: "RETIRADO", zona: "Q5", hora: "20:40", n_pizze: 1 },
+      ],
+      manual_giros: [],
+    };
+
+    // 8a — buildAnchorsFromSnapshot diretto (no travel/ETA, test puro del filtro).
+    const anchors = buildAnchorsFromSnapshot(snap, { currentOrderZone: "Q2" });
+    const ids = anchors.map((a) => a.id);
+    check("EN_ENTREGA escluso (rider partito)", !ids.includes("q5-enentrega"), JSON.stringify(ids));
+    check("EN_COCINA resta candidabile", ids.includes("q5-encocina"), JSON.stringify(ids));
+    check("LISTO resta candidabile (rider non partito)", ids.includes("q5-listo"), JSON.stringify(ids));
+    check("POR_CONFIRMAR resta candidabile", ids.includes("q5-porconf"), JSON.stringify(ids));
+    check("RETIRADO resta escluso (terminale, no regressione)", !ids.includes("q5-retirado"), JSON.stringify(ids));
+
+    // 8b — costante esposta e coerente con la semantica.
+    const NIS = mod._internal && mod._internal.NON_INSERTABLE_ANCHOR_STATES;
+    check("NON_INSERTABLE_ANCHOR_STATES esportata", NIS instanceof Set, String(NIS));
+    check("NON_INSERTABLE include EN_ENTREGA", NIS && NIS.has("EN_ENTREGA"));
+    check("NON_INSERTABLE include i terminali", NIS && NIS.has("RETIRADO") && NIS.has("CANCELADO") && NIS.has("ENTREGADO"));
+    check("NON_INSERTABLE NON include EN_COCINA/LISTO/POR_CONFIRMAR",
+      NIS && !NIS.has("EN_COCINA") && !NIS.has("LISTO") && !NIS.has("POR_CONFIRMAR"));
+
+    // 8c — end-to-end via adapter: l'anchor EN_ENTREGA non entra in serviceLine.
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "draft-q2", zona: "Q2", pizzas: 1, promised: "20:50", serviceMin: 2 },
+      startTime: "20:35",
+      snapshot: snap,
+      travelTimes: { "Pizzería->Q2": 7, "Q2->Q5": 10, "Q5->Pizzería": 15 },
+      capacity: CAPACITY,
+    });
+    const slIds = r.serviceLine.map((s) => s.id);
+    check("E2E adapter: EN_ENTREGA assente da serviceLine", !slIds.includes("q5-enentrega"), JSON.stringify(slIds));
+    check("E2E adapter: EN_COCINA presente in serviceLine", slIds.includes("q5-encocina"), JSON.stringify(slIds));
+  }
+
   console.log(`\n═══ RESULT: ${pass} passed, ${fail} failed ═══\n`);
   process.exit(fail > 0 ? 1 : 0);
 }
