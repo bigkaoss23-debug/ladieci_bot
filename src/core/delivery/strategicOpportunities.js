@@ -229,8 +229,18 @@ function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
   );
 
   // Blocco strategico: cross/indecidibile, o dati di viaggio incompleti.
-  const isCross = channel === "cross";
-  const isUndecidable = channel === null;
+  // Una rotta con UNA SOLA fermata è una entrega DIRECTA: no hay "canal" que
+  // mezclar, así que cross/indecidible NO aplican. routeChannel da null para el
+  // hub Q1 a solas (Q1 = pizzería, pertenece a sur Y oeste) → sin este caso, un
+  // pedido directo a Q1/Centro salía marcado "no recomendado / canal indecidible".
+  // Aquí lo tratamos como DIRECTA. Solo sigue bloqueando el viaje incompleto
+  // (sin tiempo Pizzería→zona no se puede calcular ningún ETA).
+  const isSingleStop = routeZones.length === 1;
+  const effectiveChannel = isSingleStop && (channel === null || channel === "cross")
+    ? "directa"
+    : channel;
+  const isCross = effectiveChannel === "cross";
+  const isUndecidable = effectiveChannel === null;
   const hasMissingTravel = missingLegs.length > 0;
   const blockedCandidate = isCross || isUndecidable || hasMissingTravel;
 
@@ -242,9 +252,11 @@ function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
   } else if (isUndecidable) {
     reason = `Canal indecidible para zonas ${routeZones.join("+")}.`;
   } else if (anchor) {
-    reason = `${routeZones[0]} entra antes de ${anchor.label || anchor.zone} (canal ${channel}).`;
+    reason = `${routeZones[0]} entra antes de ${anchor.label || anchor.zone} (canal ${effectiveChannel}).`;
+  } else if (isSingleStop) {
+    reason = `Pedido directo ${routeZones[0]}.`;
   } else {
-    reason = `Pedido directo ${routeZones[0]} (canal ${channel}).`;
+    reason = `Pedido directo ${routeZones[0]} (canal ${effectiveChannel}).`;
   }
 
   // priority: minore = migliore. Compatibile in-canale prima; cross dopo;
@@ -258,7 +270,7 @@ function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
     id: `cand-${kind}-${routeZones.join("-").toLowerCase()}${anchor ? `-${anchor.id}` : ""}`,
     kind,
     anchorId: anchor ? anchor.id : null,
-    channel: channel || "cross", // null indecidibile → trattato come cross lato UI
+    channel: effectiveChannel || "cross", // single-stop → "directa"; null multi → "cross" lato UI
     routeZones,
     mapPath,
     routeImpactInput, // null se travel incompleti

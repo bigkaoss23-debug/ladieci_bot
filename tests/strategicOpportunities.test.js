@@ -266,6 +266,27 @@ console.log("══ 7b. crear hora == prometido (bug real modal) ══");
   check("entrega 20:50 sin slip", d.eta === "20:50" && d.slips === false, `${d.eta}/${JSON.stringify(d.slipLabel)}`);
 }
 
+// ── Scenario 7c — crear directo a Q1 (hub) NO es "no recomendado" ────────────
+// Q1 = Centro/hub (la pizzería). routeChannel(["Q1"]) da null → antes el
+// candidato salía blockedCandidate=true "Canal indecidible / no recomendado".
+// Una entrega directa a una sola zona válida es DIRECTA y compatible.
+console.log("══ 7c. crear directo Q1 hub (no 'no recomendado') ══");
+{
+  const c = buildStrategicCandidates({
+    currentOrder: { id: "new-q1", zone: "Q1", label: "Pedido actual", pizzas: 1, promised: "20:35" },
+    anchors: [],
+    startTime: "20:35",
+    travelTimes: { "Pizzería->Q1": 5, "Q1->Pizzería": 5 },
+    capacity: { maxPizzas: 6, routeMinLimit: 30, pizzaQualityLimitMin: 30 },
+  })[0];
+  check("Q1 NO bloqueado", c.blockedCandidate === false, String(c.blockedCandidate));
+  check("Q1 channel = directa (no cross)", c.channel === "directa", c.channel);
+  check("Q1 reason directo (sin 'indecidible')", /directo/i.test(c.reason) && !/indecidible|distintos/i.test(c.reason), c.reason);
+  check("Q1 prioridad compatible (10)", c.priority === 10, String(c.priority));
+  const d = buildRouteImpact(c.routeImpactInput).routeEtas[0];
+  check("Q1 entrega 20:35 sin slip", d.eta === "20:35" && d.slips === false, `${d.eta}/${JSON.stringify(d.slipLabel)}`);
+}
+
 // ── Purity ───────────────────────────────────────────────────────────────────
 console.log("══ Purity ══");
 {
