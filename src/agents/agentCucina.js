@@ -4,7 +4,8 @@
 
 const { sbSelect } = require("../utils/supabase");
 const { isBevanda, isDesert, getConversazione } = require("../utils/helpers");
-const { ZONE_DELIVERY, calcolaTempoGiro, simulateDriverSchedule, BUFFER_OPS_DRIVER_MIN, calcolaFornoOut } = require("../utils/zones");
+const { ZONE_DELIVERY, calcolaTempoGiro, simulateDriverSchedule, calcolaFornoOut } = require("../utils/zones");
+const { resolveRiderAvailability, toMadridMinutes } = require("../core/delivery/riderAvailability");
 
 function pad(n) { return n < 10 ? "0" + n : "" + n; }
 
@@ -92,16 +93,6 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
   const zona = ZONE_DELIVERY.find(z => z.id === zonaId);
   if (!zona) return { slotAssegnato: oraRichiesta, slotRichiesto: oraRichiesta, zonaCompleta: false, driverInGiro: false, forno_out: null };
 
-  // Stato driver da config Supabase (override "real-time" se driver è fuori adesso)
-  const driverRows = await sbSelect("config", "chiave=eq.DRIVER_STATO");
-  let driverStato = null;
-  try {
-    const val = driverRows?.[0]?.valore;
-    driverStato = val ? (typeof val === "string" ? JSON.parse(val) : val) : null;
-  } catch(e) {}
-
-  const driverInGiro = !!(driverStato?.stato === "IN_GIRO" && driverStato?.zona === zonaId && driverStato?.partito_alle);
-
   // Ordini delivery attivi (per consolidazione zonale + simulazione cascade)
   const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
 
@@ -120,30 +111,22 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
     slotCount[k] = (slotCount[k] || 0) + 1;
   }
 
-  // ── minMin: rispetta hora richiesta + driver in giro (real-time) + driverLibero (cascade) ──
+  // ── minMin: rispetta hora richiesta + rider busy reale + driverLibero (cascade) ──
   const [h, m] = String(oraRichiesta || "20:00").split(":").map(Number);
   let minMin = h * 60 + (m || 0);
 
-  // Override real-time: driver fuori adesso, deve tornare prima di poter ripartire
+  // ── Floor disponibilità rider REALE (fonte UNICA = ordenes EN_ENTREGA + hora_salida) ──
+  // Stessa sorgente autoritativa già usata da previewOrderTiming (resolveRiderAvailability):
+  // il rider è occupato fino al rientro reale (salida_real + 2×andata + buffer) degli ordini
+  // ancora in EN_ENTREGA. NON usa più config.DRIVER_STATO, che è spesso stale perché non
+  // tutti i path UI lo settano (es. "Manda repartidor" lascia DRIVER_STATO=LIBERO). DRIVER_STATO
+  // resta scritto dagli altri path ma NON è più autoritativo per questo calcolo.
+  // V1 single-rider: busyUntilMin != null ⇒ il rider è fuori adesso (qualsiasi zona).
+  const nowMin = toMadridMinutes(Date.now());
+  const rider = resolveRiderAvailability(rows, nowMin != null ? { nowMin } : {});
+  const driverInGiro = Number.isFinite(rider?.busyUntilMin);
   if (driverInGiro) {
-    // Stima round-trip dal worst-case degli ordini del giro corrente (snapshot Google guida pura).
-    // Round trip = 2 × guida + buffer ops al cliente.
-    // Fallback zona.tempoGiro (×2 + buffer) se nessun ordine ha durata_andata_min.
-    const partitoMs = new Date(driverStato.partito_alle).getTime();
-    const ordiniGiroCorrente = (rows || []).filter(o =>
-      o && o.zona === zonaId && o.ts && Number(o.ts) >= partitoMs - 5 * 60000
-    );
-    const durateSnap = ordiniGiroCorrente
-      .map(o => o.durata_andata_min)
-      .filter(v => v != null);
-    const roundTripMin = durateSnap.length > 0
-      ? Math.max(...durateSnap) * 2 + BUFFER_OPS_DRIVER_MIN
-      : zona.tempoGiro * 2 + BUFFER_OPS_DRIVER_MIN;
-    const rientro = new Date(partitoMs + roundTripMin * 60000);
-    if (rientro > new Date()) {
-      const rientroMin = rientro.getHours() * 60 + rientro.getMinutes();
-      minMin = Math.max(minMin, rientroMin + 5);
-    }
+    minMin = Math.max(minMin, rider.busyUntilMin);
   }
 
   // Simulazione cascade: quando è realmente libero il driver dopo tutti gli ordini in DB?
