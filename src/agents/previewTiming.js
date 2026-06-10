@@ -36,6 +36,7 @@ const {
   ZONE_DELIVERY,
 } = require("../utils/zones");
 const { getManualGiros } = require("./manualGiros");
+const { resolveRiderAvailability } = require("../core/delivery/riderAvailability");
 
 // Margine di cottura: una pizza esce dal forno ~5 min dopo l'inizio. Coerente
 // con planner.DEFAULTS.margineCotturaMin. Usato per "Para ahora" (RITIRO): il
@@ -324,6 +325,41 @@ async function previewOrderTiming(params = {}) {
         }
         warnings.push({ code: "driver_conflict", message: driverMessage });
       }
+    }
+
+    // ── Floor disponibilità rider REALE (RIDER EVENT FEEDBACK LOOP, 2026-06-10) ──
+    // Fonte verità = ordini EN_ENTREGA con `hora_salida` reale (Date.now() ms).
+    // `proposeForNewOrder` (cascade pianificato) tratta un giro GIÀ PARTITO come
+    // "passato" e non blocca → un nuovo ordine col rider ancora in reparto non
+    // riceveva alcun avviso. Qui applichiamo il pavimento reale via adapter puro.
+    // NON tocca forno_out (uscita forno resta hora − andata): è solo advisory driver.
+    try {
+      const rider = resolveRiderAvailability(
+        activeOrders,
+        nowMin != null ? { nowMin } : {}
+      );
+      if (
+        rider &&
+        Number.isFinite(rider.busyUntilMin) &&
+        Number.isFinite(durataAndataMin) &&
+        Number.isFinite(horaRichiestaMin)
+      ) {
+        // Partenza rider richiesta per consegnare a horaRichiesta = hora − andata.
+        const salidaPropostaMin = horaRichiestaMin - durataAndataMin;
+        if (rider.busyUntilMin > salidaPropostaMin) {
+          driverConflict = true;
+          const msg = `Rider en reparto hasta ~${toH(rider.busyUntilMin)} (salida real)`;
+          if (!driverMessage) driverMessage = msg;
+          // Prima entrega fattibile = rientro reale + andata di questo ordine.
+          const riderSuggMin = rider.busyUntilMin + durataAndataMin;
+          if (suggestedHora == null || toMin(suggestedHora) < riderSuggMin) {
+            suggestedHora = toH(riderSuggMin);
+          }
+          warnings.push({ code: "rider_busy", message: msg });
+        }
+      }
+    } catch (e) {
+      console.warn("[previewOrderTiming] resolveRiderAvailability failed:", e?.message || e);
     }
   }
 
