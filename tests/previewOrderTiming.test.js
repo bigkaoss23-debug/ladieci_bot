@@ -173,6 +173,14 @@ const hasWarn = (r, code) => r.warnings.some((w) => w.code === code);
     assert("forno_out = hora = 21:00", r.forno_out === "21:00", `forno=${r.forno_out}`);
     assert("hora_proposta = 21:00", r.hora_proposta === "21:00");
     assert("no conflicto driver", r.driver.has_conflict === false);
+    // "Para ahora": earliest = ahora (20:38 Madrid) + cottura 5 = 20:43.
+    assert("earliest_hora = 20:43 (ahora + cottura)", r.earliest_hora === "20:43", `earliest=${r.earliest_hora}`);
+    assert("hora_proposta NO se reescribe con earliest", r.hora_proposta === "21:00");
+
+    // Sin hora: el endpoint igual propone el primer retiro fattibile.
+    const r2 = await previewOrderTiming({ tipo_consegna: "RITIRO" });
+    assert("earliest_hora = 20:43 también sin hora", r2.earliest_hora === "20:43", `earliest=${r2.earliest_hora}`);
+    assert("forno_out null sin hora", r2.forno_out === null, `forno=${r2.forno_out}`);
   }
 
   // ═══════════════════════════════════════════════════════════════

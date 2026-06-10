@@ -37,6 +37,11 @@ const {
 } = require("../utils/zones");
 const { getManualGiros } = require("./manualGiros");
 
+// Margine di cottura: una pizza esce dal forno ~5 min dopo l'inizio. Coerente
+// con planner.DEFAULTS.margineCotturaMin. Usato per "Para ahora" (RITIRO): il
+// primo orario di ritiro fattibile = adesso (Madrid) + cottura.
+const PREP_PIZZA_MIN = 5;
+
 // ── Helpers tempo (wrap 24h: mai "24:08"/"25:..") ────────────────
 const toMin = (t) => {
   if (!t) return null;
@@ -81,6 +86,7 @@ function buildResult(over = {}) {
     hora_richiesta: null,
     hora_proposta: null,
     suggested_hora: null,
+    earliest_hora: null,
     forno_out: null,
     warnings: [],
     driver: { has_conflict: false, message: null },
@@ -224,11 +230,17 @@ async function previewOrderTiming(params = {}) {
   // ── RITIRO: nessuna risoluzione delivery. forno_out = hora. ──────
   if (tipoConsegna !== "DOMICILIO") {
     const fo = calcolaFornoOut({ tipoConsegna, hora: horaRichiesta, durataAndataMin: null });
+    // "Para ahora": primo ritiro fattibile = adesso (Madrid) + cottura. Niente
+    // andata/driver per il ritiro in locale. Il frontend lo offre come tasto;
+    // non riscrive mai hora_proposta (resta = hora richiesta dall'operatore).
+    const nowMin = nowMadridMinutes();
+    const earliest = nowMin != null ? toH(nowMin + PREP_PIZZA_MIN) : null;
     return buildResult({
       tipo_consegna: tipoConsegna,
       direccion: params.direccion || null,
       hora_richiesta: horaRichiesta,
       hora_proposta: horaRichiesta,
+      earliest_hora: earliest,
       forno_out: fo.forno_out,
     });
   }
