@@ -314,6 +314,21 @@ function diffServiceDayMinutes(a, b) {
 // e schedulare i giri (gestisce la coda post-mezzanotte). I caller esistenti
 // (proposeForNewOrder, agentCucina) NON passano il flag → comportamento
 // invariato. Solo il path driver-field sync lo attiva.
+// Stati che NON contano come consegna attiva nello schedule rider: terminali
+// (consegna chiusa) + non-confermati (POR_CONFIRMAR). Se simulati come giri attivi
+// gonfiano il retraso degli ordini reali. Sorgente unica per simulateDriverSchedule
+// e computeDriverFields. Allineata agli stati esclusi altrove (plannerSnapshot).
+const DRIVER_INACTIVE_STATES = new Set([
+  "RETIRADO",
+  "COMPLETADO",
+  "COMPLETATO",
+  "CHIUSO_FORZATO",
+  "CANCELADO",
+  "ANULADO",
+  "ENTREGADO",
+  "POR_CONFIRMAR",
+]);
+
 function simulateDriverSchedule(orders, options = {}) {
   const plainToMin = (t) => { if (!t) return null; const [h,m]=String(t).split(":").map(Number); return h*60+(m||0); };
   const toMin = options.serviceDay ? toServiceDayMin : plainToMin;
@@ -325,7 +340,7 @@ function simulateDriverSchedule(orders, options = {}) {
 
   const validi = (orders || []).filter(o =>
     o && o.tipo_consegna === "DOMICILIO" && o.hora && o.zona
-    && !["RETIRADO","COMPLETATO","POR_CONFIRMAR"].includes(o.estado)
+    && !DRIVER_INACTIVE_STATES.has(o.estado)
   );
 
   const giriMap = new Map();
@@ -393,7 +408,7 @@ function computeDriverFields(orders, options = {}) {
   const out = new Map();
   for (const o of orders || []) {
     if (!o || o.tipo_consegna !== "DOMICILIO" || !o.zona || !o.hora) continue;
-    if (["RETIRADO", "COMPLETATO", "POR_CONFIRMAR"].includes(o.estado)) continue;
+    if (DRIVER_INACTIVE_STATES.has(o.estado)) continue;
     const horaMin = toServiceDayMin(o.hora);
     if (horaMin == null) continue;
     const g = byKey.get(`${o.zona}|${slot10(horaMin)}`);
@@ -588,6 +603,7 @@ module.exports = {
   calcolaFornoOut,
   simulateDriverSchedule,
   computeDriverFields,
+  DRIVER_INACTIVE_STATES,
   toServiceDayMin,
   fromServiceDayMin,
   diffServiceDayMinutes,

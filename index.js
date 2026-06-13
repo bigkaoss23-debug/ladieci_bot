@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert, sbInsert } = require("./src/utils/supabase");
-const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
+const { cambiaStato, creaOrdine, modificaOrdine, eliminaOrdine } = require("./src/agents/agentOrdini");
 const { previewOrderTiming } = require("./src/agents/previewTiming");
 const { invia } = require("./src/agents/agentWhatsapp");
 const { chiudiServizio, scanServizio, backupSerata, madridDateStr, serviceDateMadrid, nowMadridHHMM } = require("./src/utils/servizio");
@@ -411,8 +411,9 @@ app.post("/api", async (req, res) => {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { nota_cucina: req.body.nota_cucina });
       result = { success: true };
     } else if (action === "eliminaOrdine") {
-      await sbDelete("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`);
-      result = { success: true };
+      // Delete singolo + replan driver (DRIVER_REPLAN_STALE_FIX_01): se l'ordine
+      // era DOMICILIO, i campi driver degli altri domicili vengono ricalcolati.
+      result = await eliminaOrdine(req.body.id);
     } else if (action === "eliminaConversazione") {
       const wid = req.body.wa_id;
       await sbDelete("conv",     `wa_id=eq.${wid}`);

@@ -686,11 +686,15 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   let _prevManualGiroId = null;
   let estadoActual = null;
   let tipoConsegnaActual = null;
+  let zonaActual = null;
+  let horaActual = null;
   try {
-    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,estado,manual_giro_id,tipo_consegna`);
+    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,estado,manual_giro_id,tipo_consegna,zona,hora`);
     _prevManualGiroId = _prev?.[0]?.manual_giro_id || null;
     estadoActual = _prev?.[0]?.estado || null;
     tipoConsegnaActual = _prev?.[0]?.tipo_consegna || null;
+    zonaActual = _prev?.[0]?.zona || null;
+    horaActual = _prev?.[0]?.hora || null;
   } catch (e) {
     console.warn("[cambiaStato] prev fetch failed:", e?.message || e);
   }
@@ -799,6 +803,18 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
       }
     }
   }
+  // DRIVER_REPLAN_STALE_FIX_01: ogni transizione che cambia la capacità rider
+  // (un DOMICILIO entra/esce dal set attivo) sposta lo schedule di TUTTI i domicili
+  // → i campi driver advisory (salida/entrega/retraso/conflicto) vanno ricalcolati,
+  // altrimenti restano stale (caso #010: conflicto/retraso dopo che il rider si
+  // libera). EN_COCINA è già gestito nel suo ramo sopra (composizione giro). Qui
+  // copriamo LISTO/EN_ENTREGA/RETIRADO. Best-effort (risincronizzaGiro non rilancia)
+  // e NON tocca forno_out (usa solo computeDriverFields, matematica driver separata).
+  if (!_isNoop && tipoConsegnaActual === "DOMICILIO" &&
+      (nuovoStato === "LISTO" || nuovoStato === "EN_ENTREGA" || nuovoStato === "RETIRADO")) {
+    await risincronizzaGiro(zonaActual, horaActual);
+  }
+
   return { success: true, id: ordenId, estado: nuovoStato, noop: _isNoop };
 }
 
@@ -822,4 +838,26 @@ async function getById(id) {
   return (rows && rows.length > 0) ? rows[0] : null;
 }
 
-module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, planDriverScheduleSync, calcolaFornoOutFallback };
+// DRIVER_REPLAN_STALE_FIX_01: eliminazione ordine singolo con replan driver.
+// Se l'ordine cancellato era un DOMICILIO attivo, il buco che lascia libera
+// capacità rider → i campi driver degli altri domicili vanno ricalcolati.
+// Legge tipo/zona/hora PRIMA del delete; replan best-effort DOPO (non blocca
+// né fa rollback del delete). Per RITIRO: nessun replan (non tocca il rider).
+async function eliminaOrdine(ordenId) {
+  let tipo = null, zona = null, hora = null;
+  try {
+    const prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=tipo_consegna,zona,hora`);
+    tipo = prev?.[0]?.tipo_consegna || null;
+    zona = prev?.[0]?.zona || null;
+    hora = prev?.[0]?.hora || null;
+  } catch (e) {
+    console.warn("[eliminaOrdine] prev fetch failed:", e?.message || e);
+  }
+  await sbDelete("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
+  if (tipo === "DOMICILIO") {
+    await risincronizzaGiro(zona, hora);
+  }
+  return { success: true };
+}
+
+module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, eliminaOrdine, risincronizzaGiro, planDriverScheduleSync, calcolaFornoOutFallback };
