@@ -554,7 +554,11 @@ async function main() {
       ELIG && ELIG.has("EN_COCINA") && ELIG.has("LISTO") && ELIG.size === 2,
       String(ELIG && [...ELIG]));
 
-    const mkOrder = (id, estado) => ({ id, tipo_consegna: "DOMICILIO", estado, zona: "Q1", hora: "20:25", n_pizze: 1 });
+    // hora 22:10 ≈ now 22:00: gli stati eligibili NON sono time-stale, così questo
+    // blocco isola la allowlist di STATO dal filtro anti-stale (testato a parte in
+    // previewStrategicOpportunitiesStaleness.test.js). Gli stati esclusi cadono per
+    // stato a prescindere dalla hora.
+    const mkOrder = (id, estado) => ({ id, tipo_consegna: "DOMICILIO", estado, zona: "Q1", hora: "22:10", n_pizze: 1 });
     const snap = {
       now: "22:00",
       orders: [

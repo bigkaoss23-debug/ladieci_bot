@@ -5,7 +5,7 @@ const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert, sbInsert } = require(
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
 const { previewOrderTiming } = require("./src/agents/previewTiming");
 const { invia } = require("./src/agents/agentWhatsapp");
-const { chiudiServizio, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
+const { chiudiServizio, scanServizio, backupSerata, madridDateStr, serviceDateMadrid, nowMadridHHMM } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
 const {
   getManualGiros,
@@ -362,11 +362,15 @@ app.post("/api", async (req, res) => {
       // Sicurezza input: NON inoltriamo `snapshot`/`anchors` dal client — gli
       // anchor derivano SOLO dallo snapshot read-only (no injection di ordini).
       const sp = req.body || {};
+      // Anti-staleness: il flusso operatore NON manda date/now. Senza, lo snapshot
+      // farebbe full-scan di ordenes e gli anchor non avrebbero riferimento temporale.
+      // Derivati QUI (boundary backend) in ora Madrid via servizio.js (usa new Date,
+      // mai Date.now): l'adapter resta puro/deterministico, riceve date/now come input.
       result = await previewStrategicOpportunities({
         currentOrderDraft: sp.currentOrderDraft,
         startTime: sp.startTime,
-        date: sp.serviceDate || sp.date || null,
-        now: sp.now || null,
+        date: sp.serviceDate || sp.date || serviceDateMadrid(),
+        now: sp.now || nowMadridHHMM(),
         includeCrossZone: sp.includeCrossZone,
         capacity: sp.capacity,
         toleranceMin: sp.toleranceMin,

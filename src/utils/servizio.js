@@ -54,6 +54,33 @@ function madridDateStr(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
+// Giorno-di-servizio Madrid. Il servizio serale prosegue oltre mezzanotte; la
+// finestra operativa nota è ~22:00→06:00 (vedi catchUpChiusura). Prima delle
+// 06:00 Madrid il "giorno di servizio" è ancora quello della sera precedente:
+// spostiamo l'orologio indietro di 6h così 00:00–05:59 ricadono sul giorno prima.
+// Riusa madridDateStr (no Date.now: usa l'istante passato/`new Date()`).
+const SERVICE_DAY_SHIFT_MS = 6 * 60 * 60 * 1000;
+function serviceDateMadrid(d = new Date()) {
+  return madridDateStr(new Date(d.getTime() - SERVICE_DAY_SHIFT_MS));
+}
+
+// Ora corrente di Madrid come stringa "HH:MM" (hourCycle h23, niente "24:00").
+// Null se Intl non è disponibile. No Date.now: usa l'istante passato/`new Date()`.
+function nowMadridHHMM(d = new Date()) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit",
+      hour12: false, hourCycle: "h23",
+    }).formatToParts(d);
+    const h = parts.find((p) => p.type === "hour")?.value;
+    const m = parts.find((p) => p.type === "minute")?.value;
+    if (h == null || m == null) return null;
+    return `${h}:${m}`;
+  } catch (_) {
+    return null;
+  }
+}
+
 function diaSemanaIta(d = new Date()) {
   const giorni = ["domenica","lunedi","martedi","mercoledi","giovedi","venerdi","sabato"];
   return giorni[d.getDay()];
@@ -488,5 +515,7 @@ module.exports = {
   backupSerata,
   chiudiServizio,
   madridDateStr,
+  serviceDateMadrid,
+  nowMadridHHMM,
   fasciaOraDa
 };

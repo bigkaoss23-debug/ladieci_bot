@@ -86,12 +86,18 @@ function buildOrdersQuery({ date, limit } = {}) {
     `limit=${cleanLimit(limit)}`,
   ];
   if (date) {
-    const nextDate = addDays(date, 1);
+    // Service-day Madrid che ATTRAVERSA mezzanotte: gli ordini della sera hanno
+    // created_at su `date`, quelli dopo mezzanotte (00:00–06:00) su `date+1`. La
+    // finestra [date, date+2) li copre entrambi e — pur usando boundary naive —
+    // è abbastanza ampia da assorbire lo skew UTC↔Madrid (≤2h) senza tagliare
+    // ordini validi. Sostituisce il full-scan quando il caller runtime passa una
+    // date (dispatcher). Il filtro fine anti-stale vive su buildAnchorsFromSnapshot.
+    const upperDate = addDays(date, 2);
     parts.splice(
       1,
       0,
       `created_at=gte.${encodeURIComponent(`${date}T00:00:00`)}`,
-      `created_at=lt.${encodeURIComponent(`${nextDate}T00:00:00`)}`,
+      `created_at=lt.${encodeURIComponent(`${upperDate}T00:00:00`)}`,
     );
   }
   return parts.join("&");

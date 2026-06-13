@@ -98,6 +98,48 @@ function horaOrNull(value) {
   return isValidHora(value) ? value.trim() : null;
 }
 
+// ── anti-staleness anchor ──────────────────────────────────────────────────────
+// Soglia di grazia: un anchor il cui riferimento temporale è oltre questi minuti
+// NEL PASSATO rispetto a `now` è considerato stantio e NON fa da ancora (evita le
+// proposte tossiche tipo +150 da un EN_COCINA/LISTO vecchio). Prudente: gli anchor
+// futuri o vicini restano SEMPRE (EN_COCINA programmato dopo, LISTO appena pronto).
+const ANCHOR_STALE_GRACE_MIN = 30;
+
+// Orario "HH:MM" → minuti-clock, con la STESSA normalizzazione night-service
+// (h<6 → +24) di strategicOpportunities.toMin / routeImpact, così `now` e i
+// riferimenti degli anchor vivono sullo stesso orologio. Null se non parsabile.
+function toClockMin(hhmm) {
+  if (typeof hhmm !== "string") return null;
+  const m = hhmm.trim().match(/^(\d{1,2}):([0-5]\d)$/);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isInteger(h) || h < 0 || h > 23) return null;
+  if (h < 6) h += 24; // night-service normalization
+  return h * 60 + min;
+}
+
+// Riferimento temporale più affidabile per valutare la staleness di un anchor
+// DOMICILIO: preferisce l'ETA di consegna stimata, poi la salida driver, poi il
+// forno_out, infine la hora promessa. Usa l'orario più "a valle" così non si
+// scarta un ordine solo perché la hora nuda è appena passata. Null se nessun
+// campo è un "HH:MM" valido (→ nessun giudizio: l'anchor viene tenuto).
+function anchorRefHora(o = {}) {
+  return horaOrNull(o.entrega_estimada)
+    || horaOrNull(o.salida_driver_estimada)
+    || horaOrNull(o.forno_out)
+    || horaOrNull(o.hora);
+}
+
+// True se l'anchor è stantio rispetto a `now` (oltre la grazia nel passato).
+// Conservativo: se manca `now` o il riferimento dell'anchor, NON è stantio.
+function isAnchorStale(o, nowMin) {
+  if (nowMin == null) return false;
+  const refMin = toClockMin(anchorRefHora(o));
+  if (refMin == null) return false;
+  return refMin < nowMin - ANCHOR_STALE_GRACE_MIN;
+}
+
 // ── safety / shape helpers ────────────────────────────────────────────────────
 function safetyBlock() {
   return { readOnly: true, writes: false, pii: "redacted" };
@@ -186,10 +228,17 @@ function sanitizeAnchor(raw = {}) {
 // Senza un leg "Q2->Q2" in deliveryLegs, un anchor same-zone degraderebbe a
 // `blocked/missing_travel_times` (rotta [Q2,Q2]) — confuso lato UI. Meglio non
 // generarlo. Se `currentOrderZone` è assente → nessun filtro (backward-compat).
+//
+// FILTRO ANTI-STALE (now): se `opts.now` (o snapshot.now) è disponibile, un anchor
+// il cui riferimento temporale è oltre ANCHOR_STALE_GRACE_MIN nel PASSATO viene
+// scartato — così un EN_COCINA/LISTO vecchio non genera più proposte tossiche
+// (+150). Gli anchor futuri/vicini restano sempre (vedi isAnchorStale). Senza now
+// il filtro è no-op (backward-compat).
 function buildAnchorsFromSnapshot(snapshot = {}, opts = {}) {
   const orders = Array.isArray(snapshot.orders) ? snapshot.orders : [];
   const currentId = opts.currentOrderId != null ? String(opts.currentOrderId) : null;
   const currentZone = opts.currentOrderZone != null ? normZone(opts.currentOrderZone) : null;
+  const nowMin = toClockMin(opts.now != null ? opts.now : snapshot.now);
   const out = [];
   for (const o of orders) {
     if (!o) continue;
@@ -205,6 +254,8 @@ function buildAnchorsFromSnapshot(snapshot = {}, opts = {}) {
     if (currentId != null && String(o.id) === currentId) continue;
     // same-zone del current → dominio del planner classico, non strategic.
     if (currentZone != null && zone === currentZone) continue;
+    // anti-stale: scarta anchor troppo nel passato rispetto a `now`.
+    if (isAnchorStale(o, nowMin)) continue;
     const anchor = sanitizeAnchor(o);
     if (anchor) out.push(anchor);
   }
@@ -455,6 +506,7 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
     anchors = buildAnchorsFromSnapshot(snapshot, {
       currentOrderId: currentOrder.id,
       currentOrderZone: currentOrder.zone, // A1: scarta anchor same-zone (planner classico)
+      now: input.now, // anti-stale: riferimento temporale (fallback snapshot.now)
     });
   }
 
@@ -537,5 +589,8 @@ module.exports = {
   mapCandidateToOpportunity,
   rankOpportunities,
   buildStrategicPreviewResponse,
-  _internal: { CONTRACT, SOURCE, MODE, DEFAULT_SERVICE_MIN, TERMINAL_STATES, NON_INSERTABLE_ANCHOR_STATES, ANCHOR_ELIGIBLE_STATES },
+  isAnchorStale,
+  anchorRefHora,
+  toClockMin,
+  _internal: { CONTRACT, SOURCE, MODE, DEFAULT_SERVICE_MIN, TERMINAL_STATES, NON_INSERTABLE_ANCHOR_STATES, ANCHOR_ELIGIBLE_STATES, ANCHOR_STALE_GRACE_MIN },
 };
