@@ -344,8 +344,12 @@ app.post("/api", async (req, res) => {
       // Nuevo Pedido Premium → planner backend (read-only). Fonte unica per
       // disponibilità/lead-time/giri. NIENTE write: db read-only via sbSelect,
       // resolver geo read-only/no-cache di default dentro previewOrderPlanner.
+      // `now`: reloj real de Madrid (server-authoritative), como
+      // previewStrategicOpportunities. Sin esto el snapshot caía en defaultNow()
+      // ("19:00") y el guard físico (forno_out en el pasado) no podía aplicarse.
       result = await previewOrderPlanner(req.body || {}, {
         db: createReadOnlyRestDb({ sbSelect }),
+        now: () => nowMadridHHMM(),
       });
     } else if (action === "previewStrategicOpportunities") {
       // Premium Planner strategic preview (read-only, LAB). Espone la catena

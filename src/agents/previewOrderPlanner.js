@@ -9,12 +9,16 @@
 "use strict";
 
 const { loadPlannerSnapshot } = require("../core/delivery/plannerSnapshot");
-const { evaluateNewOrder } = require("../core/delivery/planner");
+const { evaluateNewOrder, _internal: plannerInternal } = require("../core/delivery/planner");
 const { resolveDeliveryFieldsReadOnly } = require("./resolveDeliveryFieldsReadOnly");
 
 const CONTRACT = "nuevo-pedido-planner-preview-v1";
 const SOURCE = "planner";
 const MODE = "read_only";
+
+// Margen de cocción para RITIRO: una pizza no está lista hasta now + cocción.
+// Coherente con previewTiming.PREP_PIZZA_MIN y planner.DEFAULTS.margineCotturaMin.
+const PICKUP_COOK_MIN = 5;
 
 function isValidHora(value) {
   if (typeof value !== "string") return false;
@@ -131,6 +135,25 @@ function mapPlannerResult(params, geo, plannerResult) {
   const selectedForno = selected.forno_out || selected.required_forno_out || null;
   const salida = selected.salida || null;
 
+  // ── Hora pedida físicamente imposible (forno_out en el pasado) ──────────────
+  // El motor (evaluateNewOrder) marca la separada `too_early` cuando la entrega
+  // pedida exige una salida del horno anterior a now + cocción. En ese caso la
+  // hora pedida NO es confirmable, NUNCA exponemos un forno_out pasado y la
+  // recomendación cae a un valor realista (giro compatible si lo hay, si no el
+  // mínimo físico now + cocción + andata).
+  const sepOption = options.find((o) => o && o.type === "separate") || null;
+  const requestedTooEarly = !!(sepOption && sepOption.too_early);
+  const minHora = sepOption && sepOption.min_hora ? sepOption.min_hora : null;
+  let recommendedHora = selectedHora || plannerResult.proximo_slot || null;
+  if (requestedTooEarly) {
+    recommendedHora = (selected.type && selected.type !== "separate")
+      ? (selectedHora || minHora || plannerResult.proximo_slot || null)
+      : (minHora || plannerResult.proximo_slot || null);
+  }
+  const canConfirm = requestedTooEarly
+    ? false
+    : (selected.status === "valid" || selected.status === "recommended");
+
   return {
     ...basePayload(params, "DOMICILIO"),
     ok: true,
@@ -147,12 +170,12 @@ function mapPlannerResult(params, geo, plannerResult) {
     },
     recommendation: {
       requested_hora: params.hora || null,
-      recommended_hora: selectedHora || plannerResult.proximo_slot || null,
-      can_confirm_requested_hora: selected.status === "valid" || selected.status === "recommended",
-      forno_out: selectedForno,
-      salida_driver: salida,
-      entrega_estimada: selectedHora,
-      reason: selected.reason || selected.status || null,
+      recommended_hora: recommendedHora,
+      can_confirm_requested_hora: canConfirm,
+      forno_out: requestedTooEarly ? null : selectedForno,
+      salida_driver: requestedTooEarly ? null : salida,
+      entrega_estimada: recommendedHora,
+      reason: requestedTooEarly ? "requested_hora_too_soon" : (selected.reason || selected.status || null),
     },
     driver: {
       required: true,
@@ -186,6 +209,9 @@ function mapPlannerResult(params, geo, plannerResult) {
     warnings: [
       ...mapWarnings(geo.warnings),
       ...mapWarnings(plannerResult && plannerResult.warnings),
+      ...(requestedTooEarly
+        ? [{ code: "requested_hora_too_soon", message: sepOption.reason || "Hora pedida muy pronta" }]
+        : []),
     ],
     blockers: mapBlockers(options),
     explanation: ["Planner source of truth", "Read-only preview"],
@@ -202,6 +228,39 @@ async function previewOrderPlanner(params = {}, deps = {}) {
   }
 
   if (tipoConsegna === "RITIRO") {
+    // Guard físico pickup: la pizza no puede estar lista en el pasado. Mínimo
+    // forno_out = now + cocción (sin andata, sin driver). Coherente con
+    // previewOrderTiming.earliest_hora. Si no hay `now` inyectado, se conserva el
+    // comportamiento previo (confirmable) para no romper a quien no pasa reloj.
+    const nowStr = typeof deps.now === "function" ? deps.now() : (params.now || null);
+    const toSvc = plannerInternal && plannerInternal.toSvc;
+    const fromSvc = plannerInternal && plannerInternal.fromSvc;
+    const nowSvc = toSvc ? toSvc(nowStr) : null;
+    const reqSvc = toSvc ? toSvc(params.hora) : null;
+    const minFornoSvc = nowSvc != null ? nowSvc + PICKUP_COOK_MIN : null;
+    const pickupTooEarly = minFornoSvc != null && reqSvc != null && reqSvc < minFornoSvc;
+    if (pickupTooEarly) {
+      const minHora = fromSvc ? fromSvc(minFornoSvc) : null;
+      const msg = `Hora pedida muy pronta · mínimo ${minHora} (cocina)`;
+      return {
+        ...basePayload(params, tipoConsegna),
+        ok: true,
+        geo: { resolved: false, zona: null },
+        recommendation: {
+          requested_hora: params.hora,
+          recommended_hora: minHora,
+          can_confirm_requested_hora: false,
+          forno_out: null,
+          salida_driver: null,
+          entrega_estimada: minHora,
+          reason: "requested_hora_too_soon",
+        },
+        driver: { required: false, available: true, status: "not_required", has_conflict: false, message: null },
+        giro: { recommended: false, giro_id: null, zona: null, slot_hora: null, salida_driver: null, entrega_estimada: null, reason: "pickup_no_giro_required", can_attach: false },
+        warnings: [{ code: "requested_hora_too_soon", message: msg }],
+        blockers: [{ code: "requested_hora_too_soon", message: msg }],
+      };
+    }
     return {
       ...basePayload(params, tipoConsegna),
       ok: true,
