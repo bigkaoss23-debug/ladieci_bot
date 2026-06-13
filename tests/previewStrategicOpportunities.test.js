@@ -427,9 +427,9 @@ async function main() {
     check("buildAnchors: terminali/RITIRO sempre esclusi", legacy.every((a) => a.id !== "ord-done" && a.id !== "ord-ret-2040"), JSON.stringify(legacy.map((a) => a.id)));
   }
 
-  // E2E-8 — EN_ENTREGA guard: rider già partito NON è candidabile per
-  // inserimento prima; stati pre-partenza (EN_COCINA/LISTO/POR_CONFIRMAR)
-  // restano candidabili; terminali sempre esclusi.
+  // E2E-8 — Anchor guard: solo lavoro operativo confermato (EN_COCINA/LISTO) è
+  // candidabile. EN_ENTREGA escluso (rider già partito). POR_CONFIRMAR escluso
+  // (non confermato → fantasma #001). Terminali sempre esclusi.
   console.log("\n══ E2E-8. EN_ENTREGA anchor guard ══");
   {
     const snap = {
@@ -453,7 +453,7 @@ async function main() {
     check("EN_ENTREGA escluso (rider partito)", !ids.includes("q5-enentrega"), JSON.stringify(ids));
     check("EN_COCINA resta candidabile", ids.includes("q5-encocina"), JSON.stringify(ids));
     check("LISTO resta candidabile (rider non partito)", ids.includes("q5-listo"), JSON.stringify(ids));
-    check("POR_CONFIRMAR resta candidabile", ids.includes("q5-porconf"), JSON.stringify(ids));
+    check("POR_CONFIRMAR NON è candidabile (fix fantasma #001)", !ids.includes("q5-porconf"), JSON.stringify(ids));
     check("RETIRADO resta escluso (terminale, no regressione)", !ids.includes("q5-retirado"), JSON.stringify(ids));
 
     // 8b — costante esposta e coerente con la semantica.
@@ -544,6 +544,75 @@ async function main() {
     check("err ok false", r.ok === false);
     check("err proposals[] presente (vuoto)", Array.isArray(r.proposals) && r.proposals.length === 0, JSON.stringify(r.proposals));
     check("err proposalContract presente", r.proposalContract === "premium-planner-proposal-selection-v1");
+  }
+
+  console.log("\n══ Anchor allowlist (fix fantasma #001) ══");
+  {
+    const ELIG = mod._internal && mod._internal.ANCHOR_ELIGIBLE_STATES;
+    check("ANCHOR_ELIGIBLE_STATES esportata come Set", ELIG instanceof Set, String(ELIG));
+    check("ANCHOR_ELIGIBLE_STATES = {EN_COCINA, LISTO}",
+      ELIG && ELIG.has("EN_COCINA") && ELIG.has("LISTO") && ELIG.size === 2,
+      String(ELIG && [...ELIG]));
+
+    const mkOrder = (id, estado) => ({ id, tipo_consegna: "DOMICILIO", estado, zona: "Q1", hora: "20:25", n_pizze: 1 });
+    const snap = {
+      now: "22:00",
+      orders: [
+        mkOrder("a-cocina", "EN_COCINA"),
+        mkOrder("a-listo", "LISTO"),
+        mkOrder("g-ghost", "POR_CONFIRMAR"),
+        mkOrder("g-forz", "CHIUSO_FORZATO"),
+        mkOrder("g-nuevo", "NUEVO"),
+        mkOrder("g-entrega", "EN_ENTREGA"),
+        mkOrder("g-ret", "RETIRADO"),
+        mkOrder("g-comp-es", "COMPLETADO"),
+        mkOrder("g-comp-it", "COMPLETATO"),
+        mkOrder("g-canc", "CANCELADO"),
+        mkOrder("g-anul", "ANULADO"),
+        mkOrder("g-entg", "ENTREGADO"),
+      ],
+      manual_giros: [],
+    };
+    const anchors = buildAnchorsFromSnapshot(snap, { currentOrderZone: "Q2" });
+    const ids = new Set(anchors.map((a) => String(a.id)));
+    check("EN_COCINA è ancora valida", ids.has("a-cocina"), JSON.stringify([...ids]));
+    check("LISTO è ancora valida", ids.has("a-listo"), JSON.stringify([...ids]));
+    check("POR_CONFIRMAR (ghost #001) NON è ancora", !ids.has("g-ghost"), JSON.stringify([...ids]));
+    check("CHIUSO_FORZATO NON è ancora", !ids.has("g-forz"), JSON.stringify([...ids]));
+    check("NUEVO NON è ancora", !ids.has("g-nuevo"), JSON.stringify([...ids]));
+    check("EN_ENTREGA NON è ancora", !ids.has("g-entrega"), JSON.stringify([...ids]));
+    check("stati terminali NON sono ancore",
+      !["g-ret", "g-comp-es", "g-comp-it", "g-canc", "g-anul", "g-entg"].some((x) => ids.has(x)),
+      JSON.stringify([...ids]));
+    check("solo 2 ancore ammesse (EN_COCINA + LISTO)", anchors.length === 2, JSON.stringify([...ids]));
+  }
+
+  console.log("\n══ Regression #001: solo POR_CONFIRMAR Q1 20:25 → no proposta (+155) ══");
+  {
+    const ghostSnap = {
+      now: "22:55",
+      orders: [{ id: "#001", tipo_consegna: "DOMICILIO", estado: "POR_CONFIRMAR", zona: "Q1", hora: "20:25", n_pizze: 1 }],
+      manual_giros: [],
+    };
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "draft-q2", zona: "Q2", pizzas: 1, promised: "22:55", serviceMin: 2 },
+      startTime: "22:55",
+      capacity: CAPACITY,
+      snapshot: ghostSnap,
+    }, {});
+    check("ghost #001 non genera opportunities", Array.isArray(r.opportunities) && r.opportunities.length === 0, JSON.stringify(r.opportunities));
+    check("nessuno slip assurdo (+155) nelle opportunities", JSON.stringify(r.opportunities).indexOf("155") === -1, JSON.stringify(r.opportunities));
+  }
+
+  console.log("\n══ Empty snapshot → no opportunities ══");
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "draft-q2", zona: "Q2", pizzas: 1, promised: "22:55", serviceMin: 2 },
+      startTime: "22:55",
+      capacity: CAPACITY,
+      snapshot: { now: "22:55", orders: [], manual_giros: [] },
+    }, {});
+    check("snapshot vuoto → opportunities vuoto", Array.isArray(r.opportunities) && r.opportunities.length === 0, JSON.stringify(r.opportunities));
   }
 
   console.log(`\n═══ RESULT: ${pass} passed, ${fail} failed ═══\n`);

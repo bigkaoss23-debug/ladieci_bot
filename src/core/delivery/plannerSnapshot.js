@@ -50,6 +50,16 @@ const TERMINAL_STATES = new Set([
   "ENTREGADO",
 ]);
 
+// Stati NON terminali ma nemmeno lavoro operativo confermato: vanno comunque
+// esclusi dallo snapshot del planner. POR_CONFIRMAR non è chiuso, ma può non
+// confermarsi mai (il fantasma #001 Q1 20:25 inquinava le proposte come ancora);
+// CHIUSO_FORZATO è un ordine chiuso a fine servizio. Tenuto separato da
+// TERMINAL_STATES perché semanticamente diverso (vivo/non confermato).
+const NON_PLANNER_STATES = new Set([
+  "POR_CONFIRMAR",
+  "CHIUSO_FORZATO",
+]);
+
 function safeError(code, message) {
   const e = new Error(message || code);
   e.code = code;
@@ -112,7 +122,8 @@ function countPizzas(items) {
 
 function normalizeOrder(row = {}) {
   const estado = row.estado || "NUEVO";
-  if (TERMINAL_STATES.has(String(estado).toUpperCase())) return null;
+  const estadoUp = String(estado).toUpperCase();
+  if (TERMINAL_STATES.has(estadoUp) || NON_PLANNER_STATES.has(estadoUp)) return null;
   const out = {
     id: row.id,
     tipo_consegna: row.tipo_consegna || "DOMICILIO",
@@ -185,6 +196,7 @@ module.exports = {
     ORDER_SELECT_FIELDS,
     MANUAL_GIRO_SELECT_FIELDS,
     TERMINAL_STATES,
+    NON_PLANNER_STATES,
     buildOrdersQuery,
     buildManualGirosQuery,
     normalizeOrder,

@@ -83,6 +83,28 @@ const ORDER_ROWS = [
     durata_andata_min: 5,
     items: [pizza("Marinara", 1)],
   },
+  {
+    // Fantasma #001: creato male, "cancellato" dall'operatore ma rimasto vivo in
+    // ordenes come POR_CONFIRMAR. NON è terminale ma non è lavoro confermato →
+    // deve sparire dallo snapshot del planner (altrimenti fa da ancora e genera +155).
+    id: "#GHOST",
+    tipo_consegna: "DOMICILIO",
+    estado: "POR_CONFIRMAR",
+    zona: "Q1",
+    hora: "20:25",
+    durata_andata_min: 7,
+    items: [pizza("El Pelusa", 1)],
+  },
+  {
+    // Ordine chiuso a fine servizio: non deve mai rientrare nello snapshot.
+    id: "#FORZ",
+    tipo_consegna: "DOMICILIO",
+    estado: "CHIUSO_FORZATO",
+    zona: "Q1",
+    hora: "20:25",
+    durata_andata_min: 7,
+    items: [pizza("El Pelusa", 1)],
+  },
 ];
 
 const GIRO_ROWS = [
@@ -200,6 +222,28 @@ async function main() {
     check("terminal states excluded",
       !snapshot.orders.some((order) => ["#TERM", "#CANCEL"].includes(order.id)),
       JSON.stringify(snapshot.orders));
+  }
+
+  console.log("\n══ Non-operative states excluded (ghost POR_CONFIRMAR / CHIUSO_FORZATO) ══");
+  {
+    const { _internal } = require("../src/core/delivery/plannerSnapshot");
+    const snapshot = await loadPlannerSnapshot({
+      db: writeGuardDb(),
+      date: "2026-06-07",
+      now: "20:15",
+    });
+    check("POR_CONFIRMAR (ghost #001) excluded from snapshot",
+      !snapshot.orders.some((order) => order.id === "#GHOST"),
+      JSON.stringify(snapshot.orders));
+    check("CHIUSO_FORZATO excluded from snapshot",
+      !snapshot.orders.some((order) => order.id === "#FORZ"),
+      JSON.stringify(snapshot.orders));
+    check("operative states (NUEVO) still present",
+      snapshot.orders.some((order) => order.id === "#D1"),
+      JSON.stringify(snapshot.orders));
+    check("NON_PLANNER_STATES exported as Set",
+      _internal && _internal.NON_PLANNER_STATES instanceof Set,
+      String(_internal && _internal.NON_PLANNER_STATES));
   }
 
   console.log("\n══ Manual giros normalization ══");
