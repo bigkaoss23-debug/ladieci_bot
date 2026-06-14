@@ -166,17 +166,28 @@ function classifyCapacity(capacityInput = {}, routeMin = null, qualityExceeded =
   };
 }
 
+// ── Tetto di magnitudine dello slip (guardrail auto-aggregation). ─────────────
+// Soglia: uno slip su una fermata FINO a questo valore (incluso) resta "ajuste"
+// (aggiustamento accettabile, coerente col modello sano del manual giro: +8 →
+// ajuste); OLTRE questo valore l'aggregazione sposta troppo un ordine esistente
+// → "no_recomendado" (resta forzabile, ma fuori dai bottoni di aggregazione
+// rapida, che ammettono solo compatible|ajuste). 15 min = soglia concordata in
+// PLANNER_AUTO_AGGREGATION_GUARDRAILS_01 (sopra il +5/+8 dei test esistenti).
+const NO_RECOMENDADO_SLIP_MIN = 15;
+
 // ── Classifica lo status complessivo della rotta + blocked. ───────────────────
 // Precedenza (documentata, design §B.7 + Task 5):
 //   1. pizze oltre il max          → "lleno"          blocked=true  (capacità dura)
 //   2. durata oltre il limite      → "no_recomendado" blocked=false (giro brutto, forzabile)
 //   3. qualità pizza a rischio     → "no_recomendado" blocked=false (forzabile con avviso)
-//   4. una fermata slitta          → "ajuste"         blocked=false
-//   5. nessuno slip, capacity ok   → "compatible"     blocked=false
-function classifyRouteImpact({ capacity, qualityExceeded, anySlip }) {
+//   4. slip oltre soglia           → "no_recomendado" blocked=false (sposta troppo un ordine)
+//   5. una fermata slitta (≤soglia)→ "ajuste"         blocked=false
+//   6. nessuno slip, capacity ok   → "compatible"     blocked=false
+function classifyRouteImpact({ capacity, qualityExceeded, anySlip, maxSlip = 0 }) {
   if (capacity._pizzasFull) return { status: "lleno", blocked: true };
   if (capacity._durationOver) return { status: "no_recomendado", blocked: false };
   if (qualityExceeded) return { status: "no_recomendado", blocked: false };
+  if (anySlip && num(maxSlip, 0) > NO_RECOMENDADO_SLIP_MIN) return { status: "no_recomendado", blocked: false };
   if (anySlip) return { status: "ajuste", blocked: false };
   return { status: "compatible", blocked: false };
 }
@@ -192,7 +203,9 @@ function buildWarning({ status, capacity, routeEtas, qualityExceeded }) {
   if (status === "no_recomendado" && qualityExceeded) {
     return "Calidad de pizza en riesgo: ruta demasiado larga para el horno";
   }
-  if (status === "ajuste") {
+  // Messaggio slip per "ajuste" E per il "no_recomendado" guidato dallo slip
+  // (slip oltre soglia, senza durata/qualità): mantiene il "X se mueve +N min".
+  if (status === "ajuste" || status === "no_recomendado") {
     const slipped = routeEtas.filter((e) => e.slips);
     if (slipped.length) {
       return slipped
@@ -251,7 +264,10 @@ function buildRouteImpact(input = {}) {
 
   const capacity = classifyCapacity(capIn, routeMin, qualityExceeded);
   const anySlip = routeEtas.some((e) => e.slips);
-  const { status, blocked } = classifyRouteImpact({ capacity, qualityExceeded, anySlip });
+  // Magnitudine massima di slip su una fermata (era già calcolata in _slipMin ma
+  // scartata): serve al tetto di magnitudine in classifyRouteImpact.
+  const maxSlip = routeEtas.reduce((m, e) => Math.max(m, num(e._slipMin, 0)), 0);
+  const { status, blocked } = classifyRouteImpact({ capacity, qualityExceeded, anySlip, maxSlip });
 
   const warning = buildWarning({ status, capacity, routeEtas, qualityExceeded });
   const explanation = buildExplanation({ status, routeEtas, capacity });

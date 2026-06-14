@@ -183,6 +183,82 @@ console.log("══ 6. no promised ══");
   check("warning vuoto", out.warning === "");
 }
 
+// ── Scenario 7 — slip guard: anchor slitta +45 → no_recomendado ──────────────
+// PLANNER_AUTO_AGGREGATION_GUARDRAILS: uno slip oltre soglia (15) su un ordine
+// esistente non è più un semplice "ajuste". Riproduce il caso 5-zone Q1+Q2 (+45).
+console.log("══ 7. slip guard +45 → no_recomendado ══");
+{
+  const out = buildRouteImpact({
+    startTime: "20:43",
+    stops: [
+      { id: "new-q2", zone: "Q2", label: "Pedido actual", isNew: true, promised: "20:50", pizzas: 1, serviceMin: 2, travelFromPrevMin: 7 },
+      { id: "q5", zone: "Q5", label: "Las Marinas", isNew: false, promised: "20:20", pizzas: 2, serviceMin: 2, travelFromPrevMin: 13 },
+    ],
+    returnTravelMin: 15,
+    capacity: { pizzas: 3, maxPizzas: 6, routeMinLimit: 180, pizzaQualityLimitMin: 180 },
+    toleranceMin: 0,
+  });
+  check("Q5 slip '+45'", out.routeEtas[1].slipLabel === "+45", out.routeEtas[1].slipLabel);
+  check("status no_recomendado (non ajuste)", out.status === "no_recomendado", out.status);
+  check("blocked false (forzabile)", out.blocked === false);
+  check("warning conserva 'se mueve +45'", /se mueve \+45 min/.test(out.warning), out.warning);
+}
+
+// ── Scenario 8 — slip guard: anchor slitta +48 → no_recomendado (caso Q3+Q4) ──
+console.log("══ 8. slip guard +48 → no_recomendado ══");
+{
+  const out = buildRouteImpact({
+    startTime: "17:00",
+    stops: [
+      { id: "new-q4", zone: "Q4", label: "Pedido actual", isNew: true, promised: "17:00", pizzas: 1, serviceMin: 2, travelFromPrevMin: 0 },
+      { id: "q3", zone: "Q3", label: "IES", isNew: false, promised: "16:20", pizzas: 1, serviceMin: 2, travelFromPrevMin: 6 },
+    ],
+    returnTravelMin: 10,
+    capacity: { pizzas: 2, maxPizzas: 6, routeMinLimit: 180, pizzaQualityLimitMin: 180 },
+    toleranceMin: 0,
+  });
+  check("Q3 slip '+48'", out.routeEtas[1].slipLabel === "+48", out.routeEtas[1].slipLabel);
+  check("status no_recomendado", out.status === "no_recomendado", out.status);
+}
+
+// ── Scenario 9 — manual-giro model: slip +8 resta ajuste (no regressione) ─────
+// Specchio del Q3+Q4 manual giro reale (Q3 +8). Sotto soglia → ajuste.
+console.log("══ 9. slip +8 resta ajuste (manual-giro) ══");
+{
+  const out = buildRouteImpact({
+    startTime: "16:20",
+    stops: [
+      { id: "new-q3", zone: "Q3", label: "Pedido actual", isNew: true, promised: "16:20", pizzas: 1, serviceMin: 2, travelFromPrevMin: 8 },
+    ],
+    returnTravelMin: 8,
+    capacity: { pizzas: 1, maxPizzas: 6, routeMinLimit: 180, pizzaQualityLimitMin: 180 },
+    toleranceMin: 0,
+  });
+  check("Q3 slip '+8'", out.routeEtas[0].slipLabel === "+8", out.routeEtas[0].slipLabel);
+  check("status ajuste (≤soglia)", out.status === "ajuste", out.status);
+}
+
+// ── Scenario 10 — boundary soglia: +15 ajuste, +16 no_recomendado ────────────
+console.log("══ 10. boundary slip 15/16 ══");
+{
+  const at15 = buildRouteImpact({
+    startTime: "20:00",
+    stops: [{ id: "b15", zone: "Q2", isNew: true, promised: "20:00", pizzas: 1, serviceMin: 2, travelFromPrevMin: 15 }],
+    returnTravelMin: 5,
+    capacity: { pizzas: 1, maxPizzas: 6, routeMinLimit: 180, pizzaQualityLimitMin: 180 },
+    toleranceMin: 0,
+  });
+  check("+15 → ajuste (soglia inclusiva)", at15.routeEtas[0].slipLabel === "+15" && at15.status === "ajuste", at15.status);
+  const at16 = buildRouteImpact({
+    startTime: "20:00",
+    stops: [{ id: "b16", zone: "Q2", isNew: true, promised: "20:00", pizzas: 1, serviceMin: 2, travelFromPrevMin: 16 }],
+    returnTravelMin: 5,
+    capacity: { pizzas: 1, maxPizzas: 6, routeMinLimit: 180, pizzaQualityLimitMin: 180 },
+    toleranceMin: 0,
+  });
+  check("+16 → no_recomendado", at16.routeEtas[0].slipLabel === "+16" && at16.status === "no_recomendado", at16.status);
+}
+
 // ── Mapper hand-off: buildRouteImpactOpportunityFields ──────────────────────
 console.log("══ Mapper hand-off ══");
 {
