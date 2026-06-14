@@ -105,6 +105,27 @@ function horaOrNull(value) {
 // futuri o vicini restano SEMPRE (EN_COCINA programmato dopo, LISTO appena pronto).
 const ANCHOR_STALE_GRACE_MIN = 30;
 
+// ── Δpromised guard (BLOCCO A.2) ────────────────────────────────────────────
+// Soglia di divario tra le ore PROMESSE delle fermate di un'aggregazione. Oltre
+// questo valore i due ordini sono operativamente troppo distanti per stare nello
+// stesso giro, ANCHE quando lo slip resta sotto la soglia di routeImpact (caso
+// residuo: ordine nuovo molto più tardi → appeso in coda → consegnato in forte
+// anticipo → nessuno slip "in ritardo" da catturare). Mirror del guardrail
+// manual-giro "Horarios >25 min". 25 min: sopra la spaziatura naturale di un
+// giro sano in-canale (~15-20 min, vedi C: Q3 16:20 + Q4 16:40 = 20 → resta ajuste).
+const PROMISED_GAP_NO_RECOMENDADO_MIN = 25;
+
+// Massimo divario (minuti) tra le ore promesse delle fermate. Considera solo i
+// `promised` validi; <2 promesse note → null (nessun giudizio). Usa la stessa
+// normalizzazione night-service di toClockMin così 00:30 e 23:50 sono coerenti.
+function maxPromisedGap(stops) {
+  const mins = (Array.isArray(stops) ? stops : [])
+    .map((s) => toClockMin(s && s.promised))
+    .filter((m) => m != null);
+  if (mins.length < 2) return null;
+  return Math.max(...mins) - Math.min(...mins);
+}
+
 // Orario "HH:MM" → minuti-clock, con la STESSA normalizzazione night-service
 // (h<6 → +24) di strategicOpportunities.toMin / routeImpact, così `now` e i
 // riferimenti degli anchor vivono sullo stesso orologio. Null se non parsabile.
@@ -375,6 +396,27 @@ function mapCandidateToOpportunity(cand, currentOrder, ctx = {}) {
     if (!opp.warning) opp.warning = cand.reason || "Canales distintos: ruta no recomendada";
     attachRouteTimeline(opp, cand, currentOrder, fullImpact);
     return { opp, blockedReason: "cross_channel" };
+  }
+
+  // RICONCILIAZIONE Δpromised (BLOCCO A.2): orari promessi troppo distanti tra le
+  // fermate dell'aggregazione → no_recomendado, anche se lo slip resta sotto la
+  // soglia di routeImpact. Asse diverso dallo slip guard (distanza promesse vs
+  // lateness): additivo, non lo sostituisce. Forzabile (blocked=false) come lo slip
+  // guard: esce dai bottoni di aggregazione rapida (compatible|ajuste) ma resta
+  // forzabile con avviso. Non scatta sul single-stop (un solo promised → gap null)
+  // né sul manual giro (path separato). Non DEGRADA mai uno status già peggiore.
+  const promisedGap = maxPromisedGap(cand.routeImpactInput.stops);
+  if (
+    promisedGap != null &&
+    promisedGap > PROMISED_GAP_NO_RECOMENDADO_MIN &&
+    STATUS_RANK[opp.status] < STATUS_RANK.no_recomendado
+  ) {
+    opp.status = "no_recomendado";
+    if (!opp.warning) {
+      opp.warning = `Horarios lejanos: ${promisedGap} min entre pedidos (máx ${PROMISED_GAP_NO_RECOMENDADO_MIN})`;
+    }
+    attachRouteTimeline(opp, cand, currentOrder, fullImpact);
+    return { opp, blockedReason: "promised_gap" };
   }
 
   attachRouteTimeline(opp, cand, currentOrder, fullImpact);

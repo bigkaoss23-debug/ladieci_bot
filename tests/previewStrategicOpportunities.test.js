@@ -619,6 +619,52 @@ async function main() {
     check("snapshot vuoto → opportunities vuoto", Array.isArray(r.opportunities) && r.opportunities.length === 0, JSON.stringify(r.opportunities));
   }
 
+  // ── Δpromised guard (BLOCCO A.2) ───────────────────────────────────────────
+  // Aggregazione same-channel con orari promessi distanti → no_recomendado, anche
+  // quando lo slip resta sotto la soglia routeImpact. Capacity larga per ISOLARE
+  // la guardia gap (no falsi no_recomendado da ruta-larga/qualità).
+  console.log("\n══ Δpromised guard (BLOCCO A.2) ══");
+  {
+    const CAP_LOOSE = { maxPizzas: 8, routeMinLimit: 240, pizzaQualityLimitMin: 240 };
+    const TRAVEL = { "Pizzería->Q2": 7, "Q2->Q5": 10, "Q5->Pizzería": 15 };
+    const run = (currentPromised, anchorHora) => previewStrategicOpportunities({
+      currentOrderDraft: { id: "new-q2", zona: "Q2", pizzas: 1, promised: currentPromised, serviceMin: 2 },
+      startTime: "20:15",
+      anchors: [{ id: "tg-q5", zona: "Q5", hora: anchorHora, pizzas: 1 }],
+      travelTimes: TRAVEL,
+      capacity: CAP_LOOSE,
+      now: "20:05",
+    });
+    const oppQ5 = (r) => r.opportunities.find((o) => Array.isArray(o.routeZones) && o.routeZones[1] === "Q5");
+
+    // gap 50 (>25) → no_recomendado per "Horarios lejanos" (non per slip)
+    const far = oppQ5(await run("20:30", "21:20"));
+    check("gap 50 → no_recomendado", far && far.status === "no_recomendado", far && far.status);
+    check("gap 50 → warning Horarios lejanos", far && /Horarios lejanos/.test(far.warning || ""), far && far.warning);
+
+    // boundary: gap 25 NON scatta (soglia è > 25)
+    const at25 = oppQ5(await run("20:30", "20:55"));
+    check("gap 25 → NO Δpromised block (status != no_recomendado o warning non-gap)",
+      at25 && (at25.status !== "no_recomendado" || !/Horarios lejanos/.test(at25.warning || "")),
+      at25 && `${at25.status} / ${at25.warning}`);
+
+    // boundary: gap 26 scatta
+    const at26 = oppQ5(await run("20:30", "20:56"));
+    check("gap 26 → no_recomendado Horarios lejanos", at26 && at26.status === "no_recomendado" && /Horarios lejanos/.test(at26.warning || ""), at26 && `${at26.status} / ${at26.warning}`);
+
+    // gap piccolo (10) → invariato (compatible/ajuste), nessun warning gap
+    const near = oppQ5(await run("20:50", "21:00"));
+    check("gap 10 → no Δpromised block", near && near.status !== "no_recomendado" && !/Horarios lejanos/.test(near.warning || ""), near && `${near.status} / ${near.warning}`);
+
+    // single-stop "crear" (nessun anchor) → mai gap (un solo promised)
+    const single = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "new-q2", zona: "Q2", pizzas: 1, promised: "20:30", serviceMin: 2 },
+      startTime: "20:15", anchors: [], travelTimes: TRAVEL, capacity: CAP_LOOSE, now: "20:05",
+    });
+    const dir = single.opportunities.find((o) => o.routeZones && o.routeZones.length === 1);
+    check("single-stop crear → nessun Δpromised block", !dir || !/Horarios lejanos/.test(dir.warning || ""), dir && `${dir.status} / ${dir.warning}`);
+  }
+
   console.log(`\n═══ RESULT: ${pass} passed, ${fail} failed ═══\n`);
   process.exit(fail > 0 ? 1 : 0);
 }
