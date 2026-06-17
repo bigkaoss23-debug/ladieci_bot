@@ -145,41 +145,51 @@ function selectDeliveryProposals(input = {}, opts = {}) {
   const opportunities = arr(input.opportunities); // GIÀ STATUS_RANK-ordinate
   const proposals = [];
 
-  // ── Bottone 1 — Direct ──
-  // bestProposal = candidato diretto (crear). Incluso se presente e non bloccato.
+  // bestProposal = candidato diretto (crear). Mostrabile/forzabile se non bloccato.
   const best = input.bestProposal;
-  if (best && best.blocked !== true) {
-    proposals.push(toProposal(best, "direct", ctx));
-  }
+  const directShowable = !!(best && best.blocked !== true);
+  // "pulito" = compatible senza conflitto rider: solo allora il diretto guida.
+  const directClean = directShowable && str(best.status) === "compatible";
+  const directProp = directShowable ? toProposal(best, "direct", ctx) : null;
 
-  // ── Bottone 2 — Miglior inserimento compatibile ──
-  // Primo qualificante nell'ordine già rankato = il migliore.
+  // Inserimenti qualificanti (compatible/ajuste, già STATUS_RANK-ordinati).
   const insertionIdx = opportunities.findIndex(isQualifyingInsertion);
-  if (insertionIdx >= 0) {
-    proposals.push(toProposal(opportunities[insertionIdx], "insertion", ctx));
+  const altIdx = insertionIdx >= 0
+    ? opportunities.findIndex((o, i) => i > insertionIdx && isQualifyingInsertion(o))
+    : -1;
+  const insertionProp = insertionIdx >= 0 ? toProposal(opportunities[insertionIdx], "insertion", ctx) : null;
+  const altProp = altIdx >= 0 ? toProposal(opportunities[altIdx], "alternative", ctx) : null;
+
+  // ── Ordine (BLOCCO 3 — "mejor operativo"):
+  //   - diretto PULITO (compatible) o nessun inserimento qualificante → diretto
+  //     primo (comportamento storico);
+  //   - diretto NON pulito (es. conflitto rider → no_recomendado/ajuste) ED esiste
+  //     un giro compatibile/ajuste → il GIRO è "mejor operativo": insertion primo,
+  //     diretto come opzione forzabile sotto. Coerente con "lo STATUS comanda":
+  //     un diretto non-compatible non supera un inserimento compatible/ajuste.
+  if (directClean || !insertionProp) {
+    if (directProp) proposals.push(directProp);
+    if (insertionProp) proposals.push(insertionProp);
+    if (altProp) proposals.push(altProp);
+  } else {
+    proposals.push(insertionProp);          // mejor operativo (recommended)
+    if (directProp) proposals.push(directProp); // diretto forzabile, sotto
+    if (altProp) proposals.push(altProp);
   }
 
-  // ── Bottone 3 — Alternativa prudente ──
-  // Secondo qualificante (diverso dal primo): un'opzione separata per non forzare.
-  if (insertionIdx >= 0) {
-    const altIdx = opportunities.findIndex(
-      (o, i) => i > insertionIdx && isQualifyingInsertion(o)
-    );
-    if (altIdx >= 0) {
-      proposals.push(toProposal(opportunities[altIdx], "alternative", ctx));
-    }
-  }
-
-  // ── Bottone 4 — Sconsigliato deterministico ──
-  // Primo no_recomendado con rotta calcolata (cross / route troppo lunga).
+  // ── Sconsigliato deterministico — primo no_recomendado con rotta calcolata. ──
   const notRecIdx = opportunities.findIndex(isNotRecommendedShowable);
   if (notRecIdx >= 0) {
     proposals.push(toProposal(opportunities[notRecIdx], "not_recommended", ctx));
   }
 
-  // Cap a maxProposals e rank finale 1-based (ordine ruoli già garantisce che
-  // not_recommended resti in coda → no_recomendado non supera ajuste/compatible).
-  const capped = proposals.slice(0, maxProposals).map((p, i) => ({ ...p, rank: i + 1 }));
+  // Cap a maxProposals, rank 1-based; `recommended` = la prima proposta primaria
+  // (mai una not_recommended) → la UI può evidenziarla come "Mejor propuesta".
+  const capped = proposals.slice(0, maxProposals).map((p, i) => ({
+    ...p,
+    rank: i + 1,
+    recommended: i === 0 && p.kind !== "not_recommended",
+  }));
 
   return { contract: CONTRACT, proposals: capped, safety };
 }

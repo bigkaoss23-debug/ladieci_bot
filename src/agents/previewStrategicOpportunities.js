@@ -140,6 +140,63 @@ function toClockMin(hhmm) {
   return h * 60 + min;
 }
 
+// minuti-clock → "HH:MM" (inverso di toClockMin). De-normalizza il night-service
+// (mod 24) così 1490 → "00:50". Null se input non finito. Solo formato, nessun
+// calcolo di business: lo usano salida/regreso degli anchor (serviceLine).
+function fromClockMin(mins) {
+  if (!Number.isFinite(mins)) return null;
+  const m = ((Math.round(mins) % 1440) + 1440) % 1440;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+// True se due intervalli orari [aStart,aEnd] e [bStart,bEnd] (HH:MM) si
+// sovrappongono sull'orologio night-service. Estremo nullo/non parsabile →
+// nessun giudizio (false): non inventiamo conflitti su dati incompleti.
+function clockIntervalsOverlap(aStart, aEnd, bStart, bEnd) {
+  const a0 = toClockMin(aStart), a1 = toClockMin(aEnd);
+  const b0 = toClockMin(bStart), b1 = toClockMin(bEnd);
+  if (a0 == null || a1 == null || b0 == null || b1 == null) return false;
+  return Math.max(a0, b0) < Math.min(a1, b1);
+}
+
+// Intervallo [salida, entrega, regreso] di una opportunity DIRETTA, letto dalla
+// routeTimeline GIÀ calcolata (mai inventato): salida = fermata departure,
+// entrega = summary.giroEta, regreso = summary.returnEta. Null se manca.
+function directIntervalFromOpp(opp) {
+  const tl = opp && opp.routeTimeline ? opp.routeTimeline : null;
+  if (!tl) return null;
+  const timeline = Array.isArray(tl.timeline) ? tl.timeline : [];
+  const dep = timeline.find((t) => t && t.type === "departure");
+  const summary = tl.summary || {};
+  return {
+    salida: dep && typeof dep.eta === "string" ? dep.eta : null,
+    entrega: typeof summary.giroEta === "string" ? summary.giroEta : null,
+    regreso: typeof summary.returnEta === "string" ? summary.returnEta : null,
+  };
+}
+
+// P0 — conflitto rider single-rider: un giro DIRETTO separato la cui finestra
+// [salida, regreso] si sovrappone a quella di un anchor già impegnato (EN_COCINA/
+// LISTO) NON può essere "compatible": un solo rider non può servire entrambi.
+// Ritorna il PRIMO anchor in conflitto, o null. Conservativo: senza salida/regreso
+// del diretto o dell'anchor non emette conflitto (nessun falso positivo).
+function findRiderConflictAnchor(directOpp, anchors) {
+  const di = directIntervalFromOpp(directOpp);
+  if (!di || di.salida == null || di.regreso == null) return null;
+  for (const a of (Array.isArray(anchors) ? anchors : [])) {
+    if (!a) continue;
+    const aSalida = a.salida != null ? a.salida : null;
+    const aRegreso = a.regreso != null
+      ? a.regreso
+      : (a.entrega != null ? a.entrega : a.promised);
+    if (aSalida == null || aRegreso == null) continue;
+    if (clockIntervalsOverlap(di.salida, di.regreso, aSalida, aRegreso)) return a;
+  }
+  return null;
+}
+
 // Riferimento temporale più affidabile per valutare la staleness di un anchor
 // DOMICILIO: preferisce l'ETA di consegna stimata, poi la salida driver, poi il
 // forno_out, infine la hora promessa. Usa l'orario più "a valle" così non si
@@ -224,6 +281,22 @@ function sanitizeAnchor(raw = {}) {
   if (!zone) return null;
   const pizzasRaw = raw.pizzas != null ? raw.pizzas : raw.n_pizze;
   const serviceRaw = raw.serviceMin != null ? raw.serviceMin : raw.service_min;
+  const promised = horaOrNull(raw.promised != null ? raw.promised : raw.hora);
+  // salida/entrega/regreso del giro esistente (per la "línea de servicio" UI,
+  // righe espandibili). Tutti DERIVATI da campi già calcolati dal sistema, MAI
+  // inventati. PRECEDENZA ai campi reali del DB già propagati dallo snapshot
+  // (salida_driver_estimada, entrega_estimada); poi fallback geometrici:
+  //   entrega = entrega_estimada DB || hora promessa;
+  //   salida  = salida_driver_estimada DB || forno_out || (entrega − andata);
+  //   regreso = entrega + andata (modello simmetrico del rientro rider; nessuna
+  //             colonna DB esiste → calcolato, mai inventato). Null se mancano dati.
+  const andata = num(raw.andata_min != null ? raw.andata_min : (raw.durata_andata_min != null ? raw.durata_andata_min : raw.andata));
+  const entrega = horaOrNull(raw.entrega_estimada) || promised;
+  const entregaMin = toClockMin(entrega);
+  const salida = horaOrNull(raw.salida_driver_estimada)
+    || horaOrNull(raw.forno_out)
+    || (entregaMin != null && andata != null ? fromClockMin(entregaMin - andata) : null);
+  const regreso = entregaMin != null && andata != null ? fromClockMin(entregaMin + andata) : null;
   return {
     id: raw.id != null ? String(raw.id) : `anchor-${zone.toLowerCase()}`,
     zone,
@@ -231,9 +304,13 @@ function sanitizeAnchor(raw = {}) {
     // accettiamo solo se non sembra PII (nessun controllo euristico: usiamo
     // sempre una label derivata dalla zona per sicurezza).
     label: `Pedido ${zone}`,
-    promised: horaOrNull(raw.promised != null ? raw.promised : raw.hora),
+    promised,
     pizzas: num(pizzasRaw) || 0,
     serviceMin: num(serviceRaw) != null ? num(serviceRaw) : DEFAULT_SERVICE_MIN,
+    // additivi (back-compat: i consumatori esistenti li ignorano).
+    salida,
+    entrega,
+    regreso,
   };
 }
 
@@ -475,11 +552,16 @@ function buildStrategicPreviewResponse({
     bestProposal: bestProposal || null,
     opportunities: Array.isArray(opportunities) ? opportunities : [],
     // serviceLine: sintesi NON-PII degli anchor (giros/huecos di servizio).
+    // salida/entrega/regreso additivi → la UI mostra ogni giro come riga
+    // espandibile (Pizzería → entrega → regreso). Valori derivati, mai inventati.
     serviceLine: (Array.isArray(anchors) ? anchors : []).map((a) => ({
       id: a.id,
       zone: a.zone,
       promised: a.promised,
       pizzas: a.pizzas,
+      salida: a.salida != null ? a.salida : null,
+      entrega: a.entrega != null ? a.entrega : a.promised,
+      regreso: a.regreso != null ? a.regreso : null,
     })),
     warnings: warningsOut,
     blockers: [],
@@ -579,6 +661,37 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
       firstAvailable = { zone: currentOrder.zone, eta: firstEta, status: impact.status };
       const mappedDirect = mapCandidateToOpportunity(directCand, currentOrder, { includeCrossZone });
       bestProposal = mappedDirect ? mappedDirect.opp : null;
+
+      // ── P0: conflitto rider del diretto vs anchor già impegnati ──
+      // Il diretto è valutato in isolamento (anchor=null) → routeImpact lo dà
+      // "compatible" anche quando il rider single-rider è già prenotato su un
+      // anchor (es. Q5 EN_COCINA) la cui salida cade dentro la finestra del
+      // diretto. Qui lo correggiamo: no_recomendado FORZABILE (blocked resta
+      // false), con avviso. Mai più "Mejor propuesta compatible" cieca.
+      if (bestProposal && bestProposal.blocked !== true) {
+        const conflictAnchor = findRiderConflictAnchor(bestProposal, anchors);
+        if (conflictAnchor) {
+          const di = directIntervalFromOpp(bestProposal);
+          const msg = `Conflicto rider: vuelve ${di && di.regreso ? di.regreso : "—"}, pero ${conflictAnchor.zone} debe salir ${conflictAnchor.salida || "—"}`;
+          bestProposal.status = "no_recomendado";
+          bestProposal.severity = "warning"; // forzabile: blocked NON cambia
+          bestProposal.riderConflict = true;
+          bestProposal.warning = msg;
+          if (!bestProposal.explanation || /compatible/i.test(bestProposal.explanation)) {
+            bestProposal.explanation = msg;
+          }
+          // la card "Mejor propuesta" legge firstAvailable.status → riallinea
+          if (firstAvailable) firstAvailable.status = "no_recomendado";
+          // La rotta del diretto è corretta (legs invariati); il conflitto è
+          // trasversale (vincolo rider su un ALTRO giro), non uno slip della
+          // rotta → patchiamo solo risk/operatorMessage del timeline esistente
+          // (buildRouteTimeline deriverebbe risk dallo slip della rotta = ok).
+          if (bestProposal.routeTimeline) {
+            bestProposal.routeTimeline.risk = "warning";
+            bestProposal.routeTimeline.operatorMessage = msg;
+          }
+        }
+      }
     } else {
       warnings.push({ code: "direct_unavailable", message: "Baseline directa no disponible (tiempos de viaje)" });
     }
@@ -634,5 +747,8 @@ module.exports = {
   isAnchorStale,
   anchorRefHora,
   toClockMin,
+  clockIntervalsOverlap,
+  directIntervalFromOpp,
+  findRiderConflictAnchor,
   _internal: { CONTRACT, SOURCE, MODE, DEFAULT_SERVICE_MIN, TERMINAL_STATES, NON_INSERTABLE_ANCHOR_STATES, ANCHOR_ELIGIBLE_STATES, ANCHOR_STALE_GRACE_MIN },
 };
