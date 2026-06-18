@@ -607,9 +607,17 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
 
   // Anchors: espliciti (sanitizzati) hanno precedenza; altrimenti dallo snapshot
   // (fixture o deps.loadSnapshot). Nessun DB diretto qui.
-  let anchors;
+  //
+  // FIX_26 — separazione delle responsabilità degli anchor (P0 same-zone rider
+  // availability). `buildAnchorsFromSnapshot` è chiamato SENZA currentOrderZone:
+  // ritorna TUTTI gli anchor operativi (EN_COCINA/LISTO, DOMICILIO, non-stale),
+  // INCLUSI quelli same-zone. Il filtro same-zone NON è più applicato qui: un
+  // anchor same-zone non è aggregabile (dominio del planner classico) MA occupa
+  // comunque il rider single-rider e struttura la serata. Da `allOperationalAnchors`
+  // derivo poi le tre viste sotto. "non aggregabile ≠ rider libero".
+  let allOperationalAnchors;
   if (Array.isArray(input.anchors)) {
-    anchors = input.anchors.map(sanitizeAnchor).filter(Boolean);
+    allOperationalAnchors = input.anchors.map(sanitizeAnchor).filter(Boolean);
   } else {
     let snapshot = input.snapshot;
     if (!snapshot && typeof deps.loadSnapshot === "function") {
@@ -627,12 +635,22 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
     if (!snapshot) {
       return safeError(currentOrder, "missing_snapshot", "Falta snapshot o loadSnapshot");
     }
-    anchors = buildAnchorsFromSnapshot(snapshot, {
+    // NB: niente currentOrderZone → same-zone NON filtrato (resta nei vincoli rider).
+    allOperationalAnchors = buildAnchorsFromSnapshot(snapshot, {
       currentOrderId: currentOrder.id,
-      currentOrderZone: currentOrder.zone, // A1: scarta anchor same-zone (planner classico)
       now: input.now, // anti-stale: riferimento temporale (fallback snapshot.now)
     });
   }
+
+  // candidateAnchors: SOLO anchor cross-zone possono generare insertion strategici
+  // (regola A1: la consolidazione same-zone è dominio del planner classico — un leg
+  // Zona->stessaZona non esiste e degraderebbe a blocked/missing_travel_times).
+  const candidateAnchors = allOperationalAnchors.filter((a) => a && a.zone !== currentOrder.zone);
+  // riderBusyAnchors / serviceLineAnchors: TUTTI gli anchor operativi, same-zone
+  // INCLUSO. Un anchor same-zone non aggregabile occupa comunque il rider e va
+  // mostrato nella linea di servizio.
+  const riderBusyAnchors = allOperationalAnchors;
+  const serviceLineAnchors = allOperationalAnchors;
 
   // Moduli iniettabili (default ai mattoni puri).
   const makeCandidates = typeof deps.buildStrategicCandidates === "function"
@@ -669,7 +687,7 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
       // diretto. Qui lo correggiamo: no_recomendado FORZABILE (blocked resta
       // false), con avviso. Mai più "Mejor propuesta compatible" cieca.
       if (bestProposal && bestProposal.blocked !== true) {
-        const conflictAnchor = findRiderConflictAnchor(bestProposal, anchors);
+        const conflictAnchor = findRiderConflictAnchor(bestProposal, riderBusyAnchors);
         if (conflictAnchor) {
           const di = directIntervalFromOpp(bestProposal);
           const msg = `Conflicto rider: vuelve ${di && di.regreso ? di.regreso : "—"}, pero ${conflictAnchor.zone} debe salir ${conflictAnchor.salida || "—"}`;
@@ -698,12 +716,18 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
 
     // ── Opportunità di giro dagli anchor. ──
     let opportunities = [];
-    if (!anchors.length) {
-      warnings.push({ code: "no_anchors", message: "No hay pedidos ancla compatibles" });
+    if (!candidateAnchors.length) {
+      // Nessun candidato di insertion (cross-zone). Emetti no_anchors SOLO se non
+      // c'è neppure un anchor che occupa il rider: se ne esiste uno (es. same-zone),
+      // la serviceLine è popolata e l'eventuale conflitto rider è già segnalato su
+      // bestProposal → "no_anchors" sarebbe fuorviante (FIX_26).
+      if (!riderBusyAnchors.length) {
+        warnings.push({ code: "no_anchors", message: "No hay pedidos ancla compatibles" });
+      }
     } else {
       const candidates = makeCandidates({
         currentOrder,
-        anchors,
+        anchors: candidateAnchors,
         startTime: context.startTime,
         travelTimes: context.travelTimes,
         capacity: context.capacity,
@@ -725,7 +749,7 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
     return buildStrategicPreviewResponse({
       input,
       currentOrder,
-      anchors,
+      anchors: serviceLineAnchors, // FIX_26: serviceLine include anche same-zone
       firstAvailable,
       bestProposal,
       opportunities,

@@ -134,7 +134,7 @@ const FAKE_ORDERS = [
   // Q5 anchor cross-zone (con PII grezza che NON deve uscire dal contract):
   { id: "ord-q5", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q5", hora: "21:00", n_pizze: 2,
     nombre: "Mario PII", telefono: "+34000000000", direccion: "Calle PII 123", wa_id: "34000000000" },
-  // Q2 same-zone del current → deve essere filtrato (A1):
+  // Q2 same-zone del current → fuori dalle insertion (A1), ma in serviceLine/rider-busy (FIX_26):
   { id: "ord-q2", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q2", hora: "20:30", n_pizze: 1 },
   // RITIRO → escluso (non DOMICILIO):
   { id: "ord-rit", tipo_consegna: "RITIRO", estado: "NUEVO", zona: null, hora: "20:40", n_pizze: 1 },
@@ -185,9 +185,15 @@ async function main() {
     check("Q2→Q5 capacity.state desconocida (non full)",
       r.opportunities.some((o) => o.routeZones[1] === "Q5" && o.capacity.state === "desconocida"),
       JSON.stringify(r.opportunities.map((o) => o.capacity)));
-    check("serviceLine = solo Q5 (Q2 same-zone filtrato, RITIRO/RETIRADO esclusi)",
-      r.serviceLine.length === 1 && r.serviceLine[0].id === "ord-q5",
-      JSON.stringify(r.serviceLine));
+    // FIX_26: same-zone Q2 ORA INCLUSO in serviceLine (occupa il rider), RITIRO/
+    // RETIRADO restano esclusi. La consolidazione same-zone resta fuori dalle
+    // opportunities (vedi check sotto: nessun [Q2,Q2]).
+    {
+      const slIds = r.serviceLine.map((s) => s.id);
+      check("serviceLine include Q5 + Q2 same-zone (rider busy), esclude RITIRO/RETIRADO (FIX_26)",
+        slIds.includes("ord-q5") && slIds.includes("ord-q2") && slIds.length === 2,
+        JSON.stringify(r.serviceLine));
+    }
     check("nessuna opportunity same-zone [Q2,Q2]",
       !r.opportunities.some((o) => o.routeZones[0] === "Q2" && o.routeZones[1] === "Q2"),
       JSON.stringify(r.opportunities.map((o) => o.routeZones)));

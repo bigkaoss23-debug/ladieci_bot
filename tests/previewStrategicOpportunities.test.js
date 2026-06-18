@@ -373,7 +373,10 @@ async function main() {
     const ids = r.serviceLine.map((s) => s.id);
     check("E2E RITIRO escluso (ord-ret-2040)", !ids.includes("ord-ret-2040"), JSON.stringify(ids));
     check("E2E RETIRADO/terminale escluso (ord-done)", !ids.includes("ord-done"), JSON.stringify(ids));
-    check("E2E same-zone Q2 escluso (ord-q2-2030, A1)", !ids.includes("ord-q2-2030"), JSON.stringify(ids));
+    // FIX_26: same-zone anchor (Q2) ORA INCLUSO in serviceLine — occupa il rider e
+    // struttura la serata anche se non è candidato di insertion (vedi E2E-6, che
+    // verifica l'ASSENZA dell'opportunity [Q2,Q2]). "non aggregabile ≠ rider libero".
+    check("E2E same-zone Q2 incluso in serviceLine (rider busy, FIX_26)", ids.includes("ord-q2-2030"), JSON.stringify(ids));
     check("E2E Q5 incluso (ord-q5-2100)", ids.includes("ord-q5-2100"), JSON.stringify(ids));
     check("E2E nessun anchor con zona null", r.serviceLine.every((s) => typeof s.zone === "string" && s.zone.length > 0), JSON.stringify(r.serviceLine));
   }

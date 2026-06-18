@@ -138,6 +138,136 @@ async function main() {
     propsNA[0] && propsNA[0].kind === "direct" && propsNA[0].recommended === true,
     JSON.stringify(propsNA.map(p => p.kind)));
 
+  // ===============================================================
+  // FIX_26 — P0 same-zone rider availability. I test sotto passano DAL PATH
+  // `buildAnchorsFromSnapshot` (snapshot, NON input.anchors espliciti): è il path
+  // dove il bug viveva (il filtro same-zone svuotava l'unica lista anchors usata
+  // anche per rider conflict + serviceLine). Anchor Q5 #001 EN_COCINA con campi DB.
+  // ===============================================================
+  const SNAP_ANCHOR_Q5 = {
+    id: "#001", tipo_consegna: "DOMICILIO", estado: "EN_COCINA", zona: "Q5",
+    hora: "21:00", salida_driver_estimada: "20:40", entrega_estimada: "21:00",
+    durata_andata_min: 20, n_pizze: 1, // regreso derivato = 21:20
+  };
+  const snapWith = (anchor, now) => ({ now: now || "20:30", orders: [anchor], manual_giros: [] });
+  const CAP = { maxPizzas: 6, routeMinLimit: 60, pizzaQualityLimitMin: 60 };
+
+  // ── FIX_26 TEST 1 — same-zone Q5 21:05 + anchor Q5 (snapshot) ───────────────
+  console.log("\n══ FIX_26 TEST 1: same-zone Q5 draft + anchor Q5 (snapshot path) ══");
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "draft-q5", zona: "Q5", promised: "21:05", pizzas: 1, serviceMin: 2 },
+      startTime: "20:35",
+      now: "20:35",
+      snapshot: snapWith(SNAP_ANCHOR_Q5),
+      capacity: CAP,
+    });
+    check("ok=true", r.ok === true, JSON.stringify(r.blockers));
+    // serviceLine NON vuota: l'anchor Q5 #001 deve esserci (occupa il rider).
+    check("serviceLine NON vuota", Array.isArray(r.serviceLine) && r.serviceLine.length > 0, JSON.stringify(r.serviceLine));
+    const sl = (r.serviceLine || []).find((s) => s && s.id === "#001");
+    check("serviceLine include l'anchor Q5 #001", !!sl, JSON.stringify(r.serviceLine));
+    // warnings NON devono essere SOLO no_anchors (l'anchor che blocca il rider c'è).
+    check("nessun warning no_anchors (rider busy presente)",
+      !(r.warnings || []).some((w) => w.code === "no_anchors"), JSON.stringify(r.warnings));
+    // direct Q5 21:05 NON compatible: rider occupato fino a 21:20.
+    const bp = r.bestProposal;
+    check("direct NON è compatible", bp && bp.status !== "compatible", bp && bp.status);
+    check("direct status = no_recomendado", bp && bp.status === "no_recomendado", bp && bp.status);
+    check("direct riderConflict = true", bp && bp.riderConflict === true);
+    check("direct resta FORZABILE (blocked !== true)", bp && bp.blocked !== true);
+    check("firstAvailable.status riallineato a no_recomendado",
+      r.firstAvailable && r.firstAvailable.status === "no_recomendado", r.firstAvailable && r.firstAvailable.status);
+    // NESSUNA insertion same-zone forzata: niente opportunity [Q5,Q5].
+    const sameZoneOpp = (r.opportunities || []).find((o) => o && o.routeZones && o.routeZones[0] === "Q5" && o.routeZones[1] === "Q5");
+    check("nessuna opportunity same-zone [Q5,Q5] forzata", !sameZoneOpp, JSON.stringify((r.opportunities || []).map((o) => o.routeZones)));
+  }
+
+  // ── FIX_26 TEST 2 — regression Q2 20:25 (presto): direct resta compatible ───
+  console.log("\n══ FIX_26 TEST 2: regression Q2 20:25 (no falso conflitto) ══");
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "draft-q2", zona: "Q2", promised: "20:25", pizzas: 1, serviceMin: 2 },
+      startTime: "20:15",
+      now: "20:15",
+      snapshot: snapWith(SNAP_ANCHOR_Q5),
+      capacity: CAP,
+    });
+    check("ok=true", r.ok === true, JSON.stringify(r.blockers));
+    const bp = r.bestProposal;
+    check("direct compatible (rider rientra prima della salida Q5 20:40)", bp && bp.status === "compatible", bp && bp.status);
+    check("nessun falso riderConflict", bp && bp.riderConflict !== true);
+    check("serviceLine mostra comunque l'anchor Q5", (r.serviceLine || []).some((s) => s.id === "#001"), JSON.stringify(r.serviceLine));
+  }
+
+  // ── FIX_26 TEST 3 — regression Q2 20:45: direct no_recomendado + Q2→Q5 ──────
+  console.log("\n══ FIX_26 TEST 3: regression Q2 20:45 (conflitto + insertion) ══");
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "draft-q2", zona: "Q2", promised: "20:45", pizzas: 1, serviceMin: 2 },
+      startTime: "20:30",
+      now: "20:30",
+      snapshot: snapWith(SNAP_ANCHOR_Q5),
+      capacity: CAP,
+    });
+    const bp = r.bestProposal;
+    check("direct no_recomendado per rider conflict", bp && bp.status === "no_recomendado", bp && bp.status);
+    check("direct riderConflict = true", bp && bp.riderConflict === true);
+    const ins = (r.opportunities || []).find((o) => o && o.routeZones && o.routeZones[0] === "Q2" && o.routeZones[1] === "Q5");
+    check("opportunity Q2→Q5 presente", !!ins, JSON.stringify((r.opportunities || []).map((o) => o.routeZones)));
+    check("Q2→Q5 valida (compatible/ajuste)", ins && (ins.status === "compatible" || ins.status === "ajuste"), ins && ins.status);
+  }
+
+  // ── FIX_26 TEST 4 — regression Q2 20:55: direct no_recomendado + insertion ──
+  console.log("\n══ FIX_26 TEST 4: regression Q2 20:55 ══");
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "draft-q2", zona: "Q2", promised: "20:55", pizzas: 1, serviceMin: 2 },
+      startTime: "20:30",
+      now: "20:30",
+      snapshot: snapWith(SNAP_ANCHOR_Q5),
+      capacity: CAP,
+    });
+    const bp = r.bestProposal;
+    check("direct no_recomendado per rider conflict", bp && bp.status === "no_recomendado", bp && bp.status);
+    const ins = (r.opportunities || []).find((o) => o && o.routeZones && o.routeZones[0] === "Q2" && o.routeZones[1] === "Q5");
+    check("insertion Q2→Q5 resta proposta", !!ins, JSON.stringify((r.opportunities || []).map((o) => o.routeZones)));
+  }
+
+  // ── FIX_26 TEST 5 — regression Q1 20:45: Q1→Q5 sur + direct no_recomendado ──
+  console.log("\n══ FIX_26 TEST 5: regression Q1 20:45 (canal sur) ══");
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "draft-q1", zona: "Q1", promised: "20:45", pizzas: 1, serviceMin: 2 },
+      startTime: "20:30",
+      now: "20:30",
+      snapshot: snapWith(SNAP_ANCHOR_Q5),
+      capacity: CAP,
+    });
+    const bp = r.bestProposal;
+    check("direct no_recomendado per rider conflict", bp && bp.status === "no_recomendado", bp && bp.status);
+    const ins = (r.opportunities || []).find((o) => o && o.routeZones && o.routeZones[0] === "Q1" && o.routeZones[1] === "Q5");
+    check("opportunity Q1→Q5 (sur) presente", !!ins, JSON.stringify((r.opportunities || []).map((o) => o.routeZones)));
+    check("Q1→Q5 NON cross (same-channel sur)", ins && ins.channel !== "cross", ins && ins.channel);
+  }
+
+  // ── FIX_26 TEST 6 — regression Q4 oeste: nessun Q4→Q5 cross-channel ─────────
+  console.log("\n══ FIX_26 TEST 6: regression Q4 oeste (no cross Q4→Q5) ══");
+  {
+    const r = await previewStrategicOpportunities({
+      currentOrderDraft: { id: "draft-q4", zona: "Q4", promised: "20:45", pizzas: 1, serviceMin: 2 },
+      startTime: "20:30",
+      now: "20:30",
+      snapshot: snapWith(SNAP_ANCHOR_Q5),
+      capacity: CAP,
+    });
+    const q4q5 = (r.opportunities || []).find((o) => o && o.routeZones && o.routeZones[0] === "Q4" && o.routeZones[1] === "Q5");
+    // Se compare, deve essere cross/no_recomendado/blocked — MAI una rotta compatibile.
+    check("nessun Q4→Q5 compatibile (no cruzar canales)",
+      !q4q5 || q4q5.status === "no_recomendado" || q4q5.blocked === true || q4q5.channel === "cross",
+      q4q5 ? JSON.stringify({ s: q4q5.status, b: q4q5.blocked, c: q4q5.channel }) : "assente");
+  }
+
   console.log(`\n${fail === 0 ? "✅" : "❌"} ${pass} passed, ${fail} failed\n`);
   process.exit(fail === 0 ? 0 : 1);
 }
