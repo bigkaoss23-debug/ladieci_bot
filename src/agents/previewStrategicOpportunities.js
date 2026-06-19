@@ -426,17 +426,20 @@ function mapCandidateToOpportunity(cand, currentOrder, ctx = {}) {
   if (isCross && !includeCrossZone) return null;
 
   // Tratte di viaggio mancanti → bloccato, no ETA fantasma.
+  // FIX_41: distinguiamo il caso CROSS-CHANNEL (canale diverso, es. Q4 vs ruta
+  // sur) dal generico "faltan tiempos": per il cross il motivo reale è il canale,
+  // non un dato mancante a caso. Messaggio esplicito per l'operatore. Nessun
+  // cambio a ranking/routing: solo code+message del blocco.
   if (cand.routeImpactInput == null) {
-    const blockedOpp = blockedOpportunity(
-      cand,
-      currentOrder,
-      "missing_travel_times",
-      cand.reason || "Tiempos de viaje incompletos"
-    );
+    const code = isCross ? "cross_channel_blocked" : "missing_travel_times";
+    const reason = isCross
+      ? "Canal diferente · revisar manualmente antes de combinar"
+      : (cand.reason || "Tiempos de viaje incompletos");
+    const blockedOpp = blockedOpportunity(cand, currentOrder, code, reason);
     attachRouteTimeline(blockedOpp, cand, currentOrder, null);
     return {
       opp: blockedOpp,
-      blockedReason: "missing_travel_times",
+      blockedReason: code,
     };
   }
 
@@ -734,11 +737,17 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
         toleranceMin: context.toleranceMin,
       });
       let anyMissingTravel = false;
+      let anyCrossChannel = false;
       for (const cand of candidates) {
         const mapped = mapCandidateToOpportunity(cand, currentOrder, { includeCrossZone });
         if (!mapped) continue; // cross scartato (includeCrossZone=false)
         if (mapped.blockedReason === "missing_travel_times") anyMissingTravel = true;
+        if (mapped.blockedReason === "cross_channel_blocked") anyCrossChannel = true;
         opportunities.push(mapped.opp);
+      }
+      // FIX_41: warning esplicito cross-channel, separato dal generico.
+      if (anyCrossChannel) {
+        warnings.push({ code: "cross_channel_blocked", message: "Canal diferente · no se recomienda combinar con esta ruta" });
       }
       if (anyMissingTravel) {
         warnings.push({ code: "missing_travel_times", message: "Algunas rutas no tienen tiempos de viaje" });
