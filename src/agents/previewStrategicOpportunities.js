@@ -151,6 +151,50 @@ function fromClockMin(mins) {
   return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
+// ── PLANNER_COCINA_FREEZE_15_MIN ────────────────────────────────────────────
+// Regola operativa: sotto questa soglia (minuti) dalla salida del giro esistente,
+// la cucina è "congelada" → la salida/forno_out NON si modifica. Il lock della
+// salida anchor (fonte di verità) GIÀ garantisce che la salida non venga
+// anticipata/ritardata; qui ESPONIAMO esplicitamente lo stato (additivo) per
+// operatore/UI: `minutesToSalida`, `cocinaFrozen`, `cocinaState`. Sopra soglia →
+// "estable" (piccoli aggiustamenti cucina NON ancora implementati → stable by
+// default). Con `now` assente lo stato è null (non valutabile, frozen=false):
+// backward-compat puro. Nessun Date.now, nessun calcolo orario inventato.
+const COCINA_FREEZE_MIN = 15;
+
+// minuti dalla salida del giro rispetto a `nowMin` (clock-min). Null se mancano
+// salida o now. Solo lettura.
+function minutesToSalidaOf(anchorSalida, nowMin) {
+  const sMin = toClockMin(anchorSalida);
+  if (sMin == null || nowMin == null) return null;
+  return sMin - nowMin;
+}
+
+// Stato cucina di un giro rispetto a `nowMin`. Additivo, niente Date.now.
+function cocinaStateFor(anchorSalida, nowMin, freezeMin = COCINA_FREEZE_MIN) {
+  const mts = minutesToSalidaOf(anchorSalida, nowMin);
+  if (mts == null) {
+    return { minutesToSalida: null, cocinaFrozen: false, cocinaState: null, cocinaReason: null };
+  }
+  const frozen = mts < freezeMin;
+  return {
+    minutesToSalida: mts,
+    cocinaFrozen: frozen,
+    cocinaState: frozen ? "congelada" : "estable",
+    cocinaReason: frozen ? "cocina_frozen_under_15" : null,
+  };
+}
+
+// Ritardo (minuti) di un cliente GIÀ confermato nel giro → banda semaforo. Pura
+// classificazione UI/operatore, MAI un blocco automatico: il `rojo` significa
+// "decisione consapevole dell'operatore". 0–5 verde · 6–10 amarillo · >10 rojo.
+function clientDelayBand(minutes) {
+  const m = Number(minutes);
+  if (!Number.isFinite(m) || m <= 5) return "verde";
+  if (m <= 10) return "amarillo";
+  return "rojo";
+}
+
 // True se due intervalli orari [aStart,aEnd] e [bStart,bEnd] (HH:MM) si
 // sovrappongono sull'orologio night-service. Estremo nullo/non parsabile →
 // nessun giudizio (false): non inventiamo conflitti su dati incompleti.
@@ -540,6 +584,33 @@ function buildStrategicPreviewResponse({
   warnings,
 }) {
   const warningsOut = Array.isArray(warnings) ? warnings.slice() : [];
+  // PLANNER_COCINA_FREEZE_15_MIN: `now` (clock-min) per valutare lo stato cucina
+  // di ogni giro. Da `input.now` (HH:MM); assente → nowMin null → stato non
+  // valutabile (cocinaState null, frozen false): backward-compat.
+  const nowMinResp = toClockMin(input && input.now);
+  const serviceLineOut = (Array.isArray(anchors) ? anchors : []).map((a) => {
+    const cs = cocinaStateFor(a.salida, nowMinResp);
+    return {
+      id: a.id,
+      zone: a.zone,
+      promised: a.promised,
+      pizzas: a.pizzas,
+      salida: a.salida != null ? a.salida : null,
+      entrega: a.entrega != null ? a.entrega : a.promised,
+      regreso: a.regreso != null ? a.regreso : null,
+      // additivi cucina (per giro): la salida NON viene mai modificata qui.
+      minutesToSalida: cs.minutesToSalida,
+      cocinaFrozen: cs.cocinaFrozen,
+      cocinaState: cs.cocinaState,
+    };
+  });
+  // Warning NON bloccante: almeno un giro con cucina congelada (<15 min a salida).
+  if (serviceLineOut.some((e) => e.cocinaFrozen)) {
+    warningsOut.push({
+      code: "cocina_frozen_under_15",
+      message: "Cocina congelada en un giro (<15 min a salida): la salida no se modifica",
+    });
+  }
   const response = {
     ok: true,
     contract: CONTRACT,
@@ -557,15 +628,8 @@ function buildStrategicPreviewResponse({
     // serviceLine: sintesi NON-PII degli anchor (giros/huecos di servizio).
     // salida/entrega/regreso additivi → la UI mostra ogni giro come riga
     // espandibile (Pizzería → entrega → regreso). Valori derivati, mai inventati.
-    serviceLine: (Array.isArray(anchors) ? anchors : []).map((a) => ({
-      id: a.id,
-      zone: a.zone,
-      promised: a.promised,
-      pizzas: a.pizzas,
-      salida: a.salida != null ? a.salida : null,
-      entrega: a.entrega != null ? a.entrega : a.promised,
-      regreso: a.regreso != null ? a.regreso : null,
-    })),
+    // + stato cucina additivo (cocinaFrozen/cocinaState/minutesToSalida).
+    serviceLine: serviceLineOut,
     warnings: warningsOut,
     blockers: [],
     safety: safetyBlock(),
@@ -738,11 +802,23 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
       });
       let anyMissingTravel = false;
       let anyCrossChannel = false;
+      // PLANNER_COCINA_FREEZE_15_MIN: nowMin per marcare ogni proposta col giro
+      // cucina-congelado che insegue (additivo, non cambia routing/status).
+      const nowMinTop = toClockMin(input.now);
       for (const cand of candidates) {
         const mapped = mapCandidateToOpportunity(cand, currentOrder, { includeCrossZone });
         if (!mapped) continue; // cross scartato (includeCrossZone=false)
         if (mapped.blockedReason === "missing_travel_times") anyMissingTravel = true;
         if (mapped.blockedReason === "cross_channel_blocked") anyCrossChannel = true;
+        // stato cucina del giro anchor su cui insiste la proposta (per chip UI).
+        const anch = candidateAnchors.find((a) => a && String(a.id) === String(cand.anchorId));
+        if (anch && mapped.opp) {
+          const cs = cocinaStateFor(anch.salida, nowMinTop);
+          mapped.opp.minutesToSalida = cs.minutesToSalida;
+          mapped.opp.cocinaFrozen = cs.cocinaFrozen;
+          mapped.opp.cocinaState = cs.cocinaState;
+          if (cs.cocinaReason) mapped.opp.cocinaReason = cs.cocinaReason;
+        }
         opportunities.push(mapped.opp);
       }
       // FIX_41: warning esplicito cross-channel, separato dal generico.
@@ -783,5 +859,9 @@ module.exports = {
   clockIntervalsOverlap,
   directIntervalFromOpp,
   findRiderConflictAnchor,
-  _internal: { CONTRACT, SOURCE, MODE, DEFAULT_SERVICE_MIN, TERMINAL_STATES, NON_INSERTABLE_ANCHOR_STATES, ANCHOR_ELIGIBLE_STATES, ANCHOR_STALE_GRACE_MIN },
+  // PLANNER_COCINA_FREEZE_15_MIN (puri, testabili in isolamento)
+  minutesToSalidaOf,
+  cocinaStateFor,
+  clientDelayBand,
+  _internal: { CONTRACT, SOURCE, MODE, DEFAULT_SERVICE_MIN, TERMINAL_STATES, NON_INSERTABLE_ANCHOR_STATES, ANCHOR_ELIGIBLE_STATES, ANCHOR_STALE_GRACE_MIN, COCINA_FREEZE_MIN },
 };
