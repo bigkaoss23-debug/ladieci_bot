@@ -11,6 +11,11 @@
 const { loadPlannerSnapshot } = require("../core/delivery/plannerSnapshot");
 const { evaluateNewOrder, _internal: plannerInternal } = require("../core/delivery/planner");
 const { resolveDeliveryFieldsReadOnly } = require("./resolveDeliveryFieldsReadOnly");
+// Riuso (read-only, puro) del cervello anchor del motore strategico: stessa
+// allowlist stati (EN_COCINA/LISTO), stesso filtro DOMICILIO + anti-stale, stesso
+// orologio night-service. Serve SOLO a derivare l'hint "Próximo giro" — NON tocca
+// ranking/proposals/popup.
+const { buildAnchorsFromSnapshot, toClockMin } = require("./previewStrategicOpportunities");
 
 const CONTRACT = "nuevo-pedido-planner-preview-v1";
 const SOURCE = "planner";
@@ -56,6 +61,10 @@ function basePayload(params, tipoConsegna) {
     recommendation: {},
     driver: {},
     giro: {},
+    // Hint logistico secondario (additivo): il primo giro futuro operativo utile,
+    // anche se distante dall'ora/primo slot. null se non esiste. NON è una proposta,
+    // NON applica nulla: la UI ci aggancia una riga "Próximo giro · Ver propuestas".
+    nextGiroOpportunity: null,
     alternatives: [],
     availability_rows: [],
     warnings: [],
@@ -127,7 +136,40 @@ function mapBlockers(options) {
     }));
 }
 
-function mapPlannerResult(params, geo, plannerResult) {
+// ── Próximo giro hint ───────────────────────────────────────────────────────
+// Sceglie il PRIMO giro futuro operativo utile (nearest) tra gli anchor già
+// derivati (EN_COCINA/LISTO, DOMICILIO, non-stale), rispetto al primo slot/direct
+// corrente (`refHora`). Regole (task 44B):
+//   - NON scartare per gap alto: se l'unico è Q5 22:00, mostrarlo comunque;
+//   - se ci sono Q1 20:30 e Q5 22:00 → mostra il nearest (Q1 20:30);
+//   - solo anchor con ora >= refHora (futuri rispetto al primo slot). Se refHora
+//     non è nota, si considerano tutti e si prende il più vicino.
+// È un hint informativo: status sempre "info", nessun giudizio di compatibilità.
+function pickNextGiroOpportunity(anchors, refHora) {
+  const list = Array.isArray(anchors) ? anchors : [];
+  if (!list.length) return null;
+  const ref = toClockMin(refHora);
+  const scored = list
+    .map((a) => ({ a, m: toClockMin(a.promised) }))
+    .filter((x) => x.m != null);
+  if (!scored.length) return null;
+  const future = ref == null ? scored : scored.filter((x) => x.m >= ref);
+  if (!future.length) return null; // nessun giro futuro rispetto al primo slot
+  future.sort((x, y) => x.m - y.m); // nearest first
+  const best = future[0].a;
+  return {
+    kind: "future_giro",
+    zone: best.zone,
+    hora: best.promised,
+    anchorOrderId: best.id,
+    label: `Próximo giro ${best.zone} ${best.promised}`,
+    cta: "Ver propuestas",
+    status: "info",
+    source: "operational_anchor",
+  };
+}
+
+function mapPlannerResult(params, geo, plannerResult, anchors) {
   const selected = plannerResult && plannerResult.selected ? plannerResult.selected : {};
   const options = arrayOrEmpty(plannerResult && plannerResult.options);
   const recommended = plannerResult && plannerResult.recommended ? plannerResult.recommended : null;
@@ -204,6 +246,8 @@ function mapPlannerResult(params, geo, plannerResult) {
           reason: null,
           can_attach: false,
         },
+    // Hint "Próximo giro": nearest giro futuro >= primo slot/direct (recommendedHora).
+    nextGiroOpportunity: pickNextGiroOpportunity(anchors, recommendedHora || params.hora || null),
     alternatives: mapAlternatives(options),
     availability_rows: mapAvailabilityRows(options),
     warnings: [
@@ -333,7 +377,14 @@ async function previewOrderPlanner(params = {}, deps = {}) {
       items: arrayOrEmpty(params.items),
     };
     const plannerResult = runPlanner(snapshot, newOrder);
-    return mapPlannerResult(params, geo, plannerResult || {});
+    // Anchor futuri operativi (read-only) per l'hint "Próximo giro". Esclude la
+    // bozza corrente; anti-stale via `now`. Non influenza ranking/proposals.
+    const nowRef = typeof deps.now === "function" ? deps.now() : params.now;
+    const futureAnchors = buildAnchorsFromSnapshot(snapshot, {
+      currentOrderId: newOrder.id,
+      now: nowRef,
+    });
+    return mapPlannerResult(params, geo, plannerResult || {}, futureAnchors);
   } catch (e) {
     if (e && /db_client|snapshot/i.test(String(e.code || e.message || ""))) {
       return safeError(params, tipoConsegna, "snapshot_unavailable", "Snapshot no disponible");
