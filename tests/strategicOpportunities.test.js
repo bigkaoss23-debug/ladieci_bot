@@ -207,6 +207,25 @@ console.log("══ 5. routeImpact integration ══");
   check("variante ajuste (Q5 +5)", impactLate.status === "ajuste" && impactLate.routeEtas[1].slipLabel === "+5", impactLate.status);
 }
 
+// ── Scenario 5b — anchor con SALIDA existente → NO se adelanta la salida ─────
+// Giro Q5 ya existente: salida 18:47, entrega 19:00. Encajar Q2 NO debe adelantar
+// la salida (a 18:41): debe partir de 18:47 e insertar Q2; Q5 se recalcula y, si
+// añadir Q2 lo retrasa, DESLIZA (no se anticipa el giro existente).
+console.log("══ 5b. anchor con salida existente → salida no se adelanta ══");
+{
+  const c = buildCandidateForAnchor(
+    { id: "new-q2", zone: "Q2", label: "Pedido actual", pizzas: 1, promised: "16:50", serviceMin: 2 },
+    { id: "#001", zone: "Q5", label: "Las Marinas", promised: "19:00", salida: "18:47", entrega: "19:00", regreso: "19:13", pizzas: 1, serviceMin: 2 },
+    { startTime: "16:50", travelTimes: { "Pizzería->Q2": 7, "Q2->Q5": 10, "Q5->Pizzería": 15 }, capacity: { maxPizzas: 6, routeMinLimit: 120, pizzaQualityLimitMin: 120 }, toleranceMin: 0 }
+  );
+  check("startTime == salida existente 18:47 (no 16:50, no 18:41)", c.routeImpactInput.startTime === "18:47", c.routeImpactInput.startTime);
+  const impact = buildRouteImpact(c.routeImpactInput);
+  check("salida NO anticipada (18:47, no 18:41)", c.routeImpactInput.startTime === "18:47");
+  check("Q2 entrega 18:54 (18:47+7)", impact.routeEtas[0].eta === "18:54", impact.routeEtas[0].eta);
+  check("Q5 desliza a 19:06 (no se adelanta para caber Q2)", impact.routeEtas[1].eta === "19:06", impact.routeEtas[1].eta);
+  check("Q5 slipLabel +6 vs prometido 19:00", impact.routeEtas[1].slipLabel === "+6", impact.routeEtas[1].slipLabel);
+}
+
 // ── Scenario 6 — bridge hand-off (candidate.routeImpactInput in context) ────
 console.log("══ 6. bridge hand-off → Opportunity contract ══");
 {

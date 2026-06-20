@@ -222,42 +222,48 @@ function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
       effectiveStartTime = fromMin(promisedMin - firstLegMin);
     }
   } else if (kind === "agregar" && anchor && finalStops.length) {
-    // ── ANCHOR LOCKED (semántica de anchor confirmado) ──────────────────────
-    // Un pedido anchor (giro existente confirmado, p.ej. Q5 prometido 17:00) NO
-    // se adelanta solo porque haya margen: su entrega queda FIJA en su hora
-    // prometida. Fijamos la salida del rider HACIA ATRÁS desde la promesa del
-    // anchor, de modo que el anchor caiga EXACTO sobre su `promised`; el pedido
-    // NUEVO se adapta (su slip resultante es real y significativo → "Q2 cede +N").
-    //   salida = anchorPromised − (Σ viajes pizzería→…→anchor + Σ sosta de las
-    //            paradas ANTERIORES al anchor)
-    // Clamp: si esa salida cae ANTES de que el rider esté libre (context.startTime),
-    // se limita a startTime → entonces es el anchor el que desliza (slip real),
-    // nunca inventamos un adelanto del anchor. Si faltan promised o algún leg
-    // hasta el anchor, se mantiene el startTime original (sin lock, comportamiento
-    // previo). NO toca el ramo "crear" ni la lógica same-zone/rider.
-    const anchorZone = normZone(anchor.zone);
-    const anchorIdx = finalStops.findIndex((s) => s.isNew !== true && s.zone === anchorZone);
-    const anchorPromisedMin = toMin(
-      anchor.promised != null ? anchor.promised : (finalStops[anchorIdx] && finalStops[anchorIdx].promised)
-    );
-    if (anchorIdx >= 0 && anchorPromisedMin != null) {
-      let prevZone = PIZZERIA;
-      let cumToAnchor = 0;
-      let legsOk = true;
-      for (let i = 0; i <= anchorIdx; i++) {
-        const leg = resolveTravelTime(prevZone, finalStops[i].zone, effectiveTravelTimes);
-        if (leg == null) { legsOk = false; break; }
-        cumToAnchor += leg;
-        if (i < anchorIdx) cumToAnchor += num(finalStops[i].serviceMin) || 0;
-        prevZone = finalStops[i].zone;
-      }
-      if (legsOk) {
-        const lockedDeparture = anchorPromisedMin - cumToAnchor;
-        const ctxStartMin = toMin(context.startTime);
-        const departureMin = ctxStartMin != null
-          ? Math.max(ctxStartMin, lockedDeparture)
-          : lockedDeparture;
-        effectiveStartTime = fromMin(departureMin);
+    // ── ANCHOR existente: su SALIDA ya planificada es la verdad ─────────────────
+    // Encajar Q2 en un giro Q5 YA EXISTENTE no debe NUNCA adelantar la salida del
+    // giro (rompería un pedido ya correcto en cocina: forno_out / uscita pizze).
+    // Verdad operativa = la salida REAL del anchor (salida_driver_estimada/forno_out,
+    // propagada como `anchor.salida`). La usamos como salida BLOQUEADA del rider;
+    // routeImpact inserta Q2 desde esa salida y recalcula: si Q5 sigue a tiempo,
+    // bien; si añadir Q2 lo retrasa, Q5 desliza (slip real, no inventamos adelanto).
+    // El nuevo Q2 se adapta a esa salida fija.
+    //
+    // Fallbacks (sin salida real conocida): (b) lock por ENTREGA prometida del
+    // anchor (deriva la salida hacia atrás, clamp a startTime); (c) startTime
+    // original. Nunca se anticipa un anchor con salida conocida.
+    const anchorSalidaMin = toMin(anchor.salida);
+    if (anchorSalidaMin != null) {
+      // (a) salida real del giro existente — fuente de verdad, NO se adelanta.
+      effectiveStartTime = fromMin(anchorSalidaMin);
+    } else {
+      // (b) sin salida conocida: mantener la ENTREGA del anchor en su promesa.
+      const anchorZone = normZone(anchor.zone);
+      const anchorIdx = finalStops.findIndex((s) => s.isNew !== true && s.zone === anchorZone);
+      const anchorPromisedMin = toMin(
+        anchor.promised != null ? anchor.promised : (finalStops[anchorIdx] && finalStops[anchorIdx].promised)
+      );
+      if (anchorIdx >= 0 && anchorPromisedMin != null) {
+        let prevZone = PIZZERIA;
+        let cumToAnchor = 0;
+        let legsOk = true;
+        for (let i = 0; i <= anchorIdx; i++) {
+          const leg = resolveTravelTime(prevZone, finalStops[i].zone, effectiveTravelTimes);
+          if (leg == null) { legsOk = false; break; }
+          cumToAnchor += leg;
+          if (i < anchorIdx) cumToAnchor += num(finalStops[i].serviceMin) || 0;
+          prevZone = finalStops[i].zone;
+        }
+        if (legsOk) {
+          const lockedDeparture = anchorPromisedMin - cumToAnchor;
+          const ctxStartMin = toMin(context.startTime);
+          const departureMin = ctxStartMin != null
+            ? Math.max(ctxStartMin, lockedDeparture)
+            : lockedDeparture;
+          effectiveStartTime = fromMin(departureMin);
+        }
       }
     }
   }
