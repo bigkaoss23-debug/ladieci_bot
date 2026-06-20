@@ -73,7 +73,11 @@ const input1 = {
   // routeImpactInput pronto
   const ri = c.routeImpactInput;
   check("routeImpactInput presente", !!ri);
-  check("startTime 20:35", ri.startTime === "20:35");
+  // ANCHOR LOCKED: la salida se fija hacia atrás desde la promesa del anchor Q5
+  // (21:00) − (Pizzería→Q2 7 + sosta Q2 2 + Q2→Q5 10 = 19) = 20:41, así el anchor
+  // Q5 cae EXACTO sobre 21:00 (no anticipado a 20:54). 20:41 > startTime 20:35
+  // (rider libre antes) → se respeta el lock.
+  check("startTime locked al anchor (21:00 − 19 = 20:41)", ri.startTime === "20:41", ri.startTime);
   check("2 stops Q2 then Q5", ri.stops.length === 2 && ri.stops[0].zone === "Q2" && ri.stops[1].zone === "Q5");
   check("Q2 isNew true", ri.stops[0].isNew === true);
   check("Q5 isNew false", ri.stops[1].isNew === false);
@@ -186,9 +190,12 @@ console.log("══ 5. routeImpact integration ══");
   // input1 compatibile → routeImpact deve dare compatible (Q5 puntuale).
   const c = buildStrategicCandidates(input1)[0];
   const impact = buildRouteImpact(c.routeImpactInput);
-  // Q2: 20:35+7=20:42 (promised 20:50 → ok); Q5: 20:42+2+10=20:54 (promised 21:00 → ok)
+  // ANCHOR LOCKED: salida 20:41 → Q2 20:48 (promised 20:50 → ok); Q5 21:00 EXACTO
+  // (promised 21:00 → slip 0). El anchor NO se anticipa a 20:54.
   check("routeImpact status compatible", impact.status === "compatible", impact.status);
   check("nessuno slip", impact.routeEtas.every((e) => e.slips === false));
+  check("anchor Q5 entrega == promised 21:00 (locked, no anticipado)", impact.routeEtas[1].eta === "21:00", impact.routeEtas[1].eta);
+  check("Q2 nuevo se adapta (entrega 20:48)", impact.routeEtas[0].eta === "20:48", impact.routeEtas[0].eta);
 
   // Variante ajuste: ritardo il Q5 con un travel più lungo.
   const cLate = buildCandidateForAnchor(

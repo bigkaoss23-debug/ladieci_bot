@@ -640,20 +640,26 @@ async function main() {
     });
     const oppQ5 = (r) => r.opportunities.find((o) => Array.isArray(o.routeZones) && o.routeZones[1] === "Q5");
 
-    // gap 50 (>25) → no_recomendado per "Horarios lejanos" (non per slip)
+    // ANCHOR LOCKED (task FIX 2): el anchor Q5 ya NO se anticipa → la salida se
+    // fija hacia atrás desde su promesa y el pedido NUEVO Q2 desliza de verdad. Por
+    // eso el warning ahora es el slip REAL del Q2 ("Q2 se mueve +N min"), más
+    // informativo que el genérico "Horarios lejanos". El guardrail de status
+    // (no_recomendado para gap>25) se mantiene.
+    // gap 50 (>25): Q2 desliza +38 → no_recomendado por slip real.
     const far = oppQ5(await run("20:30", "21:20"));
     check("gap 50 → no_recomendado", far && far.status === "no_recomendado", far && far.status);
-    check("gap 50 → warning Horarios lejanos", far && /Horarios lejanos/.test(far.warning || ""), far && far.warning);
+    check("gap 50 → warning slip real del nuevo (se mueve +N)", far && /se mueve \+\d+ min/.test(far.warning || ""), far && far.warning);
 
-    // boundary: gap 25 NON scatta (soglia è > 25)
+    // boundary: gap 25 NON scatta (soglia è > 25): Q2 slip +13 → ajuste.
     const at25 = oppQ5(await run("20:30", "20:55"));
     check("gap 25 → NO Δpromised block (status != no_recomendado o warning non-gap)",
       at25 && (at25.status !== "no_recomendado" || !/Horarios lejanos/.test(at25.warning || "")),
       at25 && `${at25.status} / ${at25.warning}`);
 
-    // boundary: gap 26 scatta
+    // boundary: gap 26 scatta: slip Q2 +14 (≤15 → sería ajuste), pero el guardrail
+    // Δpromised lo fuerza a no_recomendado. Validamos que el override dispara.
     const at26 = oppQ5(await run("20:30", "20:56"));
-    check("gap 26 → no_recomendado Horarios lejanos", at26 && at26.status === "no_recomendado" && /Horarios lejanos/.test(at26.warning || ""), at26 && `${at26.status} / ${at26.warning}`);
+    check("gap 26 → no_recomendado (Δpromised override sobre slip ≤15)", at26 && at26.status === "no_recomendado", at26 && `${at26.status} / ${at26.warning}`);
 
     // gap piccolo (10) → invariato (compatible/ajuste), nessun warning gap
     const near = oppQ5(await run("20:50", "21:00"));

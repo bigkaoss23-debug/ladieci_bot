@@ -221,6 +221,45 @@ function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
     if (firstLegMin != null && promisedMin != null) {
       effectiveStartTime = fromMin(promisedMin - firstLegMin);
     }
+  } else if (kind === "agregar" && anchor && finalStops.length) {
+    // ── ANCHOR LOCKED (semántica de anchor confirmado) ──────────────────────
+    // Un pedido anchor (giro existente confirmado, p.ej. Q5 prometido 17:00) NO
+    // se adelanta solo porque haya margen: su entrega queda FIJA en su hora
+    // prometida. Fijamos la salida del rider HACIA ATRÁS desde la promesa del
+    // anchor, de modo que el anchor caiga EXACTO sobre su `promised`; el pedido
+    // NUEVO se adapta (su slip resultante es real y significativo → "Q2 cede +N").
+    //   salida = anchorPromised − (Σ viajes pizzería→…→anchor + Σ sosta de las
+    //            paradas ANTERIORES al anchor)
+    // Clamp: si esa salida cae ANTES de que el rider esté libre (context.startTime),
+    // se limita a startTime → entonces es el anchor el que desliza (slip real),
+    // nunca inventamos un adelanto del anchor. Si faltan promised o algún leg
+    // hasta el anchor, se mantiene el startTime original (sin lock, comportamiento
+    // previo). NO toca el ramo "crear" ni la lógica same-zone/rider.
+    const anchorZone = normZone(anchor.zone);
+    const anchorIdx = finalStops.findIndex((s) => s.isNew !== true && s.zone === anchorZone);
+    const anchorPromisedMin = toMin(
+      anchor.promised != null ? anchor.promised : (finalStops[anchorIdx] && finalStops[anchorIdx].promised)
+    );
+    if (anchorIdx >= 0 && anchorPromisedMin != null) {
+      let prevZone = PIZZERIA;
+      let cumToAnchor = 0;
+      let legsOk = true;
+      for (let i = 0; i <= anchorIdx; i++) {
+        const leg = resolveTravelTime(prevZone, finalStops[i].zone, effectiveTravelTimes);
+        if (leg == null) { legsOk = false; break; }
+        cumToAnchor += leg;
+        if (i < anchorIdx) cumToAnchor += num(finalStops[i].serviceMin) || 0;
+        prevZone = finalStops[i].zone;
+      }
+      if (legsOk) {
+        const lockedDeparture = anchorPromisedMin - cumToAnchor;
+        const ctxStartMin = toMin(context.startTime);
+        const departureMin = ctxStartMin != null
+          ? Math.max(ctxStartMin, lockedDeparture)
+          : lockedDeparture;
+        effectiveStartTime = fromMin(departureMin);
+      }
+    }
   }
 
   const { routeImpactInput, missingLegs } = buildRouteImpactInputForCandidate(
