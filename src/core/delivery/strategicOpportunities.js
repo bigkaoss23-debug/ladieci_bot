@@ -328,6 +328,10 @@ function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
     routeZones,
     mapPath,
     routeImpactInput, // null se travel incompleti
+    // RIDER_SAVING: matrice viaggio risolta del candidato (espliciti + static).
+    // Additivo: serve al baseline "giri separati" con la STESSA risoluzione del
+    // giro combinato. I consumatori esistenti la ignorano.
+    travelTimes: effectiveTravelTimes,
     reason,
     priority,
     blockedCandidate,

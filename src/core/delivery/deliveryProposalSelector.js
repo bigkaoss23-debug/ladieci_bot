@@ -94,6 +94,11 @@ function toProposal(opp, kind, ctx) {
     priority: Number.isFinite(opp.priority) ? opp.priority : null, // finding: oggi null
     reason: deriveReason(opp),
     routeTimeline: opp.routeTimeline != null ? opp.routeTimeline : null,
+    // RIDER_SAVING (additivo, informativo): propagato dall'opportunity. null se
+    // non calcolabile. Mai bloccante.
+    riderSavingMin: Number.isFinite(opp.riderSavingMin) ? opp.riderSavingMin : null,
+    combinedDurationMin: Number.isFinite(opp.combinedDurationMin) ? opp.combinedDurationMin : null,
+    separateDurationMin: Number.isFinite(opp.separateDurationMin) ? opp.separateDurationMin : null,
     warnings: warning ? [warning] : [],
     blockers: [], // i proposals mostrati sono non-bloccanti per costruzione
     safety: ctx.safety,

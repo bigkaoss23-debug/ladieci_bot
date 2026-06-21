@@ -39,6 +39,7 @@ const { buildRouteImpact } = require("../core/delivery/routeImpact");
 const { buildOpportunityFromPlannerOption } = require("../core/delivery/premiumPlannerBridge");
 const { buildPremiumOpportunity } = require("../core/delivery/premiumPlannerOpportunities");
 const { buildRouteTimeline } = require("../core/delivery/routeTimeline");
+const { computeRiderSavingForRoute } = require("../core/delivery/riderSaving");
 const { selectDeliveryProposals, CONTRACT: PROPOSAL_CONTRACT } = require("../core/delivery/deliveryProposalSelector");
 
 const CONTRACT = "premium-planner-strategic-preview-v1";
@@ -542,6 +543,25 @@ function attachRouteTimeline(opp, cand, currentOrder, impact) {
   return opp;
 }
 
+// Allega (additivo, INFORMATIVO) la metrica riderSaving a una opportunity.
+// Quanto tempo-rider si risparmia col giro combinato vs giri separati. MAI
+// bloccante: non tocca status/blocked/severity. null se non calcolabile
+// (candidato bloccato / leg mancanti) → nessuna invenzione, nessun crash.
+function attachRiderSaving(opp, cand) {
+  const rii = cand && cand.routeImpactInput;
+  const saving = rii
+    ? computeRiderSavingForRoute({
+        stops: rii.stops,
+        returnTravelMin: rii.returnTravelMin,
+        travelTimes: cand.travelTimes,
+      })
+    : { riderSavingMin: null, combinedDurationMin: null, separateDurationMin: null };
+  opp.riderSavingMin = saving.riderSavingMin;
+  opp.combinedDurationMin = saving.combinedDurationMin;
+  opp.separateDurationMin = saving.separateDurationMin;
+  return opp;
+}
+
 // Mappa UN candidato strategico → Opportunity contract-ready.
 // Ritorna { opp, blockedReason } oppure null se il candidato va scartato
 // (cross con includeCrossZone=false).
@@ -563,6 +583,7 @@ function mapCandidateToOpportunity(cand, currentOrder, ctx = {}) {
       : (cand.reason || "Tiempos de viaje incompletos");
     const blockedOpp = blockedOpportunity(cand, currentOrder, code, reason);
     attachRouteTimeline(blockedOpp, cand, currentOrder, null);
+    attachRiderSaving(blockedOpp, cand); // routeImpactInput null → campi null
     return {
       opp: blockedOpp,
       blockedReason: code,
@@ -585,6 +606,10 @@ function mapCandidateToOpportunity(cand, currentOrder, ctx = {}) {
     mapPath: cand.mapPath,
     routeImpactInput: cand.routeImpactInput,
   });
+
+  // RIDER_SAVING (additivo, informativo): vale per cross/promisedGap/normal —
+  // opp è mutato in place e ritornato in tutti i rami sotto. Mai bloccante.
+  attachRiderSaving(opp, cand);
 
   // Impact COMPLETO (con driverReturn/routeMin) per il mapper timeline. È una
   // ricomputazione pura/offline dello stesso input già usato dal bridge: serve
