@@ -355,7 +355,87 @@ function sanitizeAnchor(raw = {}) {
     salida,
     entrega,
     regreso,
+    // SHARED_GIRO_ID: identità del giro a cui l'ordine è agganciato (manual_giros.id
+    // denormalizzata su ordenes.manual_giro_id). null/'' → ordine singolo. Serve a
+    // raggruppare più ordini dello stesso giro in UN anchor-giro (vedi groupAnchorsByGiro).
+    manualGiroId: (() => {
+      const g = raw.manual_giro_id != null ? raw.manual_giro_id : raw.manualGiroId;
+      return g != null && String(g).trim() !== "" ? String(g).trim() : null;
+    })(),
   };
+}
+
+// ── SHARED_GIRO_ID — raggruppamento anchor per giro ──────────────────────────
+// Min/Max hora (clock-min, night-service) tra una lista, ignorando i null. Servono
+// per la salida del giro (la più TEMPRANA: il rider esce una sola volta) e per
+// entrega/regreso rappresentativi (i più TARDIVI). Solo lettura, niente invenzione.
+function earliestHora(list) {
+  const mins = (Array.isArray(list) ? list : []).map(toClockMin).filter((m) => m != null);
+  return mins.length ? fromClockMin(Math.min(...mins)) : null;
+}
+function latestHora(list) {
+  const mins = (Array.isArray(list) ? list : []).map(toClockMin).filter((m) => m != null);
+  return mins.length ? fromClockMin(Math.max(...mins)) : null;
+}
+
+// Fonde i membri di UN giro (≥2 ordini con lo stesso manual_giro_id) in un solo
+// anchor-giro che porta TUTTE le sue fermate in `stops[]`. La salida è la fonte di
+// verità del giro (la più temprana, NON si anticipa); entrega/regreso/zone sono
+// rappresentativi per la serviceLine. `id` = manual_giro_id (stabile, condiviso).
+function buildGiroAnchor(giroId, members) {
+  const stops = members.map((m) => ({
+    id: m.id,
+    zone: m.zone,
+    label: m.label || `Pedido ${m.zone}`,
+    promised: m.promised,
+    pizzas: m.pizzas,
+    serviceMin: m.serviceMin,
+  }));
+  const salida = earliestHora(members.map((m) => m.salida));
+  const entrega = latestHora(members.map((m) => (m.entrega != null ? m.entrega : m.promised)));
+  const regreso = latestHora(members.map((m) => m.regreso));
+  return {
+    id: String(giroId),
+    manualGiroId: String(giroId),
+    isGiro: true,
+    stops,
+    // zona rappresentativa per la serviceLine (display): zone del giro unite.
+    zone: stops.map((s) => s.zone).join("+"),
+    promised: entrega,
+    salida,
+    entrega,
+    regreso,
+    pizzas: members.reduce((s, m) => s + (num(m.pizzas) || 0), 0),
+    serviceMin: members.length ? members[0].serviceMin : DEFAULT_SERVICE_MIN,
+  };
+}
+
+// Raggruppa una lista di anchor (per-ordine) in anchor-giro. SOLO i gruppi con ≥2
+// ordini che condividono un manual_giro_id non-null vengono fusi; un ordine singolo
+// (con o senza manual_giro_id) resta INALTERATO (id = order id, niente `stops`) →
+// comportamento legacy byte-identico. Preserva l'ordine d'ingresso del primo membro.
+function groupAnchorsByGiro(anchors) {
+  const list = Array.isArray(anchors) ? anchors : [];
+  const byGiro = new Map();
+  for (const a of list) {
+    const gid = a && a.manualGiroId ? a.manualGiroId : null;
+    if (!gid) continue;
+    if (!byGiro.has(gid)) byGiro.set(gid, []);
+    byGiro.get(gid).push(a);
+  }
+  const out = [];
+  const emitted = new Set();
+  for (const a of list) {
+    const gid = a && a.manualGiroId ? a.manualGiroId : null;
+    if (gid && byGiro.get(gid).length > 1) {
+      if (emitted.has(gid)) continue; // il giro è già stato emesso una volta
+      emitted.add(gid);
+      out.push(buildGiroAnchor(gid, byGiro.get(gid)));
+    } else {
+      out.push(a); // singolo ordine → identico a oggi
+    }
+  }
+  return out;
 }
 
 // Costruisce gli anchor dallo snapshot read-only: DOMICILIO, inseribili (non
@@ -401,7 +481,9 @@ function buildAnchorsFromSnapshot(snapshot = {}, opts = {}) {
     const anchor = sanitizeAnchor(o);
     if (anchor) out.push(anchor);
   }
-  return out;
+  // SHARED_GIRO_ID: fonde gli ordini dello stesso giro (manual_giro_id) in un
+  // anchor-giro unico con tutte le sue fermate. Ordini singoli → invariati.
+  return groupAnchorsByGiro(out);
 }
 
 // ── opportunity mapping ───────────────────────────────────────────────────────
@@ -684,7 +766,8 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
   // derivo poi le tre viste sotto. "non aggregabile ≠ rider libero".
   let allOperationalAnchors;
   if (Array.isArray(input.anchors)) {
-    allOperationalAnchors = input.anchors.map(sanitizeAnchor).filter(Boolean);
+    // SHARED_GIRO_ID: anche gli anchor espliciti vengono raggruppati per giro.
+    allOperationalAnchors = groupAnchorsByGiro(input.anchors.map(sanitizeAnchor).filter(Boolean));
   } else {
     let snapshot = input.snapshot;
     if (!snapshot && typeof deps.loadSnapshot === "function") {
@@ -712,7 +795,13 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
   // candidateAnchors: SOLO anchor cross-zone possono generare insertion strategici
   // (regola A1: la consolidazione same-zone è dominio del planner classico — un leg
   // Zona->stessaZona non esiste e degraderebbe a blocked/missing_travel_times).
-  const candidateAnchors = allOperationalAnchors.filter((a) => a && a.zone !== currentOrder.zone);
+  // SHARED_GIRO_ID: per un anchor-giro la "zona" è l'insieme delle sue fermate →
+  // si esclude se il nuevo pedido cade in QUALSIASI zona già nel giro. Per un anchor
+  // singolo l'insieme è {a.zone} → identico al filtro precedente (a.zone !== current).
+  const anchorZones = (a) => (Array.isArray(a.stops) && a.stops.length)
+    ? a.stops.map((s) => normZone(s.zone))
+    : [normZone(a.zone)];
+  const candidateAnchors = allOperationalAnchors.filter((a) => a && !anchorZones(a).includes(currentOrder.zone));
   // riderBusyAnchors / serviceLineAnchors: TUTTI gli anchor operativi, same-zone
   // INCLUSO. Un anchor same-zone non aggregabile occupa comunque il rider e va
   // mostrato nella linea di servizio.

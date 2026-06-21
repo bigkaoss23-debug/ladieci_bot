@@ -182,7 +182,16 @@ function buildCandidateForAnchor(currentOrder, anchor, context = {}) {
     { ...co, zone: normZone(co.zone), isNew: true, label: co.label || "Pedido actual" },
   ];
   if (anchor) {
-    rawStops.push({ ...anchor, zone: normZone(anchor.zone), isNew: false, label: anchor.label || "" });
+    // SHARED_GIRO_ID: un anchor può rappresentare un GIRO con più ordini
+    // (`anchor.stops`). Se li porta, TUTTE le sue fermate entrano nella rotta (giro
+    // intero: Pizzería → nuevo → ...todos los stops del giro → regreso). Se non li
+    // porta, l'anchor è UNA sola fermata → comportamento legacy IDENTICO.
+    const anchorStops = Array.isArray(anchor.stops) && anchor.stops.length
+      ? anchor.stops
+      : [anchor];
+    for (const s of anchorStops) {
+      rawStops.push({ ...s, zone: normZone(s.zone), isNew: false, label: s.label || "" });
+    }
   }
 
   const routeZonesUnordered = rawStops.map((s) => s.zone);
