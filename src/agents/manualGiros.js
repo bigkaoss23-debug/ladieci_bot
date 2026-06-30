@@ -468,6 +468,50 @@ async function softDissolveActiveManualGirosForClose() {
   return result;
 }
 
+// ─── Opzione A: pending_giro_intent (planner apply → attach at EN_COCINA) ──────
+//
+// The operator decides "Confirmar giro compatible" in the planner while the
+// order is still a draft. We persist a minimal, sanitized intent on the order
+// (ordenes.pending_giro_intent) and only consume it when the order transitions
+// to EN_COCINA — at which point it is operative/eligible (SELECTABLE_STATES
+// UNCHANGED; POR_CONFIRMAR is never grouped).
+
+// Pure. Normalizes a raw intent to the minimal trusted shape or null.
+// Minimum required: giroId (non-empty string) + anchorOrderId (non-empty string).
+// salidaRef/entregaRef are optional HH:MM (validated; dropped to null if bad).
+// routeTimeline and any other frontend field are intentionally DISCARDED — we
+// never trust frontend timelines for writes.
+function sanitizePendingGiroIntent(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const giroId = raw.giroId != null ? String(raw.giroId).trim() : "";
+  const anchorOrderId = raw.anchorOrderId != null ? String(raw.anchorOrderId).trim() : "";
+  if (!giroId || !anchorOrderId) return null;
+  const salidaRef = isValidHoraRef(raw.salidaRef) ? normalizeHoraRef(raw.salidaRef) : null;
+  const entregaRef = isValidHoraRef(raw.entregaRef) ? normalizeHoraRef(raw.entregaRef) : null;
+  return { giroId, anchorOrderId, salidaRef, entregaRef };
+}
+
+// Consumes a pending intent for an order that has just become operative
+// (EN_COCINA). Decides create-vs-add from giroId shape:
+//   - giroId starts with "mg_"  → the anchor already has a giro → ADD.
+//   - otherwise (giroId === anchorOrderId, a bare single order) → CREATE a new
+//     giro grouping [anchorOrderId, orderId].
+// Returns the underlying writer result, or { ok:false, error:"invalid_intent" }
+// when the intent is malformed. NEVER throws — caller is best-effort.
+async function attachOrderViaPendingIntent(orderId, rawIntent) {
+  const intent = sanitizePendingGiroIntent(rawIntent);
+  if (!intent) return { ok: false, status: 400, error: "invalid_intent" };
+  if (String(intent.giroId).startsWith("mg_")) {
+    return addOrderToManualGiro(intent.giroId, orderId);
+  }
+  return createManualGiro(
+    [intent.anchorOrderId, orderId],
+    intent.salidaRef,
+    intent.anchorOrderId,
+    intent.entregaRef
+  );
+}
+
 module.exports = {
   // pure helpers
   generateManualGiroId,
@@ -484,6 +528,9 @@ module.exports = {
   validateManualGiroOrders,
   countActiveMembers,
   autoDissolveIfBelowThreshold,
+  // Opzione A pending-intent helpers
+  sanitizePendingGiroIntent,
+  attachOrderViaPendingIntent,
   // public operations
   createManualGiro,
   addOrderToManualGiro,

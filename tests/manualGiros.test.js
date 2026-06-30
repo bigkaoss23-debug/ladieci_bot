@@ -715,6 +715,65 @@ function seedGiro(g) {
     assert.ok(db.manual_giros.find(g => g.id === "mg_260525_2").dissolved_at);
   });
 
+  // ── Opzione A: pending_giro_intent sanitize + attach ───────────
+
+  await t("sanitizePendingGiroIntent: minimal valid → normalized", async () => {
+    const r = mg.sanitizePendingGiroIntent({ giroId: "#A", anchorOrderId: "#A", salidaRef: "9:05", entregaRef: "23:21" });
+    assert.deepStrictEqual(r, { giroId: "#A", anchorOrderId: "#A", salidaRef: "09:05", entregaRef: "23:21" });
+  });
+
+  await t("sanitizePendingGiroIntent: bad hora dropped to null, extras discarded", async () => {
+    const r = mg.sanitizePendingGiroIntent({ giroId: "mg_260525_1", anchorOrderId: "#A", salidaRef: "nope", routeTimeline: [1, 2, 3] });
+    assert.deepStrictEqual(r, { giroId: "mg_260525_1", anchorOrderId: "#A", salidaRef: null, entregaRef: null });
+  });
+
+  await t("sanitizePendingGiroIntent: missing minimum → null", async () => {
+    assert.strictEqual(mg.sanitizePendingGiroIntent(null), null);
+    assert.strictEqual(mg.sanitizePendingGiroIntent({}), null);
+    assert.strictEqual(mg.sanitizePendingGiroIntent({ giroId: "#A" }), null);          // no anchor
+    assert.strictEqual(mg.sanitizePendingGiroIntent({ anchorOrderId: "#A" }), null);   // no giroId
+    assert.strictEqual(mg.sanitizePendingGiroIntent([1, 2]), null);
+  });
+
+  await t("attachOrderViaPendingIntent: anchor singolo (giroId=anchorId) → CREATE giro condiviso", async () => {
+    seedOrder({ id: "#A", estado: "EN_COCINA" });       // anchor (Q5)
+    seedOrder({ id: "#B", estado: "EN_COCINA" });       // nuovo ordine appena entrato in cucina (Q2)
+    const res = await mg.attachOrderViaPendingIntent("#B", { giroId: "#A", anchorOrderId: "#A", salidaRef: "23:02", entregaRef: "23:21" });
+    assert.strictEqual(res.ok, true);
+    const gid = db.ordenes.find(o => o.id === "#A").manual_giro_id;
+    assert.ok(gid && gid.startsWith("mg_"));
+    assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, gid); // condiviso
+    assert.strictEqual(db.manual_giros.length, 1);
+  });
+
+  await t("attachOrderViaPendingIntent: anchor con mg_ → ADD al giro esistente", async () => {
+    seedGiro({ id: "mg_260525_1", seq: 1 });
+    seedOrder({ id: "#A", estado: "EN_COCINA", manual_giro_id: "mg_260525_1" });
+    seedOrder({ id: "#C", estado: "EN_COCINA", manual_giro_id: "mg_260525_1" });
+    seedOrder({ id: "#B", estado: "EN_COCINA" });       // nuovo ordine
+    const res = await mg.attachOrderViaPendingIntent("#B", { giroId: "mg_260525_1", anchorOrderId: "#A", salidaRef: null, entregaRef: null });
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, "mg_260525_1");
+    assert.strictEqual(db.manual_giros.length, 1); // nessun nuovo giro creato
+  });
+
+  await t("attachOrderViaPendingIntent: anchor non eligible → no group, ordine resta singolo", async () => {
+    seedOrder({ id: "#A", estado: "RETIRADO" });        // anchor uscito dal set selezionabile
+    seedOrder({ id: "#B", estado: "EN_COCINA" });
+    const res = await mg.attachOrderViaPendingIntent("#B", { giroId: "#A", anchorOrderId: "#A", salidaRef: null, entregaRef: null });
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(db.manual_giros.length, 0);
+    assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, null);
+  });
+
+  await t("attachOrderViaPendingIntent: intent malformato → invalid_intent, nessuna scrittura", async () => {
+    seedOrder({ id: "#B", estado: "EN_COCINA" });
+    const res = await mg.attachOrderViaPendingIntent("#B", { giroId: "" });
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.error, "invalid_intent");
+    assert.strictEqual(db.manual_giros.length, 0);
+  });
+
   // ── final report ──────────────────────────────────────────────
   if (failures.length) {
     console.error(`\n${failures.length} test(s) failed.`);

@@ -7,7 +7,7 @@ const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, a
 const { calcolaFornoOut, simulateDriverSchedule, computeDriverFields, proposeForNewOrder } = require("../utils/zones");
 const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
-const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
+const { isStatusLeavingGiro, autoDissolveIfBelowThreshold, sanitizePendingGiroIntent, attachOrderViaPendingIntent } = require("./manualGiros");
 const {
   buildStateTimestampPatch,
   logOrderStateTransition,
@@ -406,6 +406,12 @@ async function creaOrdine(params) {
       estado: estadoInicial,
       ...stateTimestamps,
       cucina_check: params.cucina_check || null,
+      // DELIVERY-MANUAL-GIRO-01 Opzione A: intento di aggancio al giro deciso
+      // dall'operatore nel planner ("Confirmar giro compatible"). Persistito qui
+      // ma NON consumato finché l'ordine resta POR_CONFIRMAR — l'attach avviene
+      // al passaggio EN_COCINA (vedi cambiaStato). Sanitizzato a {giroId,
+      // anchorOrderId, salidaRef, entregaRef}; null se assente/malformato.
+      pending_giro_intent: sanitizePendingGiroIntent(params.pending_giro_intent),
       ts: Date.now(),
       llegado: false,
       tipo_consegna:  tipoConsegna,
@@ -688,13 +694,15 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   let tipoConsegnaActual = null;
   let zonaActual = null;
   let horaActual = null;
+  let _pendingGiroIntent = null;
   try {
-    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,estado,manual_giro_id,tipo_consegna,zona,hora`);
+    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,estado,manual_giro_id,tipo_consegna,zona,hora,pending_giro_intent`);
     _prevManualGiroId = _prev?.[0]?.manual_giro_id || null;
     estadoActual = _prev?.[0]?.estado || null;
     tipoConsegnaActual = _prev?.[0]?.tipo_consegna || null;
     zonaActual = _prev?.[0]?.zona || null;
     horaActual = _prev?.[0]?.hora || null;
+    _pendingGiroIntent = _prev?.[0]?.pending_giro_intent || null;
   } catch (e) {
     console.warn("[cambiaStato] prev fetch failed:", e?.message || e);
   }
@@ -770,6 +778,34 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
       await autoDissolveIfBelowThreshold(_prevManualGiroId);
     } catch (e) {
       console.warn(`[manualGiros] auto-dissolve hook for ${_prevManualGiroId} after cambiaStato failed:`, e?.message || e);
+    }
+  }
+
+  // DELIVERY-MANUAL-GIRO-01 Opzione A: entering-EN_COCINA attach hook. The order
+  // carried a planner intent ("Confirmar giro compatible") while POR_CONFIRMAR;
+  // now that it is operative we consume the intent and attach it to the giro
+  // (create new giro if the anchor is a bare order, else add to existing mg_).
+  // Best-effort, SYMMETRIC to the leaving hook above: any failure MUST NOT roll
+  // back the estado change — the order stays valid and single. The intent is
+  // ALWAYS cleared afterwards (success or fail) so it is consumed exactly once.
+  if (!_isNoop && nuovoStato === "EN_COCINA" && _pendingGiroIntent) {
+    try {
+      const res = await attachOrderViaPendingIntent(ordenId, _pendingGiroIntent);
+      if (!res || res.ok === false) {
+        console.warn(`[manualGiros] pending-intent attach for ${ordenId} did not group:`, res && res.error);
+      }
+    } catch (e) {
+      console.warn(`[manualGiros] pending-intent attach hook for ${ordenId} failed:`, e?.message || e);
+    }
+    // Consume the intent regardless of outcome (no retry loop, no stale intent).
+    try {
+      await sbUpdate(
+        "ordenes",
+        `id=eq.${encodeURIComponent(ordenId)}`,
+        { pending_giro_intent: null }
+      );
+    } catch (e) {
+      console.warn(`[manualGiros] clearing pending_giro_intent for ${ordenId} failed:`, e?.message || e);
     }
   }
 
