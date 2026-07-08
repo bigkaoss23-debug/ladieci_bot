@@ -16,18 +16,23 @@ const MENU_LISTA = [
   "9. El Ultimo 10 - Atun y Cebolla 14.00",
   "10. El Mago de Zadar - Vegetariana 14.50",
   "11. El Maestro - Inferno 13.50",
-  "12. Magicbox - Parmazola 16.50",
-  "13. La Joya - Carbonara 15.00",
+  "12. La Joya - Carbonara 15.00",
+  "13. Magicbox - Parmazola 16.50",
   "14. La Pinturicchio - La Ahumada 15.00",
   // POSTRES
   "Misu Clasico (Tiramisu) 5.00", "Misu Especial (Tiramisu) 6.00",
   "Ferrero Rocher 7.00", "Baba Napoletano 5.00",
-  "Pizza Nutella 9.00",
+  "Pizza Nutella 9.00", "Pizza KitKat 9.00", "Pizza Kinder 9.00",
   "Tartufo Bianco 5.00", "Tartufo Nero 5.00",
   "Tartufo Pistacchio 5.00", "Tartufo Limoncello 5.00",
   // BEBIDAS
   "Estrella Galicia 3.00", "Heineken 3.00",
-  "Peroni 4.00", "Refresco 2.00", "Agua 1.50"
+  "Peroni 4.00", "San Miguel 0'0 3.00", "Brutus 3.00",
+  "Refresco 2.00", "Aquarius Limon 2.00", "Aquarius Naranja 2.00",
+  "Agua 1.50", "Agua Natural 1L 2.50",
+  // EXTRAS PIZZA (+0.50 c/u)
+  "Extra salado (Salami Napoli, Coppa, Rucula) 0.50",
+  "Extra dulce (Nutella, Kinder, KitKat, Pistacho, Almendra) 0.50"
 ];
 
 const INFO_RISTORANTE =
@@ -57,13 +62,15 @@ const INFO_RISTORANTE =
   "9. El Ultimo 10 (Atún y Cebolla) 14€\n" +
   "10. El Mago de Zadar (Vegetariana) 14.50€\n" +
   "11. El Maestro (Inferno) 13.50€\n" +
-  "12. Magicbox (Parmazola) 16.50€\n" +
-  "13. La Joya (Carbonara) 15€\n" +
+  "12. La Joya (Carbonara) 15€\n" +
+  "13. Magicbox (Parmazola) 16.50€\n" +
   "14. La Pinturicchio (La Ahumada) 15€\n\n" +
   "POSTRES: Misú Clásico (Tiramisú) 5€, Misú Especial (Tiramisú) 6€, Ferrero Rocher 7€,\n" +
-  "Babá Napoletano 5€, Pizza Nutella 9€,\n" +
+  "Babá Napoletano 5€, Pizza Nutella 9€, Pizza KitKat 9€, Pizza Kinder 9€,\n" +
   "Tartufo Bianco 5€, Tartufo Nero 5€, Tartufo Pistacchio 5€, Tartufo Limoncello 5€\n" +
-  "BEBIDAS: Estrella Galicia/Heineken 3€, Peroni 4€, Refresco 2€, Agua 1.50€\n\n" +
+  "BEBIDAS: Estrella Galicia/Heineken 3€, Peroni 4€, San Miguel 0'0 3€, Brutus 3€,\n" +
+  "Refresco 2€, Aquarius Limón 2€, Aquarius Naranja 2€, Agua 1.50€, Agua Natural 1L 2.50€\n" +
+  "EXTRAS PIZZA (+0.50€ c/u) — salados: Salami Napoli, Coppa, Rúcula; dulces: Nutella, Kinder, KitKat, Pistacho, Almendra\n\n" +
   "ALÉRGENOS: solo menciona alérgenos si el cliente pregunta o declara una alergia.";
 
 const COSTO_CONSEGNA = 2.50;
