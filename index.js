@@ -7,6 +7,8 @@ const { previewOrderTiming } = require("./src/agents/previewTiming");
 const { invia } = require("./src/agents/agentWhatsapp");
 const { chiudiServizio, scanServizio, backupSerata, madridDateStr, serviceDateMadrid, nowMadridHHMM } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
+// Phase 2A dynamic menu read adapter (feature-gated, no runtime switch).
+const { getMenuCatalogue } = require("./src/menu/menuService");
 const {
   getManualGiros,
   createManualGiro,
@@ -160,6 +162,14 @@ app.get("/api", async (req, res) => {
         day: req.query.day,
         onlyActive: req.query.onlyActive !== "false",
       });
+    } else if (action === "getMenu") {
+      // Phase 2A: read-only dynamic catalogue. Feature-gated — when the flag
+      // is off the runtime is unaffected (same contract as an unknown action).
+      if (process.env.DYNAMIC_MENU_READ_ENABLED === "true") {
+        result = await getMenuCatalogue();
+      } else {
+        result = { error: "unknown action: " + action };
+      }
     } else {
       result = { error: "unknown action: " + action };
     }
