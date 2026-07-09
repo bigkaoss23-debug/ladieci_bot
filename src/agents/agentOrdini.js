@@ -8,6 +8,9 @@ const { calcolaFornoOut, simulateDriverSchedule, computeDriverFields, proposeFor
 const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
+// DRIVER_STATO = telemetria visiva OPZIONALE (best-effort, mai blocca la
+// transizione). Vedi src/utils/driverTelemetry.js per il contratto.
+const { recordRiderOut, recordDeliveryAndMaybeReturn, countActiveDeliveries } = require("../utils/driverTelemetry");
 const {
   buildStateTimestampPatch,
   logOrderStateTransition,
@@ -799,6 +802,32 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
       }
     }
   }
+
+  // ── DRIVER_STATO: telemetria visiva OPZIONALE (best-effort) ─────────────
+  // Registra "driver fuori" su EN_ENTREGA e l'ETA rientro sull'ULTIMA consegna
+  // del giro. NON è sorgente di verità: qualunque errore viene inghiottito con
+  // un warn e NON tocca l'estado già scritto né la response. Le funzioni di
+  // driverTelemetry sono già no-throw; il try/catch qui protegge la sbSelect.
+  // Nota idempotenza: recordRiderOut non sovrascrive un giro già aperto, e
+  // recordDeliveryAndMaybeReturn chiude solo quando il conteggio server-side
+  // dei DOMICILIO attivi (LISTO/EN_ENTREGA) arriva a 0.
+  if (!_isNoop && (nuovoStato === "EN_ENTREGA" || nuovoStato === "RETIRADO")) {
+    try {
+      const dRows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,tipo_consegna,zona,manual_giro_id`);
+      const dOrd = dRows?.[0];
+      if (dOrd && dOrd.tipo_consegna === "DOMICILIO") {
+        if (nuovoStato === "EN_ENTREGA") {
+          const active = await countActiveDeliveries({});
+          await recordRiderOut({ zona: dOrd.zona || null, nOrdini: active && active > 0 ? active : 1 });
+        } else {
+          await recordDeliveryAndMaybeReturn(dOrd);
+        }
+      }
+    } catch (e) {
+      console.warn(`[driverTelemetry] cambiaStato hook (${nuovoStato}) for ${ordenId} failed:`, e?.message || e);
+    }
+  }
+
   return { success: true, id: ordenId, estado: nuovoStato, noop: _isNoop };
 }
 

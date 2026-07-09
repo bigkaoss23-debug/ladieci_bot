@@ -3,6 +3,9 @@ const express = require("express");
 const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert, sbInsert } = require("./src/utils/supabase");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
+// DRIVER_STATO = telemetria visiva opzionale (best-effort). getDriverStatus per la
+// UI, closeGiroInternal condiviso col legacy chiudiGiro (idempotente).
+const { getDriverStatus, closeGiroInternal } = require("./src/utils/driverTelemetry");
 const { previewOrderTiming } = require("./src/agents/previewTiming");
 const { invia } = require("./src/agents/agentWhatsapp");
 const { chiudiServizio, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
@@ -155,6 +158,10 @@ app.get("/api", async (req, res) => {
         day: req.query.day,
         onlyActive: req.query.onlyActive !== "false",
       });
+    } else if (action === "getDriverStatus") {
+      // Telemetria visiva opzionale del rider. Ritorna status normalizzato o
+      // null (assente/stale/malformato/LIBERO) — mai throw, mai blocca la UI.
+      result = await getDriverStatus();
     } else {
       result = { error: "unknown action: " + action };
     }
@@ -250,66 +257,13 @@ app.post("/api", async (req, res) => {
       await sbUpsert("config", { chiave: "DRIVER_STATO", valore: JSON.stringify(nuovoStato) }, "chiave");
       result = { success: true, stato: nuovoStato };
     } else if (action === "chiudiGiro") {
-      // Driver rientra: calcola rientro stimato, logga il giro
-      const rows = await sbSelect("config", "chiave=eq.DRIVER_STATO");
-      const ds = rows?.[0]?.valore
-        ? (typeof rows[0].valore === "string" ? JSON.parse(rows[0].valore) : rows[0].valore)
-        : null;
-      if (ds?.partito_alle) {
-        const adesso = new Date();
-        const tempoAndata = Math.round((adesso - new Date(ds.partito_alle)) / 60000);
-        const rientroStimato = new Date(adesso.getTime() + (tempoAndata + 3) * 60000).toISOString();
-        await sbUpsert("config", {
-          chiave: "DRIVER_STATO",
-          valore: JSON.stringify({ ...ds, rientro_stimato: rientroStimato })
-        }, "chiave");
-
-        // ── Shadow A/B: raccoglie stime degli ordini consegnati in questo giro ──
-        // Per ogni ordine RETIRADO con hora_entrega DOPO partito_alle e stessa zona,
-        // estrae le 3 stime (chosen, google, haversine) + source.
-        // Aggregazione MAX (worst-case del giro) per coerenza con tempo reale registrato.
-        let durataStimataMin = null, durataGoogleMin = null, durataHaversineMin = null, durataStimataSource = null;
-        try {
-          const partitoMs = new Date(ds.partito_alle).getTime();
-          const recent = await sbSelect("ordenes",
-            `estado=eq.RETIRADO&zona=eq.${encodeURIComponent(ds.zona || "")}&order=hora_entrega.desc&limit=10`
-          );
-          const ords = (recent || []).filter(o => o.hora_entrega && Number(o.hora_entrega) >= partitoMs);
-          if (ords.length > 0) {
-            const maxOf = (k) => {
-              const vals = ords.map(o => o[k]).filter(v => v != null);
-              return vals.length ? Math.max(...vals) : null;
-            };
-            durataStimataMin    = maxOf("durata_andata_min");
-            durataGoogleMin     = maxOf("durata_google_min");
-            durataHaversineMin  = maxOf("durata_haversine_min");
-            const sources = [...new Set(ords.map(o => o.geo_source).filter(Boolean))];
-            durataStimataSource = sources.length === 1 ? sources[0] : (sources.length > 1 ? "mixed" : null);
-          }
-        } catch (e) {
-          console.warn("[chiudiGiro] A/B aggregation failed:", e?.message || e);
-        }
-
-        // INSERT (non upsert) — ogni giro è una nuova riga, id è serial autoincrement.
-        // sbUpsert qui falliva sempre per via di prefer=resolution=merge-duplicates senza on_conflict
-        // → PostgREST 400 → catch silenzioso → tabella vuota per mesi. Bug fixato 2026-05-14.
-        try {
-          await sbInsert("delivery_logs", {
-            zona: ds.zona, n_ordini: ds.n_ordini || 1,
-            partito_alle: ds.partito_alle, ultimo_entregado: adesso.toISOString(),
-            tempo_andata_min: tempoAndata, rientro_stimato: rientroStimato,
-            durata_stimata_min: durataStimataMin,
-            durata_stimata_source: durataStimataSource,
-            durata_stimata_google_min: durataGoogleMin,
-            durata_stimata_haversine_min: durataHaversineMin
-          });
-        } catch (e) {
-          console.warn("[delivery_logs] insert failed:", e?.message || e);
-        }
-        result = { success: true, rientroStimato, tempoAndata };
-      } else {
-        result = { success: true, skipped: "driver_not_out" };
-      }
+      // Driver rientra: calcola rientro stimato + logga il giro.
+      // Logica centralizzata in driverTelemetry.closeGiroInternal (condivisa con
+      // l'hook interno su RETIRADO). IDEMPOTENTE: chiamate ripetute non duplicano
+      // il delivery_log (skip se rientro_stimato già settato). Back-compat: stessa
+      // forma di response del legacy ({success, rientroStimato, tempoAndata} oppure
+      // {success, skipped}). Best-effort: non fa mai throw.
+      result = await closeGiroInternal();
     } else if (action === "marcarLlegado") {
       // Cliente arrivato (RITIRO) — segna flag llegado
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { llegado: req.body.llegado !== false });
