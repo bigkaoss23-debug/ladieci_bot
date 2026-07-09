@@ -5,20 +5,20 @@
 
 const MENU_LISTA = [
   // PIZZAS
-  "1. El Pelusa - Margarita Clasica 12.00",
-  "2. Zizou - Margarita de Bufala 12.50",
-  "3. O Rei - Marinara Clasica 10.00",
-  "4. Il Gladiatore - Caprichosa 14.50",
+  "1. El Pelusa - Margherita Classica 12.00",
+  "2. Zizou - Margherita di Bufala 12.50",
+  "3. O Rei - Marinara Classica 10.00",
+  "4. El Maestro - Inferno 13.50",
   "5. El Gaucho - Diavola 13.00",
   "6. El Divino Codino - Prosciutto 12.50",
-  "7. La Pulga - Jamon y Champinones 13.00",
-  "8. Il Tulipano Nero - Cuatro Quesos 14.50",
-  "9. El Ultimo 10 - Atun y Cebolla 14.00",
-  "10. El Mago de Zadar - Vegetariana 14.50",
-  "11. El Maestro - Inferno 13.50",
-  "12. La Joya - Carbonara 15.00",
+  "7. La Pulga - Prosciutto e Funghi 13.00",
+  "8. Il Tulipano Nero - Quattro Formaggi 14.50",
+  "9. El Mago de Zadar - Vegetariana 14.50",
+  "10. El Último 10 - Tonno e Cipolla 14.00",
+  "11. Il Gladiatore - Capricciosa 14.50",
+  "12. La Joya - CarboDieci 15.00",
   "13. Magicbox - Parmazola 16.50",
-  "14. La Pinturicchio - La Ahumada 15.00",
+  "14. Pinturicchio - affumicata 15.00",
   // POSTRES
   "Misu Clasico (Tiramisu) 5.00", "Misu Especial (Tiramisu) 6.00",
   "Ferrero Rocher 7.00", "Baba Napoletano 5.00",
@@ -51,20 +51,20 @@ const INFO_RISTORANTE =
   "de las 19:30, o domicilio antes de las 20:00, o un lunes o martes, responde con\n" +
   "simpatía indicando el horario correcto y el slot más cercano disponible.\n\n" +
   "MENÚ PIZZAS (con número oficial del menú):\n" +
-  "1. El Pelusa (Margarita Clásica) 12€\n" +
-  "2. Zizou (Margarita Búfala) 12.50€\n" +
-  "3. O Rei (Marinara) 10€\n" +
-  "4. Il Gladiatore (Caprichosa) 14.50€\n" +
+  "1. El Pelusa (Margherita Classica) 12€\n" +
+  "2. Zizou (Margherita di Bufala) 12.50€\n" +
+  "3. O Rei (Marinara Classica) 10€\n" +
+  "4. El Maestro (Inferno) 13.50€\n" +
   "5. El Gaucho (Diavola) 13€\n" +
   "6. El Divino Codino (Prosciutto) 12.50€\n" +
-  "7. La Pulga (Jamón y Champiñones) 13€\n" +
-  "8. Il Tulipano Nero (Cuatro Quesos) 14.50€\n" +
-  "9. El Ultimo 10 (Atún y Cebolla) 14€\n" +
-  "10. El Mago de Zadar (Vegetariana) 14.50€\n" +
-  "11. El Maestro (Inferno) 13.50€\n" +
-  "12. La Joya (Carbonara) 15€\n" +
+  "7. La Pulga (Prosciutto e Funghi) 13€\n" +
+  "8. Il Tulipano Nero (Quattro Formaggi) 14.50€\n" +
+  "9. El Mago de Zadar (Vegetariana) 14.50€\n" +
+  "10. El Último 10 (Tonno e Cipolla) 14€\n" +
+  "11. Il Gladiatore (Capricciosa) 14.50€\n" +
+  "12. La Joya (CarboDieci) 15€\n" +
   "13. Magicbox (Parmazola) 16.50€\n" +
-  "14. La Pinturicchio (La Ahumada) 15€\n\n" +
+  "14. Pinturicchio (affumicata) 15€\n\n" +
   "POSTRES: Misú Clásico (Tiramisú) 5€, Misú Especial (Tiramisú) 6€, Ferrero Rocher 7€,\n" +
   "Babá Napoletano 5€, Pizza Nutella 9€, Pizza KitKat 9€, Pizza Kinder 9€,\n" +
   "Tartufo Bianco 5€, Tartufo Nero 5€, Tartufo Pistacchio 5€, Tartufo Limoncello 5€\n" +
@@ -85,7 +85,7 @@ const ABBINAMENTI_NOMI =
   "quattro formaggi/cuatro quesos=Il Tulipano Nero, vegetariana=El Mago de Zadar, " +
   "tonno e cipolla/tonno/atun=El Ultimo 10, capricciosa/caprichosa=Il Gladiatore, " +
   "carbonara=La Joya, parmazola/parma gorgonzola/magicbox=Magicbox, " +
-  "ahumada/affumicata/provola=La Pinturicchio, " +
+  "ahumada/affumicata/provola=Pinturicchio, " +
   "tiramisu/misu=Misu Clásico, baba=Babá Napoletano, ferrero/rocher=Ferrero Rocher, " +
   "coca/cola/fanta=Refresco, cerveza/estrella=Estrella Galicia, heineken=Heineken, agua=Agua";
 
