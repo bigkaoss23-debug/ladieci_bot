@@ -73,15 +73,31 @@ async function countActiveDeliveries({ excludeId = null, manualGiroId = null } =
   }
 }
 
-// Best-effort: registra "driver fuori" (IN_GIRO). IDEMPOTENTE — se già IN_GIRO
-// con partito_alle non sovrascrive (preserva l'inizio giro e l'eventuale
-// rientro_stimato del legacy `registrarSalidaDriver`). Mai throw.
+// Best-effort: registra "driver fuori" (IN_GIRO). Mai throw.
+//
+// Idempotenza per-giro (DELIVERY-RIDER-SECOND-GIRO-01, 2026-07):
+//   - Case A — giro corrente ANCORA APERTO (IN_GIRO + partito_alle senza
+//     rientro_stimato): non sovrascrive → `already_out`. Le EN_ENTREGA
+//     successive dello STESSO giro restano idempotenti (nessun reset).
+//   - Case B — giro precedente GIÀ CHIUSO (IN_GIRO + rientro_stimato già
+//     settato dall'ultima consegna): una NUOVA partenza nella stessa serata
+//     apre un giro fresco → nuovo partito_alle, rientro_stimato azzerato,
+//     zona/n_ordini rinfrescati, stato invariato (IN_GIRO). Evita che il
+//     banner "Volviendo" del giro precedente resti appeso mentre il rider è
+//     già in consegna sul giro nuovo. Ritorna `new_giro_after_return`.
+//   - Altrimenti (assente/LIBERO/malformato/read fallito → ds null): prima
+//     partenza, apre il giro come sempre.
+// La distinzione è basata SOLO sulla presenza di rientro_stimato (nessuna
+// dipendenza dall'orario ETA: vale sia prima sia dopo l'ETA vecchia).
 async function recordRiderOut({ zona = null, nOrdini = 1 } = {}) {
   try {
     const ds = await readDriverStato();
-    if (ds && ds.stato === "IN_GIRO" && ds.partito_alle) {
+    // Case A: giro corrente ancora aperto → idempotenza invariata.
+    if (ds && ds.stato === "IN_GIRO" && ds.partito_alle && !ds.rientro_stimato) {
       return { success: true, skipped: "already_out" };
     }
+    // Case B: giro precedente già chiuso → reset per il nuovo giro.
+    const isNewGiroAfterReturn = !!(ds && ds.stato === "IN_GIRO" && ds.partito_alle && ds.rientro_stimato);
     const nuovo = {
       stato: "IN_GIRO",
       zona: zona || null,
@@ -90,7 +106,10 @@ async function recordRiderOut({ zona = null, nOrdini = 1 } = {}) {
       rientro_stimato: null,
     };
     const wrote = await writeDriverStato(nuovo);
-    return wrote ? { success: true, stato: nuovo } : { success: false, error: "telemetry_failed" };
+    if (!wrote) return { success: false, error: "telemetry_failed" };
+    return isNewGiroAfterReturn
+      ? { success: true, stato: nuovo, reset: "new_giro_after_return" }
+      : { success: true, stato: nuovo };
   } catch (e) {
     console.warn("[driverTelemetry] recordRiderOut failed:", e?.message || e);
     return { success: false, error: "telemetry_failed" };
