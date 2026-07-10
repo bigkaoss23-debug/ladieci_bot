@@ -57,18 +57,23 @@ function validFecha(v) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new ReadParamError("fecha inválida (YYYY-MM-DD)");
   return s;
 }
+const MAX_WA_IDS = 200;
 function validWaIds(input) {
-  // Accepts an array or a CSV string (querystring transport).
-  const arr = Array.isArray(input)
+  // Accepts an array or a CSV string (querystring transport). Enforces a hard
+  // cap BEFORE validation (bounds URL length), a strict per-id format (6-15
+  // digits → bounds id length), and removes duplicates.
+  const raw = Array.isArray(input)
     ? input
     : String(input == null ? "" : input).split(",").map(s => s.trim()).filter(Boolean);
-  if (arr.length === 0) return [];
-  if (arr.length > 200) throw new ReadParamError("demasiados wa_ids (max 200)");
-  return arr.map(x => {
+  if (raw.length === 0) return [];
+  if (raw.length > MAX_WA_IDS) throw new ReadParamError(`demasiados wa_ids (max ${MAX_WA_IDS})`);
+  const seen = new Set();
+  for (const x of raw) {
     const s = String(x == null ? "" : x).trim();
     if (!/^\d{6,15}$/.test(s)) throw new ReadParamError("wa_id inválido en la lista");
-    return s;
-  });
+    seen.add(s);
+  }
+  return [...seen];
 }
 
 // Small internal wrapper: never leaks the raw error to the client.

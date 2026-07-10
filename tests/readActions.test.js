@@ -97,7 +97,12 @@ async function expectParamError(fn, label) {
   const empty = await R.getConvChats({ wa_ids: "" });
   check("getConvChats empty → [] (no query)", Array.isArray(empty) && empty.length === 0);
   await expectParamError(() => R.getConvChats({ wa_ids: "34600111222,bad-id" }), "convChats bad id in list");
-  await expectParamError(() => R.getConvChats({ wa_ids: Array(201).fill("34600111222") }), "convChats too many");
+  await expectParamError(() => R.getConvChats({ wa_ids: Array(201).fill("340000000").map((v,i)=>v+(1000+i)) }), "convChats >200 unique → 400");
+  // Duplicate removal: 3 duplicates collapse to 1 id in the emitted query.
+  await R.getConvChats({ wa_ids: "34600111222,34600111222,34600111222" });
+  check("getConvChats dedups → single id in(...)",
+    /wa_id=in\.\("34600111222"\)/.test(last().query) && !/,/.test(last().query.split("in.(")[1].split(")")[0]),
+    last().query);
 
   console.log("\n── Controlled backend read failure → 500 ──");
   failNext = true;
