@@ -6,6 +6,9 @@ const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentO
 // DRIVER_STATO = telemetria visiva opzionale (best-effort). getDriverStatus per la
 // UI, closeGiroInternal condiviso col legacy chiudiGiro (idempotente).
 const { getDriverStatus, closeGiroInternal } = require("./src/utils/driverTelemetry");
+// Private authenticated READ contracts (P0 containment). Fixed per-action queries;
+// no generic table access. Reachable only behind the shared X-Api-Key (trusted proxy).
+const readActions = require("./src/utils/readActions");
 const { previewOrderTiming } = require("./src/agents/previewTiming");
 const { invia } = require("./src/agents/agentWhatsapp");
 const { chiudiServizio, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
@@ -162,14 +165,46 @@ app.get("/api", async (req, res) => {
       // Telemetria visiva opzionale del rider. Ritorna status normalizzato o
       // null (assente/stale/malformato/LIBERO) — mai throw, mai blocca la UI.
       result = await getDriverStatus();
+    }
+    // ── Private authenticated READ contracts (P0). Fixed queries only. ──────
+    // Params arrivano da querystring; ogni action valida i propri input e cappa
+    // il limit server-side. ReadParamError → 400, ReadBackendError → 500.
+    else if (action === "getOrdenesRecent") {
+      result = await readActions.getOrdenesRecent();
+    } else if (action === "getWaMessages") {
+      result = await readActions.getWaMessages();
+    } else if (action === "getStorico") {
+      result = await readActions.getStorico({ fecha: req.query.fecha, limit: req.query.limit });
+    } else if (action === "getOrdenesArchivio") {
+      result = await readActions.getOrdenesArchivio({ limit: req.query.limit });
+    } else if (action === "getDeliveryLogs") {
+      result = await readActions.getDeliveryLogs({ limit: req.query.limit });
+    } else if (action === "getSuggerimenti") {
+      result = await readActions.getSuggerimenti();
+    } else if (action === "getConversacionesActivas") {
+      result = await readActions.getConversacionesActivas();
+    } else if (action === "getClienteByTelefono") {
+      result = await readActions.getClienteByTelefono({ telefono: req.query.telefono });
+    } else if (action === "getWaMessageById") {
+      result = await readActions.getWaMessageById({ id: req.query.id });
+    } else if (action === "getOrdenById") {
+      result = await readActions.getOrdenById({ id: req.query.id });
+    } else if (action === "getConvByWaId") {
+      result = await readActions.getConvByWaId({ wa_id: req.query.wa_id });
+    } else if (action === "getConvChats") {
+      // wa_ids come CSV in querystring → array validato in readActions.
+      result = await readActions.getConvChats({ wa_ids: req.query.wa_ids });
     } else {
       result = { error: "unknown action: " + action };
     }
 
     res.json(result);
   } catch (e) {
-    console.error("API GET error:", e);
-    res.status(500).json({ error: e.message });
+    // Typed read errors carry a controlled httpStatus (400 param / 500 read).
+    // Everything else stays a generic 500 without leaking internals.
+    const status = e && e.httpStatus ? e.httpStatus : 500;
+    if (status >= 500) console.error("API GET error:", e);
+    res.status(status).json({ error: status === 400 ? e.message : "read failed" });
   }
 });
 
@@ -370,8 +405,9 @@ app.post("/api", async (req, res) => {
 
     res.json(result);
   } catch (e) {
-    console.error("API POST error:", e);
-    res.status(500).json({ error: e.message });
+    const status = e && e.httpStatus ? e.httpStatus : 500;
+    if (status >= 500) console.error("API POST error:", e);
+    res.status(status).json({ error: status === 400 ? e.message : "read failed" });
   }
 });
 
