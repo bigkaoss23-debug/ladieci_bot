@@ -171,6 +171,18 @@ t("validation: duplicate normalized alias throws", () => expectAdapterError((r) 
 t("validation: orphan producto_extra throws", () => expectAdapterError((r) => { r.menu_producto_extras[0].extra_id = "00000000-0000-0000-0000-000000000000"; }, "ORPHAN_MAP"));
 t("validation: alias → missing product throws", () => expectAdapterError((r) => { r.menu_aliases[0].producto_id = "00000000-0000-0000-0000-000000000000"; }, "ALIAS_ORPHAN"));
 
+// ── emoji contract (Phase 3A.1): Supabase row → adapter → payload ──
+t("extra emoji flows through adapter; sweet null preserved", () => {
+  const raw2 = JSON.parse(JSON.stringify(RAW));
+  raw2.menu_extras.forEach((e) => { if (e.legacy_key === "ing_coppa") e.emoji = "🥓"; if (e.grupo === "sweet") e.emoji = null; });
+  const c = assembleCatalogue(raw2);
+  assert.equal(c.extras.find((e) => e.legacyKey === "ing_coppa").emoji, "🥓");
+  assert.equal(c.extras.find((e) => e.grupo === "sweet").emoji, null);
+  // per-product permitted extra also carries emoji
+  const pizza = c.productos.find((p) => p.categoria === "pizzas");
+  assert.ok("extrasPermitidos" in pizza);
+});
+
 // ── TASK 7: cache tests ───────────────────────────────────────────
 (function cacheTests() {
   t("cache: fresh within TTL, single load", async () => {

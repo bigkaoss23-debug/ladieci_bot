@@ -77,7 +77,7 @@ function assembleCatalogue(raw, opts = {}) {
     if (!extrasByProduct.has(m.producto_id)) extrasByProduct.set(m.producto_id, []);
     extrasByProduct.get(m.producto_id).push({
       id: e.id, legacyKey: e.legacy_key, nombre: e.nombre,
-      grupo: e.grupo, precioDelta: Number(e.precio_delta), orden: e.orden,
+      grupo: e.grupo, precioDelta: Number(e.precio_delta), emoji: e.emoji ?? null, orden: e.orden,
     });
   }
 
@@ -126,7 +126,7 @@ function assembleCatalogue(raw, opts = {}) {
 
   const extras = extrasRaw
     .filter((e) => includeInactive || e.activo !== false)
-    .map((e) => ({ id: e.id, legacyKey: e.legacy_key, nombre: e.nombre, grupo: e.grupo, precioDelta: Number(e.precio_delta), orden: e.orden, activo: e.activo }));
+    .map((e) => ({ id: e.id, legacyKey: e.legacy_key, nombre: e.nombre, grupo: e.grupo, precioDelta: Number(e.precio_delta), emoji: e.emoji ?? null, orden: e.orden, activo: e.activo }));
 
   return { version: CONTRACT_VERSION, generatedAt, categorias, productos, extras, aliases };
 }
