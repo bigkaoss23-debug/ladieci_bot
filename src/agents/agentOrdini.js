@@ -4,6 +4,25 @@
 
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
+const { normalizeOrderItem, OrderItemValidationError } = require("../menu/menuSnapshot");
+
+// Phase A — canonical immutable order-item snapshot at the write boundary.
+// Filters the delivery-fee pseudo-item, then normalizes every real item into
+// the versioned snapshot (canonical + backward-compatible legacy fields). It
+// never re-prices/re-names from the live catalogue — existing snapshots keep
+// the values accepted at order time. A single critically malformed item throws
+// a controlled validation error so the order is NOT partially saved.
+function normalizeItemsForPersist(rawItems) {
+  const arr = Array.isArray(rawItems) ? rawItems : [];
+  const real = arr.filter(i => i && i.n !== "Entrega a domicilio");
+  return real.map((it, idx) => {
+    try {
+      return normalizeOrderItem(it);
+    } catch (e) {
+      throw new OrderItemValidationError(`item #${idx + 1}${it && it.n ? " ('" + it.n + "')" : ""}: ${e.message}`);
+    }
+  });
+}
 const { calcolaFornoOut, simulateDriverSchedule, computeDriverFields, proposeForNewOrder } = require("../utils/zones");
 const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
@@ -214,7 +233,8 @@ async function creaOrdine(params) {
   // Items contiene solo prodotti veri (pizze, bevande, dolci).
   // Se qualcuno (vecchi flussi) lo manda dentro items, lo filtriamo via.
   const itemsRaw = params.items || [];
-  const itemsFinali = itemsRaw.filter(i => i.n !== "Entrega a domicilio");
+  // Phase A: normalize to the immutable canonical snapshot (throws → order not saved).
+  const itemsFinali = normalizeItemsForPersist(itemsRaw);
   const tipoConsegna = params.tipo_consegna || "RITIRO";
   const deliveryFee = deliveryFeeFor(tipoConsegna);
   const totaleBase = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
@@ -512,8 +532,9 @@ async function modificaOrdine(ordenId, updates) {
   const isManual = updates.operatorManual === true;
 
   const upd = {};
-  // Items: filtra sempre il fake item (sicurezza retrocompatibile con chiamate vecchie)
-  if (updates.items) upd.items = updates.items.filter(i => i.n !== "Entrega a domicilio");
+  // Items: Phase A canonical snapshot. Existing items keep their accepted values
+  // (idempotent normalize), newly added items get the immutable snapshot too.
+  if (updates.items) upd.items = normalizeItemsForPersist(updates.items);
   if (updates.nota !== undefined) upd.nota = updates.nota;
   if (updates.hora) upd.hora = updates.hora;
   if (updates.nota_cucina !== undefined) upd.nota_cucina = updates.nota_cucina;
@@ -821,8 +842,9 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
 async function aggiungiItems(ordenId, newItems) {
   const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
   if (!rows || rows.length === 0) return { error: "not found" };
-  // Filtriamo via il fake item anche dagli newItems per sicurezza
-  const cleanedNew = (newItems || []).filter(i => i.n !== "Entrega a domicilio");
+  // Phase A: normalize newly added items to the canonical snapshot. Existing
+  // persisted items keep their original accepted snapshot (not re-priced).
+  const cleanedNew = normalizeItemsForPersist(newItems);
   const merged = mergeItemsBevande((rows[0].items || []).filter(i => i.n !== "Entrega a domicilio"), cleanedNew);
   const tipoConsegna = rows[0].tipo_consegna || "RITIRO";
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, {
@@ -860,4 +882,4 @@ async function eliminaOrdine(ordenId) {
   return { success: true };
 }
 
-module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, eliminaOrdine, risincronizzaGiro, planDriverScheduleSync, calcolaFornoOutFallback };
+module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, eliminaOrdine, risincronizzaGiro, planDriverScheduleSync, calcolaFornoOutFallback, normalizeItemsForPersist };
