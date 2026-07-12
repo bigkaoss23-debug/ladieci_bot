@@ -167,6 +167,42 @@ function buildLegacySub(extras, notes) {
   return [...tags, notes].filter(Boolean).join(", ");
 }
 
+// A Custom pizza — detected by an explicit flag or the legacy "custom_" id.
+function isCustomItem(item) {
+  return item.custom === true || String(firstDefined(item.id, item.legacyId, item.legacy_id) ?? "").startsWith("custom_");
+}
+
+// Normalize the Custom base identity + accepted price (additive). Copies only
+// values already present on the item — never re-prices/re-names from a live
+// catalogue. Returns undefined when there is nothing usable to preserve.
+function normalizeCustomBase(item) {
+  const b = firstDefined(item.customBase, item.custom_base);
+  if (!b || typeof b !== "object" || Array.isArray(b)) return undefined;
+  const id = firstDefined(b.id, b.key, b.clave, b.legacyKey);
+  const name = nonEmptyStr(b.name, b.nombre, b.n);
+  const price = toNum(firstDefined(b.price, b.precio, b.p, item.baseUnitPrice));
+  const out = {};
+  if (id != null) out.id = String(id);
+  if (name) out.name = name;
+  if (price != null) out.price = round2(price);
+  return Object.keys(out).length ? out : undefined;
+}
+
+// Preserve the compatibility `_ingredienti` list required by current frontend /
+// signature consumers. Accepted fields are copied verbatim (no reprice/rename);
+// only a present numeric `prezzo`/`price` is normalized numerically. Unknown but
+// valid legacy values are kept. `extras[]` remains the canonical source.
+function normalizeCustomIngredients(item) {
+  if (!Array.isArray(item._ingredienti)) return undefined;
+  return item._ingredienti.map((i) => {
+    if (!i || typeof i !== "object" || Array.isArray(i)) return i; // keep scalars/unknown as-is
+    const out = { ...i };
+    const price = toNum(firstDefined(i.prezzo, i.price));
+    if (price != null) { if ("prezzo" in out) out.prezzo = round2(price); else out.price = round2(price); }
+    return out;
+  });
+}
+
 // The canonical normalizer. Never re-prices/re-names an item from the live
 // catalogue; `opts.catalogue` only fills gaps for a newly selected product.
 function normalizeOrderItem(item, opts = {}) {
@@ -265,6 +301,19 @@ function normalizeOrderItem(item, opts = {}) {
     sub: legacySub,
   };
   if (snap.extrasPermitidos === undefined) delete snap.extrasPermitidos;
+
+  // ── Custom pizza configuration (additive; ONLY for Custom items) ──
+  // Preserve `custom`, `customBase` and the compatibility `_ingredienti` list so
+  // a Custom order stays semantically identical across the backend round-trip.
+  // Normal items are untouched. `extras[]` remains the canonical ingredient source.
+  if (isCustomItem(item)) {
+    snap.custom = true;
+    const cb = normalizeCustomBase(item);
+    if (cb) snap.customBase = cb;
+    const ci = normalizeCustomIngredients(item);
+    if (ci) snap._ingredienti = ci;
+  }
+
   return deepFreeze(snap);
 }
 
