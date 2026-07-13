@@ -156,15 +156,21 @@ function makeIngLookup(catalogue) {
   return (name, key) => (key && byKey.get(key)) || (name && byName.get(String(name).toLowerCase())) || null;
 }
 
-// Rebuild a backward-compatible readable `sub` string from structured extras +
-// notes, matching the "+Name, nota" convention parsed by existing views.
-function buildLegacySub(extras, notes) {
+// Rebuild a backward-compatible readable `sub` string from structured extras
+// ONLY, matching the "+Name" convention parsed by existing views.
+//
+// CANONICAL CONTRACT: `sub` is configuration/compatibility text only. The manual
+// operator note lives exclusively in `notes` and must NEVER be echoed into `sub`
+// (a note-only item must produce sub="", not sub=notes). Every consumer reads the
+// note from `notes`; legacy sub-only items keep their original `sub` verbatim
+// (this rebuild only runs when no incoming `sub` is present).
+function buildLegacySub(extras) {
   const tags = [];
   for (const e of extras) {
     const label = e.quantity > 1 ? `+${e.name} ×${e.quantity}` : `+${e.name}`;
     tags.push(label);
   }
-  return [...tags, notes].filter(Boolean).join(", ");
+  return tags.filter(Boolean).join(", ");
 }
 
 // A Custom pizza — detected by an explicit flag or the legacy "custom_" id.
@@ -270,8 +276,10 @@ function normalizeOrderItem(item, opts = {}) {
   }
   const lineTotal = round2(finalUnitPrice * quantity);
 
-  // legacy readable variation string (preserve original text when present)
-  const legacySub = (typeof item.sub === "string" && item.sub.trim() !== "") ? item.sub : buildLegacySub(extras, notes);
+  // legacy readable variation string. Preserve the original `sub` verbatim when
+  // present (legacy/Custom compatibility text); otherwise rebuild from EXTRAS ONLY.
+  // The manual note is never part of `sub` (it lives in `notes`).
+  const legacySub = (typeof item.sub === "string" && item.sub.trim() !== "") ? item.sub : buildLegacySub(extras);
 
   const snap = {
     // ── canonical (Phase A) ──
