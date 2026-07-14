@@ -111,9 +111,10 @@ async function getStorico({ fecha, limit } = {}) {
 }
 
 // Ordini archiviati/chiusi (Economía live-fallback): estado in (COMPLETADO,RETIRADO).
+// Legacy IT 'COMPLETATO' rows are the same terminal domain — include during compat.
 async function getOrdenesArchivio({ limit } = {}) {
   const lim = clampLimit(limit, 500);
-  return safeSelect("ordenes", `estado=in.(COMPLETADO,RETIRADO)&order=ts.desc&limit=${lim}`);
+  return safeSelect("ordenes", `estado=in.(COMPLETADO,COMPLETATO,RETIRADO)&order=ts.desc&limit=${lim}`);
 }
 
 // Log dei giri di consegna (Economía). order partito_alle.desc, limit cap 500.

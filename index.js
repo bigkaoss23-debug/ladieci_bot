@@ -86,7 +86,7 @@ app.get("/api", async (req, res) => {
     let result;
 
     if (action === "getOrdenes") {
-      result = await sbSelect("ordenes", "estado=not.in.(RETIRADO,COMPLETADO)&order=ts.asc");
+      result = await sbSelect("ordenes", "estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)&order=ts.asc");
     } else if (action === "getWaMsgs") {
       result = await sbSelect("wa_msgs", "stato=not.eq.COMPLETATO&order=ts.desc&limit=100");
     } else if (action === "getConfig") {

@@ -72,7 +72,7 @@ function fasciaOraDa(hora) {
 // ─── Scan: cosa c'è prima di chiudere (read-only) ────────────────
 async function scanServizio() {
   const oggi = madridDateStr();
-  const ordiniCompletati = await sbSelect("ordenes", "estado=in.(RETIRADO,COMPLETADO)") || [];
+  const ordiniCompletati = await sbSelect("ordenes", "estado=in.(RETIRADO,COMPLETADO,COMPLETATO)") || [];
   const convChiuse       = await sbSelect("conv", "stato_ordine=in.(ritirata,confermata,chiusa)") || [];
   const convAttive       = await sbSelect("conv", "stato_ordine=not.in.(ritirata,confermata,chiusa)") || [];
   const waMsgsAttivi     = await sbSelect("wa_msgs", "stato=in.(NUEVO,IN_TRATTAMENTO)") || [];
@@ -336,8 +336,8 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   });
 
   // ─── PASSO 3: leggi tutti gli ordini target ───────────────────
-  const ordCompletati = await sbSelect("ordenes", "estado=in.(RETIRADO,COMPLETADO)") || [];
-  const ordAttivi     = deleteAttivi ? (await sbSelect("ordenes", "estado=not.in.(RETIRADO,COMPLETADO)") || []) : [];
+  const ordCompletati = await sbSelect("ordenes", "estado=in.(RETIRADO,COMPLETADO,COMPLETATO)") || [];
+  const ordAttivi     = deleteAttivi ? (await sbSelect("ordenes", "estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)") || []) : [];
   const ordiniDaArch  = [
     ...(Array.isArray(ordCompletati) ? ordCompletati : []),
     ...(Array.isArray(ordAttivi)     ? ordAttivi.map(o => ({ ...o, estado: "CHIUSO_FORZATO" })) : [])
@@ -456,12 +456,12 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   // ─── PASSO 10: cleanup ordenes/conv/wa_msgs ───────────────────
   await sbDelete("conv",    "stato_ordine=in.(ritirata,confermata,chiusa)");
   await sbDelete("wa_msgs", "stato=in.(COMPLETATO,COCINA)");
-  await sbDelete("ordenes", "estado=in.(RETIRADO,COMPLETADO)");
+  await sbDelete("ordenes", "estado=in.(RETIRADO,COMPLETADO,COMPLETATO)");
 
   if (deleteAttivi) {
     await sbDelete("conv",    "stato_ordine=not.in.(ritirata,confermata,chiusa)");
     await sbDelete("wa_msgs", "stato=neq.COMPLETATO");
-    await sbDelete("ordenes", "estado=not.in.(RETIRADO,COMPLETADO)");
+    await sbDelete("ordenes", "estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)");
   }
 
   // ─── PASSO 11: reset config ───────────────────────────────────

@@ -482,7 +482,7 @@ async function creaOrdine(params) {
 // Stati post-cucina / terminali: il pedido è già consegnato/chiuso e nessuna
 // modifica server-side deve poter mutarlo. Chiude MOD-4 (M-06 EN_ENTREGA,
 // M-07 RETIRADO/COMPLETADO). Vedi LaDieciBotV2_TEST_MATRIX.md.
-const MODIFICA_TERMINAL_STATES = new Set(["EN_ENTREGA", "RETIRADO", "COMPLETADO"]);
+const MODIFICA_TERMINAL_STATES = new Set(["EN_ENTREGA", "RETIRADO", "COMPLETADO", "COMPLETATO"]);
 
 async function modificaOrdine(ordenId, updates) {
   if (updates.hora !== undefined && horaToMinStrict(updates.hora) == null) {

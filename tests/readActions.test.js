@@ -59,8 +59,13 @@ async function expectParamError(fn, label) {
   check("getStorico limit clamped to 500 max", /limit=500/.test(last().query), last().query);
 
   await R.getOrdenesArchivio();
-  check("getOrdenesArchivio → estado in (COMPLETADO,RETIRADO), limit 500",
-    last().table === "ordenes" && /estado=in\.\(COMPLETADO,RETIRADO\)/.test(last().query) && /limit=500/.test(last().query));
+  // Phase 2B: archive read recognizes BOTH the canonical ES 'COMPLETADO' and the
+  // legacy IT 'COMPLETATO' terminal spelling during the compatibility period.
+  check("getOrdenesArchivio → estado in (COMPLETADO,COMPLETATO,RETIRADO), limit 500",
+    last().table === "ordenes"
+    && /estado=in\.\(COMPLETADO,COMPLETATO,RETIRADO\)/.test(last().query)
+    && /RETIRADO/.test(last().query)
+    && /limit=500/.test(last().query));
 
   await R.getDeliveryLogs();
   check("getDeliveryLogs → delivery_logs, partito_alle.desc",
