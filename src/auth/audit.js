@@ -32,6 +32,7 @@ async function sbRest(method, resource, { query, body, prefer } = {}) {
 
 const ALLOWED_EVENTS = Object.freeze([
   'login_ok', 'login_fail', 'locked', 'pin_set', 'pin_change', 'revoke', 'bootstrap', 'recovery',
+  'actor_disabled', 'actor_enabled',
 ]);
 
 // Sensitive keys in NORMALIZED form: lowercased, separators (_ - space) removed.

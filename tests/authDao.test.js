@@ -143,6 +143,13 @@ async function throwsCode(fn, code) {
   assert('best-effort increments diagnostic counter', audit.getAuditWriteErrorCount() === before + 1);
   const evErr = await captureErr(() => audit.writeAuthAudit({ event: 'not_an_event' }));
   assert('invalid event rejected (VALIDATION)', evErr && evErr.code === 'VALIDATION');
+  // 9b — dedicated actor-state events are allowed
+  assert('ALLOWED_EVENTS includes actor_disabled/actor_enabled',
+    audit.ALLOWED_EVENTS.includes('actor_disabled') && audit.ALLOWED_EVENTS.includes('actor_enabled'));
+  reset(() => ({ ok: true, status: 201, bodyObj: null }));
+  const ad = await audit.writeAuthAudit({ event: 'actor_disabled', targetActor: 'rider', byActor: 'owner' });
+  const ae = await audit.writeAuthAudit({ event: 'actor_enabled', targetActor: 'rider', byActor: 'owner' });
+  assert('writeAuthAudit accepts actor_disabled/actor_enabled', ad.ok === true && ae.ok === true);
 
   // 10 — getLockState computes lock/retry
   reset(() => ({ bodyObj: [{ actor: 'owner', role: 'admin', active: true, session_version: 1, failed_count: 5, locked_until: new Date(Date.now() + 60000).toISOString(), updated_at: 't', updated_by: null }] }));

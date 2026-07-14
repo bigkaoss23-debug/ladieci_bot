@@ -14,7 +14,7 @@
 --   set_pin (pin_hash NULL) → event=pin_set, sv+1, failed reset
 --   set_pin (pin_hash present) → event=pin_change
 --   bump_session_version → event=revoke, sv+1
---   set_active(false) → event=revoke, meta{op:set_active,active:false}, sv+1
+--   set_active(false) → event=actor_disabled, sv+1 ; set_active(true) → event=actor_enabled, sv unchanged
 --   invalid by_actor → constraint violation, NO mutation (atomic)
 --   unknown actor → AUTH_ACTOR_NOT_FOUND
 --   sensitive meta → AUTH_META_SENSITIVE_KEY, NO mutation
@@ -89,11 +89,16 @@ begin
   raise exception 'REVOKE %', jsonb_build_object('rpc',r,'audit_event',ev);
 end $$;
 
-do $$ declare r jsonb; ev text; mt jsonb;
+-- disable → actor_disabled, sv+1 ; enable (same aborted tx) → actor_enabled, sv unchanged
+do $$ declare r1 jsonb; r2 jsonb; ev1 text; ev2 text; sv0 int;
 begin
-  r := public.auth_set_active('rider', false, 'owner', '{}'::jsonb);
-  select event, meta into ev, mt from public.auth_audit where target_actor='rider' order by id desc limit 1;
-  raise exception 'ACTIVE %', jsonb_build_object('rpc',r,'audit_event',ev,'meta',mt);
+  select session_version into sv0 from public.auth_actors where actor='rider';
+  r1 := public.auth_set_active('rider', false, 'owner', '{}'::jsonb);
+  select event into ev1 from public.auth_audit where target_actor='rider' order by id desc limit 1;
+  r2 := public.auth_set_active('rider', true, 'owner', '{}'::jsonb);
+  select event into ev2 from public.auth_audit where target_actor='rider' order by id desc limit 1;
+  raise exception 'ACTIVE %', jsonb_build_object(
+    'sv_before', sv0, 'disable', r1, 'disable_event', ev1, 'enable', r2, 'enable_event', ev2);
 end $$;
 
 -- ── controlled errors (each raises; the failing statement mutates nothing) ────
