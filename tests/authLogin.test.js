@@ -52,7 +52,7 @@ function makeDeps(over = {}) {
   }
 
   // ── success paths (admin/owner, rider, operator primary/backup) ──────────
-  for (const [role, actor, pin] of [['admin', 'owner', '13572468'], ['rider', 'rider', '135724'], ['operator', 'operator_primary', '246813'], ['operator', 'operator_backup', '864213']]) {
+  for (const [role, actor, pin] of [['admin', 'owner', '135724680'], ['rider', 'rider', '135724'], ['operator', 'operator_primary', '246813'], ['operator', 'operator_backup', '864213']]) {
     const { deps, rec, verify } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:' + pin }, resetRet: { active: true, session_version: 5 } } });
     const login = createLoginHandler(deps);
     const r = await login({ role, pin, actor, trustedClientIp: '1.2.3.4' });

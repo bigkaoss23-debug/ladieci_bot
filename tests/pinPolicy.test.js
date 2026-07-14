@@ -5,9 +5,10 @@ let pass = 0, fail = 0;
 const assert = (n, c, d = '') => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n + (d ? '  → ' + d : '')); } };
 const ok = (pin, role) => pp.validatePinFormat(pin, role).ok;
 
-// admin: 8..12 digits
-assert('admin 8 strong ok', ok('13572468', 'admin'));
+// admin: 9..12 digits
+assert('admin 9 strong ok', ok('135724680', 'admin'));
 assert('admin 12 strong ok', ok('135724680246', 'admin'));
+assert('admin 8 too short', !ok('13572468', 'admin'));
 assert('admin 7 too short', !ok('1357246', 'admin'));
 assert('admin 13 too long', !ok('1357246802468', 'admin'));
 assert('admin all-same reject', !ok('00000000', 'admin'));

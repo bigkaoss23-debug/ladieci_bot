@@ -4,9 +4,10 @@
 // hashing is B1, verification is the login flow. `reason` is for internal/B6 use;
 // the login endpoint must map any failure to a GENERIC external error.
 
-// Role → allowed digit length [min, max].
+// Role → allowed digit length [min, max]. Admin 9–12 / operator·rider 6–8 are
+// disjoint by design (owner PIN can never collide with an operational PIN).
 const ROLE_PIN_RULES = Object.freeze({
-  admin:    { min: 8, max: 12 },
+  admin:    { min: 9, max: 12 },
   operator: { min: 6, max: 8 },
   rider:    { min: 6, max: 8 },
 });

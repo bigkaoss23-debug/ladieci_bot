@@ -26,7 +26,7 @@ const assert = (n, c, d = '') => { if (c) { pass++; console.log('  PASS  ' + n);
   const jwt = require('../src/auth/jwt');
 
   const cases = [
-    ['admin', 'owner', '81726354'],           // 8 digits, strong
+    ['admin', 'owner', '817263549'],          // 9 digits, strong (admin policy 9–12)
     ['operator', 'operator_primary', '284617'],
     ['operator', 'operator_backup', '736194'],
     ['rider', 'rider', '905172'],
