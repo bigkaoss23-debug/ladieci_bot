@@ -39,7 +39,7 @@ require.cache[sbPath] = {
       }
       return Array.from(sbState.db.values())
         .filter(o => o.tipo_consegna === "DOMICILIO" &&
-                     !["RETIRADO","COMPLETATO"].includes(o.estado))
+                     !["RETIRADO","COMPLETADO","COMPLETATO"].includes(o.estado))
         .map(o => JSON.parse(JSON.stringify(o)));
     },
     sbUpdate: async (table, query, body) => {

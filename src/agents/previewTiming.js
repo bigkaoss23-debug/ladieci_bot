@@ -261,7 +261,7 @@ async function previewOrderTiming(params = {}) {
     activeOrders =
       (await sbSelect(
         "ordenes",
-        "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)"
+        "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)"
       )) || [];
   } catch (e) {
     console.warn("[previewOrderTiming] read ordenes failed:", e?.message || e);

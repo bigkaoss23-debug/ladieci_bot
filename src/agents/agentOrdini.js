@@ -42,7 +42,7 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
   if (tipoConsegna !== "DOMICILIO" || !zona || !durataAndataMin) {
     return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin });
   }
-  const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
+  const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)") || [];
   const sim = simulateDriverSchedule(rows);
 
   // Aggregazione stesso giro: se il nuovo ordine cade nello stesso slot+zona di un
@@ -130,7 +130,7 @@ function planDriverScheduleSync(rows) {
 async function risincronizzaGiro(zona, hora) {
   if (!zona || !hora) return;
   try {
-    const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
+    const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)") || [];
     for (const u of planDriverScheduleSync(rows)) {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(u.id)}`, u.patch);
     }

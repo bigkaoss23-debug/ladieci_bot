@@ -103,7 +103,7 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
   const driverInGiro = !!(driverStato?.stato === "IN_GIRO" && driverStato?.zona === zonaId && driverStato?.partito_alle);
 
   // Ordini delivery attivi (per consolidazione zonale + simulazione cascade)
-  const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
+  const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)") || [];
 
   // ── Conta ordini per (zona, slot10(hora)) — coerente con la logica di aggregazione ──
   const slotKey = (z, h) => {

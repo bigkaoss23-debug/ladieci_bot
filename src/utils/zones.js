@@ -325,7 +325,7 @@ function simulateDriverSchedule(orders, options = {}) {
 
   const validi = (orders || []).filter(o =>
     o && o.tipo_consegna === "DOMICILIO" && o.hora && o.zona
-    && !["RETIRADO","COMPLETATO","POR_CONFIRMAR"].includes(o.estado)
+    && !["RETIRADO","COMPLETADO","COMPLETATO","POR_CONFIRMAR"].includes(o.estado)
   );
 
   const giriMap = new Map();
@@ -393,7 +393,7 @@ function computeDriverFields(orders, options = {}) {
   const out = new Map();
   for (const o of orders || []) {
     if (!o || o.tipo_consegna !== "DOMICILIO" || !o.zona || !o.hora) continue;
-    if (["RETIRADO", "COMPLETATO", "POR_CONFIRMAR"].includes(o.estado)) continue;
+    if (["RETIRADO", "COMPLETADO", "COMPLETATO", "POR_CONFIRMAR"].includes(o.estado)) continue;
     const horaMin = toServiceDayMin(o.hora);
     if (horaMin == null) continue;
     const g = byKey.get(`${o.zona}|${slot10(horaMin)}`);
