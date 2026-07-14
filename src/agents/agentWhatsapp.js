@@ -5,8 +5,15 @@
 const { chiamaClaude } = require("../utils/claude");
 const { sbSelect, sbUpdate, sbUpsert } = require("../utils/supabase");
 const { isBevanda } = require("../utils/helpers");
-const { MENU_LISTA, INFO_RISTORANTE, ABBINAMENTI_NOMI, COSTO_CONSEGNA } = require("../config");
+// INFO_RISTORANTE / COSTO_CONSEGNA are static restaurant info used only by the
+// RESPONDER (generaRisposta). The PARSER no longer reads MENU_LISTA/ABBINAMENTI
+// from config — the dynamic catalogue is its source of truth (Phase C).
+const { INFO_RISTORANTE, COSTO_CONSEGNA } = require("../config");
 const { KEYWORDS_ZONA } = require("../utils/zones");
+// Phase C — dynamic catalogue for the WhatsApp parser (replaces hardcoded config
+// MENU_LISTA / ABBINAMENTI / inline number map as the source of truth).
+const { getWhatsappMenuContext } = require("../menu/whatsappMenuContext");
+const { resolveWhatsappItem } = require("../menu/whatsappCatalogo");
 
 // Tipi di via spagnoli non ambigui come marcatori di indirizzo postale
 const RE_TIPOS_VIA = /\b(calle|c\/|avenida|avda?\.?|paseo|carretera|ctra\.?|bulevar|boulevard|urbanizaci[oó]n|urb\.?|ronda|traves[íi]a|autov[íi]a|plaza)[\s.]+\w/i;
@@ -77,6 +84,16 @@ function assicuraFirma(testo) {
 }
 
 async function interpreta(testo, cfg, clienteInfo, chatHistory) {
+  // Phase C — the DYNAMIC catalogue is the source of truth. Fetch it (cache-backed,
+  // last-good) and fail CLOSED if it cannot be loaded: never fall back to the stale
+  // hardcoded MENU_LISTA to build a real order.
+  let menuCtx;
+  try {
+    menuCtx = await getWhatsappMenuContext();
+  } catch (err) {
+    console.error("[interpreta] catalogue unavailable:", err.message);
+    return { items: [], nota: "", hora: "", conf: 0, tipo: "errore", catalogoError: true };
+  }
   const cTempo = contestoTempo();
   const direccionPreDetectada = preDetectaDireccion(testo);
   let contestoCliente = "";
@@ -104,7 +121,8 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
   const systemPrompt =
     "Eres un asistente para una pizzería italiana. Analiza el mensaje de WhatsApp.\n" +
     "Responde SOLO con JSON válido, sin texto extra.\n\n" +
-    "MENÚ: " + MENU_LISTA.join(", ") + "\n" +
+    "MENÚ: " + menuCtx.menuLista.join(", ") + "\n" +
+    "EXTRAS DISPONIBLES (" + menuCtx.extrasCatalog + ")\n" +
     cTempo + contestoCliente + contestoChat +
     "\nSALUDOS — REGLA FUNDAMENTAL:\n" +
     "Ignora completamente saludos iniciales y finales: hola, buenas, hey, buenos días, buenas noches,\n" +
@@ -118,13 +136,13 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
     "5. correccion (conf 90): cliente CORRIGE cantidad. items = cantidad TOTAL deseada.\n" +
     "6. modifica_complessa (conf 90, items=[]): cambio/eliminación de item. Señales: 'en vez de', 'cambiar', 'quitar', 'elimina'.\n" +
     "7. custom_pizza (conf=50, items=[]): pizza completamente inventada fuera del menú.\n\n" +
-    "EQUIVALENCIAS DE NOMBRES:\n" + ABBINAMENTI_NOMI + "\n\n" +
+    "EQUIVALENCIAS DE NOMBRES:\n" + menuCtx.abbinamenti + "\n\n" +
     "BEBIDAS — REGLA sub: Cuando el cliente pide un refresco con nombre específico\n" +
     "(Coca Cola, Fanta, Sprite, Nestea, Aquarius, Seven Up, etc.) → n='Refresco', p=2.50,\n" +
     "y guarda el nombre exacto en sub. Ejemplo: 'una Fanta' → {n:'Refresco',p:2.50,sub:'Fanta'}.\n" +
     "Si dice solo 'refresco' sin especificar → sub=''.\n\n" +
-    "NÚMEROS MENÚ: 1=El Pelusa, 2=Zizou, 3=O Rei, 4=Il Gladiatore, 5=El Gaucho,\n" +
-    "6=El Divino Codino, 7=La Pulga, 8=Il Tulipano Nero, 9=El Ultimo 10, 10=El Mago de Zadar, 11=El Maestro.\n\n" +
+    "NÚMEROS MENÚ (del catálogo actual): " + menuCtx.numeriMenu + "\n" +
+    "Si el cliente pide por número, incluye ese número en el campo 'num'.\n\n" +
     ((() => { const r = sanitizeRegoleAppreseForPrompt(cfg["REGOLE_APPRESE"]); return r ? "REGLAS APRENDIDAS — APLICAR SIEMPRE:\n" + r + "\n\n" : ""; })()) +
     (direccionPreDetectada
       ? "⚠️ DIRECCIÓN DETECTADA AUTOMÁTICAMENTE: el sistema ha identificado un tipo de vía\n" +
@@ -146,11 +164,16 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
         "CRÍTICO: NO inventar direcciones. Si escribe 'domicilio' sin dirección → direccion=''\n\n") +
     "FORMATO OUTPUT (solo JSON):\n" +
     "{\"tipo\":\"ordine|domanda|misto|solo_ora|correccion|modifica_complessa|custom_pizza\"," +
-    "\"items\":[{\"n\":\"nombre\",\"q\":1,\"p\":9.50,\"e\":\"emoji\",\"sub\":\"\"}]," +
+    "\"items\":[{\"n\":\"nombre\",\"num\":null,\"q\":1,\"p\":9.50,\"e\":\"emoji\",\"extras\":[],\"sub\":\"\"}]," +
     "\"nota\":\"\",\"hora\":\"\",\"conf\":95," +
     "\"tipo_consegna\":\"RITIRO\",\"direccion\":\"\"}\n\n" +
+    "CAMPO num: si el cliente pide por número de menú, ponlo en 'num' (si no, null).\n" +
+    "CAMPO extras: SOLO suplementos reales de la lista EXTRAS DISPONIBLES arriba (ej: Coppa, Kinder).\n" +
+    "  Devuelve los nombres exactos del catálogo en un array. Sin extras: [].\n" +
     "CAMPO sub CRÍTICO: SIEMPRE presente. Sin variación: sub=''. Con variación: rellenarlo.\n" +
-    "Ejemplos: 'marinara sin ajo' -> sub='sin ajo' | 'diavola extra picante' -> sub='extra picante'\n\n" +
+    "  El campo sub/nota es SOLO para instrucciones manuales (ej: 'sin ajo', 'cortar en 4'),\n" +
+    "  NUNCA para suplementos (esos van en 'extras').\n" +
+    "Ejemplos: 'marinara sin ajo' -> sub='sin ajo' | 'nutella con kinder' -> extras=['Kinder']\n\n" +
     "REGLA ANTI-INVENCIÓN — CRÍTICA:\n" +
     "Si el cliente pide una pizza que NO existe en el menú y NO tiene equivalencia explícita arriba\n" +
     "(ej: carbonara, quattro stagioni, fungi, napoli, calzone, hawaiana, bbq, etc.),\n" +
@@ -164,10 +187,29 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
     const clean = raw.trim().replace(/```json/g, "").replace(/```/g, "").trim();
     const parsed = JSON.parse(clean);
     console.log(`[interpreta] regex=${direccionPreDetectada} claude_tc=${parsed.tipo_consegna} dir="${parsed.direccion}"`);
-    const normalizedItems = (parsed.items || []).map(it => ({
-      n: it.n || "", q: Number(it.q) || 1, p: Number(it.p) || 0,
-      e: it.e || "", sub: (it.sub != null) ? String(it.sub) : ""
-    }));
+    // Enrich each parsed item against the DYNAMIC catalogue. On a confident match
+    // we replace it with a canonical-ready item (real UUID/number/classicName +
+    // structured extras + accepted catalogue price), which then flows unchanged
+    // into the shared normalizeOrderItem snapshot. On unknown/ambiguous/disabled
+    // we KEEP the legacy LLM item (no regression) and log — the anti-invención
+    // rule + operator handoff already cover genuinely unknown products.
+    const normalizedItems = (parsed.items || []).map(it => {
+      const legacy = {
+        n: it.n || "", q: Number(it.q) || 1, p: Number(it.p) || 0,
+        e: it.e || "", sub: (it.sub != null) ? String(it.sub) : ""
+      };
+      const res = resolveWhatsappItem(menuCtx.index, {
+        n: it.n, num: it.num, q: legacy.q,
+        extras: Array.isArray(it.extras) ? it.extras : [],
+        nota: (it.sub != null && String(it.sub).trim() !== "") ? String(it.sub) : "",
+      });
+      if (res.status === "ok") {
+        if (res.warnings && res.warnings.length) console.log("[interpreta] extra warnings:", JSON.stringify(res.warnings));
+        return res.item;
+      }
+      console.log(`[interpreta] item not resolved (${res.reason}) → legacy fallback: "${legacy.n}"`);
+      return legacy;
+    });
     const esDomicilio = direccionPreDetectada || parsed.tipo_consegna === "DOMICILIO";
     return {
       items: normalizedItems,
