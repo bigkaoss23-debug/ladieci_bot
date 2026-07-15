@@ -22,16 +22,25 @@ const KNOWN_STATES = new Set([
   "COMPLETADO",
   "COMPLETATO",
   "CANCELADO",
+  // B7: operational void terminal (distinct from legacy CANCELADO). Reachable
+  // only from the four active states below; NEVER from RETIRADO/COMPLETADO/
+  // COMPLETATO/CANCELADO/ANULADO. Grammar-only in B7A1 — no writer/route yet.
+  "ANULADO",
 ]);
 
 // Stati terminali "duri": nessuna transizione in uscita.
 // NB: RETIRADO (consegnato/ritirato) NON è qui — può ancora avanzare a
 // COMPLETADO/COMPLETATO alla chiusura serata; ma le transizioni all'indietro
 // restano illegali via il grafo FORWARD (RETIRADO → solo completamento).
-const TERMINAL_STATES = new Set(["COMPLETADO", "COMPLETATO", "CANCELADO"]);
+const TERMINAL_STATES = new Set(["COMPLETADO", "COMPLETATO", "CANCELADO", "ANULADO"]);
 
 // Stati da cui si può sempre cancellare.
 const CANCELLABLE_FROM = ["POR_CONFIRMAR", "NUEVO", "EN_COCINA", "LISTO", "EN_ENTREGA"];
+
+// B7 void: gli stati attivi da cui un ordine può passare a ANULADO. Distinto da
+// CANCELLABLE_FROM: NUEVO NON è incluso (void operativo solo su ordini realmente
+// in lavorazione). Nessun altro stato può entrare in ANULADO.
+const VOIDABLE_FROM = ["POR_CONFIRMAR", "EN_COCINA", "LISTO", "EN_ENTREGA"];
 
 // Undo operativo consentito (49B): il pulsante LISTO della dashboard non ha
 // conferma, quindi l'operatore può marcarlo per sbaglio. Permettiamo di
@@ -55,12 +64,15 @@ const FORWARD = {
   COMPLETADO: [],
   COMPLETATO: [],
   CANCELADO: [],
+  // B7 void terminal: nessuna transizione in uscita.
+  ANULADO: [],
 };
 
 const LEGAL_TRANSITIONS = Object.fromEntries(
   Object.entries(FORWARD).map(([from, tos]) => {
     const extra = [];
     if (CANCELLABLE_FROM.includes(from)) extra.push("CANCELADO");
+    if (VOIDABLE_FROM.includes(from)) extra.push("ANULADO");
     if (OPERATIONAL_UNDO[from]) extra.push(...OPERATIONAL_UNDO[from]);
     return [from, Array.from(new Set([...tos, ...extra]))];
   })

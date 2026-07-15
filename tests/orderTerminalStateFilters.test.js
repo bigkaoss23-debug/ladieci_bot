@@ -168,8 +168,11 @@ for (const file of PROD_FILES) {
 // ── PART 5: state machine keeps dual terminal compatibility ──────────────────
 {
   const osm = read('src/utils/orderStateMachine.js');
-  assert('[P5a] orderStateMachine TERMINAL_STATES keeps both completed',
-    /TERMINAL_STATES = new Set\(\["COMPLETADO", "COMPLETATO", "CANCELADO"\]\)/.test(osm));
+  // Membership check (not exact-equal): B7 additively adds "ANULADO" as a void
+  // terminal; the dual-completed + CANCELADO compatibility invariant must remain.
+  assert('[P5a] orderStateMachine TERMINAL_STATES keeps both completed (+ CANCELADO)',
+    hasBoth((osm.match(/TERMINAL_STATES = new Set\(\[([^\]]*)\]/) || [, ''])[1]) &&
+    /TERMINAL_STATES = new Set\(\[[^\]]*"CANCELADO"[^\]]*\]/.test(osm));
   assert('[P5b] orderStateMachine RETIRADO -> both completed targets',
     /RETIRADO: \["COMPLETADO", "COMPLETATO"\]/.test(osm));
   assert('[P5c] planner INACTIVE_STATES keeps both',
