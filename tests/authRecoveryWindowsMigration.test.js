@@ -10,8 +10,43 @@ let pass = 0, fail = 0;
 const assert = (n, c, d = '') => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n + (d ? '  -> ' + d : '')); } };
 const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
 
-const SQL = read('migrations/2026-07-14_auth_recovery_windows.sql');
-const RB = read('migrations/2026-07-14_auth_recovery_windows.ROLLBACK.sql');
+// ── migration discovery / packaging convention ──────────────────────────────
+// This repo has NO automated runner (no supabase/ dir, no migrate script, nothing
+// reads migrations/). Migrations are applied MANUALLY, one project per header. The
+// established convention is `YYYY-MM-DD_description.sql`; rollbacks are the paired
+// `...description.ROLLBACK.sql` (segregated by the `.ROLLBACK` infix, never applied
+// forward). The 14-digit versions in the SQL (e.g. 20260710075612) are the Supabase
+// schema_migrations SENTINEL, not a filename convention. We model "forward
+// discovery" as: every `*.sql` in migrations/ that is NOT `*.ROLLBACK.sql`, applied
+// in lexical (date) order. The B5 files are validated as MEMBERS of that derived
+// set — not by opening a hardcoded path the convention would ignore.
+const MIG_DIR = path.join(__dirname, '..', 'migrations');
+const ALL_MIGRATIONS = fs.readdirSync(MIG_DIR).filter((f) => f.endsWith('.sql'));
+const isRollback = (f) => f.endsWith('.ROLLBACK.sql');
+const FORWARD_CONVENTION = /^\d{4}-\d{2}-\d{2}_[a-z0-9_]+\.sql$/;      // matches ALL forward files
+const ROLLBACK_CONVENTION = /^\d{4}-\d{2}-\d{2}_[a-z0-9_]+\.ROLLBACK\.sql$/;
+const FORWARD_SET = ALL_MIGRATIONS.filter((f) => !isRollback(f)).sort(); // discovery order
+const B5_FWD = '2026-07-14_auth_recovery_windows.sql';
+const B5_RB = '2026-07-14_auth_recovery_windows.ROLLBACK.sql';
+
+assert('convention: every forward migration matches YYYY-MM-DD_desc.sql',
+  FORWARD_SET.every((f) => FORWARD_CONVENTION.test(f)), FORWARD_SET.filter((f) => !FORWARD_CONVENTION.test(f)).join(','));
+assert('convention: B5 forward filename matches the real convention', FORWARD_CONVENTION.test(B5_FWD) && !isRollback(B5_FWD));
+assert('discovery: B5 forward is INCLUDED in the derived forward set', FORWARD_SET.includes(B5_FWD));
+assert('discovery: hardcoded path is a real discovered member (not an ignored file)',
+  fs.existsSync(path.join(MIG_DIR, B5_FWD)) && FORWARD_SET.includes(B5_FWD));
+assert('uniqueness: B5 forward version appears exactly once', FORWARD_SET.filter((f) => f === B5_FWD).length === 1);
+assert('ordering: B5 forward sorts AFTER all B0–B3 auth forwards (2026-07-13_auth_*)',
+  FORWARD_SET.filter((f) => /_auth_/.test(f) && f < B5_FWD).length >= 3 &&
+  FORWARD_SET.filter((f) => /^2026-07-13_auth_/.test(f)).every((f) => f < B5_FWD));
+assert('ordering: B5 forward is the LAST forward migration lexically', FORWARD_SET[FORWARD_SET.length - 1] === B5_FWD);
+assert('rollback: B5 rollback EXCLUDED from forward discovery set', !FORWARD_SET.includes(B5_RB) && isRollback(B5_RB));
+assert('rollback: B5 rollback matches the established .ROLLBACK.sql convention', ROLLBACK_CONVENTION.test(B5_RB));
+assert('rollback: every rollback in the repo uses the same .ROLLBACK.sql convention',
+  ALL_MIGRATIONS.filter(isRollback).every((f) => ROLLBACK_CONVENTION.test(f)));
+
+const SQL = read('migrations/' + B5_FWD);
+const RB = read('migrations/' + B5_RB);
 // Isolate each function DEFINITION body (not the REVOKE/GRANT signatures) for
 // atomicity assertions. register spans its CREATE → consume's CREATE; consume
 // spans its CREATE → the grants section.
@@ -88,6 +123,11 @@ assert('consume revoked from public/anon/authenticated', /REVOKE ALL ON FUNCTION
 assert('register granted to service_role only', /GRANT EXECUTE ON FUNCTION public\.auth_register_recovery_window[\s\S]*?TO service_role/.test(SQL));
 assert('consume granted to service_role only', /GRANT EXECUTE ON FUNCTION public\.auth_consume_recovery_window[\s\S]*?TO service_role/.test(SQL));
 assert('no broad GRANT ... TO PUBLIC/anon/authenticated', !/GRANT[\s\S]*?TO (PUBLIC|anon|authenticated)/.test(SQL));
+
+// ── documentation references the FINAL actual filenames ─────────────────────
+const DOC = read('docs/access-control/B5_BOOTSTRAP_RECOVERY_CONTRACT.md');
+assert('doc references the actual forward migration filename', DOC.includes('migrations/' + B5_FWD));
+assert('doc references the actual rollback filename', DOC.includes('migrations/' + B5_RB));
 
 // ── rollback safety ──────────────────────────────────────────────────────────
 assert('rollback refuses if any consumed window exists', /ROLLBACK REFUSED/.test(RB) && /consumed_at IS NOT NULL/.test(RB));

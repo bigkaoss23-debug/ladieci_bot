@@ -129,6 +129,26 @@ secret, wrong API key, actor not found/not admin/inactive, or a PIN-presence
 conflict — no user/actor enumeration. Internal distinctions exist only in safe
 test assertions, never with secret material.
 
+## Migration packaging
+
+The repository has **no automated migration runner** (no `supabase/` directory, no
+migrate script, nothing reads `migrations/`); migrations are applied **manually**,
+one target project per SQL header. The established convention is
+`YYYY-MM-DD_description.sql`, with the paired guarded rollback as
+`YYYY-MM-DD_description.ROLLBACK.sql` (segregated by the `.ROLLBACK` infix and never
+applied forward). The 14-digit values inside the SQL (e.g. `20260710075612`) are the
+Supabase `schema_migrations` **sentinel version**, not a filename convention.
+
+B5 artifacts follow this convention exactly and sort **after** all B0–B3 auth
+forwards (`2026-07-13_auth_*`):
+
+- forward: `migrations/2026-07-14_auth_recovery_windows.sql`
+- rollback: `migrations/2026-07-14_auth_recovery_windows.ROLLBACK.sql`
+
+`tests/authRecoveryWindowsMigration.test.js` derives the forward-discovery set from
+the directory and proves membership, ordering, uniqueness, and rollback exclusion —
+so the packaging cannot silently drift from the runner convention.
+
 ## Unwired / no-runtime-effect status
 
 - No Express route; not imported by `index.js`; not a B4 action.
