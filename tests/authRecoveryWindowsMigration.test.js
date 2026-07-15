@@ -39,7 +39,12 @@ assert('uniqueness: B5 forward version appears exactly once', FORWARD_SET.filter
 assert('ordering: B5 forward sorts AFTER all B0–B3 auth forwards (2026-07-13_auth_*)',
   FORWARD_SET.filter((f) => /_auth_/.test(f) && f < B5_FWD).length >= 3 &&
   FORWARD_SET.filter((f) => /^2026-07-13_auth_/.test(f)).every((f) => f < B5_FWD));
-assert('ordering: B5 forward is the LAST forward migration lexically', FORWARD_SET[FORWARD_SET.length - 1] === B5_FWD);
+// B5 was the newest forward migration AT AUTHORING; it must sort last among all
+// migrations dated on/before its own date. Newer-dated migrations (e.g. the
+// B6-PRE 2026-07-15 event extension) may legitimately follow it — do not assert
+// B5 is the permanent lexical last.
+assert('ordering: B5 forward is the last forward migration dated on/before 2026-07-14',
+  FORWARD_SET.filter((f) => f <= B5_FWD).slice(-1)[0] === B5_FWD);
 assert('rollback: B5 rollback EXCLUDED from forward discovery set', !FORWARD_SET.includes(B5_RB) && isRollback(B5_RB));
 assert('rollback: B5 rollback matches the established .ROLLBACK.sql convention', ROLLBACK_CONVENTION.test(B5_RB));
 assert('rollback: every rollback in the repo uses the same .ROLLBACK.sql convention',
