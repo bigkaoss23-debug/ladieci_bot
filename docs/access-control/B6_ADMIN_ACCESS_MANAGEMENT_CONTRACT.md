@@ -136,10 +136,31 @@ these RPCs).
 
 - **B6A (this contract):** canonical doc + the four SQL RPCs + guarded rollback +
   static tests. **Migration not applied.** No Node code, no router/HTTP wiring.
-- **B6B (future):** Node DAO/service that calls these RPCs (computing the scrypt
-  hash via B1 and the IP hash via `ipSecurity`), plus authenticated HTTP routes.
+- **B6B (implemented, UNWIRED):** Node DAO/service that calls these RPCs
+  (computing the scrypt hash via B1 and the IP hash via `ipSecurity`). **No HTTP
+  routes / no `index.js` wiring / no JWT-fresh-auth enforcement yet** — that
+  remains a later phase.
+
+### B6B Node API (unwired)
+- **DAO** `src/auth/adminAccessDao.js` (service_role, thin RPC wrappers):
+  `adminSetActorPin`, `adminRevokeActorSessions`, `adminSetActorActive`,
+  `adminUnlockActor`, plus the authoritative safe read `getActorSafe` (no
+  `pin_hash`). Every RPC/transport failure maps to one opaque
+  `AuthDaoError('ADMIN_ACTION_FAILED')`; results are whitelisted to the sanitized
+  B6A fields.
+- **Service** `src/auth/adminAccessService.js` —
+  `createAdminAccessService({ dao, hashPin, pinPolicy, ipHash, getTargetActor?, logger? })`
+  exposing `setActorPin`, `revokeActorSessions`, `setActorActive`, `unlockActor`.
+  Resolves the target's **authoritative role from the DAO** to pick the PIN policy
+  and to pass as the RPC's expected role (SQL re-verifies under lock); derives the
+  approved IP hash (fail-closed); sanitizes metadata (adds `pin_hash`/`raw_ip`/
+  `confirmation` to the rejected keys); issues exactly one atomic RPC per action;
+  never retries; returns a single generic `{ ok:false, error:'admin_action_failed' }`
+  on any failure. Default: performs no logging.
 
 ### Artifacts
 - Forward: `migrations/2026-07-15_auth_admin_access_management.sql`
 - Rollback: `migrations/2026-07-15_auth_admin_access_management.ROLLBACK.sql`
-- Static tests: `tests/authAdminAccessManagementMigration.test.js`
+- Static SQL tests: `tests/authAdminAccessManagementMigration.test.js`
+- B6B unit/static tests: `tests/adminAccessDao.test.js`,
+  `tests/adminAccessService.test.js`, `tests/adminAccessBoundary.static.test.js`
