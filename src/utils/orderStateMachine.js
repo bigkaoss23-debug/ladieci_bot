@@ -92,6 +92,11 @@ function validateTransition(from, to) {
   const t = String(to || "");
 
   if (!isKnownState(t)) return { ok: false, reason: "unknown_target_state" };
+  // B7 void: ANULADO is a hard terminal with NO outgoing edge, INCLUDING no
+  // self-edge. This narrow guard must precede the generic same-state no-op below
+  // so ANULADO→ANULADO is rejected (contract), while every other state keeps its
+  // idempotent noop (e.g. CANCELADO→CANCELADO stays a no-op).
+  if (f === "ANULADO" && t === "ANULADO") return { ok: false, reason: "from_terminal_state" };
   if (f === t) return { ok: true, reason: "noop" };          // idempotente
   if (f == null || f === "") return { ok: true, reason: "create" };
   if (!isKnownState(f)) return { ok: false, reason: "unknown_source_state" };

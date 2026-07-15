@@ -25,6 +25,19 @@ assert('ANULADO has no outgoing edges (LEGAL_TRANSITIONS empty, no self-edge)', 
 // a real (non-noop) transition out of ANULADO is rejected as terminal
 assert('ANULADO → EN_COCINA rejected (from_terminal_state)', validateTransition('ANULADO', 'EN_COCINA').reason === 'from_terminal_state');
 assert('ANULADO → RETIRADO rejected (from_terminal_state)', validateTransition('ANULADO', 'RETIRADO').reason === 'from_terminal_state');
+// PUBLIC-API contract: ANULADO→ANULADO must be REJECTED (NOT an idempotent no-op).
+// Covers both exported entry points (boolean predicate + {ok,reason} validator).
+assert('public predicate rejects ANULADO → ANULADO', isValidTransition('ANULADO', 'ANULADO') === false);
+assert('public validator rejects ANULADO → ANULADO (not noop)', (() => {
+  const v = validateTransition('ANULADO', 'ANULADO');
+  return v.ok === false && v.reason === 'from_terminal_state' && v.reason !== 'noop';
+})());
+// pre-existing same-state no-op is preserved for every OTHER state
+assert('CANCELADO → CANCELADO still an idempotent no-op', (() => {
+  const v = validateTransition('CANCELADO', 'CANCELADO'); return v.ok === true && v.reason === 'noop';
+})());
+assert('COMPLETADO → COMPLETADO still an idempotent no-op', validateTransition('COMPLETADO', 'COMPLETADO').reason === 'noop');
+assert('EN_COCINA → EN_COCINA still an idempotent no-op', validateTransition('EN_COCINA', 'EN_COCINA').reason === 'noop');
 
 // ── exactly four states can enter ANULADO ────────────────────────────────────
 const entersAnulado = [...sm.KNOWN_STATES].filter((f) => f !== 'ANULADO' && isValidTransition(f, 'ANULADO'));
@@ -90,6 +103,20 @@ assert('orderStateMachine imports nothing (no require / no DB / no route)', (() 
   // NC4: a pre-existing transition removed (EN_COCINA loses LISTO)
   const nc4 = build({ ...FWD, EN_COCINA: [] }, VOIDABLE, CANC);
   assert('NC4: detector catches a removed pre-existing transition', !(nc4['EN_COCINA'] || []).includes('LISTO'));
+
+  // NC5: prove the self-transition assertion fails if the generic same-state
+  // shortcut is (wrongly) allowed to authorize ANULADO→ANULADO. Model the buggy
+  // validator (noop before the terminal guard) and assert our detector flags it.
+  const buggyValidate = (from, to) => {
+    const f = from == null ? null : String(from);
+    const t = String(to || '');
+    if (![...sm.KNOWN_STATES].includes(t)) return { ok: false, reason: 'unknown_target_state' };
+    if (f === t) return { ok: true, reason: 'noop' };   // BUG: no ANULADO self-guard
+    return { ok: false, reason: 'other' };
+  };
+  const buggy = buggyValidate('ANULADO', 'ANULADO');
+  assert('NC5: detector catches ANULADO→ANULADO wrongly allowed as no-op',
+    !(buggy.ok === false));   // buggy returns ok:true → our reject-assertion would FAIL on it
 })();
 
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
