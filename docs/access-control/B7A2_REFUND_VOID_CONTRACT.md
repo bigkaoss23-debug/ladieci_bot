@@ -6,7 +6,7 @@ DAO/service, no router/HTTP wiring, no handler/state-machine change. Staging-onl
 (`tdikhfeinufaahagmpjz`); production untouched. Builds on the B7A1 ledger and the
 B7A2A payment-basis contract; does not edit or contradict either.
 
-## 1. Phase boundary (locked)
+## 1. Phase boundary
 - B7A2B implements **only** `order_refund` and `order_void`.
 - `order_rider_deliver` → **B7A3** (not B7A2C).
 - Prepaid creation is atomic inside the future `order_create` (no
@@ -40,23 +40,27 @@ Role is read from `auth_actors` under lock; caller-supplied role is never truste
 Ledger rows are the sole authority. Basis existence, refund existence, and void
 pay-state all derive from `order_financial_events`. `ordenes.refunded` is written
 as a convenience mirror but **never consulted** as authority; mutable
-`ya_pagado`/`cobrado`/`metodo_pago` never determine pay state. No hidden repair.
+`ya_pagado`/`cobrado`/`metodo_pago` never determine pay state. The target order row
+is the serialization lock. Financial-ledger rows are immutable and are read with
+plain `SELECT` without row-locking clauses. No hidden repair.
 
 ## 5. Refund — basis & amount/method
-Finds exactly one immutable basis event (`payment` or `payment_imported`, locked)
-and derives `basis_event_id`, `amount`, `payment_method` from it. Amount/method are
-**never** derived from `ordenes.totale`, `descuento_*`, `cobrado`, `ya_pagado`, or
-request input. No basis → `AUTH_NO_PAYMENT_BASIS` (mutable flags are not a
-substitute). A second refund under a different key → `AUTH_ALREADY_REFUNDED`
+Finds exactly one immutable basis event (`payment` or `payment_imported`) with a
+plain ledger `SELECT` and derives `basis_event_id`, `amount`, `payment_method` from
+it. Amount/method are **never** derived from `ordenes.totale`, `descuento_*`,
+`cobrado`, `ya_pagado`, or request input. No basis → `AUTH_NO_PAYMENT_BASIS`
+(mutable flags are not a substitute). A second refund under a different key is
+detected with a plain ledger `SELECT`, then rejected with `AUTH_ALREADY_REFUNDED`
 (ledger, not `ordenes.refunded`).
 
 ## 6. Void — source states & pay-state
 New void allowed only from `POR_CONFIRMAR`, `EN_COCINA`, `LISTO`, `EN_ENTREGA`
 (rejected from `RETIRADO`/`COMPLETADO`/`COMPLETATO`/`CANCELADO`/`ANULADO`/unknown →
-`AUTH_VOID_STATE_FORBIDDEN`). Pay state derives from the ledger: `refunded` if a
-refund event exists, else `paid` if a basis exists, else `unpaid`; `prev_pay_state
-= new_pay_state = <that value>`. No auto-refund; a paid order stays refundable; a
-previously-refunded active order may be voided (`refunded → refunded`).
+`AUTH_VOID_STATE_FORBIDDEN`). Pay state derives from plain ledger reads:
+`refunded` if a refund event exists, else `paid` if a basis exists, else `unpaid`;
+`prev_pay_state = new_pay_state = <that value>`. No auto-refund; a paid order
+stays refundable; a previously-refunded active order may be voided
+(`refunded → refunded`).
 
 ## 7. Snapshots
 - Refund: `prev_estado = new_estado = order.estado`, `paid → refunded`,
@@ -68,8 +72,9 @@ previously-refunded active order may be voided (`refunded → refunded`).
 ## 8. Canonical digest fields (server-generated; never caller-supplied)
 `lower(encode(sha256(convert_to(<canonical_jsonb>::text,'UTF8')),'hex'))`. Common:
 `order_id, type, idem_scope_key, by_actor, by_role, reason, prev_estado, new_estado,
-prev_pay_state, new_pay_state`. Refund adds `basis_event_id, amount, payment_method,
-legacy=false`. Void adds `amount=0, payment_method=NULL, original_giro_id, legacy=false`.
+prev_pay_state, new_pay_state`. Refund adds `basis_event_id, amount,
+payment_method, legacy=false`. Void adds `amount=0, payment_method=NULL,
+original_giro_id, legacy=false`.
 Excluded: `ip_hash`, `meta`, `created_at`, mutable order total, mutable payment flags.
 Reason is included in the digest (never returned; never auto-copied into metadata).
 
@@ -79,20 +84,25 @@ same-scope hit `(order_id, type, idem_scope_key)`, the candidate digest is
 **reconstructed from the EXISTING event's immutable snapshots** (`prev_estado`,
 `new_estado`, `prev_pay_state`, `new_pay_state`, `amount`, `payment_method`,
 `original_giro_id`, `legacy`) plus the current normalized `reason`/`by_actor`/
-`by_role` (and, for refund, the immutable basis id). It is **never** recomputed
-from the already-mutated current order state. Same digest → return the existing
-event (`idempotent=true`, no insert/update); different digest →
-`AUTH_IDEMPOTENCY_CONFLICT`. The same-scope branch runs **before** already-refunded
-(refund) and before the state rejection (void), so a committed void replays even
-though the order is already `ANULADO`.
+`by_role`. For refund replay, the same-scope branch first resolves the immutable
+payment basis with a plain ledger `SELECT`, verifies its amount/method match the
+existing refund event, and includes that basis event UUID in the replay digest. It
+is **never** recomputed from the already-mutated current order state and never uses
+metadata, request input, or mutable order fields as the basis identity. Same digest
+→ return the existing event (`idempotent=true`, no insert/update); different digest
+→ `AUTH_IDEMPOTENCY_CONFLICT`. Missing or mismatched basis during replay fails
+closed with `AUTH_REFUND_BASIS_INTEGRITY`. The same-scope branch runs **before**
+already-refunded (refund) and before the state rejection (void), so a committed
+void replays even though the order is already `ANULADO`.
 
 ## 10. Locking / concurrency
 Consistent lock order (shared with B7A2A): (1) initiating actor row, (2) target
-order row, (3) relevant immutable event rows (basis / same-scope event). The order
-`FOR UPDATE` lock serializes all financial operations on that order: one concurrent
+order row. The order `FOR UPDATE` lock serializes all financial operations on that
+order. Relevant immutable ledger rows (basis, same-scope event, existing refund
+row, void pay-state row) are read afterward with plain `SELECT`: one concurrent
 refund wins, the other becomes idempotent replay or `AUTH_ALREADY_REFUNDED`;
 concurrent voids yield at most one real void; void and refund serialize. Partial
-unique indexes are the DB backstop. No automatic retry; no split mutation.
+unique indexes are the final integrity backstop. No automatic retry; no split mutation.
 
 ## 11. Atomic order updates
 - Refund: `UPDATE ordenes SET refunded=true` — estado, `ya_pagado`/`cobrado`,
@@ -114,9 +124,9 @@ event identity + original snapshots.
 `AUTH_ORDER_NOT_FOUND`, `AUTH_REASON_BLANK`, `AUTH_IP_HASH_REQUIRED`,
 `AUTH_IP_HASH_TOO_LONG`, `AUTH_META_INVALID`, `AUTH_META_TOO_LARGE`,
 `AUTH_META_SENSITIVE_KEY`, `AUTH_IDEM_KEY_INVALID`, `AUTH_NO_PAYMENT_BASIS`,
-`AUTH_ALREADY_REFUNDED`, `AUTH_VOID_STATE_FORBIDDEN`, `AUTH_IDEMPOTENCY_CONFLICT`.
-The future Node boundary maps these to a generic error; PostgreSQL rows/secrets are
-never leaked.
+`AUTH_REFUND_BASIS_INTEGRITY`, `AUTH_ALREADY_REFUNDED`,
+`AUTH_VOID_STATE_FORBIDDEN`, `AUTH_IDEMPOTENCY_CONFLICT`. The future Node boundary
+maps these to a generic error; PostgreSQL rows/secrets are never leaked.
 
 ## 14. Rollback boundary
 `…ROLLBACK.sql` drops only the two RPCs and refuses (`ROLLBACK REFUSED`) if any

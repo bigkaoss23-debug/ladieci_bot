@@ -50,6 +50,7 @@ DECLARE
   v_ord public.ordenes%ROWTYPE;
   v_basis public.order_financial_events%ROWTYPE;
   v_existing public.order_financial_events%ROWTYPE;
+  v_existing_refund public.order_financial_events%ROWTYPE;
   v_new public.order_financial_events%ROWTYPE;
   v_role text; v_reason text; v_meta jsonb := COALESCE(p_meta, '{}'::jsonb);
   v_canon jsonb; v_digest text; v_replay_digest text;
@@ -82,18 +83,19 @@ BEGIN
   SELECT * INTO v_ord FROM public.ordenes WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'AUTH_ORDER_NOT_FOUND' USING ERRCODE='P0002'; END IF;
 
-  -- immutable payment basis (authoritative amount + method); one per order, locked
-  SELECT * INTO v_basis FROM public.order_financial_events
-    WHERE order_id = p_order_id AND type IN ('payment','payment_imported')
-    ORDER BY created_at ASC LIMIT 1 FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'AUTH_NO_PAYMENT_BASIS' USING ERRCODE='22023'; END IF;
-
-  -- (A) same-scope idempotency FIRST — reconstruct the candidate digest from the
-  -- EXISTING refund event's IMMUTABLE snapshots (+ the immutable basis id), NOT
-  -- from the current order state. reason/by_actor/by_role are the current request.
+  -- (A) same-scope idempotency FIRST. If present, fetch the immutable payment
+  -- basis with a plain SELECT so the replay digest includes the original basis
+  -- identity; never use metadata, request input, or mutable order fields.
   SELECT * INTO v_existing FROM public.order_financial_events
-    WHERE order_id = p_order_id AND type = 'refund' AND idem_scope_key = p_idem_scope_key FOR UPDATE;
+    WHERE order_id = p_order_id AND type = 'refund' AND idem_scope_key = p_idem_scope_key;
   IF FOUND THEN
+    SELECT * INTO v_basis FROM public.order_financial_events
+      WHERE order_id = p_order_id AND type IN ('payment','payment_imported')
+      ORDER BY created_at ASC LIMIT 1;
+    IF NOT FOUND OR v_basis.amount IS DISTINCT FROM v_existing.amount
+       OR v_basis.payment_method IS DISTINCT FROM v_existing.payment_method
+    THEN RAISE EXCEPTION 'AUTH_REFUND_BASIS_INTEGRITY' USING ERRCODE='22023'; END IF;
+
     v_replay_digest := lower(encode(sha256(convert_to((jsonb_build_object(
       'order_id', v_existing.order_id, 'type', 'refund', 'idem_scope_key', v_existing.idem_scope_key,
       'by_actor', p_by_actor, 'by_role', v_role, 'reason', v_reason,
@@ -112,9 +114,18 @@ BEGIN
     RAISE EXCEPTION 'AUTH_IDEMPOTENCY_CONFLICT' USING ERRCODE='22023';
   END IF;
 
-  -- (B) already refunded under a DIFFERENT key (ledger authority; ordenes.refunded
-  -- is written as a mirror but NEVER consulted as authority)
-  IF EXISTS (SELECT 1 FROM public.order_financial_events WHERE order_id = p_order_id AND type = 'refund') THEN
+  -- immutable payment basis (authoritative amount + method); one per order
+  SELECT * INTO v_basis FROM public.order_financial_events
+    WHERE order_id = p_order_id AND type IN ('payment','payment_imported')
+    ORDER BY created_at ASC LIMIT 1;
+  IF NOT FOUND THEN RAISE EXCEPTION 'AUTH_NO_PAYMENT_BASIS' USING ERRCODE='22023'; END IF;
+
+  -- (B) already refunded under a DIFFERENT key (ledger authority;
+  -- ordenes.refunded is written as a mirror but NEVER consulted as authority)
+  SELECT * INTO v_existing_refund FROM public.order_financial_events
+    WHERE order_id = p_order_id AND type = 'refund'
+    ORDER BY created_at ASC LIMIT 1;
+  IF FOUND THEN
     RAISE EXCEPTION 'AUTH_ALREADY_REFUNDED' USING ERRCODE='22023';
   END IF;
 
@@ -164,6 +175,7 @@ DECLARE
   v_by public.auth_actors%ROWTYPE;
   v_ord public.ordenes%ROWTYPE;
   v_existing public.order_financial_events%ROWTYPE;
+  v_pay_event public.order_financial_events%ROWTYPE;
   v_new public.order_financial_events%ROWTYPE;
   v_role text; v_reason text; v_meta jsonb := COALESCE(p_meta, '{}'::jsonb);
   v_pay_state text; v_canon jsonb; v_digest text; v_replay_digest text; v_now timestamptz := now();
@@ -200,7 +212,7 @@ BEGIN
   -- EXISTING void event's IMMUTABLE snapshots so a committed void replays cleanly
   -- even though the order is already ANULADO (before the state rejection below).
   SELECT * INTO v_existing FROM public.order_financial_events
-    WHERE order_id = p_order_id AND type = 'void' AND idem_scope_key = p_idem_scope_key FOR UPDATE;
+    WHERE order_id = p_order_id AND type = 'void' AND idem_scope_key = p_idem_scope_key;
   IF FOUND THEN
     v_replay_digest := lower(encode(sha256(convert_to((jsonb_build_object(
       'order_id', v_existing.order_id, 'type', 'void', 'idem_scope_key', v_existing.idem_scope_key,
@@ -220,18 +232,23 @@ BEGIN
     RAISE EXCEPTION 'AUTH_IDEMPOTENCY_CONFLICT' USING ERRCODE='22023';
   END IF;
 
-  -- (B) NEW void allowed only from the four active states (grammar-consistent)
-  IF v_ord.estado NOT IN ('POR_CONFIRMAR','EN_COCINA','LISTO','EN_ENTREGA') THEN
-    RAISE EXCEPTION 'AUTH_VOID_STATE_FORBIDDEN' USING ERRCODE='22023';
-  END IF;
-
-  -- (C) pay state derived ONLY from the ledger (never mutable order flags)
-  IF EXISTS (SELECT 1 FROM public.order_financial_events WHERE order_id = p_order_id AND type = 'refund') THEN
+  -- (B) pay state derived ONLY from the ledger (never mutable order flags):
+  -- refund wins, else basis, else no row = unpaid.
+  SELECT * INTO v_pay_event FROM public.order_financial_events
+    WHERE order_id = p_order_id AND type IN ('refund','payment','payment_imported')
+    ORDER BY CASE WHEN type = 'refund' THEN 1 ELSE 2 END, created_at ASC
+    LIMIT 1;
+  IF FOUND AND v_pay_event.type = 'refund' THEN
     v_pay_state := 'refunded';
-  ELSIF EXISTS (SELECT 1 FROM public.order_financial_events WHERE order_id = p_order_id AND type IN ('payment','payment_imported')) THEN
+  ELSIF FOUND THEN
     v_pay_state := 'paid';
   ELSE
     v_pay_state := 'unpaid';
+  END IF;
+
+  -- (C) NEW void allowed only from the four active states (grammar-consistent)
+  IF v_ord.estado NOT IN ('POR_CONFIRMAR','EN_COCINA','LISTO','EN_ENTREGA') THEN
+    RAISE EXCEPTION 'AUTH_VOID_STATE_FORBIDDEN' USING ERRCODE='22023';
   END IF;
 
   v_canon := jsonb_build_object(

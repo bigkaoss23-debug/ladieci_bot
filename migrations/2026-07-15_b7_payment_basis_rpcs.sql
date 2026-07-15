@@ -45,6 +45,7 @@ DECLARE
   v_by public.auth_actors%ROWTYPE;
   v_ord public.ordenes%ROWTYPE;
   v_existing public.order_financial_events%ROWTYPE;
+  v_existing_basis public.order_financial_events%ROWTYPE;
   v_new public.order_financial_events%ROWTYPE;
   v_role text; v_method text; v_reason text; v_amount numeric(10,2);
   v_meta jsonb := COALESCE(p_meta, '{}'::jsonb);
@@ -97,7 +98,7 @@ BEGIN
 
   -- (A) same-scope idempotency check BEFORE generic already-paid rejection
   SELECT * INTO v_existing FROM public.order_financial_events
-    WHERE order_id = p_order_id AND type = 'payment' AND idem_scope_key = p_idem_scope_key FOR UPDATE;
+    WHERE order_id = p_order_id AND type = 'payment' AND idem_scope_key = p_idem_scope_key;
   IF FOUND THEN
     IF v_existing.payload_digest = v_digest THEN
       RETURN jsonb_build_object('event_id', v_existing.id, 'order_id', v_existing.order_id,
@@ -110,8 +111,10 @@ BEGIN
   END IF;
 
   -- (B) one payment basis per order (payment OR payment_imported)
-  IF EXISTS (SELECT 1 FROM public.order_financial_events
-             WHERE order_id = p_order_id AND type IN ('payment','payment_imported')) THEN
+  SELECT * INTO v_existing_basis FROM public.order_financial_events
+    WHERE order_id = p_order_id AND type IN ('payment','payment_imported')
+    ORDER BY created_at ASC LIMIT 1;
+  IF FOUND THEN
     RAISE EXCEPTION 'AUTH_BASIS_EXISTS' USING ERRCODE='22023';
   END IF;
 
@@ -157,6 +160,7 @@ DECLARE
   v_by public.auth_actors%ROWTYPE;
   v_ord public.ordenes%ROWTYPE;
   v_existing public.order_financial_events%ROWTYPE;
+  v_existing_basis public.order_financial_events%ROWTYPE;
   v_new public.order_financial_events%ROWTYPE;
   v_role text; v_method text; v_reason text; v_amount numeric(10,2);
   v_meta jsonb := COALESCE(p_meta, '{}'::jsonb);
@@ -212,7 +216,7 @@ BEGIN
 
   -- (A) same-scope idempotency BEFORE generic basis rejection
   SELECT * INTO v_existing FROM public.order_financial_events
-    WHERE order_id = p_order_id AND type = 'payment_imported' AND idem_scope_key = p_idem_scope_key FOR UPDATE;
+    WHERE order_id = p_order_id AND type = 'payment_imported' AND idem_scope_key = p_idem_scope_key;
   IF FOUND THEN
     IF v_existing.payload_digest = v_digest THEN
       RETURN jsonb_build_object('event_id', v_existing.id, 'order_id', v_existing.order_id,
@@ -225,8 +229,10 @@ BEGIN
   END IF;
 
   -- (B) one basis per order
-  IF EXISTS (SELECT 1 FROM public.order_financial_events
-             WHERE order_id = p_order_id AND type IN ('payment','payment_imported')) THEN
+  SELECT * INTO v_existing_basis FROM public.order_financial_events
+    WHERE order_id = p_order_id AND type IN ('payment','payment_imported')
+    ORDER BY created_at ASC LIMIT 1;
+  IF FOUND THEN
     RAISE EXCEPTION 'AUTH_BASIS_EXISTS' USING ERRCODE='22023';
   END IF;
 

@@ -67,15 +67,18 @@ Excluded: `ip_hash`, `meta`, `created_at`, transport/display fields. Callers sup
 `by_role`, or (for `order_mark_paid`) the amount.
 
 ## 6. Idempotency & concurrency
-Order of operations under locks (initiator row + order row `FOR UPDATE`):
-1. lock initiator + order (serializes concurrent basis attempts on the order);
+The target order row is the serialization lock. Financial-ledger rows are immutable
+and are read with plain `SELECT` without row-locking clauses.
+
+Order of operations:
+1. lock initiator + order (`FOR UPDATE`; serializes concurrent financial attempts on the order);
 2. derive all canonical values + digest;
 3. **same-scope check** `(order_id, type, idem_scope_key)` **before** the generic
-   basis rejection: same digest → return the existing committed result with
-   `idempotent=true` (no insert, no order update); different digest →
-   `AUTH_IDEMPOTENCY_CONFLICT` (no insert/update);
-4. one-basis rule: reject `AUTH_BASIS_EXISTS` if any `payment`/`payment_imported`
-   event already exists for the order;
+   basis rejection, using a plain ledger `SELECT`: same digest → return the existing
+   committed result with `idempotent=true` (no insert, no order update); different
+   digest → `AUTH_IDEMPOTENCY_CONFLICT` (no insert/update);
+4. one-basis rule: use a plain ledger `SELECT` for any existing
+   `payment`/`payment_imported` row, then reject `AUTH_BASIS_EXISTS` if one exists;
 5. legacy precondition; then insert + order mirror.
 No automatic retry after ambiguous failure. The partial unique indexes
 (`…one_payment_uq`, `…one_refund_uq`) remain the final database backstop.

@@ -36,6 +36,18 @@ const grantsIdx = S.indexOf('REVOKE ALL ON FUNCTION');
 const MP = S.slice(mpIdx, liIdx);      // order_mark_paid body
 const LI = S.slice(liIdx, grantsIdx);  // order_import_legacy_payment body
 const BODIES = [MP, LI];
+const ROW_LOCK_RE = /\bFOR\s+(?:NO\s+KEY\s+UPDATE|KEY\s+SHARE|UPDATE|SHARE)\b/i;
+const ledgerSelects = (b) => (b.match(/\bSELECT\b[\s\S]*?;/g) || [])
+  .filter((stmt) => /public\.order_financial_events\b/.test(stmt));
+const noLedgerRowLocks = (b) => ledgerSelects(b).every((stmt) => !ROW_LOCK_RE.test(stmt));
+const firstLedgerReadAfterOrderLock = (b) => {
+  const orderLock = b.indexOf('SELECT * INTO v_ord FROM public.ordenes WHERE id = p_order_id FOR UPDATE;');
+  const firstLedger = b.indexOf('FROM public.order_financial_events');
+  return orderLock >= 0 && firstLedger > orderLock;
+};
+const noLedgerUpdateGrantToServiceRole = (s) =>
+  !/GRANT[\s\S]*?\bUPDATE\b[\s\S]*?order_financial_events[\s\S]*?TO service_role/i.test(s) &&
+  !/GRANT[\s\S]*?order_financial_events[\s\S]*?\bUPDATE\b[\s\S]*?TO service_role/i.test(s);
 
 // ── structure: transaction, sentinel, exactly two RPCs, fail-closed ──────────
 assert('BEGIN/COMMIT', /^\s*BEGIN;/.test(S) && /COMMIT;\s*$/.test(S.trim() + '\n'));
@@ -58,6 +70,7 @@ assert('no dynamic SQL', !/\bEXECUTE\s+format\b/i.test(S) && !/\bEXECUTE\s+'/.te
 assert('grants: revoke from PUBLIC/anon/authenticated (both)', (S.match(/REVOKE ALL ON FUNCTION[\s\S]*?FROM PUBLIC, anon, authenticated/g) || []).length === 2);
 assert('grants: EXECUTE to service_role only (both)', (S.match(/GRANT EXECUTE ON FUNCTION[\s\S]*?TO service_role/g) || []).length === 2);
 assert('no broad EXECUTE grant to PUBLIC/anon/authenticated', !/GRANT EXECUTE[\s\S]*?TO (PUBLIC|anon|authenticated)\b/i.test(S));
+assert('no ledger UPDATE privilege granted to service_role', noLedgerUpdateGrantToServiceRole(S));
 assert('digest uses native pg sha256 (no md5, no caller digest)',
   /encode\(sha256\(convert_to\(v_canon::text, 'UTF8'\)\), 'hex'\)/.test(S) && !/\bmd5\b/i.test(S));
 
@@ -68,6 +81,8 @@ BODIES.forEach((b, i) => {
   assert(`[${nm}] initiator must exist + be active`, /AUTH_ACTOR_NOT_FOUND/.test(b) && /v_by\.active <> true[\s\S]*?AUTH_INITIATOR_INACTIVE/.test(b));
   assert(`[${nm}] role derived from DB (v_by.role), not caller`, /v_role := v_by\.role/.test(b) && !/p_by_role/.test(b));
   assert(`[${nm}] locks order FOR UPDATE`, /ordenes WHERE id = p_order_id FOR UPDATE/.test(b));
+  assert(`[${nm}] first ledger read occurs after order lock`, firstLedgerReadAfterOrderLock(b));
+  assert(`[${nm}] ledger SELECTs use no row-locking clause`, noLedgerRowLocks(b));
   assert(`[${nm}] IP hash required + max length`, /p_ip_hash IS NULL OR btrim\(p_ip_hash\) = ''[\s\S]*?AUTH_IP_HASH_REQUIRED/.test(b) && /length\(p_ip_hash\) > 64/.test(b));
   assert(`[${nm}] metadata object/size/sensitive guard`, /jsonb_typeof\(v_meta\) <> 'object'/.test(b) && /length\(v_meta::text\) > 2048/.test(b) && /AUTH_META_SENSITIVE_KEY/.test(b) && /'raw_ip'/.test(b) && /'confirmation'/.test(b));
   assert(`[${nm}] idem key length + regex`, /char_length\(p_idem_scope_key\) < 8 OR char_length\(p_idem_scope_key\) > 128[\s\S]*?\^\[A-Za-z0-9_-\]\+\$/.test(b));
@@ -78,10 +93,12 @@ BODIES.forEach((b, i) => {
   assert(`[${nm}] caller supplies no digest/pay-state/estado snapshots`, !/p_digest|p_prev_pay_state|p_new_pay_state|p_prev_estado|p_new_estado/.test(b));
   // idempotency check before generic basis rejection
   assert(`[${nm}] same-scope idempotency precedes AUTH_BASIS_EXISTS`,
-    b.indexOf('idem_scope_key = p_idem_scope_key FOR UPDATE') < b.indexOf('AUTH_BASIS_EXISTS') &&
+    b.indexOf('idem_scope_key = p_idem_scope_key;') < b.indexOf('AUTH_BASIS_EXISTS') &&
     /payload_digest = v_digest[\s\S]*?'idempotent', true/.test(b) &&
     /AUTH_IDEMPOTENCY_CONFLICT/.test(b));
   assert(`[${nm}] one basis per order (payment OR payment_imported)`, /type IN \('payment','payment_imported'\)[\s\S]*?AUTH_BASIS_EXISTS/.test(b));
+  assert(`[${nm}] generic basis rejection is a plain ledger SELECT`,
+    /SELECT \* INTO v_existing_basis FROM public\.order_financial_events[\s\S]*?type IN \('payment','payment_imported'\)[\s\S]*?LIMIT 1;[\s\S]*?IF FOUND THEN[\s\S]*?AUTH_BASIS_EXISTS/.test(b));
   // atomic: insert event + update order mirrors in same fn
   assert(`[${nm}] inserts event then mirrors order flags (one fn)`,
     /INSERT INTO public\.order_financial_events/.test(b) &&
@@ -142,15 +159,32 @@ assert('doc references forward + rollback filenames', DOC.includes('migrations/'
   // NC5: rider allowed on mark_paid
   const riderOk = MP.replace("v_role NOT IN ('admin','operator')", "v_role NOT IN ('admin','operator','rider')");
   assert('NC5: detector catches rider being allowed', /v_role NOT IN \('admin','operator','rider'\)/.test(riderOk));
-  // NC6: idempotency check placed AFTER basis rejection
-  const swapped = 'AUTH_BASIS_EXISTS then later idem_scope_key = p_idem_scope_key FOR UPDATE';
-  assert('NC6: detector catches idempotency-after-basis ordering', swapped.indexOf('AUTH_BASIS_EXISTS') < swapped.indexOf('idem_scope_key = p_idem_scope_key FOR UPDATE'));
-  // NC7: generic arbitrary event helper
+  // NC6: ledger row lock added to basis lookup
+  const basisLocked = MP.replace('ORDER BY created_at ASC LIMIT 1;', 'ORDER BY created_at ASC LIMIT 1 FOR UPDATE;');
+  assert('NC6: detector catches FOR UPDATE added to a basis lookup', !noLedgerRowLocks(basisLocked));
+  // NC7: ledger row lock added to scoped-event lookup
+  const scopedLocked = MP.replace('idem_scope_key = p_idem_scope_key;', 'idem_scope_key = p_idem_scope_key FOR UPDATE;');
+  assert('NC7: detector catches FOR UPDATE added to a scoped-event lookup', !noLedgerRowLocks(scopedLocked));
+  // NC8: weaker-looking ledger row lock added
+  assert('NC8: detector catches FOR SHARE added to a ledger lookup', !noLedgerRowLocks(MP.replace('idem_scope_key = p_idem_scope_key;', 'idem_scope_key = p_idem_scope_key FOR SHARE;')));
+  // NC9: key-share ledger row lock added
+  assert('NC9: detector catches FOR KEY SHARE added to a ledger lookup', !noLedgerRowLocks(MP.replace('ORDER BY created_at ASC LIMIT 1;', 'ORDER BY created_at ASC LIMIT 1 FOR KEY SHARE;')));
+  // NC10: order lock removed
+  assert('NC10: detector catches removed order lock', !/ordenes WHERE id = p_order_id FOR UPDATE/.test(MP.replace(' WHERE id = p_order_id FOR UPDATE', ' WHERE id = p_order_id')));
+  // NC11: first ledger read moved before order lock
+  const ledgerMovedEarly = MP.replace('SELECT * INTO v_ord FROM public.ordenes WHERE id = p_order_id FOR UPDATE;', 'SELECT 1 FROM public.order_financial_events WHERE order_id = p_order_id;\n  SELECT * INTO v_ord FROM public.ordenes WHERE id = p_order_id FOR UPDATE;');
+  assert('NC11: detector catches first ledger read before order lock', !firstLedgerReadAfterOrderLock(ledgerMovedEarly));
+  // NC12: service_role UPDATE grant
+  assert('NC12: detector catches UPDATE granted to service_role', !noLedgerUpdateGrantToServiceRole(S + '\nGRANT UPDATE ON public.order_financial_events TO service_role;'));
+  // NC13: idempotency check placed AFTER basis rejection
+  const swapped = 'AUTH_BASIS_EXISTS then later idem_scope_key = p_idem_scope_key;';
+  assert('NC13: detector catches idempotency-after-basis ordering', swapped.indexOf('AUTH_BASIS_EXISTS') < swapped.indexOf('idem_scope_key = p_idem_scope_key;'));
+  // NC14: generic arbitrary event helper
   const withGeneric = S + '\nCREATE OR REPLACE FUNCTION public.order_insert_financial_event(p_type text) RETURNS void LANGUAGE sql AS $$ $$;';
-  assert('NC7: detector catches a generic event helper', /order_insert_financial_event/i.test(withGeneric));
-  // NC8: rollback deleting evidence
+  assert('NC14: detector catches a generic event helper', /order_insert_financial_event/i.test(withGeneric));
+  // NC15: rollback deleting evidence
   const rbDelete = R + '\nDELETE FROM public.order_financial_events;';
-  assert('NC8: detector catches rollback deleting evidence', /DELETE FROM|UPDATE public\.|DROP TABLE|ALTER TABLE|TRUNCATE/i.test(rbDelete));
+  assert('NC15: detector catches rollback deleting evidence', /DELETE FROM|UPDATE public\.|DROP TABLE|ALTER TABLE|TRUNCATE/i.test(rbDelete));
 })();
 
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
