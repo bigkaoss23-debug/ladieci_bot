@@ -78,13 +78,28 @@ original_giro_id, legacy=false`.
 Excluded: `ip_hash`, `meta`, `created_at`, mutable order total, mutable payment flags.
 Reason is included in the digest (never returned; never auto-copied into metadata).
 
+### 8a. Void amount canonicalization (corrective — `2026-07-16`)
+A void's amount is a **fixed business constant of exactly zero**, and its
+canonical digest value is always the **JSON number literal `0`** (`{"amount": 0}`).
+The ledger column `order_financial_events.amount` is `numeric(10,2)`; the database
+may **display/serialize** the stored value as `0.00`, but digest generation must
+**never inherit that database numeric display scale**. Both the fresh-insert canon
+and the same-scope replay-reconstruction canon serialize the void amount as literal
+`0` (and method as literal `NULL`, `legacy` as literal `false`) so the two SHA-256
+digests are byte-identical; using `v_existing.amount` (which renders `0.00`) in the
+replay canon is forbidden. Before returning an existing-event replay the function
+**fails closed** (`AUTH_VOID_REPLAY_INTEGRITY`) unless the stored row is a genuine
+void shape: `type='void'`, `amount=0`, `payment_method IS NULL`, `legacy=false`,
+`new_estado='ANULADO'`, `prev_pay_state = new_pay_state`. The refund/payment digest
+contract is unchanged (their non-zero `numeric(10,2)` amounts are built identically
+on both paths and are unaffected).
+
 ## 9. Replay-after-mutation design (critical)
 Both operations mutate the state their original digest was built from. On a
 same-scope hit `(order_id, type, idem_scope_key)`, the candidate digest is
 **reconstructed from the EXISTING event's immutable snapshots** (`prev_estado`,
-`new_estado`, `prev_pay_state`, `new_pay_state`, `amount`, `payment_method`,
-`original_giro_id`, `legacy`) plus the current normalized `reason`/`by_actor`/
-`by_role`. For refund replay, the same-scope branch first resolves the immutable
+`new_estado`, `prev_pay_state`, `new_pay_state`, `original_giro_id`) plus the
+current normalized `reason`/`by_actor`/`by_role`. For refund replay, the same-scope branch first resolves the immutable
 payment basis with a plain ledger `SELECT`, verifies its amount/method match the
 existing refund event, and includes that basis event UUID in the replay digest. It
 is **never** recomputed from the already-mutated current order state and never uses
@@ -142,3 +157,10 @@ Unwired; migration not applied. No business RPC beyond the two above; no generic
 - Forward: `migrations/2026-07-15_b7_refund_void_rpcs.sql`
 - Rollback: `migrations/2026-07-15_b7_refund_void_rpcs.ROLLBACK.sql`
 - Static tests: `tests/b7RefundVoidRpcsMigration.test.js`
+
+### Corrective artifacts — order_void replay digest fix (`2026-07-16`)
+The original B7A2B migration above is **not edited or reapplied**; the `order_void`
+replay-digest fix (§8a) ships as a separate `CREATE OR REPLACE` corrective:
+- Forward: `migrations/2026-07-16_b7_void_digest_replay_fix.sql`
+- Rollback: `migrations/2026-07-16_b7_void_digest_replay_fix.ROLLBACK.sql` (refuses while any `void` event exists)
+- Static tests: `tests/b7VoidDigestReplayFixMigration.test.js`
