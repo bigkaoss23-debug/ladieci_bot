@@ -50,13 +50,36 @@ Each route chain is `[authContextMiddleware, handler]` — auth runs first, so n
 reachable unauthenticated. No GET/PUT/PATCH/DELETE mutation route; no query-string
 mutation params. OPTIONS/CORS stays with the existing app-level convention.
 
-## Authentication / context
-`Authorization: Bearer <JWT>` → `jwt.verifyToken` → `req.authContext = {role, sub, sv}`
-(frozen). Missing/invalid/non-Bearer/unverifiable → sanitized **401** `{ok:false, code:
-FINANCIAL_UNAUTHENTICATED}`; the handler is never reached. The trusted actor passed to the
-service is `authContext.sub`. Body `actor / by_actor / role / session_version / sub /
-digest / event_type / prev_estado / new_estado / prev_pay_state / new_pay_state` are never
-read and can never override context. PIN / token / service key in the body are ignored.
+## Authentication / context (with DB session freshness)
+Cryptographic verification alone is **not** sufficient: `jwt.verifyToken` checks
+signature/expiry/structure and that `sv` is a positive integer, but never compares `sv`
+to the live `auth_actors.session_version`, nor `active`, nor the DB role — so a revoked /
+PIN-changed / deactivated / role-changed token would otherwise stay valid until natural
+expiry. The B7A3 auth middleware closes this with a DB-authoritative freshness gate.
+
+Effective order (a stale/revoked/inactive/role-mismatched token can never reach the service):
+```
+Bearer extraction
+→ cryptographic JWT verification (jwt.verifyToken)
+→ DB session/actor freshness (dao.getActor — one safe read, no pin_hash, no retry)
+→ trusted context attach (DB-authoritative role + session_version)
+→ financial handler → financial service
+```
+Freshness comparison and sanitized classification (reuses the central mapper):
+- missing / invalid / unverifiable JWT → **401** `FINANCIAL_UNAUTHENTICATED`
+- actor missing / unusable identity → **401** `FINANCIAL_UNAUTHENTICATED`
+- stale `sv` (`row.session_version !== claim.sv`) → **401** `FINANCIAL_UNAUTHENTICATED`
+- actor `active !== true` → **403** `AUTH_INITIATOR_INACTIVE`
+- DB role ≠ token role → **403** `AUTH_FORBIDDEN_ROLE`
+- ambiguous freshness-lookup failure → **401** (fail closed, sanitized)
+
+`req.authContext = {role, sub, sv}` (frozen) is built from **DB-authoritative** values,
+never the raw JWT role. The trusted actor passed to the service is `authContext.sub`.
+Body `actor / by_actor / role / session_version / sub / digest / event_type / prev_estado
+/ new_estado / prev_pay_state / new_pay_state` are never read and can never override
+context. Body PIN / token / service key are ignored. The freshness DAO
+(`dao.getActor(sub)`, injectable) is called exactly once; no automatic retry; no PIN
+check; no pin_hash read; no JWT/session/DB detail is ever logged or returned.
 
 ## Request fields (operation-specific)
 - **mark-paid**: `orderId, paymentMethod, reason, idempotencyKey, metadata?` — **no amount**.
@@ -93,8 +116,30 @@ function source, payload digest, service-role info, raw metadata, raw IP, IP has
 claims, actor internals, or confirmation value. `AUTH_IDEMPOTENCY_CONFLICT` maps to a
 409 failure — never success.
 
+## HTTP parser / body / content-type contract (inherited app stack)
+The application stack is Express 4 with `app.use(express.json())`. Discovered contract,
+and where each protection lives:
+- **Framework / parser**: Express 4 + `express.json()` (body-parser). *(inherited)*
+- **Body-size limit**: express.json() default **100kb** (`JSON_BODY_LIMIT`), exported so a
+  future mount can pin it explicitly. Oversize → **413**. *(inherited parser; sanitized by B7A3 error handler)*
+- **Malformed JSON**: body-parser raises before routes → sanitized **400**
+  `FINANCIAL_INVALID_REQUEST` via `financialJsonErrorHandler`; never reaches auth/service;
+  no stack / parser message / raw body leaked. *(error handler added in B7A3; must be mounted
+  after `express.json()`, before the routes, at wiring time)*
+- **Content type**: non-`application/json` bodies are not parsed → the endpoint sees no
+  fields → service returns `FINANCIAL_INVALID_REQUEST` (**400**). *(inherited + service)*
+- **Missing body**: handled safely (empty body, no 5xx). *(inherited + handler)*
+- **CORS / OPTIONS**: app-level middleware (`Access-Control-*`, `OPTIONS → 204`);
+  OPTIONS never reaches auth/handler. *(inherited app-level; mirrored in the offline harness)*
+- **Method safety**: only POST is registered; GET/PUT/PATCH/DELETE cannot mutate. *(B7A3)*
+- **Not yet present / deferred to staging-only wiring**: mounting `express.json()` +
+  `financialJsonErrorHandler` + `registerFinancialRoutes` into the real app (behind the
+  accepted transport). B7A3 remains unwired; the offline app-stack harness
+  (`tests/financialHttpAppStack.test.js`) exercises the real parser + error handler + CORS
+  + freshness auth without opening a port.
+
 ## Artifacts
-- Handlers + auth middleware + registration: `src/auth/financialHttpHandlers.js`
+- Handlers + auth/freshness middleware + JSON error handler + registration: `src/auth/financialHttpHandlers.js`
 - Error mapping: `src/auth/financialHttpErrors.js`
-- Tests: `tests/financialHttpHandlers.test.js`, `tests/financialHttpErrorMapping.test.js`, `tests/financialHttpRoutes.test.js`
-- Depends on (unchanged): `src/auth/financialService.js`, `src/auth/financialDao.js`, `src/auth/jwt.js`
+- Tests: `tests/financialHttpHandlers.test.js`, `tests/financialHttpErrorMapping.test.js`, `tests/financialHttpRoutes.test.js`, `tests/financialSessionFreshness.test.js`, `tests/financialHttpAppStack.test.js`
+- Depends on (unchanged): `src/auth/financialService.js`, `src/auth/financialDao.js`, `src/auth/jwt.js`, `src/auth/dao.js` (`getActor` freshness read)

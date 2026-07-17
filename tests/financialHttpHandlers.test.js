@@ -106,34 +106,37 @@ const reqWith = (ctx, body, ip = '9.9.9.9') => ({ authContext: ctx, body, ip, he
   assert('handler log has only safe keys', logs.length === 1 && JSON.stringify(Object.keys(logs[0]).sort()) === JSON.stringify(['authed', 'code', 'op', 'outcome', 'status'].sort()));
   assert('handler log leaks no reason/ip/order/meta', !/topsecret|9\.9\.9\.9|ORDLOG|"x"/.test(JSON.stringify(logs)));
 
-  // ════════════════ AUTH-CONTEXT MIDDLEWARE ════════════════
+  // ════════════════ AUTH-CONTEXT MIDDLEWARE (crypto verify only) ════════════════
+  // Freshness (DB session_version/active/role) is covered exhaustively in
+  // tests/financialSessionFreshness.test.js; here getActor returns a fresh matching row.
   const verifyOK = (t) => (t === 'good' ? { role: 'admin', sub: 'owner', sv: 2 } : null);
-  const mw = createAuthContextMiddleware({ verifyToken: verifyOK });
+  const freshActor = async (sub) => (sub === 'owner' ? { actor: 'owner', role: 'admin', active: true, session_version: 2 } : null);
+  const mw = createAuthContextMiddleware({ verifyToken: verifyOK, getActor: freshActor });
 
-  // valid token → context attached, next called, nothing sent
+  // valid token + fresh DB session → context attached, next called, nothing sent
   let nexted = 0; let req = { headers: { authorization: 'Bearer good' } }; res = fakeRes();
-  mw(req, res, () => { nexted++; });
-  assert('valid token attaches trusted context {role,sub,sv}', req.authContext && req.authContext.sub === 'owner' && req.authContext.role === 'admin' && nexted === 1 && res._status === null);
+  await mw(req, res, () => { nexted++; });
+  assert('valid token + fresh session attaches trusted context {role,sub,sv}', req.authContext && req.authContext.sub === 'owner' && req.authContext.role === 'admin' && req.authContext.sv === 2 && nexted === 1 && res._status === null);
   assert('context is frozen (immutable)', Object.isFrozen(req.authContext));
 
   // missing header → 401, next NOT called
   nexted = 0; req = { headers: {} }; res = fakeRes();
-  mw(req, res, () => { nexted++; });
+  await mw(req, res, () => { nexted++; });
   assert('missing Authorization → 401, no next', res._status === 401 && res._json.code === 'FINANCIAL_UNAUTHENTICATED' && nexted === 0);
 
   // invalid/unverified token → 401
   nexted = 0; req = { headers: { authorization: 'Bearer bad' } }; res = fakeRes();
-  mw(req, res, () => { nexted++; });
+  await mw(req, res, () => { nexted++; });
   assert('invalid token → 401, no context', res._status === 401 && !req.authContext && nexted === 0);
 
   // body actor/PIN/token/service-key cannot substitute for auth
   nexted = 0; req = { headers: {}, body: { actor: 'owner', role: 'admin', pin: '1234', token: 'x', service_key: 'sk' } }; res = fakeRes();
-  mw(req, res, () => { nexted++; });
+  await mw(req, res, () => { nexted++; });
   assert('body actor/pin/token cannot substitute for auth → 401', res._status === 401 && nexted === 0 && !req.authContext);
 
   // non-Bearer scheme ignored
   nexted = 0; req = { headers: { authorization: 'Basic Zm9v' } }; res = fakeRes();
-  mw(req, res, () => { nexted++; });
+  await mw(req, res, () => { nexted++; });
   assert('non-Bearer Authorization → 401', res._status === 401 && nexted === 0);
 
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);

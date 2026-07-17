@@ -29,12 +29,14 @@ function fakeService() {
   return { calls, markPaid: mk('markPaid'), importLegacyPayment: mk('importLegacyPayment'), refund: mk('refund'), voidOrder: mk('voidOrder') };
 }
 const verifyOK = (t) => (t === 'good' ? { role: 'admin', sub: 'owner', sv: 1 } : null);
+const freshActor = async (sub) => (sub === 'owner' ? { actor: 'owner', role: 'admin', active: true, session_version: 1 } : null);
+const deps0 = { verifyToken: verifyOK, getActor: freshActor };
 
 (async () => {
   // ── exactly four POST routes at the expected paths ──────────────────────────
   let app = fakeApp();
   let svc = fakeService();
-  const reg = registerFinancialRoutes(app, { service: svc, verifyToken: verifyOK });
+  const reg = registerFinancialRoutes(app, { service: svc, ...deps0 });
   assert('registers exactly 4 routes', app.routes.length === 4);
   assert('all routes are POST', app.routes.every((r) => r.method === 'POST'));
   const paths = app.routes.map((r) => r.path).sort();
@@ -58,7 +60,7 @@ const verifyOK = (t) => (t === 'good' ? { role: 'admin', sub: 'owner', sv: 1 } :
 
   // ── with a valid token the chain reaches the handler exactly once ───────────
   svc = fakeService(); app = fakeApp();
-  registerFinancialRoutes(app, { service: svc, verifyToken: verifyOK });
+  registerFinancialRoutes(app, { service: svc, ...deps0 });
   const markRoute = app.routes.find((r) => r.path === '/api/financial/mark-paid');
   let res = fakeRes();
   await runChain(markRoute.chain, { headers: { authorization: 'Bearer good' }, body: { orderId: 'ORDZ', paymentMethod: 'efectivo', reason: 'r', idempotencyKey: 'k12345678' }, ip: '2.2.2.2' }, res);
@@ -67,7 +69,7 @@ const verifyOK = (t) => (t === 'good' ? { role: 'admin', sub: 'owner', sv: 1 } :
 
   // ── absent/invalid body handled safely (no throw) → boundary rejects ────────
   svc = fakeService(); app = fakeApp();
-  registerFinancialRoutes(app, { service: svc, verifyToken: verifyOK });
+  registerFinancialRoutes(app, { service: svc, ...deps0 });
   const refundRoute = app.routes.find((r) => r.path === '/api/financial/refund');
   res = fakeRes();
   await runChain(refundRoute.chain, { headers: { authorization: 'Bearer good' }, body: undefined, ip: '2.2.2.2' }, res);
@@ -121,6 +123,19 @@ const verifyOK = (t) => (t === 'good' ? { role: 'admin', sub: 'owner', sv: 1 } :
   assert('financial http modules not wired into index.js', !/financialHttpHandlers|financialHttpErrors|registerFinancialRoutes/.test(idx));
   assert('handler reads actor only from req.authContext', /req\.authContext|req && req\.authContext/.test(HND) && !/req\.body\.actor|body\.actor/.test(HND));
 
+  // ── session-freshness guards (crypto verification alone is insufficient) ────
+  const hasSvCheck = (s) => /row\.session_version !== payload\.sv/.test(s);
+  const hasActiveCheck = (s) => /row\.active !== true/.test(s);
+  const hasDbRoleCheck = (s) => /row\.role !== payload\.role/.test(s);
+  const freshnessBeforeContext = (s) => { const g = s.indexOf('getActor(payload.sub)'); const c = s.indexOf('req.authContext = Object.freeze'); return g > 0 && c > 0 && g < c; };
+  const freshnessFailIsClosed = (s) => { const mw = s.slice(s.indexOf('async function authContextMiddleware'), s.indexOf('function financialJsonErrorHandler')); const m = mw.match(/catch \(_\) \{ return ([a-zA-Z0-9_]+)\(/); return !!m && m[1] !== 'next'; };
+  assert('freshness: compares token sv to DB session_version', hasSvCheck(HND));
+  assert('freshness: checks DB active=true', hasActiveCheck(HND));
+  assert('freshness: compares token role to DB role', hasDbRoleCheck(HND));
+  assert('freshness: DB read occurs BEFORE context attach', freshnessBeforeContext(HND));
+  assert('freshness: attaches DB-authoritative role (not raw JWT role)', /req\.authContext = Object\.freeze\(\{ role: row\.role/.test(HND));
+  assert('freshness: ambiguous DB failure fails closed (not next)', freshnessFailIsClosed(HND));
+
   // negative controls: detectors must fire on injected violations
   assert('NC1: handler→DAO detected', callsDaoDirect(HND + '\nconst d = require("./financialDao").createFinancialDao();'));
   assert('NC2: handler→Supabase detected', callsSupabase(HND + '\nawait sbRest("POST","rpc/order_void",{});'));
@@ -138,6 +153,11 @@ const verifyOK = (t) => (t === 'good' ? { role: 'admin', sub: 'owner', sv: 1 } :
     badApp.post('/api/financial/mark-paid', async () => {}); // simulate an unguarded route
     return badApp.routes[0].chain.length === 1; // guard: our real registration is length 2
   })());
+  assert('NC12: omitted sv comparison detected', hasSvCheck(HND) && !hasSvCheck(HND.replace('row.session_version !== payload.sv', 'false')));
+  assert('NC13: omitted DB-role comparison detected', hasDbRoleCheck(HND) && !hasDbRoleCheck(HND.replace('row.role !== payload.role', 'false')));
+  assert('NC14: inactive-allowed detected', hasActiveCheck(HND) && !hasActiveCheck(HND.replace('row.active !== true', 'false')));
+  assert('NC15: freshness failure treated as success detected', freshnessFailIsClosed(HND) && !freshnessFailIsClosed(HND.replace('catch (_) { return send401(res); }', 'catch (_) { return next(); }')));
+  assert('NC16: freshness placed after context attach detected', !freshnessBeforeContext('req.authContext = Object.freeze({ role: row.role }); const x = getActor(payload.sub);'));
 
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   process.exit(fail === 0 ? 0 : 1);

@@ -22,9 +22,16 @@
 //    hashing/validation stay in the accepted service/ipSecurity layer.
 
 const jwt = require('./jwt');
+const dao = require('./dao');
 const { statusForCode, UNAUTHENTICATED } = require('./financialHttpErrors');
 
 const DEFAULT_PREFIX = '/api/financial';
+// Inherited application body-parser limit (express.json() default). Documented so a
+// future staging mount can pin it explicitly: express.json({ limit: JSON_BODY_LIMIT }).
+const JSON_BODY_LIMIT = '100kb';
+// DB-authoritative freshness-failure classifications (reuse the accepted B7A3 mapper).
+const INACTIVE_CODE = 'AUTH_INITIATOR_INACTIVE';   // → 403
+const ROLE_MISMATCH_CODE = 'AUTH_FORBIDDEN_ROLE';  // → 403
 
 // Ordered route table — explicit, never client-selected.
 const ROUTES = Object.freeze([
@@ -61,21 +68,63 @@ function sendResult(res, out, log) {
   return res.status(status).json({ ok: false, code });
 }
 
-// Verify the Bearer JWT with the accepted B3 verifier and attach the trusted context.
-// Missing/invalid/unverifiable token → sanitized 401 (no leak). No independent decode.
+const sendDeny = (res, code) => res.status(statusForCode(code)).json({ ok: false, code });
+const send401 = (res) => res.status(401).json({ ok: false, code: UNAUTHENTICATED });
+
+// Verify the Bearer JWT with the accepted B3 verifier, THEN prove the session is
+// current against DB-authoritative actor state before attaching a trusted context.
+// Cryptographic verification alone does NOT prove freshness: jwt.verifyToken checks
+// signature/expiry/structure but never compares the claim `sv` to the live
+// auth_actors.session_version, nor `active`, nor the DB role — so a revoked / PIN-
+// changed / deactivated / role-changed token stays valid until natural expiry. This
+// middleware closes that gap with ONE injected DB-authoritative read (no PIN, no
+// pin_hash, no retry). Effective order:
+//   Bearer extraction → JWT signature/expiry → DB session/actor freshness →
+//   trusted context attach → handler → service.
+// getActor(sub) → { role, active, session_version } (accepted B2 dao.getActor safe
+// read, never pin_hash). Injected for offline tests. Failures fail CLOSED, sanitized.
 function createAuthContextMiddleware(deps = {}) {
   const verifyToken = typeof deps.verifyToken === 'function' ? deps.verifyToken : jwt.verifyToken;
-  return function authContextMiddleware(req, res, next) {
+  const getActor = typeof deps.getActor === 'function'
+    ? deps.getActor
+    : (deps.sessionAuthority && typeof deps.sessionAuthority.getActor === 'function'
+      ? (sub) => deps.sessionAuthority.getActor(sub)
+      : dao.getActor);
+  return async function authContextMiddleware(req, res, next) {
+    // (1) Bearer extraction + cryptographic verification (B3). No independent decode.
     const raw = req && req.headers ? (req.headers.authorization || req.headers.Authorization) : null;
     const m = typeof raw === 'string' ? raw.match(/^Bearer (.+)$/) : null;
     const payload = m ? verifyToken(m[1]) : null;
-    if (!payload || typeof payload.sub !== 'string' || typeof payload.role !== 'string') {
-      return res.status(401).json({ ok: false, code: UNAUTHENTICATED });
+    if (!payload || typeof payload.sub !== 'string' || typeof payload.role !== 'string' || !Number.isInteger(payload.sv)) {
+      return send401(res); // missing / invalid / unverifiable token → 401
     }
-    // Only the trusted identity fields — nothing from the body.
-    req.authContext = Object.freeze({ role: payload.role, sub: payload.sub, sv: payload.sv });
+    // (2) DB-authoritative freshness — exactly one read, no retry, no PIN.
+    let row;
+    try { row = await getActor(payload.sub); }
+    catch (_) { return send401(res); } // ambiguous DB/transport failure → fail closed (401)
+    if (!row || typeof row.session_version !== 'number' || typeof row.role !== 'string') {
+      return send401(res); // actor missing / unusable identity → 401
+    }
+    if (row.active !== true) return sendDeny(res, INACTIVE_CODE);           // inactive → 403
+    if (row.role !== payload.role) return sendDeny(res, ROLE_MISMATCH_CODE); // DB role ≠ token role → 403
+    if (row.session_version !== payload.sv) return send401(res);            // stale session_version → 401
+    // (3) trusted context from DB-authoritative values — never the raw JWT role, and
+    // never anything from the request body.
+    req.authContext = Object.freeze({ role: row.role, sub: payload.sub, sv: row.session_version });
     return next();
   };
+}
+
+// Intended sanitizing error middleware for the future staging mount. Converts the
+// inherited express.json()/body-parser transport errors into a stable envelope with NO
+// stack, NO raw body, NO parser message: malformed/oversize JSON can never mutate and
+// never reaches auth/service. Mount AFTER express.json() and BEFORE the financial routes.
+function financialJsonErrorHandler(err, req, res, next) {
+  if (!err) return next();
+  const tooLarge = err.status === 413 || err.statusCode === 413 || err.type === 'entity.too.large';
+  if (tooLarge) return res.status(413).json({ ok: false, code: 'FINANCIAL_PAYLOAD_TOO_LARGE' });
+  // parse failure / unsupported charset / any other body-parser error → safe 400
+  return res.status(400).json({ ok: false, code: 'FINANCIAL_INVALID_REQUEST' });
 }
 
 function createFinancialHandlers(deps = {}) {
@@ -159,7 +208,9 @@ function registerFinancialRoutes(app, deps = {}) {
   if (!app || typeof app.post !== 'function') throw new Error('registerFinancialRoutes: app.post required');
   if (!deps.service) throw new Error('registerFinancialRoutes: service required');
   const prefix = typeof deps.prefix === 'string' && deps.prefix ? deps.prefix : DEFAULT_PREFIX;
-  const auth = createAuthContextMiddleware({ verifyToken: deps.verifyToken });
+  const auth = createAuthContextMiddleware({
+    verifyToken: deps.verifyToken, getActor: deps.getActor, sessionAuthority: deps.sessionAuthority,
+  });
   const handlers = createFinancialHandlers({ service: deps.service, logger: deps.logger });
   const registered = [];
   for (const r of ROUTES) {
@@ -172,8 +223,10 @@ function registerFinancialRoutes(app, deps = {}) {
 module.exports = {
   createFinancialHandlers,
   createAuthContextMiddleware,
+  financialJsonErrorHandler,
   registerFinancialRoutes,
   extractClientIp,
   DEFAULT_PREFIX,
+  JSON_BODY_LIMIT,
   ROUTES,
 };
