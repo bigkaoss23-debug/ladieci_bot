@@ -14,6 +14,7 @@ const { UNAUTHENTICATED, INVALID_REQUEST } = require('../src/auth/financialServi
 // Independent expected classification of the 23 SQL domain markers.
 const EXPECT = {
   AUTH_ACTOR_NOT_FOUND: 401,
+  AUTH_SESSION_STALE: 401,
   AUTH_INITIATOR_INACTIVE: 403,
   AUTH_FORBIDDEN_ROLE: 403,
   AUTH_ORDER_NOT_FOUND: 404,
@@ -40,7 +41,8 @@ const EXPECT = {
 
 // completeness: every recognized domain code is explicitly mapped
 assert('no recognized domain code is unmapped', UNMAPPED_RECOGNIZED.length === 0, UNMAPPED_RECOGNIZED.join(','));
-assert('EXPECT covers exactly the 23 recognized markers', RECOGNIZED_DOMAIN_CODES.length === Object.keys(EXPECT).length && RECOGNIZED_DOMAIN_CODES.every((c) => c in EXPECT));
+assert('EXPECT covers exactly the recognized markers (incl AUTH_SESSION_STALE)', RECOGNIZED_DOMAIN_CODES.length === Object.keys(EXPECT).length && RECOGNIZED_DOMAIN_CODES.every((c) => c in EXPECT));
+assert('AUTH_SESSION_STALE maps to 401', statusForCode('AUTH_SESSION_STALE') === 401 && RECOGNIZED_DOMAIN_CODES.includes('AUTH_SESSION_STALE'));
 
 // each recognized code → the expected class, exactly one
 for (const code of RECOGNIZED_DOMAIN_CODES) {

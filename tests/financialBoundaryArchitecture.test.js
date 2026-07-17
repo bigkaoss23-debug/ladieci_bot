@@ -67,5 +67,22 @@ assert('NC8: HTTP wiring detected', hasHttpWiring(SVC + '\nrouter.post("/refund"
 assert('NC9: migration modification detected', modifiesMigrations(DAO + "\nfs.writeFileSync('migrations/x.sql','CREATE OR REPLACE FUNCTION');"));
 assert('NC10: sensitive logging detected', logsSensitive(SVC + '\nlogger.info({ payload_digest: d, ip_hash: h });'));
 
+// ── session-version guard (B7A2D) ────────────────────────────────────────────
+// DAO forwards p_session_version in every RPC payload; service takes it from the
+// trusted context (authContext.sv) and NEVER from the request body.
+const daoSessionCount = (s) => (s.match(/p_session_version:\s*sessionVersion/g) || []).length;
+const svcForwardsCtxSv = (s) => /sessionVersion:\s*authContext\.sv/.test(s);
+const svcReadsBodySession = (s) => /\b(?:b|body|req\.body)\.(sv|sessionVersion|session_version|p_session_version)\b/.test(s);
+assert('DAO forwards p_session_version in all four RPC payloads', daoSessionCount(DAO) === 4);
+assert('service forwards session version from trusted context (authContext.sv)', svcForwardsCtxSv(SVC));
+assert('service validates a positive integer session_version before DAO', /Number\.isInteger\(authContext\.sv\)\s*\|\|\s*authContext\.sv\s*<\s*1/.test(SVC));
+assert('service never reads a body-supplied session version', !svcReadsBodySession(SVC));
+// NC11: an RPC payload omitting p_session_version is detected
+assert('NC11: DAO omission of p_session_version detected', daoSessionCount(DAO) === 4 && daoSessionCount(DAO.replace(/p_session_version:\s*sessionVersion,\s*/, '')) === 3);
+// NC12: service dropping the trusted-context sv forward is detected
+assert('NC12: service omission of trusted sv forward detected', svcForwardsCtxSv(SVC) && !svcForwardsCtxSv(SVC.replace(/sessionVersion:\s*authContext\.sv/g, 'x: 1')));
+// NC13: service reading a body-controlled session version is detected
+assert('NC13: body-controlled session version detected', !svcReadsBodySession(SVC) && svcReadsBodySession(SVC + '\nconst v = body.sessionVersion;'));
+
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);

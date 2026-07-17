@@ -23,7 +23,7 @@
 
 const jwt = require('./jwt');
 const dao = require('./dao');
-const { statusForCode, UNAUTHENTICATED } = require('./financialHttpErrors');
+const { statusForCode, UNAUTHENTICATED, INTERNAL_ERROR_CODE } = require('./financialHttpErrors');
 
 const DEFAULT_PREFIX = '/api/financial';
 // Inherited application body-parser limit (express.json() default). Documented so a
@@ -101,7 +101,11 @@ function createAuthContextMiddleware(deps = {}) {
     // (2) DB-authoritative freshness — exactly one read, no retry, no PIN.
     let row;
     try { row = await getActor(payload.sub); }
-    catch (_) { return send401(res); } // ambiguous DB/transport failure → fail closed (401)
+    catch (_) {
+      // ambiguous freshness-authority/DB failure is NOT a credential problem: sanitized 500,
+      // never reported as invalid user credentials, never leaking DB/actor detail.
+      return res.status(statusForCode(INTERNAL_ERROR_CODE)).json({ ok: false, code: INTERNAL_ERROR_CODE });
+    }
     if (!row || typeof row.session_version !== 'number' || typeof row.role !== 'string') {
       return send401(res); // actor missing / unusable identity → 401
     }

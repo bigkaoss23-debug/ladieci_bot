@@ -85,11 +85,12 @@ async function run(mw, token) {
   await run(mw, 'good');
   assert('exactly one freshness read (no retry)', calls === 1);
 
-  // 10) ambiguous DB failure → sanitized 401 fail-closed, no next
+  // 10) ambiguous DB/freshness-authority failure → sanitized 500 (NOT invalid credentials), no next
   getActor = async () => { throw new Error('db.internal:5432 connection reset pwd=secret'); };
   mw = createAuthContextMiddleware({ verifyToken: verify({ good: claims() }), getActor });
   r = await run(mw, 'good');
-  assert('ambiguous DB failure → 401 fail-closed, no next', r.res._status === 401 && r.res._json.code === 'FINANCIAL_UNAUTHENTICATED' && r.nexted === 0);
+  assert('ambiguous DB failure → sanitized 500, no next', r.res._status === 500 && r.res._json.code === 'FINANCIAL_INTERNAL_ERROR' && r.nexted === 0);
+  assert('ambiguous failure NOT reported as invalid credentials (not 401/UNAUTHENTICATED)', r.res._json.code !== 'FINANCIAL_UNAUTHENTICATED');
   assert('DB failure detail never leaked to client', !/db\.internal|5432|secret/.test(JSON.stringify(r.res._json)));
 
   // 11) no JWT/PIN/session value or DB detail exposed in any rejection envelope

@@ -71,7 +71,19 @@ Freshness comparison and sanitized classification (reuses the central mapper):
 - stale `sv` (`row.session_version !== claim.sv`) → **401** `FINANCIAL_UNAUTHENTICATED`
 - actor `active !== true` → **403** `AUTH_INITIATOR_INACTIVE`
 - DB role ≠ token role → **403** `AUTH_FORBIDDEN_ROLE`
-- ambiguous freshness-lookup failure → **401** (fail closed, sanitized)
+- ambiguous freshness-lookup / DB failure → **500** `FINANCIAL_INTERNAL_ERROR` (sanitized;
+  NOT reported as invalid credentials — a DB outage is not a stale token)
+
+### Atomic session-version guard (B7A2D)
+The middleware preflight above closes the common case but is a time-of-check/time-of-use
+check: a revocation landing between the preflight read and the RPC's actor lock would be
+invisible to the RPC. B7A2D makes the check **atomic with the mutation** — all four
+financial RPCs now take `p_session_version integer` and, while holding the actor `FOR
+UPDATE` lock (before the order lock / any ledger read), compare it to the locked
+`auth_actors.session_version`; mismatch/absent/invalid → `AUTH_SESSION_STALE` → **HTTP 401**
+(never success, never retried). The service forwards the DB-verified `authContext.sv`
+(never a body-supplied `sv`) to the DAO's `p_session_version`. The middleware preflight is
+retained (fast rejection + DB-authoritative role/active/sv for the context).
 
 `req.authContext = {role, sub, sv}` (frozen) is built from **DB-authoritative** values,
 never the raw JWT role. The trusted actor passed to the service is `authContext.sub`.

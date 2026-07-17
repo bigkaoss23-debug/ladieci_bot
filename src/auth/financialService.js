@@ -62,12 +62,15 @@ function createFinancialService(deps = {}) {
   }
 
   // Trusted actor identity from verified context (JWT claims {role, sub, sv}); the
-  // request body can NEVER supply actor/role. sub must be a canonical actor and, when
-  // a role is present, must match the role→sub allow-list (forged-context defense).
+  // request body can NEVER supply actor/role/sv. sub must be a canonical actor and, when
+  // a role is present, must match the role→sub allow-list (forged-context defense). The
+  // context must also carry a valid positive session_version (DB-verified by the B7A3
+  // middleware) — it is forwarded to SQL for the atomic under-lock guard.
   function resolveActor(authContext) {
     if (!authContext || typeof authContext !== 'object') return null;
     const sub = authContext.sub;
     if (typeof sub !== 'string' || !actors.includes(sub)) return null;
+    if (!Number.isInteger(authContext.sv) || authContext.sv < 1) return null;
     const role = authContext.role;
     if (role !== undefined) {
       const set = roleSub && roleSub[role];
@@ -114,7 +117,7 @@ function createFinancialService(deps = {}) {
     try {
       const result = await dao.markOrderPaid({
         orderId: oid, paymentMethod: method, reason: normReason(reason),
-        byActor, ipHash: ipH, meta, idemScopeKey: key,
+        byActor, sessionVersion: authContext.sv, ipHash: ipH, meta, idemScopeKey: key,
       });
       log('mark_paid', oid, byActor, 'ok', null);
       return ok(result);
@@ -136,7 +139,7 @@ function createFinancialService(deps = {}) {
     try {
       const result = await dao.importLegacyPayment({
         orderId: oid, amount, paymentMethod: method, reason: normReason(reason),
-        byActor, ipHash: ipH, meta, idemScopeKey: key, confirm,
+        byActor, sessionVersion: authContext.sv, ipHash: ipH, meta, idemScopeKey: key, confirm,
       });
       log('import_legacy_payment', oid, byActor, 'ok', null);
       return ok(result);
@@ -154,7 +157,7 @@ function createFinancialService(deps = {}) {
     if (!ipH) return fail(INVALID_REQUEST);
     try {
       const result = await dao.refundOrder({
-        orderId: oid, reason: normReason(reason), byActor, ipHash: ipH, meta, idemScopeKey: key,
+        orderId: oid, reason: normReason(reason), byActor, sessionVersion: authContext.sv, ipHash: ipH, meta, idemScopeKey: key,
       });
       log('refund', oid, byActor, 'ok', null);
       return ok(result);
@@ -172,7 +175,7 @@ function createFinancialService(deps = {}) {
     if (!ipH) return fail(INVALID_REQUEST);
     try {
       const result = await dao.voidOrder({
-        orderId: oid, reason: normReason(reason), byActor, ipHash: ipH, meta, idemScopeKey: key,
+        orderId: oid, reason: normReason(reason), byActor, sessionVersion: authContext.sv, ipHash: ipH, meta, idemScopeKey: key,
       });
       log('void', oid, byActor, 'ok', null);
       return ok(result);

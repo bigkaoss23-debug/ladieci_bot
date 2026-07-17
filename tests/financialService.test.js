@@ -41,8 +41,27 @@ const svc = (dao, extra = {}) => createFinancialService(Object.assign({ dao, ipH
     return !k.includes('role') && !k.includes('byRole') && !k.includes('payload_digest') && !k.includes('digest')
       && !k.includes('amount') && !k.includes('type') && !k.includes('prev_estado') && !k.includes('new_pay_state') && !k.includes('refunded') && !k.includes('cancelado_at');
   })());
-  assert('DAO payload keys are exactly the mark_paid mapping', JSON.stringify(Object.keys(dao.calls[0].args).sort()) === JSON.stringify(['byActor', 'idemScopeKey', 'ipHash', 'meta', 'orderId', 'paymentMethod', 'reason'].sort()));
+  assert('DAO payload keys are exactly the mark_paid mapping (incl sessionVersion)', JSON.stringify(Object.keys(dao.calls[0].args).sort()) === JSON.stringify(['byActor', 'idemScopeKey', 'ipHash', 'meta', 'orderId', 'paymentMethod', 'reason', 'sessionVersion'].sort()));
+  assert('sessionVersion forwarded from trusted context (ctx.sv=3), not body', dao.calls[0].args.sessionVersion === 3);
   assert('ip hash derived from trusted ip, raw ip not forwarded', dao.calls[0].args.ipHash === 'iphash_of_1.2.3.4');
+
+  // ── session version comes from trusted context; body cannot override; invalid ctx rejects ──
+  dao = makeDao(); s = svc(dao);
+  r = await s.refund({ authContext: { role: 'admin', sub: 'owner', sv: 8 }, orderId: 'O', reason: 'r', idempotencyKey: 'k12345678', trustedClientIp: '1.1.1.1',
+    sv: 999, sessionVersion: 999, session_version: 999, p_session_version: 999 });
+  assert('body sv/sessionVersion/session_version ignored; ctx.sv=8 forwarded', r.ok === true && dao.calls[0].args.sessionVersion === 8);
+  dao = makeDao(); s = svc(dao);
+  r = await s.refund({ authContext: { role: 'admin', sub: 'owner' }, orderId: 'O', reason: 'r', idempotencyKey: 'k12345678', trustedClientIp: '1.1.1.1' });
+  assert('context without sv → UNAUTHENTICATED before DAO', r.ok === false && r.code === UNAUTHENTICATED && dao.calls.length === 0);
+  dao = makeDao(); s = svc(dao);
+  r = await s.refund({ authContext: { role: 'admin', sub: 'owner', sv: 0 }, orderId: 'O', reason: 'r', idempotencyKey: 'k12345678', trustedClientIp: '1.1.1.1' });
+  assert('context with non-positive sv → UNAUTHENTICATED before DAO', r.ok === false && r.code === UNAUTHENTICATED && dao.calls.length === 0);
+  dao = makeDao(); s = svc(dao);
+  r = await s.refund({ authContext: { role: 'admin', sub: 'owner', sv: 3.5 }, orderId: 'O', reason: 'r', idempotencyKey: 'k12345678', trustedClientIp: '1.1.1.1' });
+  assert('context with non-integer sv → UNAUTHENTICATED before DAO', r.ok === false && r.code === UNAUTHENTICATED && dao.calls.length === 0);
+  dao = makeDao({ voidOrder: { throw: new FinancialDaoError('AUTH_SESSION_STALE') } }); s = svc(dao);
+  r = await s.voidOrder({ authContext: ADMIN_CTX, orderId: 'O', reason: 'r', idempotencyKey: 'k12345678', trustedClientIp: '1.1.1.1' });
+  assert('AUTH_SESSION_STALE from SQL stays a failure (not success)', r.ok === false && r.code === 'AUTH_SESSION_STALE');
 
   // ── exactly one DAO call for valid input ────────────────────────────────────
   assert('valid input → exactly one DAO call', dao.calls.length === 1);
@@ -79,7 +98,7 @@ const svc = (dao, extra = {}) => createFinancialService(Object.assign({ dao, ipH
   s = svc(dao);
   r = await s.importLegacyPayment({ authContext: ADMIN_CTX, orderId: 'O', amount: 30, paymentMethod: 'efectivo', reason: '  hist  ', confirmation: 'IMPORT_LEGACY_PAYMENT', idempotencyKey: 'k12345678', trustedClientIp: '1.1.1.1' });
   assert('import ok maps amount/method/confirm and trims reason', r.ok === true && dao.calls[0].args.amount === 30 && dao.calls[0].args.confirm === 'IMPORT_LEGACY_PAYMENT' && dao.calls[0].args.reason === 'hist');
-  assert('import DAO keys exact', JSON.stringify(Object.keys(dao.calls[0].args).sort()) === JSON.stringify(['amount', 'byActor', 'confirm', 'idemScopeKey', 'ipHash', 'meta', 'orderId', 'paymentMethod', 'reason'].sort()));
+  assert('import DAO keys exact (incl sessionVersion)', JSON.stringify(Object.keys(dao.calls[0].args).sort()) === JSON.stringify(['amount', 'byActor', 'confirm', 'idemScopeKey', 'ipHash', 'meta', 'orderId', 'paymentMethod', 'reason', 'sessionVersion'].sort()));
 
   // ── replay result returned intact; conflict stays a failure ─────────────────
   dao = makeDao({ voidOrder: { result: { order_id: 'O', type: 'void', new_estado: 'ANULADO', idempotent: true, event_id: 'evX' } } });

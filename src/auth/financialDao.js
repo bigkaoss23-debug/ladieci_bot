@@ -29,8 +29,8 @@ const RECOGNIZED_DOMAIN_CODES = Object.freeze([
   'AUTH_IP_HASH_TOO_LONG', 'AUTH_LEGACY_IMPORT_REQUIRED', 'AUTH_META_INVALID',
   'AUTH_META_SENSITIVE_KEY', 'AUTH_META_TOO_LARGE', 'AUTH_METHOD_INVALID',
   'AUTH_NOT_LEGACY_PAID', 'AUTH_NO_PAYMENT_BASIS', 'AUTH_ORDER_NOT_FOUND',
-  'AUTH_REASON_BLANK', 'AUTH_REFUND_BASIS_INTEGRITY', 'AUTH_VOID_REPLAY_INTEGRITY',
-  'AUTH_VOID_STATE_FORBIDDEN',
+  'AUTH_REASON_BLANK', 'AUTH_REFUND_BASIS_INTEGRITY', 'AUTH_SESSION_STALE',
+  'AUTH_VOID_REPLAY_INTEGRITY', 'AUTH_VOID_STATE_FORBIDDEN',
 ]);
 const DOMAIN_SET = new Set(RECOGNIZED_DOMAIN_CODES);
 const INTERNAL_ERROR_CODE = 'FINANCIAL_INTERNAL_ERROR';
@@ -75,34 +75,35 @@ function createFinancialDao(deps = {}) {
   const rpc = typeof deps.rpc === 'function' ? deps.rpc : defaultRpc;
 
   // order_mark_paid — amount is SQL-derived from ordenes.totale (caller cannot supply).
-  async function markOrderPaid({ orderId, paymentMethod, reason, byActor, ipHash, meta = {}, idemScopeKey } = {}) {
+  // sessionVersion is the trusted DB-verified session_version; SQL re-checks it under lock.
+  async function markOrderPaid({ orderId, paymentMethod, reason, byActor, sessionVersion, ipHash, meta = {}, idemScopeKey } = {}) {
     return sanitizeResult(await rpc('order_mark_paid', {
       p_order_id: orderId, p_payment_method: paymentMethod, p_reason: reason,
-      p_by_actor: byActor, p_ip_hash: ipHash, p_meta: meta, p_idem_scope_key: idemScopeKey,
+      p_by_actor: byActor, p_session_version: sessionVersion, p_ip_hash: ipHash, p_meta: meta, p_idem_scope_key: idemScopeKey,
     }));
   }
 
   // order_import_legacy_payment — explicit historical amount + method + exact confirm.
-  async function importLegacyPayment({ orderId, amount, paymentMethod, reason, byActor, ipHash, meta = {}, idemScopeKey, confirm } = {}) {
+  async function importLegacyPayment({ orderId, amount, paymentMethod, reason, byActor, sessionVersion, ipHash, meta = {}, idemScopeKey, confirm } = {}) {
     return sanitizeResult(await rpc('order_import_legacy_payment', {
       p_order_id: orderId, p_amount: amount, p_payment_method: paymentMethod, p_reason: reason,
-      p_by_actor: byActor, p_ip_hash: ipHash, p_meta: meta, p_idem_scope_key: idemScopeKey, p_confirm: confirm,
+      p_by_actor: byActor, p_session_version: sessionVersion, p_ip_hash: ipHash, p_meta: meta, p_idem_scope_key: idemScopeKey, p_confirm: confirm,
     }));
   }
 
   // order_refund — amount/method derived by SQL from the immutable payment basis.
-  async function refundOrder({ orderId, reason, byActor, ipHash, meta = {}, idemScopeKey } = {}) {
+  async function refundOrder({ orderId, reason, byActor, sessionVersion, ipHash, meta = {}, idemScopeKey } = {}) {
     return sanitizeResult(await rpc('order_refund', {
       p_order_id: orderId, p_reason: reason, p_by_actor: byActor,
-      p_ip_hash: ipHash, p_meta: meta, p_idem_scope_key: idemScopeKey,
+      p_session_version: sessionVersion, p_ip_hash: ipHash, p_meta: meta, p_idem_scope_key: idemScopeKey,
     }));
   }
 
   // order_void — amount 0 / method NULL / state transition all SQL-authoritative.
-  async function voidOrder({ orderId, reason, byActor, ipHash, meta = {}, idemScopeKey } = {}) {
+  async function voidOrder({ orderId, reason, byActor, sessionVersion, ipHash, meta = {}, idemScopeKey } = {}) {
     return sanitizeResult(await rpc('order_void', {
       p_order_id: orderId, p_reason: reason, p_by_actor: byActor,
-      p_ip_hash: ipHash, p_meta: meta, p_idem_scope_key: idemScopeKey,
+      p_session_version: sessionVersion, p_ip_hash: ipHash, p_meta: meta, p_idem_scope_key: idemScopeKey,
     }));
   }
 

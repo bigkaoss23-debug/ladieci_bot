@@ -35,33 +35,33 @@ const okResult = (over = {}) => Object.assign({
 
   let dao = createFinancialDao({ rpc: rec(okResult()) });
   CALLS = [];
-  let r = await dao.markOrderPaid({ orderId: 'ORD1', paymentMethod: 'efectivo', reason: 'r', byActor: 'owner', ipHash: 'h', meta: { a: 1 }, idemScopeKey: 'k12345678' });
+  let r = await dao.markOrderPaid({ orderId: 'ORD1', paymentMethod: 'efectivo', reason: 'r', byActor: 'owner', sessionVersion: 5, ipHash: 'h', meta: { a: 1 }, idemScopeKey: 'k12345678' });
   assert('mark_paid: exactly one RPC call (no retry)', CALLS.length === 1);
   assert('mark_paid: RPC name order_mark_paid', CALLS[0].fn === 'order_mark_paid');
-  assert('mark_paid: exact param keys (no p_amount)', eqKeys(CALLS[0].args, ['p_order_id', 'p_payment_method', 'p_reason', 'p_by_actor', 'p_ip_hash', 'p_meta', 'p_idem_scope_key']), keys(CALLS[0].args).join(','));
-  assert('mark_paid: exact value mapping', CALLS[0].args.p_order_id === 'ORD1' && CALLS[0].args.p_payment_method === 'efectivo' && CALLS[0].args.p_by_actor === 'owner' && CALLS[0].args.p_ip_hash === 'h' && CALLS[0].args.p_idem_scope_key === 'k12345678');
+  assert('mark_paid: exact param keys (incl p_session_version, no p_amount)', eqKeys(CALLS[0].args, ['p_order_id', 'p_payment_method', 'p_reason', 'p_by_actor', 'p_session_version', 'p_ip_hash', 'p_meta', 'p_idem_scope_key']), keys(CALLS[0].args).join(','));
+  assert('mark_paid: exact value mapping incl p_session_version', CALLS[0].args.p_order_id === 'ORD1' && CALLS[0].args.p_payment_method === 'efectivo' && CALLS[0].args.p_by_actor === 'owner' && CALLS[0].args.p_session_version === 5 && CALLS[0].args.p_ip_hash === 'h' && CALLS[0].args.p_idem_scope_key === 'k12345678');
   assert('mark_paid: no p_by_role / p_expected_role / p_digest', !('p_by_role' in CALLS[0].args) && !('p_expected_role' in CALLS[0].args) && !('p_payload_digest' in CALLS[0].args));
   assert('mark_paid: result returned intact (whitelisted)', r.order_id === 'ORD1' && r.type === 'payment' && r.idempotent === false && Object.isFrozen(r));
 
   CALLS = [];
   dao = createFinancialDao({ rpc: rec(okResult({ type: 'payment_imported', legacy: true, amount: 30 })) });
-  await dao.importLegacyPayment({ orderId: 'ORD2', amount: 30, paymentMethod: 'efectivo', reason: 'hist', byActor: 'owner', ipHash: 'h', meta: {}, idemScopeKey: 'k12345678', confirm: 'IMPORT_LEGACY_PAYMENT' });
+  await dao.importLegacyPayment({ orderId: 'ORD2', amount: 30, paymentMethod: 'efectivo', reason: 'hist', byActor: 'owner', sessionVersion: 7, ipHash: 'h', meta: {}, idemScopeKey: 'k12345678', confirm: 'IMPORT_LEGACY_PAYMENT' });
   assert('import: RPC name order_import_legacy_payment', CALLS[0].fn === 'order_import_legacy_payment');
-  assert('import: exact param keys (incl p_amount + p_confirm)', eqKeys(CALLS[0].args, ['p_order_id', 'p_amount', 'p_payment_method', 'p_reason', 'p_by_actor', 'p_ip_hash', 'p_meta', 'p_idem_scope_key', 'p_confirm']), keys(CALLS[0].args).join(','));
-  assert('import: p_amount + p_confirm mapped', CALLS[0].args.p_amount === 30 && CALLS[0].args.p_confirm === 'IMPORT_LEGACY_PAYMENT');
+  assert('import: exact param keys (incl p_amount + p_session_version + p_confirm)', eqKeys(CALLS[0].args, ['p_order_id', 'p_amount', 'p_payment_method', 'p_reason', 'p_by_actor', 'p_session_version', 'p_ip_hash', 'p_meta', 'p_idem_scope_key', 'p_confirm']), keys(CALLS[0].args).join(','));
+  assert('import: p_amount + p_confirm + p_session_version mapped', CALLS[0].args.p_amount === 30 && CALLS[0].args.p_confirm === 'IMPORT_LEGACY_PAYMENT' && CALLS[0].args.p_session_version === 7);
 
   CALLS = [];
   dao = createFinancialDao({ rpc: rec(okResult({ type: 'refund', new_pay_state: 'refunded' })) });
-  await dao.refundOrder({ orderId: 'ORD1', reason: 'ref', byActor: 'owner', ipHash: 'h', meta: {}, idemScopeKey: 'k12345678' });
+  await dao.refundOrder({ orderId: 'ORD1', reason: 'ref', byActor: 'owner', sessionVersion: 5, ipHash: 'h', meta: {}, idemScopeKey: 'k12345678' });
   assert('refund: RPC name order_refund', CALLS[0].fn === 'order_refund');
-  assert('refund: exact param keys (NO amount/method)', eqKeys(CALLS[0].args, ['p_order_id', 'p_reason', 'p_by_actor', 'p_ip_hash', 'p_meta', 'p_idem_scope_key']), keys(CALLS[0].args).join(','));
-  assert('refund: no p_amount / p_payment_method (SQL-derived)', !('p_amount' in CALLS[0].args) && !('p_payment_method' in CALLS[0].args));
+  assert('refund: exact param keys (incl p_session_version, NO amount/method)', eqKeys(CALLS[0].args, ['p_order_id', 'p_reason', 'p_by_actor', 'p_session_version', 'p_ip_hash', 'p_meta', 'p_idem_scope_key']), keys(CALLS[0].args).join(','));
+  assert('refund: p_session_version mapped; no p_amount / p_payment_method (SQL-derived)', CALLS[0].args.p_session_version === 5 && !('p_amount' in CALLS[0].args) && !('p_payment_method' in CALLS[0].args));
 
   CALLS = [];
   dao = createFinancialDao({ rpc: rec(okResult({ type: 'void', new_estado: 'ANULADO', amount: 0, payment_method: null })) });
-  await dao.voidOrder({ orderId: 'ORD1', reason: 'vd', byActor: 'owner', ipHash: 'h', meta: {}, idemScopeKey: 'k12345678' });
+  await dao.voidOrder({ orderId: 'ORD1', reason: 'vd', byActor: 'owner', sessionVersion: 5, ipHash: 'h', meta: {}, idemScopeKey: 'k12345678' });
   assert('void: RPC name order_void', CALLS[0].fn === 'order_void');
-  assert('void: exact param keys (NO amount/method/state)', eqKeys(CALLS[0].args, ['p_order_id', 'p_reason', 'p_by_actor', 'p_ip_hash', 'p_meta', 'p_idem_scope_key']), keys(CALLS[0].args).join(','));
+  assert('void: exact param keys (incl p_session_version, NO amount/method/state)', eqKeys(CALLS[0].args, ['p_order_id', 'p_reason', 'p_by_actor', 'p_session_version', 'p_ip_hash', 'p_meta', 'p_idem_scope_key']), keys(CALLS[0].args).join(','));
 
   // ── recognized domain code preserved through the DAO layer ──────────────────
   dao = createFinancialDao({ rpc: rec(null, new FinancialDaoError('AUTH_IDEMPOTENCY_CONFLICT')) });
@@ -103,7 +103,7 @@ const okResult = (over = {}) => Object.assign({
   assert('default transport: transport failure → internal', err && err.code === INTERNAL_ERROR_CODE);
 
   // ── recognized-code list matches the committed migration markers exactly ─────
-  const MIGS = ['migrations/2026-07-15_b7_payment_basis_rpcs.sql', 'migrations/2026-07-15_b7_refund_void_rpcs.sql', 'migrations/2026-07-16_b7_void_digest_replay_fix.sql'];
+  const MIGS = ['migrations/2026-07-15_b7_payment_basis_rpcs.sql', 'migrations/2026-07-15_b7_refund_void_rpcs.sql', 'migrations/2026-07-16_b7_void_digest_replay_fix.sql', 'migrations/2026-07-17_b7_financial_session_version_guard.sql'];
   const fromSql = new Set();
   for (const m of MIGS) {
     const txt = fs.readFileSync(path.join(__dirname, '..', m), 'utf8');
@@ -123,6 +123,20 @@ const okResult = (over = {}) => Object.assign({
     return invoked.length === 4 && invoked.every((n) => allowed.has(n));
   })());
   assert('DAO has no generic financial event writer', !/insertFinancialEvent|writeLedger|insertLedger|order_insert_financial_event/i.test(daoCode));
+
+  // ── every RPC payload carries p_session_version; no old shape without it ─────
+  const stale = new FinancialDaoError('AUTH_SESSION_STALE');
+  const seen = [];
+  const capDao = createFinancialDao({ rpc: (fn, args) => { seen.push({ fn, args }); return Promise.resolve(okResult()); } });
+  await capDao.markOrderPaid({ orderId: 'O', paymentMethod: 'efectivo', byActor: 'owner', sessionVersion: 5, ipHash: 'h', idemScopeKey: 'k12345678' });
+  await capDao.importLegacyPayment({ orderId: 'O', amount: 5, paymentMethod: 'efectivo', reason: 'r', byActor: 'owner', sessionVersion: 5, ipHash: 'h', idemScopeKey: 'k12345678', confirm: 'IMPORT_LEGACY_PAYMENT' });
+  await capDao.refundOrder({ orderId: 'O', reason: 'r', byActor: 'owner', sessionVersion: 5, ipHash: 'h', idemScopeKey: 'k12345678' });
+  await capDao.voidOrder({ orderId: 'O', reason: 'r', byActor: 'owner', sessionVersion: 5, ipHash: 'h', idemScopeKey: 'k12345678' });
+  assert('every RPC payload includes p_session_version (no legacy shape)', seen.length === 4 && seen.every((c) => 'p_session_version' in c.args && c.args.p_session_version === 5));
+  let staleErr = null;
+  try { await createFinancialDao({ rpc: () => Promise.reject(stale) }).markOrderPaid({ orderId: 'O', paymentMethod: 'efectivo', byActor: 'owner', sessionVersion: 5, ipHash: 'h', idemScopeKey: 'k12345678' }); } catch (e) { staleErr = e; }
+  assert('AUTH_SESSION_STALE preserved through DAO', staleErr && staleErr.code === 'AUTH_SESSION_STALE');
+  assert('AUTH_SESSION_STALE is in the recognized-domain-code set', RECOGNIZED_DOMAIN_CODES.includes('AUTH_SESSION_STALE'));
 
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   process.exit(fail === 0 ? 0 : 1);

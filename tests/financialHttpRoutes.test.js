@@ -66,6 +66,7 @@ const deps0 = { verifyToken: verifyOK, getActor: freshActor };
   await runChain(markRoute.chain, { headers: { authorization: 'Bearer good' }, body: { orderId: 'ORDZ', paymentMethod: 'efectivo', reason: 'r', idempotencyKey: 'k12345678' }, ip: '2.2.2.2' }, res);
   assert('authenticated request reaches handler → 200, one service call', res._status === 200 && svc.calls.length === 1 && svc.calls[0].name === 'markPaid');
   assert('authenticated request: actor from token context', svc.calls[0].args.authContext.sub === 'owner');
+  assert('DB-verified session_version reaches the service (ctx.sv === DB row sv=1)', svc.calls[0].args.authContext.sv === 1);
 
   // ── absent/invalid body handled safely (no throw) → boundary rejects ────────
   svc = fakeService(); app = fakeApp();
@@ -128,13 +129,16 @@ const deps0 = { verifyToken: verifyOK, getActor: freshActor };
   const hasActiveCheck = (s) => /row\.active !== true/.test(s);
   const hasDbRoleCheck = (s) => /row\.role !== payload\.role/.test(s);
   const freshnessBeforeContext = (s) => { const g = s.indexOf('getActor(payload.sub)'); const c = s.indexOf('req.authContext = Object.freeze'); return g > 0 && c > 0 && g < c; };
-  const freshnessFailIsClosed = (s) => { const mw = s.slice(s.indexOf('async function authContextMiddleware'), s.indexOf('function financialJsonErrorHandler')); const m = mw.match(/catch \(_\) \{ return ([a-zA-Z0-9_]+)\(/); return !!m && m[1] !== 'next'; };
+  // fail-closed = the freshness catch block returns a response (sanitized 500) and never calls next().
+  const freshnessCatch = (s) => { const i = s.indexOf('try { row = await getActor'); const c = s.indexOf('catch (', i); const end = s.indexOf('if (!row', c); return (c >= 0 && end > c) ? s.slice(c, end) : ''; };
+  const freshnessFailIsClosed = (s) => { const b = freshnessCatch(s); return /res\.status\([\s\S]*?\.json\(/.test(b) && !/\bnext\(/.test(b); };
   assert('freshness: compares token sv to DB session_version', hasSvCheck(HND));
   assert('freshness: checks DB active=true', hasActiveCheck(HND));
   assert('freshness: compares token role to DB role', hasDbRoleCheck(HND));
   assert('freshness: DB read occurs BEFORE context attach', freshnessBeforeContext(HND));
   assert('freshness: attaches DB-authoritative role (not raw JWT role)', /req\.authContext = Object\.freeze\(\{ role: row\.role/.test(HND));
-  assert('freshness: ambiguous DB failure fails closed (not next)', freshnessFailIsClosed(HND));
+  assert('freshness: ambiguous DB failure fails closed to sanitized response (not next)', freshnessFailIsClosed(HND));
+  assert('freshness: ambiguous DB failure maps to internal error (500), not credentials', /catch \([\s\S]*?INTERNAL_ERROR_CODE[\s\S]*?\}/.test(HND.slice(HND.indexOf('try { row = await getActor'))));
 
   // negative controls: detectors must fire on injected violations
   assert('NC1: handler→DAO detected', callsDaoDirect(HND + '\nconst d = require("./financialDao").createFinancialDao();'));
@@ -156,7 +160,7 @@ const deps0 = { verifyToken: verifyOK, getActor: freshActor };
   assert('NC12: omitted sv comparison detected', hasSvCheck(HND) && !hasSvCheck(HND.replace('row.session_version !== payload.sv', 'false')));
   assert('NC13: omitted DB-role comparison detected', hasDbRoleCheck(HND) && !hasDbRoleCheck(HND.replace('row.role !== payload.role', 'false')));
   assert('NC14: inactive-allowed detected', hasActiveCheck(HND) && !hasActiveCheck(HND.replace('row.active !== true', 'false')));
-  assert('NC15: freshness failure treated as success detected', freshnessFailIsClosed(HND) && !freshnessFailIsClosed(HND.replace('catch (_) { return send401(res); }', 'catch (_) { return next(); }')));
+  assert('NC15: freshness failure treated as success detected', freshnessFailIsClosed(HND) && !freshnessFailIsClosed(HND.replace('return res.status(statusForCode(INTERNAL_ERROR_CODE)).json({ ok: false, code: INTERNAL_ERROR_CODE });', 'return next();')));
   assert('NC16: freshness placed after context attach detected', !freshnessBeforeContext('req.authContext = Object.freeze({ role: row.role }); const x = getActor(payload.sub);'));
 
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);

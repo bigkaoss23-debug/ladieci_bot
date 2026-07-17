@@ -19,6 +19,7 @@ const STATUS_BY_CODE = Object.freeze({
   // ── 401 ────────────────────────────────────────────────────────────────────
   [UNAUTHENTICATED]: 401,           // FINANCIAL_UNAUTHENTICATED
   AUTH_ACTOR_NOT_FOUND: 401,        // trusted actor no longer resolvable → unusable identity
+  AUTH_SESSION_STALE: 401,          // token session_version != locked DB value (revoked mid-flight)
   // ── 403 ────────────────────────────────────────────────────────────────────
   AUTH_FORBIDDEN_ROLE: 403,
   AUTH_INITIATOR_INACTIVE: 403,
