@@ -22,6 +22,7 @@ const {
 } = require("./src/agents/manualGiros");
 const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
 const { integrateFinancialRoutes } = require("./src/auth/financialHttpIntegration");
+const { integrateLoginRoute } = require("./src/auth/loginHttpIntegration");
 
 const app = express();
 app.use(express.json());
@@ -39,6 +40,13 @@ app.use((req, res, next) => {
 // paths enter their Bearer-JWT chain first and never require/accept the legacy key, while
 // every other /api path continues to the legacy proxy unchanged.
 integrateFinancialRoutes(app, { env: process.env, logger: console });
+
+// Access Control V2 / B7A5 — staging-gated Auth V2 login route. DISABLED BY DEFAULT
+// (mounts nothing unless AUTH_V2_LOGIN_HTTP_ENABLED === 'true'; independent of the financial
+// flag). Mounted here — after CORS/JSON parsing, BEFORE the legacy /api X-Api-Key proxy — so
+// the single POST /api/auth/v2/login enters the accepted B3 login handler directly (no JWT,
+// no X-Api-Key), while every other /api path continues to the legacy proxy unchanged.
+integrateLoginRoute(app, { env: process.env, logger: console });
 
 // Auth middleware — protegge tutti gli endpoint /api
 const DASHBOARD_API_KEY = process.env.DASHBOARD_API_KEY;
