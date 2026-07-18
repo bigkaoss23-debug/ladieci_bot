@@ -21,6 +21,7 @@ const {
   dissolveManualGiro,
 } = require("./src/agents/manualGiros");
 const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
+const { integrateFinancialRoutes } = require("./src/auth/financialHttpIntegration");
 
 const app = express();
 app.use(express.json());
@@ -31,6 +32,13 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
+
+// Access Control V2 / B7A4 — staging-gated financial JWT routes. DISABLED BY DEFAULT
+// (mounts nothing unless AUTH_V2_FINANCIAL_HTTP_ENABLED === 'true'). Mounted here — after
+// CORS/JSON parsing, BEFORE the legacy /api X-Api-Key proxy — so the four static financial
+// paths enter their Bearer-JWT chain first and never require/accept the legacy key, while
+// every other /api path continues to the legacy proxy unchanged.
+integrateFinancialRoutes(app, { env: process.env, logger: console });
 
 // Auth middleware — protegge tutti gli endpoint /api
 const DASHBOARD_API_KEY = process.env.DASHBOARD_API_KEY;
@@ -567,7 +575,12 @@ app.get("/status", async (_req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`La Dieci Bot running on port ${PORT}`));
+// Start the server + schedulers ONLY when run as the process entrypoint. When the module
+// is required (e.g. offline integration tests), it exports `app` without listening, opening
+// no port and triggering no scheduled DB work. Production startup semantics are unchanged.
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`La Dieci Bot running on port ${PORT}`));
+}
 
 // ─── Messaggio operatore di fine chiusura (summary completa) ────────────────
 function buildCloseSummaryMsg(res, ctx) {
@@ -688,6 +701,10 @@ async function catchUpChiusura() {
   }
 }
 
-schedula2340();
-schedula2350();
-catchUpChiusura();
+if (require.main === module) {
+  schedula2340();
+  schedula2350();
+  catchUpChiusura();
+}
+
+module.exports = { app };
