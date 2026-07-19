@@ -72,14 +72,20 @@ and are read with plain `SELECT` without row-locking clauses.
 
 Order of operations:
 1. lock initiator + order (`FOR UPDATE`; serializes concurrent financial attempts on the order);
-2. derive all canonical values + digest;
-3. **same-scope check** `(order_id, type, idem_scope_key)` **before** the generic
-   basis rejection, using a plain ledger `SELECT`: same digest → return the existing
-   committed result with `idempotent=true` (no insert, no order update); different
-   digest → `AUTH_IDEMPOTENCY_CONFLICT` (no insert/update);
+2. **same-scope check** `(order_id, type, idem_scope_key)` **before** the generic
+   basis rejection, using a plain ledger `SELECT`;
+3. for same-scope replay, rebuild the digest from the existing event's immutable
+   `prev_estado`/`new_estado`/pay-state snapshots. `order_mark_paid` also uses the
+   existing immutable event amount; `order_import_legacy_payment` uses the current
+   normalized request amount so changed historical amount remains a conflict. Both
+   use current normalized actor/method/reason semantics. Same digest → return the
+   existing committed result with `idempotent=true` (no insert, no order update);
+   different digest or malformed stored basis shape → `AUTH_IDEMPOTENCY_CONFLICT`
+   (no insert/update);
 4. one-basis rule: use a plain ledger `SELECT` for any existing
    `payment`/`payment_imported` row, then reject `AUTH_BASIS_EXISTS` if one exists;
-5. legacy precondition; then insert + order mirror.
+5. for a fresh basis only, derive current order canonical values + digest;
+6. legacy precondition; then insert + order mirror.
 No automatic retry after ambiguous failure. The partial unique indexes
 (`…one_payment_uq`, `…one_refund_uq`) remain the final database backstop.
 
@@ -123,4 +129,7 @@ Unwired; migration not applied. No business RPC beyond the two above; no generic
 ### Artifacts
 - Forward: `migrations/2026-07-15_b7_payment_basis_rpcs.sql`
 - Rollback: `migrations/2026-07-15_b7_payment_basis_rpcs.ROLLBACK.sql`
+- Historical replay fix: `migrations/2026-07-19_b7_payment_basis_historical_replay_fix.sql`
+- Historical replay fix rollback: `migrations/2026-07-19_b7_payment_basis_historical_replay_fix.ROLLBACK.sql`
 - Static tests: `tests/b7PaymentBasisRpcsMigration.test.js`
+- Historical replay static tests: `tests/b7PaymentBasisHistoricalReplayFixMigration.test.js`
