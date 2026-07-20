@@ -37,5 +37,19 @@ check("no PII columns in snapshot (no nombre/tel/direccion/items)",
 check("rollback drops exact signatures", /DROP FUNCTION IF EXISTS public\.start_rider_trip\(text\)/.test(rb) && /public\.complete_rider_stop\(text, boolean, text\)/.test(rb) && /public\.close_rider_trip\(\)/.test(rb));
 check("no CREATE POLICY / no new table", !/CREATE POLICY/.test(fwd) && !/CREATE TABLE/i.test(fwd));
 
+// ── S2-1C line-by-line contract review assertions ──
+check("config.valore text<->jsonb conversion", /NULLIF\(valore,''\)::jsonb/.test(fwd) && /valore = v_ds::text/.test(fwd));
+check("manual-giro grouping query", /WHERE manual_giro_id = v_giro\s+AND estado IN \('LISTO','EN_ENTREGA'\)/.test(fwd));
+check("standalone anchor fallback", /v_order_ids := ARRAY\[p_anchor_order_id\]/.test(fwd));
+check("idempotent same-member start", /v_active->'order_ids' \? p_anchor_order_id/.test(fwd));
+check("different active trip conflict", /ACTIVE_TRIP_CONFLICT/.test(fwd));
+check("all members transitioned in one UPDATE (id = ANY)", /UPDATE public\.ordenes[\s\S]*?WHERE id = ANY\(v_order_ids\) AND estado = 'LISTO'/.test(fwd));
+check("completion membership check", /v_active->'order_ids' \? p_order_id/.test(fwd));
+check("close verifies all snapshot orders terminal", /estado NOT IN \('RETIRADO','COMPLETADO','COMPLETATO','CANCELADO','ANULADO'\)/.test(fwd));
+check("early close returns EARLY_CLOSE", /EARLY_CLOSE/.test(fwd));
+check("idempotent duplicate close returns last_closed_trip w/o new write", /last_closed_trip[\s\S]*?IDEMPOTENT/.test(fwd));
+check("no swallowed EXCEPTION that could commit partial work", !/EXCEPTION\s+WHEN/i.test(fwd));
+check("column types honored (bigint epoch ms for hora_*)", /hora_salida = \(extract\(epoch FROM v_now\) \* 1000\)::bigint/.test(fwd) && /hora_entrega = \(extract\(epoch FROM now\(\)\) \* 1000\)::bigint/.test(fwd));
+
 console.log(`\nriderTripRpcsMigration: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

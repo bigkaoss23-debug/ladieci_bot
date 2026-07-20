@@ -24,7 +24,14 @@ const { getActionRule } = require("./legacyActionRoles");
 // POST -> req.query.action || req.body.action
 // The special REST route /api/delivery/shadow-preview -> "shadowPreview".
 function extractAction(req) {
-  if (req && req.path === "/api/delivery/shadow-preview") return "shadowPreview";
+  // When mounted via app.use("/api", ...) Express strips the "/api" prefix from req.path,
+  // so match both the mounted-relative and the full form (and originalUrl as a fallback).
+  const p = (req && (req.path || "")) || "";
+  const ou = (req && (req.originalUrl || "")) || "";
+  if (p === "/api/delivery/shadow-preview" || p === "/delivery/shadow-preview" ||
+      ou.split("?")[0].endsWith("/api/delivery/shadow-preview")) {
+    return "shadowPreview";
+  }
   const q = (req && req.query) || {};
   const b = (req && req.body) || {};
   if (req && req.method === "GET") return q.action;

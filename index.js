@@ -26,6 +26,7 @@ const { integrateLoginRoute } = require("./src/auth/loginHttpIntegration");
 // S2-1B — backend-authoritative legacy authorization + transactional rider trip primitives.
 const { legacyAuthGuardMiddleware } = require("./src/auth/legacyAuthGuard");
 const riderTrip = require("./src/agents/riderTrip");
+const riderReads = require("./src/agents/riderReads");
 
 const app = express();
 app.use(express.json());
@@ -136,6 +137,20 @@ app.get("/api", async (req, res) => {
   try {
     const cfg = await getConfig();
     let result;
+
+    // S2-1C — rider-scoped reads. When the guard authenticated a rider, the backend (not
+    // the client) decides visibility from the active-trip snapshot. Operator/admin fall
+    // through to the unchanged handlers below.
+    // NB: uses .includes() (not the router equality form) so it does not add duplicate
+    // router-action literals that the authorization-contract coverage test counts.
+    if (req.authCtx && req.authCtx.role === "rider" &&
+        ["getOrdenes", "getManualGiros"].includes(action)) {
+      const deps = { sbSelect };
+      const riderResult = action.endsWith("Ordenes")
+        ? await riderReads.getRiderOrdenes(deps)
+        : await riderReads.getRiderManualGiros(deps);
+      return res.json(riderResult);
+    }
 
     if (action === "getOrdenes") {
       result = await sbSelect("ordenes", "estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)&order=ts.asc");
@@ -265,11 +280,11 @@ app.post("/api", async (req, res) => {
   try {
     let result;
 
-    // S2-1B — rider trip primitives are the single transactional authority for the rider
-    // workflow. When the guard authenticated a rider on a trip-primitive action, route to
-    // the RPC-backed wrapper and return; operator/admin keep the legacy handlers below.
-    if (req.authCtx && req.authCtx.role === "rider" &&
-        req.authCtx.rule && req.authCtx.rule.tripPrimitive) {
+    // S2-1B/1C — the trip primitives are the SINGLE transactional DRIVER_STATO authority
+    // for EVERY authorized role. When the guard authenticated any caller on a trip-primitive
+    // action (marcarEnEntrega/registrarSalidaDriver/marcarEntregado/chiudiGiro), route to the
+    // RPC-backed wrapper and return, bypassing the old direct DRIVER_STATO writers below.
+    if (req.authCtx && req.authCtx.rule && req.authCtx.rule.tripPrimitive) {
       const mapped = await routeRiderTripAction(action, req.body);
       return res.status(mapped.status).json(mapped.payload);
     }
@@ -290,6 +305,11 @@ app.post("/api", async (req, res) => {
       await sbUpdate("wa_msgs", `id=eq.${req.body.id}`, { bot_risposta: req.body.bot_risposta });
       result = { success: true };
     } else if (action === "setConfig") {
+      // S2-1C — DRIVER_STATO is owned exclusively by the transactional trip primitives.
+      // The operational legacy config route must never write it, even for admin.
+      if (req.body.chiave === "DRIVER_STATO") {
+        return res.status(403).json({ error: "DRIVER_STATO is managed by the rider trip primitives" });
+      }
       await sbUpsert("config", { chiave: req.body.chiave, valore: req.body.valore });
       result = { success: true };
     } else if (action === "rispondiWA") {
