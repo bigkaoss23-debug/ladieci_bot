@@ -47,6 +47,8 @@ const noLedgerRowLocks = (b) => ledgerSelects(b).every((stmt) => !ROW_LOCK_RE.te
 assert('BEGIN/COMMIT', /^\s*BEGIN;/.test(S) && /COMMIT;\s*$/.test(S.trim() + '\n'));
 assert('staging sentinel', /schema_migrations WHERE version='20260710075612'/.test(S));
 assert('precondition requires guarded payment-basis signatures', /expected 2 guarded payment-basis RPCs/.test(S) && /p_session_version integer/.test(S));
+assert('precondition refuses old unguarded payment-basis overloads', /unguarded payment-basis overload present/.test(S) &&
+  /p_by_actor text, p_ip_hash text, p_meta jsonb/.test(S));
 assert('replaces exactly two payment-basis RPCs', (S.match(/CREATE OR REPLACE FUNCTION public\.order_/g) || []).length === 2 &&
   /public\.order_mark_paid/.test(S) && /public\.order_import_legacy_payment/.test(S));
 assert('does not replace refund/void/create/rider/generic helper', !/public\.order_(refund|void|create|rider_deliver|insert_financial_event)\b/.test(S));
@@ -114,6 +116,10 @@ assert('grants remain service_role only', (S.match(/GRANT EXECUTE ON FUNCTION[\s
 
 // rollback
 assert('rollback requires explicit replay downgrade confirmation', /ROLLBACK REFUSED/.test(R) && /confirm_b7a2e_replay_fix_rollback/.test(R));
+assert('rollback verifies expected B7A2E forward state before replacement', /expected B7A2E corrected guarded payment-basis RPCs/.test(R) &&
+  /pg_get_functiondef\(p\.oid\) LIKE '%v_replay_digest%'/.test(R) &&
+  /pg_get_functiondef\(p\.oid\) LIKE '%v_existing\.prev_estado%'/.test(R));
+assert('rollback refuses old unguarded payment-basis overloads', /ROLLBACK REFUSED: unguarded payment-basis overload present/.test(R));
 assert('rollback restores guarded signatures', /p_by_actor text, p_session_version integer/.test(RBMP) && /p_by_actor text, p_session_version integer/.test(RBIM));
 assert('rollback restores B7A2D mutable replay baseline', /v_canon := jsonb_build_object[\s\S]*'prev_estado', v_ord\.estado[\s\S]*SELECT \* INTO v_existing/.test(RBMP) &&
   /v_canon := jsonb_build_object[\s\S]*'prev_estado', v_ord\.estado[\s\S]*SELECT \* INTO v_existing/.test(RBIM));
@@ -128,11 +134,23 @@ assert('rollback top level deletes/rewrites no evidence', !/DELETE FROM|TRUNCATE
   assert('NC2: detector catches mark_paid replay amount drift', /'amount', v_amount/.test(mpBadAmount));
   const imBadState = imReplay.replace(/v_existing\.new_estado/g, 'v_ord.estado');
   assert('NC3: detector catches mutable order estado in import replay', /v_ord\.estado/.test(imBadState));
+  const badPayState = mpReplay.replace(/v_existing\.prev_pay_state/g, 'v_pay_state');
+  assert('NC4: detector catches current derived pay state in replay', /v_pay_state/.test(badPayState));
   const lateReplay = 'AUTH_BASIS_EXISTS then v_replay_digest :=';
-  assert('NC4: detector catches replay after basis rejection', lateReplay.indexOf('v_replay_digest :=') > lateReplay.indexOf('AUTH_BASIS_EXISTS'));
-  assert('NC5: detector catches ledger row locks', !noLedgerRowLocks(MP.replace('idem_scope_key = p_idem_scope_key;', 'idem_scope_key = p_idem_scope_key FOR UPDATE;')));
+  assert('NC5: detector catches replay after basis rejection', lateReplay.indexOf('v_replay_digest :=') > lateReplay.indexOf('AUTH_BASIS_EXISTS'));
+  const withSessionDigest = mpReplay.replace("'legacy', false", "'session_version', p_session_version, 'legacy', false");
+  assert('NC6: detector catches session version in digest', /session_version/.test(withSessionDigest));
+  assert('NC7: detector catches ledger row locks', !noLedgerRowLocks(MP.replace('idem_scope_key = p_idem_scope_key;', 'idem_scope_key = p_idem_scope_key FOR UPDATE;')));
   const topData = TOP + '\nUPDATE public.ordenes SET cobrado = true;';
-  assert('NC6: detector catches top-level order mutation', /UPDATE public\.ordenes/i.test(topData));
+  assert('NC8: detector catches top-level order mutation', /UPDATE public\.ordenes/i.test(topData));
+  const oldOverload = S.replace('unguarded payment-basis overload present', 'unguarded check removed');
+  assert('NC9: detector catches missing unguarded-overload refusal', !/unguarded payment-basis overload present/.test(oldOverload));
+  const ledgerRewrite = TOP + '\nUPDATE public.order_financial_events SET payload_digest = payload_digest;';
+  assert('NC10: detector catches existing ledger event update', /UPDATE public\.order_financial_events/i.test(ledgerRewrite));
+  const refundReplace = S + '\nCREATE OR REPLACE FUNCTION public.order_refund() RETURNS jsonb LANGUAGE sql AS $$ SELECT null::jsonb $$;';
+  assert('NC11: detector catches refund/void function replacement', /public\.order_(refund|void)\b/.test(refundReplace));
+  const importCurrentState = imReplay.replace(/v_existing\.prev_estado/g, 'v_ord.estado');
+  assert('NC12: detector catches legacy-import replay dependent on current order state', /v_ord\.estado/.test(importCurrentState));
 })();
 
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);

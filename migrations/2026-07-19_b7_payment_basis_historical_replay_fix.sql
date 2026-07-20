@@ -22,6 +22,7 @@ END $$;
 
 DO $$
 DECLARE n int;
+        old_n int;
 BEGIN
   IF to_regclass('public.order_financial_events') IS NULL
   THEN RAISE EXCEPTION 'B7A2E refused: order_financial_events missing — apply B7A1 first.'; END IF;
@@ -31,6 +32,12 @@ BEGIN
     (p.proname='order_mark_paid'             AND pg_get_function_identity_arguments(p.oid)='p_order_id text, p_payment_method text, p_reason text, p_by_actor text, p_session_version integer, p_ip_hash text, p_meta jsonb, p_idem_scope_key text') OR
     (p.proname='order_import_legacy_payment' AND pg_get_function_identity_arguments(p.oid)='p_order_id text, p_amount numeric, p_payment_method text, p_reason text, p_by_actor text, p_session_version integer, p_ip_hash text, p_meta jsonb, p_idem_scope_key text, p_confirm text'));
   IF n <> 2 THEN RAISE EXCEPTION 'B7A2E refused: expected 2 guarded payment-basis RPCs, found %.', n; END IF;
+
+  SELECT count(*) INTO old_n FROM pg_proc p JOIN pg_namespace ns ON ns.oid=p.pronamespace
+  WHERE ns.nspname='public' AND (
+    (p.proname='order_mark_paid'             AND pg_get_function_identity_arguments(p.oid)='p_order_id text, p_payment_method text, p_reason text, p_by_actor text, p_ip_hash text, p_meta jsonb, p_idem_scope_key text') OR
+    (p.proname='order_import_legacy_payment' AND pg_get_function_identity_arguments(p.oid)='p_order_id text, p_amount numeric, p_payment_method text, p_reason text, p_by_actor text, p_ip_hash text, p_meta jsonb, p_idem_scope_key text, p_confirm text'));
+  IF old_n <> 0 THEN RAISE EXCEPTION 'B7A2E refused: unguarded payment-basis overload present — resolve drift first.'; END IF;
 END $$;
 
 CREATE OR REPLACE FUNCTION public.order_mark_paid(

@@ -8,12 +8,34 @@
 BEGIN;
 
 DO $$
+DECLARE n int;
+        old_n int;
 BEGIN
   IF coalesce(current_setting('ladieci.confirm_b7a2e_replay_fix_rollback', true), '') <> 'I_UNDERSTAND_PAYMENT_BASIS_REPLAY_DOWNGRADE' THEN
     RAISE EXCEPTION 'ROLLBACK REFUSED: payment-basis replay downgrade not confirmed. Set ladieci.confirm_b7a2e_replay_fix_rollback to proceed.';
   END IF;
   IF to_regclass('public.order_financial_events') IS NULL THEN
     RAISE EXCEPTION 'ROLLBACK REFUSED: order_financial_events missing — unexpected state.';
+  END IF;
+
+  SELECT count(*) INTO n FROM pg_proc p JOIN pg_namespace ns ON ns.oid=p.pronamespace
+  WHERE ns.nspname='public' AND (
+    (p.proname='order_mark_paid'             AND pg_get_function_identity_arguments(p.oid)='p_order_id text, p_payment_method text, p_reason text, p_by_actor text, p_session_version integer, p_ip_hash text, p_meta jsonb, p_idem_scope_key text'
+      AND pg_get_functiondef(p.oid) LIKE '%v_replay_digest%'
+      AND pg_get_functiondef(p.oid) LIKE '%v_existing.prev_estado%') OR
+    (p.proname='order_import_legacy_payment' AND pg_get_function_identity_arguments(p.oid)='p_order_id text, p_amount numeric, p_payment_method text, p_reason text, p_by_actor text, p_session_version integer, p_ip_hash text, p_meta jsonb, p_idem_scope_key text, p_confirm text'
+      AND pg_get_functiondef(p.oid) LIKE '%v_replay_digest%'
+      AND pg_get_functiondef(p.oid) LIKE '%v_existing.prev_estado%'));
+  IF n <> 2 THEN
+    RAISE EXCEPTION 'ROLLBACK REFUSED: expected B7A2E corrected guarded payment-basis RPCs, found %.', n;
+  END IF;
+
+  SELECT count(*) INTO old_n FROM pg_proc p JOIN pg_namespace ns ON ns.oid=p.pronamespace
+  WHERE ns.nspname='public' AND (
+    (p.proname='order_mark_paid'             AND pg_get_function_identity_arguments(p.oid)='p_order_id text, p_payment_method text, p_reason text, p_by_actor text, p_ip_hash text, p_meta jsonb, p_idem_scope_key text') OR
+    (p.proname='order_import_legacy_payment' AND pg_get_function_identity_arguments(p.oid)='p_order_id text, p_amount numeric, p_payment_method text, p_reason text, p_by_actor text, p_ip_hash text, p_meta jsonb, p_idem_scope_key text, p_confirm text'));
+  IF old_n <> 0 THEN
+    RAISE EXCEPTION 'ROLLBACK REFUSED: unguarded payment-basis overload present — resolve drift first.';
   END IF;
 END $$;
 
