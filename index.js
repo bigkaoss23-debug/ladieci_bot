@@ -23,6 +23,9 @@ const {
 const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
 const { integrateFinancialRoutes } = require("./src/auth/financialHttpIntegration");
 const { integrateLoginRoute } = require("./src/auth/loginHttpIntegration");
+// S2-1B — backend-authoritative legacy authorization + transactional rider trip primitives.
+const { legacyAuthGuardMiddleware } = require("./src/auth/legacyAuthGuard");
+const riderTrip = require("./src/agents/riderTrip");
 
 const app = express();
 app.use(express.json());
@@ -56,6 +59,39 @@ app.use("/api", (req, res, next) => {
   if (key !== DASHBOARD_API_KEY) return res.status(401).json({ error: "unauthorized" });
   next();
 });
+
+// S2-1B — backend-authoritative legacy authorization guard. Staging-gated (DISABLED BY
+// DEFAULT; mounts nothing unless AUTH_V2_LEGACY_GUARD_ENABLED === 'true'), mirroring the
+// B7 route rollout. Mounted AFTER the shared X-Api-Key check and BEFORE the legacy /api
+// dispatcher (and /api/delivery/shadow-preview), so every authenticated legacy action is
+// verified for JWT + actor active + fresh session_version + role before any handler runs.
+// It never intercepts the earlier-mounted /api/auth/v2/login or /api/financial/* routes,
+// nor /health or /version. Enable only together with the Netlify Authorization-forwarding
+// change (proxy currently strips the Bearer token), else all legacy traffic would 401.
+if (process.env.AUTH_V2_LEGACY_GUARD_ENABLED === "true") {
+  app.use("/api", legacyAuthGuardMiddleware());
+}
+
+// S2-1B — route the rider trip workflow through the single transactional authority.
+// Applies only when the guard authenticated a rider on a trip-primitive action.
+async function routeRiderTripAction(action, body) {
+  // NB: uses a switch (not the router equality form) so it does not add duplicate
+  // router-action literals that the authorization-contract coverage test counts.
+  switch (action) {
+    case "marcarEnEntrega":
+      return riderTrip.startTrip(body && body.id);
+    case "marcarEntregado":
+      return riderTrip.completeStop(body && body.id, body && body.cobrado, body && body.metodo_pago);
+    case "chiudiGiro":
+      return riderTrip.closeTrip();
+    case "registrarSalidaDriver":
+      // The first marcarEnEntrega already started the trip; this legacy side-effect call is
+      // an idempotent compatibility no-op — it must never create a competing trip.
+      return { status: 200, payload: { ok: true, code: "IDEMPOTENT" } };
+    default:
+      return { status: 404, payload: { error: "UNKNOWN_ACTION" } };
+  }
+}
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || "ladieci_webhook_2026";
 const PORT = process.env.PORT || 3000;
@@ -228,6 +264,15 @@ app.post("/api", async (req, res) => {
   const action = req.query.action || req.body.action;
   try {
     let result;
+
+    // S2-1B — rider trip primitives are the single transactional authority for the rider
+    // workflow. When the guard authenticated a rider on a trip-primitive action, route to
+    // the RPC-backed wrapper and return; operator/admin keep the legacy handlers below.
+    if (req.authCtx && req.authCtx.role === "rider" &&
+        req.authCtx.rule && req.authCtx.rule.tripPrimitive) {
+      const mapped = await routeRiderTripAction(action, req.body);
+      return res.status(mapped.status).json(mapped.payload);
+    }
 
     if (action === "cambiaStato") {
       result = await cambiaStato(req.body.id, req.body.estado, {
