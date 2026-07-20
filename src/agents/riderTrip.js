@@ -1,0 +1,66 @@
+// riderTrip.js — single authority for the rider trip lifecycle.
+//
+// S2-1B. Wraps the three transactional PostgreSQL RPCs (migrations/2026-07-20_rider_trip_rpcs.sql):
+//   start_rider_trip(p_anchor_order_id text)
+//   complete_rider_stop(p_order_id text, p_cobrado boolean, p_metodo_pago text)
+//   close_rider_trip()
+// Each RPC runs in one transaction with an advisory lock and returns a structured
+// { ok, code, snapshot?, ... } JSON payload. This wrapper maps the RPC's structured
+// code to a backend HTTP status and NEVER surfaces raw PostgREST/SQL messages.
+//
+// State mutation lives entirely in the RPC (DB) — never in the authorization module.
+
+"use strict";
+
+const { sbRpc } = require("../utils/supabase");
+
+// Structured RPC code -> backend HTTP status. Deterministic, no leakage.
+const CODE_TO_HTTP = Object.freeze({
+  OK: 200,
+  IDEMPOTENT: 200,
+  NON_MEMBER: 403,          // do not reveal existence of unrelated orders
+  ROLE_FORBIDDEN: 403,
+  NOT_FOUND: 404,           // absent anchor/order
+  INVALID_STATE: 409,       // wrong source state / invalid transition
+  ACTIVE_TRIP_CONFLICT: 409,
+  EARLY_CLOSE: 409,
+  NO_ACTIVE_TRIP: 409,
+  BAD_REQUEST: 400,
+  INTERNAL: 500,
+});
+
+function mapResult(rpcResult) {
+  // rpcResult = { httpStatus, ok, body }. PostgREST returns the function's jsonb as body.
+  const body = rpcResult && rpcResult.body;
+  // Any transport/parse failure -> generic 500 (no internals).
+  if (!rpcResult || rpcResult.ok !== true || !body || typeof body !== "object") {
+    return { status: 500, payload: { error: "internal_error" } };
+  }
+  const code = body.code || (body.ok ? "OK" : "INTERNAL");
+  const status = CODE_TO_HTTP[code] != null ? CODE_TO_HTTP[code] : (body.ok ? 200 : 500);
+  if (body.ok) {
+    return { status, payload: { ...body } };
+  }
+  return { status, payload: { error: code } };
+}
+
+async function startTrip(anchorOrderId) {
+  const r = await sbRpc("start_rider_trip", { p_anchor_order_id: String(anchorOrderId) });
+  return mapResult(r);
+}
+
+async function completeStop(orderId, cobrado, metodoPago) {
+  const r = await sbRpc("complete_rider_stop", {
+    p_order_id: String(orderId),
+    p_cobrado: cobrado === true,
+    p_metodo_pago: metodoPago == null ? "" : String(metodoPago),
+  });
+  return mapResult(r);
+}
+
+async function closeTrip() {
+  const r = await sbRpc("close_rider_trip", {});
+  return mapResult(r);
+}
+
+module.exports = { startTrip, completeStop, closeTrip, mapResult, CODE_TO_HTTP };

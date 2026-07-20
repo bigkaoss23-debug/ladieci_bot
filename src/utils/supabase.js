@@ -60,4 +60,22 @@ async function getConfig() {
   return cfg;
 }
 
-module.exports = { sbSelect, sbUpsert, sbUpdate, sbDelete, sbInsert, getConfig };
+// sbRpc — invoke a PostgreSQL function via PostgREST /rest/v1/rpc/<fn>, as the
+// backend service-role. Used by the transactional rider trip primitives
+// (start_rider_trip / complete_rider_stop / close_rider_trip). Never logs secrets;
+// never surfaces raw PostgREST text — callers (src/agents/riderTrip.js) normalize
+// the structured {ok,code,...} JSON result.
+async function sbRpc(functionName, args = {}) {
+  const url = `${SUPABASE_URL}/rest/v1/rpc/${functionName}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: sbHeaders(),
+    body: JSON.stringify(args || {}),
+  });
+  const text = await res.text();
+  let body;
+  try { body = JSON.parse(text); } catch { body = null; }
+  return { httpStatus: res.status, ok: res.ok, body };
+}
+
+module.exports = { sbSelect, sbUpsert, sbUpdate, sbDelete, sbInsert, getConfig, sbRpc };
