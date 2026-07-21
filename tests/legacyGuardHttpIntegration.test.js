@@ -89,7 +89,7 @@ function reqHttp(server, { method = "POST", path = "/api", key = "testkey", auth
   sbCalls = [];
   const menuOp = await reqHttp(server, { method: "GET", action: "getMenu", auth: OP });
   check("operator getMenu -> 200 read-only handler reached", menuOp.status === 200 && sbCalls.includes("menu_productos"));
-  check("operator getMenu empty source -> controlled legacy fallback", JSON.parse(menuOp.body).source === "legacy");
+  check("operator getMenu empty source -> controlled legacy fallback", JSON.parse(menuOp.body).cacheMeta.source === "legacy");
   sbCalls = [];
   const menuRider = await reqHttp(server, { method: "GET", action: "getMenu", auth: RIDER });
   check("rider getMenu -> 403 before handler", menuRider.status === 403 && !sbCalls.some((table) => table.startsWith("menu_")));

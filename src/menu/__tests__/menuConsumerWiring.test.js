@@ -21,8 +21,8 @@ function test(name, fn) { tests.push([name, fn]); }
 test("read-only consumer receives canonical dynamic shape", async () => {
   const service = createMenuReadService({ readTables: async () => RAW });
   const menu = await getCanonicalMenu(service);
-  assert.deepStrictEqual(Object.keys(menu).sort(), ["aliases", "cacheState", "categorias", "extras", "fallbackReason", "generatedAt", "legacy", "productos", "source", "version"].sort());
-  assert.equal(menu.source, "dynamic");
+  assert.deepStrictEqual(Object.keys(menu).sort(), ["aliases", "cacheMeta", "categorias", "extras", "generatedAt", "legacy", "productos", "version"].sort());
+  assert.equal(menu.cacheMeta.source, "dynamic");
   assert.deepStrictEqual(menu.productos.map((row) => row.clave), ["prima", "seconda"]);
 });
 
@@ -30,16 +30,16 @@ test("fallback keeps the same outer response shape on read error", async () => {
   const dynamic = await getCanonicalMenu(createMenuReadService({ readTables: async () => RAW }));
   const fallback = await getCanonicalMenu(createMenuReadService({ readTables: async () => { throw Object.assign(new Error("offline"), { code: "MENU_READ_FAILED" }); } }));
   assert.deepStrictEqual(Object.keys(fallback).sort(), Object.keys(dynamic).sort());
-  assert.equal(fallback.source, "legacy");
-  assert.equal(fallback.fallbackReason, "MENU_READ_FAILED");
+  assert.equal(fallback.cacheMeta.source, "legacy");
+  assert.equal(fallback.cacheMeta.fallbackReason, "MENU_READ_FAILED");
   assert.ok(fallback.legacy.menuLista.length > 0);
 });
 
 test("empty catalogue uses legacy fallback", async () => {
   const empty = Object.fromEntries(Object.keys(RAW).map((key) => [key, []]));
   const menu = await getCanonicalMenu(createMenuReadService({ readTables: async () => empty }));
-  assert.equal(menu.source, "legacy");
-  assert.equal(menu.fallbackReason, "MENU_EMPTY");
+  assert.equal(menu.cacheMeta.source, "legacy");
+  assert.equal(menu.cacheMeta.fallbackReason, "MENU_EMPTY");
 });
 
 test("last-good cache survives a later source error", async () => {
@@ -49,11 +49,11 @@ test("last-good cache survives a later source error", async () => {
     now: () => clock,
     readTables: async () => { if (++reads > 1) throw new Error("offline"); return RAW; },
   });
-  assert.equal((await getCanonicalMenu(service)).cacheState, "fresh");
+  assert.equal((await getCanonicalMenu(service)).cacheMeta.state, "fresh");
   clock = 20;
   const stale = await getCanonicalMenu(service);
-  assert.equal(stale.source, "dynamic");
-  assert.equal(stale.cacheState, "stale");
+  assert.equal(stale.cacheMeta.source, "dynamic");
+  assert.equal(stale.cacheMeta.state, "stale");
   assert.equal(reads, 2);
 });
 

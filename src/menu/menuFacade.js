@@ -9,9 +9,7 @@ function toCanonicalShape(result) {
       productos: result.catalogue.productos,
       extras: result.catalogue.extras,
       aliases: result.catalogue.aliases,
-      source: "dynamic",
-      cacheState: result.cacheState,
-      fallbackReason: null,
+      cacheMeta: { state: result.cacheState, source: "dynamic", fallbackReason: null },
       legacy: null,
     };
   }
@@ -23,9 +21,7 @@ function toCanonicalShape(result) {
     productos: [],
     extras: [],
     aliases: [],
-    source: "legacy",
-    cacheState: null,
-    fallbackReason: result?.reason || "MENU_READ_FAILED",
+    cacheMeta: { state: "legacy", source: "legacy", fallbackReason: result?.reason || "MENU_READ_FAILED" },
     legacy: result?.legacy || null,
   };
 }
