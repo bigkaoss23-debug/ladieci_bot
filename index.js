@@ -13,6 +13,7 @@ const { previewOrderTiming } = require("./src/agents/previewTiming");
 const { invia } = require("./src/agents/agentWhatsapp");
 const { chiudiServizio, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
+const { getCanonicalMenu } = require("./src/menu/menuFacade");
 const {
   getManualGiros,
   createManualGiro,
@@ -243,6 +244,10 @@ app.get("/api", async (req, res) => {
       // Telemetria visiva opzionale del rider. Ritorna status normalizzato o
       // null (assente/stale/malformato/LIBERO) — mai throw, mai blocca la UI.
       result = await getDriverStatus();
+    } else if (action === "getMenu") {
+      // S3-1B: read-only catalogue consumer. Auth/role enforcement happens in the
+      // legacy guard before this dispatcher; the facade hides storage and fallback.
+      result = await getCanonicalMenu();
     }
     // ── Private authenticated READ contracts (P0). Fixed queries only. ──────
     // Params arrivano da querystring; ogni action valida i propri input e cappa

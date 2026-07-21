@@ -22,13 +22,13 @@
 const PRINCIPALS = Object.freeze(['admin', 'operator', 'rider', 'service']);
 const HUMAN_PRINCIPALS = Object.freeze(['admin', 'operator', 'rider']);
 
-// ── Canonical routed-action set (55) ─────────────────────────────────────────
+// ── Canonical routed-action set (56) ─────────────────────────────────────────
 // Authoritative classification input. The live router (index.js) is extracted
 // dynamically and proven set-equal to this list (no matrix-only / router-only).
 const CANONICAL_ACTIONS = Object.freeze([
   'getOrdenes', 'getWaMsgs', 'getConfig', 'chiudiServizio', 'triggerCloseIfNeeded',
   'scanServizio', 'backupSerata', 'rigeneraSuggerimenti', 'approvaSuggerimento',
-  'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'getManualGiros',
+  'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'getManualGiros', 'getMenu',
   'getDriverStatus', 'getOrdenesRecent', 'getWaMessages', 'getStorico', 'getOrdenesArchivio',
   'getDeliveryLogs', 'getSuggerimenti', 'getConversacionesActivas', 'getClienteByTelefono',
   'getWaMessageById', 'getOrdenById', 'getConvByWaId', 'getConvChats', 'cambiaStato',
@@ -94,7 +94,7 @@ const RIDER_PREDICATES = Object.freeze({
 // ── Resolved, explicit per-action contract ───────────────────────────────────
 // Generated from the frozen groups above, then frozen. The resolved `allowed`
 // set is stored EXPLICITLY per action (no runtime "admin=*" shortcut). Tests
-// assert the resolved 55×4 decision surface.
+// assert the resolved 56×4 decision surface.
 function buildContract(action) {
   const machineOnly = SERVICE_ONLY_SET.has(action);
   const allowed = [];

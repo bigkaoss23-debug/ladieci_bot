@@ -82,7 +82,7 @@ targets, and be added here + to the module + to the tests explicitly.
 | `rider` | 7 (the rider-enabled actions) |
 | `service` | 1 (`triggerCloseIfNeeded`) |
 
-Primary proof is the exhaustive 55 × 4 action-by-action decision surface plus
+Primary proof is the exhaustive 56 × 4 action-by-action decision surface plus
 dynamic router↔matrix set-equality — see `tests/authorizationContract.test.js`.
 
 ## Dynamic set-equality requirements
@@ -111,7 +111,7 @@ change B3 JWT/login/PIN behavior.
 
 ```
 PRINCIPALS: admin, operator, rider, service
-CANONICAL_COUNT: 55
+CANONICAL_COUNT: 56
 SERVICE_ONLY: triggerCloseIfNeeded
 ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, getStorico, getOrdenesArchivio, getDeliveryLogs, setConfig, eliminaOrdine, eliminaConversazione
 RIDER_ENABLED: getDriverStatus, updateEstado, marcarEnEntrega, marcarEntregado, registrarSalidaDriver, chiudiGiro, marcarLlegado
@@ -124,8 +124,8 @@ PREDICATE registrarSalidaDriver: RIDER_REGISTER_SALIDA_SCOPE
 PREDICATE chiudiGiro: RIDER_CLOSE_GIRO_SCOPE
 PREDICATE marcarLlegado: RIDER_MARK_LLEGADO_SCOPE
 ALIAS_MAP: EMPTY
-TOTAL admin: 54
-TOTAL operator: 43
+TOTAL admin: 55
+TOTAL operator: 44
 TOTAL rider: 7
 TOTAL service: 1
 ```
