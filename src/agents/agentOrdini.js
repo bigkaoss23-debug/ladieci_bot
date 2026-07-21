@@ -803,28 +803,22 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     }
   }
 
-  // ── DRIVER_STATO: telemetria visiva OPZIONALE (best-effort) ─────────────
-  // Registra "driver fuori" su EN_ENTREGA e l'ETA rientro sull'ULTIMA consegna
-  // del giro. NON è sorgente di verità: qualunque errore viene inghiottito con
-  // un warn e NON tocca l'estado già scritto né la response. Le funzioni di
-  // driverTelemetry sono già no-throw; il try/catch qui protegge la sbSelect.
-  // Nota idempotenza: recordRiderOut non sovrascrive un giro già aperto, e
-  // recordDeliveryAndMaybeReturn chiude solo quando il conteggio server-side
-  // dei DOMICILIO attivi (LISTO/EN_ENTREGA) arriva a 0.
-  if (!_isNoop && (nuovoStato === "EN_ENTREGA" || nuovoStato === "RETIRADO")) {
+  // ── DRIVER_STATO reconciliation (S2-1D) — single authority ──────────────
+  // DRIVER_STATO/trip lifecycle is owned exclusively by the rider trip RPCs. An operator/
+  // admin generic transition NEVER writes DRIVER_STATO directly here: on a domicilio
+  // RETIRADO it may only REQUEST close reconciliation (recordDeliveryAndMaybeReturn ->
+  // close_rider_trip), which is a controlled no-op unless every active-trip member is
+  // terminal. There is no "driver out" writer anymore (start is start_rider_trip only).
+  // Any RPC failure is swallowed with a warn and never triggers a legacy direct write.
+  if (!_isNoop && nuovoStato === "RETIRADO") {
     try {
       const dRows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,tipo_consegna,zona,manual_giro_id`);
       const dOrd = dRows?.[0];
       if (dOrd && dOrd.tipo_consegna === "DOMICILIO") {
-        if (nuovoStato === "EN_ENTREGA") {
-          const active = await countActiveDeliveries({});
-          await recordRiderOut({ zona: dOrd.zona || null, nOrdini: active && active > 0 ? active : 1 });
-        } else {
-          await recordDeliveryAndMaybeReturn(dOrd);
-        }
+        await recordDeliveryAndMaybeReturn(dOrd);
       }
     } catch (e) {
-      console.warn(`[driverTelemetry] cambiaStato hook (${nuovoStato}) for ${ordenId} failed:`, e?.message || e);
+      console.warn(`[driverTelemetry] cambiaStato reconciliation (${nuovoStato}) for ${ordenId} failed:`, e?.message || e);
     }
   }
 

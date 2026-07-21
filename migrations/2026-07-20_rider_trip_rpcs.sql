@@ -252,6 +252,17 @@ BEGIN
 
   UPDATE public.config SET valore = v_ds::text WHERE chiave = 'DRIVER_STATO';
 
+  -- One operational delivery log per close, in the same transaction (single close
+  -- authority; the JS closeGiroInternal no longer inserts logs). IDs/zone only.
+  INSERT INTO public.delivery_logs (zona, n_ordini, partito_alle, ultimo_entregado, rientro_stimato)
+  VALUES (
+    (v_active->'zone_sequence'->>0),
+    COALESCE((v_active->>'n_orders')::int, 1),
+    (v_active->>'started_at'),
+    to_char(v_now, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    to_char(v_now, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  );
+
   RETURN jsonb_build_object('ok', true, 'code', 'OK', 'snapshot', v_closed);
 END;
 $$;

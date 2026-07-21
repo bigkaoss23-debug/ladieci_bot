@@ -41,15 +41,14 @@ async function readDriverStato() {
   }
 }
 
-// Scrive DRIVER_STATO. Mai throw → true/false.
-async function writeDriverStato(obj) {
-  try {
-    await sbUpsert("config", { chiave: DRIVER_STATO_KEY, valore: JSON.stringify(obj) }, "chiave");
-    return true;
-  } catch (e) {
-    console.warn("[driverTelemetry] writeDriverStato failed:", e?.message || e);
-    return false;
-  }
+// S2-1D — DRIVER_STATO is now owned EXCLUSIVELY by the transactional rider trip RPCs
+// (start_rider_trip / complete_rider_stop / close_rider_trip). This legacy direct writer
+// is FORBIDDEN: it performs no write and returns false, so no JS production path can
+// create/replace DRIVER_STATO independently. Retained only so historical callers/tests
+// resolve the symbol without mutating state.
+async function writeDriverStato(_obj) {
+  console.warn("[driverTelemetry] writeDriverStato is disabled — DRIVER_STATO is owned by the rider trip RPCs");
+  return false;
 }
 
 // Conta i DOMICILIO ancora attivi (LISTO/EN_ENTREGA), escludendo un id.
@@ -89,90 +88,37 @@ async function countActiveDeliveries({ excludeId = null, manualGiroId = null } =
 //     partenza, apre il giro come sempre.
 // La distinzione è basata SOLO sulla presenza di rientro_stimato (nessuna
 // dipendenza dall'orario ETA: vale sia prima sia dopo l'ETA vecchia).
-async function recordRiderOut({ zona = null, nOrdini = 1 } = {}) {
-  try {
-    const ds = await readDriverStato();
-    // Case A: giro corrente ancora aperto → idempotenza invariata.
-    if (ds && ds.stato === "IN_GIRO" && ds.partito_alle && !ds.rientro_stimato) {
-      return { success: true, skipped: "already_out" };
-    }
-    // Case B: giro precedente già chiuso → reset per il nuovo giro.
-    const isNewGiroAfterReturn = !!(ds && ds.stato === "IN_GIRO" && ds.partito_alle && ds.rientro_stimato);
-    const nuovo = {
-      stato: "IN_GIRO",
-      zona: zona || null,
-      partito_alle: new Date().toISOString(),
-      n_ordini: nOrdini && nOrdini > 0 ? nOrdini : 1,
-      rientro_stimato: null,
-    };
-    const wrote = await writeDriverStato(nuovo);
-    if (!wrote) return { success: false, error: "telemetry_failed" };
-    return isNewGiroAfterReturn
-      ? { success: true, stato: nuovo, reset: "new_giro_after_return" }
-      : { success: true, stato: nuovo };
-  } catch (e) {
-    console.warn("[driverTelemetry] recordRiderOut failed:", e?.message || e);
-    return { success: false, error: "telemetry_failed" };
-  }
+// S2-1D — OBSOLETE for production trip starts. A rider trip is started exclusively by
+// start_rider_trip (via the /api marcarEnEntrega route → riderTrip.startTrip). This
+// function writes NOTHING to DRIVER_STATO; it exists only as an inert compatibility stub.
+async function recordRiderOut(_opts = {}) {
+  return { success: true, skipped: "obsolete_use_start_rider_trip" };
 }
 
 // Internal: calcola ETA rientro + logga il giro (portato 1:1 dal legacy
 // `chiudiGiro` di index.js). IDEMPOTENTE: se `rientro_stimato` è già settato
 // per il giro corrente, salta senza duplicare il delivery_log. Mai cambia
 // `stato` (resta "IN_GIRO") → `agentCucina` legge invariato. Mai throw.
+// S2-1D — thin wrapper around the SINGLE close authority `close_rider_trip`. It performs
+// NO direct DRIVER_STATO write, NO direct delivery_log insert, and NO independent
+// idempotency calculation — the RPC does all of that in one transaction. Result is mapped
+// back to the legacy shape for back-compatible callers. Never throws.
 async function closeGiroInternal() {
   try {
-    const ds = await readDriverStato();
-    if (!ds || !ds.partito_alle) {
-      return { success: true, skipped: "driver_not_out" };
+    const riderTrip = require("../agents/riderTrip");
+    const mapped = await riderTrip.closeTrip();
+    const p = mapped && mapped.payload;
+    if (mapped && mapped.status === 200 && p && p.ok) {
+      const snap = p.snapshot || {};
+      // Legacy-shaped success; idempotent duplicate close is also 200 (no new log/state).
+      return { success: true, rientroStimato: snap.closed_at || null, tripId: snap.trip_id || null,
+               skipped: p.code === "IDEMPOTENT" ? "already_closed" : undefined };
     }
-    if (ds.rientro_stimato) {
-      return { success: true, skipped: "already_closed", rientroStimato: ds.rientro_stimato };
+    if (mapped && mapped.status === 409) {
+      // EARLY_CLOSE / NO_ACTIVE_TRIP — controlled no-op (trip stays as-is; nothing written).
+      return { success: true, skipped: (p && p.error) || "not_closable" };
     }
-    const adesso = new Date();
-    const tempoAndata = Math.round((adesso - new Date(ds.partito_alle)) / 60000);
-    const rientroStimato = new Date(adesso.getTime() + (tempoAndata + RETURN_BUFFER_MIN) * 60000).toISOString();
-    // NB: manteniamo `stato` invariato (IN_GIRO) — settiamo solo rientro_stimato.
-    await writeDriverStato({ ...ds, rientro_stimato: rientroStimato });
-
-    // ── Shadow A/B: stime degli ordini consegnati in questo giro ──
-    let durataStimataMin = null, durataGoogleMin = null, durataHaversineMin = null, durataStimataSource = null;
-    try {
-      const partitoMs = new Date(ds.partito_alle).getTime();
-      const recent = await sbSelect(
-        "ordenes",
-        `estado=eq.RETIRADO&zona=eq.${encodeURIComponent(ds.zona || "")}&order=hora_entrega.desc&limit=10`
-      );
-      const ords = (recent || []).filter(o => o.hora_entrega && Number(o.hora_entrega) >= partitoMs);
-      if (ords.length > 0) {
-        const maxOf = (k) => {
-          const vals = ords.map(o => o[k]).filter(v => v != null);
-          return vals.length ? Math.max(...vals) : null;
-        };
-        durataStimataMin   = maxOf("durata_andata_min");
-        durataGoogleMin    = maxOf("durata_google_min");
-        durataHaversineMin = maxOf("durata_haversine_min");
-        const sources = [...new Set(ords.map(o => o.geo_source).filter(Boolean))];
-        durataStimataSource = sources.length === 1 ? sources[0] : (sources.length > 1 ? "mixed" : null);
-      }
-    } catch (e) {
-      console.warn("[driverTelemetry] A/B aggregation failed:", e?.message || e);
-    }
-
-    try {
-      await sbInsert("delivery_logs", {
-        zona: ds.zona, n_ordini: ds.n_ordini || 1,
-        partito_alle: ds.partito_alle, ultimo_entregado: adesso.toISOString(),
-        tempo_andata_min: tempoAndata, rientro_stimato: rientroStimato,
-        durata_stimata_min: durataStimataMin,
-        durata_stimata_source: durataStimataSource,
-        durata_stimata_google_min: durataGoogleMin,
-        durata_stimata_haversine_min: durataHaversineMin,
-      });
-    } catch (e) {
-      console.warn("[driverTelemetry] delivery_logs insert failed:", e?.message || e);
-    }
-    return { success: true, rientroStimato, tempoAndata };
+    return { success: false, error: "telemetry_failed" };
   } catch (e) {
     console.warn("[driverTelemetry] closeGiroInternal failed:", e?.message || e);
     return { success: false, error: "telemetry_failed" };
