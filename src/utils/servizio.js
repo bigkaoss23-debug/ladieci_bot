@@ -339,7 +339,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   // No direct config read is used as the authority.
   let riderGate;
   try {
-    riderGate = await require("../agents/riderTrip").resetIfIdle();
+    riderGate = await require("../agents/riderTrip").beginServiceCloseIfIdle();
   } catch (e) {
     console.warn(`[chiudiServizio ${source}] rider-state gate failed:`, e?.message || e);
     return { success: false, error: "rider_state_gate_failed", deferred: true, data: oggi };
@@ -441,6 +441,9 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
     // L'operatore vede l'errore, può riprovare. Backup raw resta in backup_serata.
     await sbDelete("storico", `fecha=eq.${oggi}`);
     await sbDelete("serata_summary", `fecha=eq.${oggi}`);
+    // S2-1G — clear the service_closing marker so rider trips can resume after this
+    // aborted close (best-effort; never a direct DRIVER_STATO write).
+    try { await require("../agents/riderTrip").endServiceClose(); } catch (e) { console.warn("[chiudiServizio] endServiceClose (verify-fail) failed:", e?.message || e); }
     return {
       success: false,
       error: "verify_failed",
@@ -495,6 +498,9 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   // No direct DRIVER_STATO write occurs anywhere in this flow.
   await sbUpsert("config", { chiave: "ORDER_RESET_TS",  valore: String(Date.now()) }, "chiave");
   await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
+  // S2-1G — destructive cleanup done: release the service_closing marker so new rider
+  // trips may start again (idempotent; never a direct DRIVER_STATO write).
+  try { await require("../agents/riderTrip").endServiceClose(); } catch (e) { console.warn("[chiudiServizio] endServiceClose failed:", e?.message || e); }
 
   // ─── DONE ────────────────────────────────────────────────────
   return {
