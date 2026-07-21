@@ -36,7 +36,7 @@ const riderTrip = require("../src/agents/riderTrip");
 
   // ── servizio routes through the RPC with no direct write / no fallback ──
   const servizio = fs.readFileSync(path.join(__dirname, "..", "src", "utils", "servizio.js"), "utf8").replace(/\/\/.*$/gm, "");
-  check("servizio gate calls beginServiceCloseIfIdle", /beginServiceCloseIfIdle\(\)/.test(servizio));
+  check("servizio gate calls beginServiceCloseIfIdle", /beginServiceCloseIfIdle\(\{ serviceDate: oggi, source \}\)/.test(servizio));
   check("servizio has no direct DRIVER_STATO sbUpsert", !/sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(servizio));
   check("servizio DEFERS on active-trip conflict (no fallback write)",
     /ACTIVE_TRIP_CONFLICT[\s\S]{0,200}deferred: true/.test(servizio) &&
