@@ -36,11 +36,13 @@ const riderTrip = require("../src/agents/riderTrip");
 
   // ── servizio routes through the RPC with no direct write / no fallback ──
   const servizio = fs.readFileSync(path.join(__dirname, "..", "src", "utils", "servizio.js"), "utf8").replace(/\/\/.*$/gm, "");
-  check("servizio calls riderTrip.resetIfIdle", /riderTrip\.resetIfIdle\(\)/.test(servizio));
+  check("servizio gate calls resetIfIdle", /resetIfIdle\(\)/.test(servizio));
   check("servizio has no direct DRIVER_STATO sbUpsert", !/sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(servizio));
-  check("servizio conflict is best-effort (no fallback write, only warn)",
-    /rider state not reset[\s\S]{0,80}console\.warn|console\.warn[\s\S]{0,120}rider state not reset/.test(servizio) &&
-    !/resetIfIdle[\s\S]{0,200}sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(servizio));
+  check("servizio DEFERS on active-trip conflict (no fallback write)",
+    /ACTIVE_TRIP_CONFLICT[\s\S]{0,200}deferred: true/.test(servizio) &&
+    !/resetIfIdle[\s\S]*sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(servizio));
+  check("servizio fails closed on gate error (no destructive continue)",
+    /rider_state_gate_failed/.test(servizio));
 
   console.log(`\nlifecycleReset: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
