@@ -18,6 +18,7 @@ const { sbRpc } = require("../utils/supabase");
 const CODE_TO_HTTP = Object.freeze({
   OK: 200,
   IDEMPOTENT: 200,
+  NON_MEMBER_NOOP: 200,     // reconciliation no-op: trigger order not in active snapshot
   NON_MEMBER: 403,          // do not reveal existence of unrelated orders
   ROLE_FORBIDDEN: 403,
   NOT_FOUND: 404,           // absent anchor/order
@@ -58,9 +59,18 @@ async function completeStop(orderId, cobrado, metodoPago) {
   return mapResult(r);
 }
 
-async function closeTrip() {
-  const r = await sbRpc("close_rider_trip", {});
+// closeTrip(triggerOrderId?) — no arg for an explicit rider close; a trigger order id for
+// operator/admin reconciliation (the RPC no-ops if it is not an active-snapshot member).
+async function closeTrip(triggerOrderId) {
+  const args = triggerOrderId != null ? { p_trigger_order_id: String(triggerOrderId) } : {};
+  const r = await sbRpc("close_rider_trip", args);
   return mapResult(r);
 }
 
-module.exports = { startTrip, completeStop, closeTrip, mapResult, CODE_TO_HTTP };
+// resetIfIdle() — sole lifecycle idle reset (end-of-service). Rejects if a trip is active.
+async function resetIfIdle() {
+  const r = await sbRpc("reset_rider_state_if_idle", {});
+  return mapResult(r);
+}
+
+module.exports = { startTrip, completeStop, closeTrip, resetIfIdle, mapResult, CODE_TO_HTTP };

@@ -196,9 +196,13 @@ END;
 $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- close_rider_trip() — verify all snapshot orders terminal, close exactly once.
+-- close_rider_trip([p_trigger_order_id]) — verify all snapshot orders terminal,
+-- close exactly once. When invoked for reconciliation with a trigger order that is
+-- NOT a member of the active snapshot, it is a controlled no-op (NON_MEMBER) so an
+-- unrelated operator completion never closes or mutates the active trip. Called with
+-- no argument (or NULL) for an explicit rider close (no member filter).
 -- ─────────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE FUNCTION public.close_rider_trip()
+CREATE OR REPLACE FUNCTION public.close_rider_trip(p_trigger_order_id text DEFAULT NULL)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY INVOKER
@@ -225,6 +229,12 @@ BEGIN
                                 'snapshot', v_ds->'last_closed_trip');
     END IF;
     RETURN jsonb_build_object('ok', false, 'code', 'NO_ACTIVE_TRIP');
+  END IF;
+
+  -- Reconciliation safety: a trigger order that is NOT a snapshot member must never
+  -- close the active trip (controlled no-op). NULL trigger = explicit rider close.
+  IF p_trigger_order_id IS NOT NULL AND NOT (v_active->'order_ids' ? p_trigger_order_id) THEN
+    RETURN jsonb_build_object('ok', true, 'code', 'NON_MEMBER_NOOP');
   END IF;
 
   SELECT array_agg(value::text) INTO v_order_ids
@@ -268,15 +278,66 @@ END;
 $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- reset_rider_state_if_idle() — the SOLE lifecycle idle reset (replaces the former
+-- direct JS servizio write). Sets only the compatible idle fields; PRESERVES schema,
+-- trip_seq and last_closed_trip; deletes no snapshot or log. REJECTS with conflict if
+-- an unclosed active trip exists, so an end-of-service close can never erase an active
+-- trip's snapshot.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.reset_rider_state_if_idle()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_ds     jsonb;
+  v_active jsonb;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('LA_DIECI_DRIVER_STATO'));
+
+  INSERT INTO public.config(chiave, valore)
+  VALUES ('DRIVER_STATO', '{}')
+  ON CONFLICT (chiave) DO NOTHING;
+
+  SELECT COALESCE(NULLIF(valore,'')::jsonb, '{}'::jsonb) INTO v_ds
+  FROM public.config WHERE chiave = 'DRIVER_STATO' FOR UPDATE;
+  v_active := v_ds->'active_trip';
+
+  -- Refuse to reset over an unclosed active trip (never destroy an active snapshot).
+  IF v_active IS NOT NULL AND (v_active->>'status') = 'ACTIVE' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'ACTIVE_TRIP_CONFLICT');
+  END IF;
+
+  -- Set only idle fields; preserve schema / trip_seq / last_closed_trip.
+  v_ds := v_ds || jsonb_build_object(
+    'stato',           'LIBERO',
+    'zona',            'null'::jsonb,
+    'partito_alle',    'null'::jsonb,
+    'n_ordini',        0,
+    'rientro_stimato', 'null'::jsonb,
+    'active_trip',     'null'::jsonb
+  );
+  IF NOT (v_ds ? 'schema')   THEN v_ds := v_ds || jsonb_build_object('schema', 2); END IF;
+  IF NOT (v_ds ? 'trip_seq') THEN v_ds := v_ds || jsonb_build_object('trip_seq', 0); END IF;
+
+  UPDATE public.config SET valore = v_ds::text WHERE chiave = 'DRIVER_STATO';
+  RETURN jsonb_build_object('ok', true, 'code', 'OK', 'stato', 'LIBERO');
+END;
+$$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- Privileges: PostgreSQL grants EXECUTE to PUBLIC by default — revoke, then grant
 -- only to service_role (backend). Exact signatures used everywhere.
 -- ─────────────────────────────────────────────────────────────────────────────
 REVOKE EXECUTE ON FUNCTION public.start_rider_trip(text)                    FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.complete_rider_stop(text, boolean, text)  FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.close_rider_trip()                        FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.close_rider_trip(text)                    FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.reset_rider_state_if_idle()               FROM PUBLIC, anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION public.start_rider_trip(text)                     TO service_role;
 GRANT EXECUTE ON FUNCTION public.complete_rider_stop(text, boolean, text)   TO service_role;
-GRANT EXECUTE ON FUNCTION public.close_rider_trip()                         TO service_role;
+GRANT EXECUTE ON FUNCTION public.close_rider_trip(text)                     TO service_role;
+GRANT EXECUTE ON FUNCTION public.reset_rider_state_if_idle()                TO service_role;
 
 COMMIT;

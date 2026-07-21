@@ -6,6 +6,7 @@ BEGIN;
 
 DROP FUNCTION IF EXISTS public.start_rider_trip(text);
 DROP FUNCTION IF EXISTS public.complete_rider_stop(text, boolean, text);
-DROP FUNCTION IF EXISTS public.close_rider_trip();
+DROP FUNCTION IF EXISTS public.close_rider_trip(text);
+DROP FUNCTION IF EXISTS public.reset_rider_state_if_idle();
 
 COMMIT;

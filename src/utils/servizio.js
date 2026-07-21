@@ -466,7 +466,19 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
 
   // ─── PASSO 11: reset config ───────────────────────────────────
   await sbUpsert("config", { chiave: "ORDER_RESET_TS",  valore: String(Date.now()) }, "chiave");
-  await sbUpsert("config", { chiave: "DRIVER_STATO",    valore: JSON.stringify({ stato: "LIBERO" }) }, "chiave");
+  // S2-1E — DRIVER_STATO is owned exclusively by the rider trip RPCs. The end-of-service
+  // idle reset goes through the transactional reset_rider_state_if_idle(), which REFUSES to
+  // erase an unclosed active trip (preserving trip_seq / last_closed_trip). Best-effort: a
+  // conflict (trip still active) or failure is logged, never a direct DRIVER_STATO write.
+  try {
+    const riderTrip = require("../agents/riderTrip");
+    const rr = await riderTrip.resetIfIdle();
+    if (!(rr && rr.payload && rr.payload.ok)) {
+      console.warn("[chiudiServizio] rider state not reset (active trip?):", rr && rr.payload && rr.payload.error);
+    }
+  } catch (e) {
+    console.warn("[chiudiServizio] resetIfIdle failed:", e?.message || e);
+  }
   await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
 
   // ─── DONE ────────────────────────────────────────────────────

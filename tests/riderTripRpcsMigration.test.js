@@ -11,20 +11,29 @@ const fwd = stripComments(fs.readFileSync(path.join(dir, "2026-07-20_rider_trip_
 const rb = stripComments(fs.readFileSync(path.join(dir, "2026-07-20_rider_trip_rpcs.ROLLBACK.sql"), "utf8"));
 
 check("wrapped in one transaction", /^\s*BEGIN;/m.test(fwd) && /COMMIT;\s*$/m.test(fwd));
-for (const fn of ["start_rider_trip(p_anchor_order_id text)", "complete_rider_stop(", "close_rider_trip()"]) {
+for (const fn of ["start_rider_trip(p_anchor_order_id text)", "complete_rider_stop(", "close_rider_trip(p_trigger_order_id text DEFAULT NULL)"]) {
   check("defines " + fn, fwd.includes("CREATE OR REPLACE FUNCTION public." + fn.split("(")[0].replace("public.", "")) && fwd.includes(fn.split(" ")[0]));
 }
-check("all functions SECURITY INVOKER (x3)", (fwd.match(/SECURITY INVOKER/g) || []).length === 3);
-check("all functions fixed search_path (x3)", (fwd.match(/SET search_path = public, pg_temp/g) || []).length === 3);
-check("advisory lock in every function (x3)", (fwd.match(/pg_advisory_xact_lock\(hashtext\('LA_DIECI_DRIVER_STATO'\)\)/g) || []).length === 3);
+check("all functions SECURITY INVOKER (x4)", (fwd.match(/SECURITY INVOKER/g) || []).length === 4);
+check("all functions fixed search_path (x4)", (fwd.match(/SET search_path = public, pg_temp/g) || []).length === 4);
+check("advisory lock in every function (x4)", (fwd.match(/pg_advisory_xact_lock\(hashtext\('LA_DIECI_DRIVER_STATO'\)\)/g) || []).length === 4);
 check("bootstraps missing DRIVER_STATO row", /INSERT INTO public\.config\(chiave, valore\)[\s\S]*ON CONFLICT \(chiave\) DO NOTHING/.test(fwd));
 check("locks config row FOR UPDATE", /FROM public\.config WHERE chiave = 'DRIVER_STATO' FOR UPDATE/.test(fwd));
 check("schema-qualifies ordenes/manual_giros/config", /public\.ordenes/.test(fwd) && /public\.manual_giros/.test(fwd) && /public\.config/.test(fwd));
 check("uses gen_random_uuid for trip_id", /gen_random_uuid\(\)/.test(fwd));
 // Privilege hardening — do not rely on default PUBLIC EXECUTE.
-check("REVOKE EXECUTE FROM PUBLIC/anon/authenticated (x3)", (fwd.match(/REVOKE EXECUTE ON FUNCTION[\s\S]*?FROM PUBLIC, anon, authenticated/g) || []).length === 3);
-check("GRANT EXECUTE TO service_role (x3)", (fwd.match(/GRANT EXECUTE ON FUNCTION[\s\S]*?TO service_role/g) || []).length === 3);
-check("grants/revokes use exact signatures", /start_rider_trip\(text\)/.test(fwd) && /complete_rider_stop\(text, boolean, text\)/.test(fwd) && /close_rider_trip\(\)/.test(fwd));
+check("REVOKE EXECUTE FROM PUBLIC/anon/authenticated (x4)", (fwd.match(/REVOKE EXECUTE ON FUNCTION[\s\S]*?FROM PUBLIC, anon, authenticated/g) || []).length === 4);
+check("GRANT EXECUTE TO service_role (x4)", (fwd.match(/GRANT EXECUTE ON FUNCTION[\s\S]*?TO service_role/g) || []).length === 4);
+check("grants/revokes use exact signatures", /start_rider_trip\(text\)/.test(fwd) && /complete_rider_stop\(text, boolean, text\)/.test(fwd) && /close_rider_trip\(text\)/.test(fwd) && /reset_rider_state_if_idle\(\)/.test(fwd));
+// S2-1E — reset_rider_state_if_idle: idle-only lifecycle reset.
+check("defines reset_rider_state_if_idle", /CREATE OR REPLACE FUNCTION public\.reset_rider_state_if_idle\(\)/.test(fwd));
+check("reset refuses active trip (conflict)", /reset_rider_state_if_idle[\s\S]*?ACTIVE_TRIP_CONFLICT/.test(fwd));
+check("reset preserves trip_seq / last_closed_trip (no deletion)",
+  /reset_rider_state_if_idle[\s\S]*?NOT \(v_ds \? 'trip_seq'\)/.test(fwd) &&
+  !/reset_rider_state_if_idle[\s\S]*?(DELETE FROM|last_closed_trip'\s*,\s*'null)/.test(fwd));
+check("close reconciliation non-member no-op", /NON_MEMBER_NOOP/.test(fwd) && /NOT \(v_active->'order_ids' \? p_trigger_order_id\)/.test(fwd));
+check("close signature carries optional trigger", /close_rider_trip\(p_trigger_order_id text DEFAULT NULL\)/.test(fwd));
+check("rollback drops reset + close(text)", /reset_rider_state_if_idle\(\)/.test(rb) && /close_rider_trip\(text\)/.test(rb));
 // Financial invariant: completion writes only operational columns.
 const compBody = fwd.slice(fwd.indexOf("complete_rider_stop"), fwd.indexOf("close_rider_trip"));
 check("completion never writes pagado/ya_pagado/total/descuento/ledger",
@@ -34,7 +43,7 @@ check("completion sets only estado/hora_entrega/cobrado/metodo_pago",
 check("no PII columns in snapshot (no nombre/tel/direccion/items)",
   !/nombre|tel\b|telefono|direccion|items/i.test(fwd.replace(/--.*$/gm, "")));
 // Rollback drops exact signatures.
-check("rollback drops exact signatures", /DROP FUNCTION IF EXISTS public\.start_rider_trip\(text\)/.test(rb) && /public\.complete_rider_stop\(text, boolean, text\)/.test(rb) && /public\.close_rider_trip\(\)/.test(rb));
+check("rollback drops exact signatures", /DROP FUNCTION IF EXISTS public\.start_rider_trip\(text\)/.test(rb) && /public\.complete_rider_stop\(text, boolean, text\)/.test(rb) && /public\.close_rider_trip\(text\)/.test(rb));
 check("no CREATE POLICY / no new table", !/CREATE POLICY/.test(fwd) && !/CREATE TABLE/i.test(fwd));
 
 // ── S2-1C line-by-line contract review assertions ──
@@ -46,6 +55,7 @@ check("different active trip conflict", /ACTIVE_TRIP_CONFLICT/.test(fwd));
 check("all members transitioned in one UPDATE (id = ANY)", /UPDATE public\.ordenes[\s\S]*?WHERE id = ANY\(v_order_ids\) AND estado = 'LISTO'/.test(fwd));
 check("completion membership check", /v_active->'order_ids' \? p_order_id/.test(fwd));
 check("close verifies all snapshot orders terminal", /estado NOT IN \('RETIRADO','COMPLETADO','COMPLETATO','CANCELADO','ANULADO'\)/.test(fwd));
+check("close checks ONLY snapshot members (next-trip orders ignored)", /WHERE id = ANY\(v_order_ids\)\s+AND estado NOT IN/.test(fwd));
 check("early close returns EARLY_CLOSE", /EARLY_CLOSE/.test(fwd));
 check("idempotent duplicate close returns last_closed_trip w/o new write", /last_closed_trip[\s\S]*?IDEMPOTENT/.test(fwd));
 check("no swallowed EXCEPTION that could commit partial work", !/EXCEPTION\s+WHEN/i.test(fwd));
