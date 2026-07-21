@@ -17,6 +17,7 @@ require.cache[supaPath].exports = Object.assign({}, realSupa, {
 });
 const riderTrip = require("../src/agents/riderTrip");
 const idx = require("../index.js");
+const roles = require("../src/auth/legacyActionRoles");
 
 let pass = 0, fail = 0;
 const check = (l, c) => { if (c) { pass++; console.log("  ✓ " + l); } else { fail++; console.log("  ✗ " + l); } };
@@ -30,15 +31,26 @@ const check = (l, c) => { if (c) { pass++; console.log("  ✓ " + l); } else { f
   RPC = { httpStatus: 200, ok: true, body: { ok: true, code: "OK", deleted: 1 } };
   r = await riderTrip.deleteOrder("Z");
   check("deleteOrder non-member -> 200", r.status === 200 && r.payload.deleted === 1);
+  RPC = { httpStatus: 200, ok: true, body: { ok: false, code: "ACTIVE_TRIP_MEMBER_CONFLICT" } };
+  r = await riderTrip.deleteConversation("wa-a");
+  check("deleteConversation active member -> 409", r.status === 409 && r.payload.error === "ACTIVE_TRIP_MEMBER_CONFLICT");
+  check("deleteConversation calls delete_conversation_if_not_active(wa_id)", lastRpc.fn === "delete_conversation_if_not_active" && lastRpc.args.p_wa_id === "wa-a");
+  RPC = { httpStatus: 200, ok: true, body: { ok: true, code: "OK", deleted: { conv: 1, wa_msgs: 2, ordenes: 3 } } };
+  r = await riderTrip.deleteConversation("wa-z");
+  check("deleteConversation non-active preserves success payload", r.status === 200 && r.payload.deleted.ordenes === 3);
 
   // Cardinality + service-closing mapping.
   check("MISSING_TRIP_MEMBER -> 409", riderTrip.mapResult({ httpStatus: 200, ok: true, body: { ok: false, code: "MISSING_TRIP_MEMBER" } }).status === 409);
+  check("INVALID_TRIP_SNAPSHOT -> 409", riderTrip.mapResult({ httpStatus: 200, ok: true, body: { ok: false, code: "INVALID_TRIP_SNAPSHOT" } }).status === 409);
   check("SERVICE_CLOSING -> 409", riderTrip.mapResult({ httpStatus: 200, ok: true, body: { ok: false, code: "SERVICE_CLOSING" } }).status === 409);
 
   // eliminaOrdine routes through the guard (no raw sbDelete ordenes-by-id).
   const src = fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8");
   check("eliminaOrdine routes through riderTrip.deleteOrder", /action === "eliminaOrdine"[\s\S]{0,220}riderTrip\.deleteOrder\(req\.body\.id\)/.test(src));
   check("eliminaOrdine no longer raw-deletes ordenes by id", !/action === "eliminaOrdine"[\s\S]{0,160}sbDelete\("ordenes", `id=eq/.test(src));
+  check("eliminaConversazione routes through riderTrip.deleteConversation", /action === "eliminaConversazione"[\s\S]{0,260}riderTrip\.deleteConversation\(req\.body\.wa_id\)/.test(src));
+  check("eliminaConversazione no raw JS deletes", !/action === "eliminaConversazione"[\s\S]{0,260}sbDelete\("(conv|wa_msgs|ordenes)"/.test(src));
+  check("rider denied eliminaConversazione by role map", !roles.isAllowed("rider", "eliminaConversazione"));
 
   // Bounded deferred-close retry decision (pure).
   const deferred = { deferred: true, reason: "active_rider_trip" };

@@ -45,7 +45,7 @@ check("no active writeDriverStato caller (definition only)",
 check("index legacy has no DRIVER_STATO sbUpsert", !/sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(idx));
 check("servizio no longer writes DRIVER_STATO directly", !/sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(servizio));
 check("servizio end-of-service reset routes through the transactional gate RPC",
-  /beginServiceCloseIfIdle\(\)/.test(servizio));
+  /beginServiceCloseIfIdle\(\{ serviceDate: oggi, source \}\)/.test(servizio));
 
 // (4) recordRiderOut — obsolete, no write.
 const rroBody = funcBody(tele, "recordRiderOut");

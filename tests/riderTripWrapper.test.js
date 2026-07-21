@@ -25,7 +25,8 @@ function check(label, cond) { if (cond) { pass++; console.log("  ✓ " + label);
   const cases = [
     ["OK", 200], ["IDEMPOTENT", 200], ["NON_MEMBER", 403], ["NOT_FOUND", 404],
     ["INVALID_STATE", 409], ["ACTIVE_TRIP_CONFLICT", 409], ["EARLY_CLOSE", 409],
-    ["NO_ACTIVE_TRIP", 409], ["BAD_REQUEST", 400],
+    ["NO_ACTIVE_TRIP", 409], ["INVALID_TRIP_SNAPSHOT", 409], ["MISSING_TRIP_MEMBER", 409],
+    ["SERVICE_CLOSING", 409], ["SERVICE_CLOSE_ID_MISMATCH", 409], ["BAD_REQUEST", 400],
   ];
   for (const [code, http] of cases) {
     const ok = ["OK", "IDEMPOTENT"].includes(code);
@@ -55,6 +56,15 @@ function check(label, cond) { if (cond) { pass++; console.log("  ✓ " + label);
   // closeTrip forwards no args
   await riderTrip.closeTrip();
   check("closeTrip -> close_rider_trip() no args", lastRpc.fn === "close_rider_trip" && Object.keys(lastRpc.args).length === 0);
+
+  await riderTrip.beginServiceCloseIfIdle({ serviceDate: "2026-07-21", source: "manual" });
+  check("beginServiceCloseIfIdle forwards service date/source", lastRpc.fn === "begin_service_close_if_idle" && lastRpc.args.p_service_date === "2026-07-21" && lastRpc.args.p_source === "manual");
+
+  await riderTrip.endServiceClose("close-1");
+  check("endServiceClose forwards close_id", lastRpc.fn === "end_service_close" && lastRpc.args.p_close_id === "close-1");
+
+  await riderTrip.deleteConversation("wa-1");
+  check("deleteConversation -> delete_conversation_if_not_active(wa_id)", lastRpc.fn === "delete_conversation_if_not_active" && lastRpc.args.p_wa_id === "wa-1");
 
   console.log(`\nriderTripWrapper: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

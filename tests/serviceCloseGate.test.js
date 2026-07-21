@@ -7,10 +7,18 @@
 const supaPath = require.resolve("../src/utils/supabase");
 const realSupa = require(supaPath);
 let deletes = [], inserts = [], upserts = [];
+let existingSummary = [];
+let completedOrders = [];
+let throwStorico = false;
 require.cache[supaPath].exports = Object.assign({}, realSupa, {
-  sbSelect: async (t) => (t === "serata_summary" ? [] : []),         // not closed today; no orders
+  sbSelect: async (t, q) => {
+    if (t === "serata_summary") return existingSummary;
+    if (t === "ordenes") return completedOrders;
+    if (t === "storico" && /select=orden_id/.test(q || "")) return completedOrders.map(o => ({ orden_id: o.id }));
+    return [];
+  },
   sbInsert: async (t, d) => { inserts.push(t); return [{ ...d }]; }, // serata_summary lock OK
-  sbUpsert: async (t) => { upserts.push(t); return [{}]; },
+  sbUpsert: async (t) => { if (throwStorico && t === "storico") throw new Error("archive crash"); upserts.push(t); return [{}]; },
   sbUpdate: async () => [{}],
   sbDelete: async (t, q) => { deletes.push([t, q]); return []; },
 });
@@ -20,9 +28,11 @@ const realRt = require(rtPath);
 let RESET;                       // programmable resetIfIdle result, or a thrower flag
 let throwReset = false;
 let endCalls = 0;
+let beginCalls = 0;
+let endIds = [];
 require.cache[rtPath].exports = Object.assign({}, realRt, {
-  beginServiceCloseIfIdle: async () => { if (throwReset) throw new Error("rpc down"); return RESET; },
-  endServiceClose: async () => { endCalls++; return { status: 200, payload: { ok: true, code: "OK" } }; },
+  beginServiceCloseIfIdle: async () => { beginCalls++; if (throwReset) throw new Error("rpc down"); return RESET; },
+  endServiceClose: async (closeId) => { endCalls++; endIds.push(closeId); return { status: 200, payload: { ok: true, code: "OK" } }; },
   closeTrip: async () => ({ status: 200, payload: { ok: true, code: "NO_ACTIVE_TRIP" } }),
 });
 
@@ -30,7 +40,11 @@ const { chiudiServizio } = require("../src/utils/servizio");
 
 let pass = 0, fail = 0;
 const check = (l, c) => { if (c) { pass++; console.log("  ✓ " + l); } else { fail++; console.log("  ✗ " + l); } };
-const reset = () => { deletes = []; inserts = []; upserts = []; throwReset = false; endCalls = 0; };
+const order = { id: "O1", wa_id: "wa1", tel: "wa1", estado: "RETIRADO", items: [], tipo_consegna: "DOMICILIO", totale: 10 };
+const reset = () => {
+  deletes = []; inserts = []; upserts = []; throwReset = false; endCalls = 0; beginCalls = 0; endIds = [];
+  existingSummary = []; completedOrders = []; throwStorico = false;
+};
 
 (async () => {
   // ── Active trip -> DEFERRED, no destructive work ──
@@ -58,12 +72,41 @@ const reset = () => { deletes = []; inserts = []; upserts = []; throwReset = fal
 
   // ── No active trip -> proceeds through the destructive/reset steps ──
   reset();
-  RESET = { status: 200, payload: { ok: true, code: "OK", stato: "LIBERO" } };
+  RESET = { status: 200, payload: { ok: true, code: "OK", stato: "LIBERO", close_id: "close-ok", marker: { close_id: "close-ok" }, resumed: false } };
   r = await chiudiServizio(true, "manual");
   check("idle -> service close proceeds (reaches cleanup)", deletes.some(([t]) => t === "ordenes"));
   check("idle -> serata_summary lock taken", inserts.includes("serata_summary"));
   check("idle -> NO direct DRIVER_STATO config write", !upserts.includes("DRIVER_STATO"));
   check("idle -> service_closing marker released after cleanup (endServiceClose)", endCalls === 1);
+  check("idle -> releases matching close_id", endIds[0] === "close-ok");
+
+  // ── Already closed with no resumed marker -> releases just-created marker and skips ──
+  reset();
+  existingSummary = [{ fecha: "today" }];
+  RESET = { status: 200, payload: { ok: true, code: "OK", close_id: "close-new", marker: { close_id: "close-new" }, resumed: false } };
+  r = await chiudiServizio(false, "manual");
+  check("already closed non-recovery -> skipped", r.skipped === true && r.reason === "already_closed_today");
+  check("already closed non-recovery -> marker released", endCalls === 1 && endIds[0] === "close-new");
+
+  // ── Crash after archival begins -> marker is NOT released ──
+  reset();
+  completedOrders = [order];
+  throwStorico = true;
+  RESET = { status: 200, payload: { ok: true, code: "OK", close_id: "close-crash", marker: { close_id: "close-crash" }, resumed: false } };
+  let threw = false;
+  try { await chiudiServizio(false, "manual"); } catch (_) { threw = true; }
+  check("archive crash propagates for retry/recovery", threw === true);
+  check("archive crash after destructive start keeps marker", endCalls === 0);
+
+  // ── Recovery resumes same close_id and concludes without taking a new summary lock ──
+  reset();
+  existingSummary = [{ fecha: "today" }];
+  completedOrders = [order];
+  RESET = { status: 200, payload: { ok: true, code: "OK", close_id: "close-crash", marker: { close_id: "close-crash" }, resumed: true } };
+  r = await chiudiServizio(false, "startup_recovery");
+  check("recovery resumed close succeeds", r.success === true && endIds[0] === "close-crash");
+  check("recovery does not create overlapping serata_summary lock", !inserts.includes("serata_summary"));
+  check("overlapping retry uses one begin call / same marker", beginCalls === 1 && RESET.payload.close_id === "close-crash");
 
   console.log(`\nserviceCloseGate: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
