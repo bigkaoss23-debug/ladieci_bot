@@ -72,10 +72,14 @@ function req({ method = "POST", action, token, path } = {}) {
     (await authorizeLegacyRequest(req({ action: "createOrden", token: "operator:operator_primary:5" }), deps)).ok === true);
   check("operator_backup createOrden -> ok (parity)",
     (await authorizeLegacyRequest(req({ action: "createOrden", token: "operator:operator_backup:5" }), deps)).ok === true);
+  check("operator getMenu -> ok",
+    (await authorizeLegacyRequest(req({ method: "GET", action: "getMenu", token: "operator:operator_primary:5" }), deps)).ok === true);
 
   // Operator denied admin-only action -> 403
   check("operator setConfig -> 403",
     (await authorizeLegacyRequest(req({ action: "setConfig", token: "operator:operator_primary:5" }), deps)).status === 403);
+  check("rider getMenu -> 403",
+    (await authorizeLegacyRequest(req({ method: "GET", action: "getMenu", token: "rider:rider:5" }), deps)).status === 403);
 
   // Rider deny set -> 403
   for (const a of ["updateEstado", "createOrden", "cambiaStato", "createManualGiro", "dissolveManualGiro", "setConfig", "marcarLlegado", "asignarRepartidor"]) {

@@ -84,6 +84,15 @@ function reqHttp(server, { method = "POST", path = "/api", key = "testkey", auth
   sbCalls = [];
   const r7 = await reqHttp(server, { method: "GET", action: "getOrdenes", auth: OP });
   check("7 operator getOrdenes -> 200", r7.status === 200 && sbCalls.includes("ordenes"));
+  // S3-1B read-only menu route: operator reaches the facade; the empty dynamic
+  // fixture falls back to legacy. Rider is denied before any menu-table read.
+  sbCalls = [];
+  const menuOp = await reqHttp(server, { method: "GET", action: "getMenu", auth: OP });
+  check("operator getMenu -> 200 read-only handler reached", menuOp.status === 200 && sbCalls.includes("menu_productos"));
+  check("operator getMenu empty source -> controlled legacy fallback", JSON.parse(menuOp.body).source === "legacy");
+  sbCalls = [];
+  const menuRider = await reqHttp(server, { method: "GET", action: "getMenu", auth: RIDER });
+  check("rider getMenu -> 403 before handler", menuRider.status === 403 && !sbCalls.some((table) => table.startsWith("menu_")));
   // 8. unknown action -> 404
   check("8 unknown action -> 404", (await reqHttp(server, { method: "GET", action: "totallyBogus", auth: OWNER })).status === 404);
   // 11. shadow-preview requires fresh authorized JWT: no JWT -> 401; rider -> 403

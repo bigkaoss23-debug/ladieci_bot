@@ -44,6 +44,8 @@ const RIDER_EXPECTED = ["getOrdenes","getManualGiros","getDriverStatus","marcarE
 const riderActual = map.ALL_ACTIONS.filter((a) => map.isAllowed("rider", a)).sort();
 check("rider allow-list is exactly the accepted set", JSON.stringify(riderActual) === JSON.stringify(RIDER_EXPECTED));
 check("rider denied generic updateEstado", !map.isAllowed("rider", "updateEstado"));
+check("rider denied read-only menu catalogue", !map.isAllowed("rider", "getMenu"));
+check("admin/operator allowed read-only menu catalogue", map.isAllowed("admin", "getMenu") && map.isAllowed("operator", "getMenu"));
 
 // Operator denied admin-only config/dev actions, allowed normal ops.
 for (const a of ["setConfig","debugInterpreta","parseOrdineDaRisposta"]) check("operator denied admin-only: " + a, !map.isAllowed("operator", a));
