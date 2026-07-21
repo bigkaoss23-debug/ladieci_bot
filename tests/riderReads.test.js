@@ -50,10 +50,31 @@ const depsWith = (driverStato) => ({
   const g = (await riderReads.getRiderManualGiros(trip))[0];
   check("giro projection excludes internal field", !("internal" in g) && g.salida_ref !== undefined);
 
-  // ── Best-effort: broken DRIVER_STATO degrades to pre-trip ──
+  // ── S2-1D fail-closed cases ──
+  // Malformed JSON while (implicitly) present -> fail closed, NOT pre-trip broadening.
   const broken = { sbSelect: async (t) => t === "config" ? [{ chiave: "DRIVER_STATO", valore: "{bad json" }] : (t === "ordenes" ? ORDERS : GIROS) };
-  const degraded = (await riderReads.getRiderOrdenes(broken)).map((o) => o.id).sort();
-  check("broken snapshot -> pre-trip filter", JSON.stringify(degraded) === JSON.stringify(["A","B","E"]));
+  const bres = await riderReads.getRiderOrdenes(broken);
+  check("malformed snapshot -> fail closed (not a list)", !Array.isArray(bres) && bres.error === "rider_read_unavailable");
+
+  // IN_GIRO but no ACTIVE snapshot -> fail closed.
+  const inconsistent = depsWith({ stato: "IN_GIRO", active_trip: null });
+  const ires = await riderReads.getRiderOrdenes(inconsistent);
+  check("IN_GIRO without active snapshot -> fail closed", !Array.isArray(ires) && ires.reason === "in_giro_without_active_snapshot");
+
+  // ACTIVE snapshot with missing order_ids array -> fail closed.
+  const badSnap = depsWith({ stato: "IN_GIRO", active_trip: { status: "ACTIVE" } });
+  const sres = await riderReads.getRiderOrdenes(badSnap);
+  check("ACTIVE snapshot missing order_ids -> fail closed", !Array.isArray(sres) && sres.reason === "snapshot_missing_order_ids");
+
+  // Config READ error -> fail closed.
+  const readErr = { sbSelect: async (t) => { if (t === "config") throw new Error("db down"); return ORDERS; } };
+  const eres = await riderReads.getRiderOrdenes(readErr);
+  check("config read error -> fail closed", !Array.isArray(eres) && eres.reason === "config_read_error");
+
+  // ACTIVE snapshot referencing a missing order -> returns only valid rows, never broadens.
+  const missingMember = depsWith({ stato: "IN_GIRO", active_trip: { status: "ACTIVE", order_ids: ["A","ZZZ"], manual_giro_ids: [] } });
+  const mm = (await riderReads.getRiderOrdenes(missingMember)).map((o) => o.id).sort();
+  check("active snapshot missing order -> only valid rows, no broadening", JSON.stringify(mm) === JSON.stringify(["A"]));
 
   console.log(`\nriderReads: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

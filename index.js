@@ -149,6 +149,11 @@ app.get("/api", async (req, res) => {
       const riderResult = action.endsWith("Ordenes")
         ? await riderReads.getRiderOrdenes(deps)
         : await riderReads.getRiderManualGiros(deps);
+      // Fail-closed: DRIVER_STATO read error / malformed active snapshot -> 503, never a
+      // broadened list.
+      if (riderResult && !Array.isArray(riderResult) && riderResult.error) {
+        return res.status(503).json({ error: riderResult.error });
+      }
       return res.json(riderResult);
     }
 
@@ -362,16 +367,10 @@ app.post("/api", async (req, res) => {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { repartidor: req.body.repartidor || null });
       result = { success: true };
     } else if (action === "registrarSalidaDriver") {
-      // Driver fuori: setta DRIVER_STATO con zona + ora partenza
-      const nuovoStato = {
-        stato: "IN_GIRO",
-        zona: req.body.zona || null,
-        partito_alle: new Date().toISOString(),
-        n_ordini: req.body.n_ordini || 1,
-        rientro_stimato: null
-      };
-      await sbUpsert("config", { chiave: "DRIVER_STATO", valore: JSON.stringify(nuovoStato) }, "chiave");
-      result = { success: true, stato: nuovoStato };
+      // S2-1D — DRIVER_STATO is owned exclusively by the rider trip RPCs. A trip is started
+      // by start_rider_trip (marcarEnEntrega route). This legacy side-effect no longer writes
+      // a fresh DRIVER_STATO object; it is an inert idempotent compatibility no-op.
+      result = { success: true, code: "IDEMPOTENT", skipped: "managed_by_trip_rpc" };
     } else if (action === "chiudiGiro") {
       // Driver rientra: calcola rientro stimato + logga il giro.
       // Logica centralizzata in driverTelemetry.closeGiroInternal (condivisa con
