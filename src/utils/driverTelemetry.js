@@ -103,16 +103,20 @@ async function recordRiderOut(_opts = {}) {
 // NO direct DRIVER_STATO write, NO direct delivery_log insert, and NO independent
 // idempotency calculation — the RPC does all of that in one transaction. Result is mapped
 // back to the legacy shape for back-compatible callers. Never throws.
-async function closeGiroInternal() {
+// closeGiroInternal(triggerOrderId?) — thin wrapper around the SINGLE close authority
+// close_rider_trip. No arg = explicit rider close; a trigger order id = operator/admin
+// reconciliation (RPC no-ops if the order is not an active-snapshot member). Performs NO
+// direct DRIVER_STATO write, NO delivery_log insert, NO idempotency calc. Never throws.
+async function closeGiroInternal(triggerOrderId) {
   try {
     const riderTrip = require("../agents/riderTrip");
-    const mapped = await riderTrip.closeTrip();
+    const mapped = await riderTrip.closeTrip(triggerOrderId);
     const p = mapped && mapped.payload;
     if (mapped && mapped.status === 200 && p && p.ok) {
       const snap = p.snapshot || {};
-      // Legacy-shaped success; idempotent duplicate close is also 200 (no new log/state).
+      // Success incl. idempotent duplicate close and NON_MEMBER_NOOP (no state written).
       return { success: true, rientroStimato: snap.closed_at || null, tripId: snap.trip_id || null,
-               skipped: p.code === "IDEMPOTENT" ? "already_closed" : undefined };
+               skipped: (p.code === "IDEMPOTENT" || p.code === "NON_MEMBER_NOOP") ? p.code : undefined };
     }
     if (mapped && mapped.status === 409) {
       // EARLY_CLOSE / NO_ACTIVE_TRIP — controlled no-op (trip stays as-is; nothing written).
@@ -129,19 +133,12 @@ async function closeGiroInternal() {
 // del giro, calcola/registra l'ETA di rientro. Il "last" è calcolato SEMPRE
 // server-side sui dati DB (manual_giro_id se presente, altrimenti conteggio
 // DOMICILIO LISTO/EN_ENTREGA) — niente snapshot stale lato frontend. Mai throw.
+// S2-1E — snapshot-authoritative reconciliation. NO global active-delivery count decides
+// whether to close: the close RPC alone decides (active trip? order a member? all members
+// terminal? later orders belong to another trip? idempotent?). We simply request close with
+// the completed order as the trigger; a non-member or incomplete trip is a controlled no-op.
 async function recordDeliveryAndMaybeReturn(order) {
-  try {
-    const remaining = await countActiveDeliveries({
-      excludeId: order?.id,
-      manualGiroId: order?.manual_giro_id || null,
-    });
-    if (remaining === null) return { success: true, skipped: "remaining_unknown" };
-    if (remaining > 0)      return { success: true, skipped: "not_last", remaining };
-    return await closeGiroInternal();
-  } catch (e) {
-    console.warn("[driverTelemetry] recordDeliveryAndMaybeReturn failed:", e?.message || e);
-    return { success: false, error: "telemetry_failed" };
-  }
+  return await closeGiroInternal(order && order.id);
 }
 
 // Status normalizzato per la UI. Ritorna null se DRIVER_STATO è

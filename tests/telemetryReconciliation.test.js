@@ -20,13 +20,14 @@ require.cache[supaPath].exports = Object.assign({}, realSupa, {
   sbUpdate: async (...a) => { writes.push(["update", ...a]); return {}; },
 });
 
-// Stub riderTrip — record close calls, return a programmable mapped result.
+// Stub riderTrip — record close calls (+ trigger arg), return a programmable result.
 const rtPath = require.resolve("../src/agents/riderTrip");
 const realRt = require(rtPath);
 let closeCalls = 0;
+let lastTrigger;
 let CLOSE_RESULT = { status: 200, payload: { ok: true, code: "OK", snapshot: { trip_id: "T1", closed_at: "2026-07-21T00:00:00Z" } } };
 require.cache[rtPath].exports = Object.assign({}, realRt, {
-  closeTrip: async () => { closeCalls++; return CLOSE_RESULT; },
+  closeTrip: async (trigger) => { closeCalls++; lastTrigger = trigger; return CLOSE_RESULT; },
 });
 
 const tele = require("../src/utils/driverTelemetry");
@@ -62,21 +63,31 @@ const check = (l, c) => { if (c) { pass++; console.log("  ✓ " + l); } else { f
   const boom = await tele.closeGiroInternal();
   check("RPC failure -> failure, no fallback write", boom.success === false && writes.length === 0);
 
-  // recordDeliveryAndMaybeReturn: non-last member -> no close call.
+  // S2-1E — reconciliation is snapshot-authoritative: NO global count decides. Every
+  // domicilio RETIRADO requests close with the completed order as the trigger; the RPC
+  // decides. The completed order id must be forwarded as the trigger.
   CLOSE_RESULT = { status: 200, payload: { ok: true, code: "OK", snapshot: {} } };
-  writes = []; closeCalls = 0; activeCount = 2; // remaining > 0
-  const notLast = await tele.recordDeliveryAndMaybeReturn({ id: "a", manual_giro_id: null });
-  check("non-last delivery -> no close, no write", closeCalls === 0 && writes.length === 0 && notLast.skipped === "not_last");
+  writes = []; closeCalls = 0; lastTrigger = undefined;
+  await tele.recordDeliveryAndMaybeReturn({ id: "ORD7", manual_giro_id: "G1" });
+  check("every RETIRADO requests close with order as trigger", closeCalls === 1 && lastTrigger === "ORD7" && writes.length === 0);
+  check("no global count import drives reconciliation", writes.length === 0);
 
-  // Last member -> exactly one close call, no direct write.
-  writes = []; closeCalls = 0; activeCount = 0; // remaining == 0
-  await tele.recordDeliveryAndMaybeReturn({ id: "a", manual_giro_id: null });
-  check("last delivery -> exactly one close RPC, no write", closeCalls === 1 && writes.length === 0);
+  // Non-member completion -> RPC returns NON_MEMBER_NOOP -> controlled success, no write.
+  CLOSE_RESULT = { status: 200, payload: { ok: true, code: "NON_MEMBER_NOOP" } };
+  writes = []; closeCalls = 0;
+  const nm = await tele.recordDeliveryAndMaybeReturn({ id: "OTHER", manual_giro_id: null });
+  check("non-member completion -> controlled no-op, trip untouched", nm.success === true && nm.skipped === "NON_MEMBER_NOOP" && writes.length === 0);
 
-  // Duplicate reconciliation (idempotent close) -> still no duplicate write.
-  writes = []; closeCalls = 0; activeCount = 0;
+  // Incomplete current trip -> EARLY_CLOSE -> controlled no-op.
+  CLOSE_RESULT = { status: 409, payload: { ok: false, error: "EARLY_CLOSE" } };
+  writes = []; closeCalls = 0;
+  const inc = await tele.recordDeliveryAndMaybeReturn({ id: "ORD8", manual_giro_id: null });
+  check("incomplete trip member -> EARLY_CLOSE controlled no-op", inc.success === true && inc.skipped === "EARLY_CLOSE" && writes.length === 0);
+
+  // Duplicate reconciliation (idempotent close) -> still no write.
   CLOSE_RESULT = { status: 200, payload: { ok: true, code: "IDEMPOTENT", snapshot: {} } };
-  await tele.recordDeliveryAndMaybeReturn({ id: "a", manual_giro_id: null });
+  writes = []; closeCalls = 0;
+  await tele.recordDeliveryAndMaybeReturn({ id: "ORD9", manual_giro_id: null });
   check("duplicate reconciliation -> idempotent, no duplicate write", writes.length === 0);
 
   console.log(`\ntelemetryReconciliation: ${pass} passed, ${fail} failed`);
