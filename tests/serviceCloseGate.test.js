@@ -19,8 +19,10 @@ const rtPath = require.resolve("../src/agents/riderTrip");
 const realRt = require(rtPath);
 let RESET;                       // programmable resetIfIdle result, or a thrower flag
 let throwReset = false;
+let endCalls = 0;
 require.cache[rtPath].exports = Object.assign({}, realRt, {
-  resetIfIdle: async () => { if (throwReset) throw new Error("rpc down"); return RESET; },
+  beginServiceCloseIfIdle: async () => { if (throwReset) throw new Error("rpc down"); return RESET; },
+  endServiceClose: async () => { endCalls++; return { status: 200, payload: { ok: true, code: "OK" } }; },
   closeTrip: async () => ({ status: 200, payload: { ok: true, code: "NO_ACTIVE_TRIP" } }),
 });
 
@@ -28,7 +30,7 @@ const { chiudiServizio } = require("../src/utils/servizio");
 
 let pass = 0, fail = 0;
 const check = (l, c) => { if (c) { pass++; console.log("  ✓ " + l); } else { fail++; console.log("  ✗ " + l); } };
-const reset = () => { deletes = []; inserts = []; upserts = []; throwReset = false; };
+const reset = () => { deletes = []; inserts = []; upserts = []; throwReset = false; endCalls = 0; };
 
 (async () => {
   // ── Active trip -> DEFERRED, no destructive work ──
@@ -61,6 +63,7 @@ const reset = () => { deletes = []; inserts = []; upserts = []; throwReset = fal
   check("idle -> service close proceeds (reaches cleanup)", deletes.some(([t]) => t === "ordenes"));
   check("idle -> serata_summary lock taken", inserts.includes("serata_summary"));
   check("idle -> NO direct DRIVER_STATO config write", !upserts.includes("DRIVER_STATO"));
+  check("idle -> service_closing marker released after cleanup (endServiceClose)", endCalls === 1);
 
   console.log(`\nserviceCloseGate: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
