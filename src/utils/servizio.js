@@ -329,6 +329,31 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
     return { skipped: true, reason: "already_closed_today", data: oggi };
   }
 
+  // ─── PASSO 1b (S2-1F): ACTIVE-TRIP GATE ───────────────────────
+  // A service close must NEVER run destructively over an active rider trip (PASSO 6/10
+  // archive+delete ordenes, which would hide/erase active-trip members). The transactional
+  // reset_rider_state_if_idle() is the sole authority (advisory-locked, service-role-only):
+  //   • no active trip -> establishes idle state, we continue;
+  //   • active trip     -> ACTIVE_TRIP_CONFLICT, no mutation -> defer close, preserve all;
+  //   • unexpected error -> FAIL CLOSED (do not archive/delete anything).
+  // No direct config read is used as the authority.
+  let riderGate;
+  try {
+    riderGate = await require("../agents/riderTrip").resetIfIdle();
+  } catch (e) {
+    console.warn(`[chiudiServizio ${source}] rider-state gate failed:`, e?.message || e);
+    return { success: false, error: "rider_state_gate_failed", deferred: true, data: oggi };
+  }
+  const gateBody = riderGate && riderGate.payload;
+  if (gateBody && gateBody.error === "ACTIVE_TRIP_CONFLICT") {
+    console.warn(`[chiudiServizio ${source}] DEFERRED — active rider trip in progress; no archival/deletion performed`);
+    return { skipped: true, deferred: true, reason: "active_rider_trip", data: oggi };
+  }
+  if (!(gateBody && gateBody.ok)) {
+    console.warn(`[chiudiServizio ${source}] rider-state gate not ok; failing closed`);
+    return { success: false, error: "rider_state_gate_failed", deferred: true, data: oggi };
+  }
+
   // ─── PASSO 2: backup raw SUBITO (safety net) ──────────────────
   const bkp = await backupSerata().catch(e => {
     console.error(`[chiudiServizio ${source}] backup fallito:`, e);
@@ -465,20 +490,10 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   }
 
   // ─── PASSO 11: reset config ───────────────────────────────────
+  // DRIVER_STATO was already set idle by the S2-1F active-trip gate (PASSO 1b) via the
+  // transactional reset_rider_state_if_idle() — reaching here proves no active trip existed.
+  // No direct DRIVER_STATO write occurs anywhere in this flow.
   await sbUpsert("config", { chiave: "ORDER_RESET_TS",  valore: String(Date.now()) }, "chiave");
-  // S2-1E — DRIVER_STATO is owned exclusively by the rider trip RPCs. The end-of-service
-  // idle reset goes through the transactional reset_rider_state_if_idle(), which REFUSES to
-  // erase an unclosed active trip (preserving trip_seq / last_closed_trip). Best-effort: a
-  // conflict (trip still active) or failure is logged, never a direct DRIVER_STATO write.
-  try {
-    const riderTrip = require("../agents/riderTrip");
-    const rr = await riderTrip.resetIfIdle();
-    if (!(rr && rr.payload && rr.payload.ok)) {
-      console.warn("[chiudiServizio] rider state not reset (active trip?):", rr && rr.payload && rr.payload.error);
-    }
-  } catch (e) {
-    console.warn("[chiudiServizio] resetIfIdle failed:", e?.message || e);
-  }
   await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
 
   // ─── DONE ────────────────────────────────────────────────────
