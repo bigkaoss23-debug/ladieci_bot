@@ -43,12 +43,9 @@ BEGIN
 
   v_active := v_ds->'active_trip';
 
-  -- S2-1G — no new trip may start while a service close is in progress (set by
-  -- begin_service_close_if_idle under this same lock). Prevents a race where the gate
-  -- reports idle and a trip then starts before destructive cleanup. Stale markers older
-  -- than 30 min are ignored so a crashed close can never block starts permanently.
-  IF (v_ds->>'service_closing') = 'true'
-     AND COALESCE((v_ds->>'service_closing_at')::timestamptz, 'epoch'::timestamptz) > (now() - interval '30 minutes') THEN
+  -- S2-1H — crash-safe service close gate. Any existing marker blocks new trips until
+  -- the exact close_id is explicitly ended; there is no automatic timeout.
+  IF v_ds ? 'service_closing' THEN
     RETURN jsonb_build_object('ok', false, 'code', 'SERVICE_CLOSING');
   END IF;
 
@@ -220,10 +217,12 @@ AS $$
 DECLARE
   v_ds        jsonb;
   v_active    jsonb;
-  v_order_ids text[];
-  v_pending   int;
-  v_expected  int;
-  v_found     int;
+  v_order_ids      text[];
+  v_pending        int;
+  v_raw_count      int;
+  v_distinct_count int;
+  v_snapshot_count int;
+  v_found          int;
   v_now       timestamptz := now();
   v_closed    jsonb;
 BEGIN
@@ -248,16 +247,35 @@ BEGIN
     RETURN jsonb_build_object('ok', true, 'code', 'NON_MEMBER_NOOP');
   END IF;
 
-  -- Distinct snapshot ids (defensive against a duplicated id inside the stored snapshot).
+  IF jsonb_typeof(v_active->'order_ids') <> 'array' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'INVALID_TRIP_SNAPSHOT');
+  END IF;
+
+  SELECT count(*), count(DISTINCT value::text)
+    INTO v_raw_count, v_distinct_count
+  FROM jsonb_array_elements_text(v_active->'order_ids') AS value;
+
+  v_snapshot_count := CASE
+    WHEN COALESCE(v_active->>'n_orders', '') ~ '^[0-9]+$' THEN (v_active->>'n_orders')::int
+    ELSE -1
+  END;
+
+  -- Snapshot structure must be internally consistent before any close side effect.
+  -- Duplicates or n_orders drift indicate a corrupted active snapshot and are not
+  -- silently deduplicated.
+  IF v_raw_count <> v_distinct_count OR v_snapshot_count <> v_raw_count THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'INVALID_TRIP_SNAPSHOT');
+  END IF;
+
+  -- Distinct ids are safe to use only after the raw snapshot was validated above.
   SELECT array_agg(DISTINCT value::text) INTO v_order_ids
   FROM jsonb_array_elements_text(v_active->'order_ids') AS value;
 
-  -- Cardinality invariant (S2-1G): a missing snapshot row must NOT be silently treated as
+  -- Cardinality invariant: a missing snapshot row must NOT be silently treated as
   -- terminal. Every expected member must still exist. If any is gone (hard-deleted), refuse
   -- to close — do not move active_trip, write a log, or touch last_closed_trip.
-  v_expected := COALESCE(array_length(v_order_ids, 1), 0);
   SELECT count(*) INTO v_found FROM public.ordenes WHERE id = ANY(v_order_ids);
-  IF v_found <> v_expected THEN
+  IF v_found <> v_raw_count THEN
     RETURN jsonb_build_object('ok', false, 'code', 'MISSING_TRIP_MEMBER');
   END IF;
 
@@ -302,19 +320,24 @@ $$;
 -- begin_service_close_if_idle() — service-close GATE + idle reset. Sets only the
 -- compatible idle fields; PRESERVES schema, trip_seq and last_closed_trip; deletes no
 -- snapshot or log. REJECTS with ACTIVE_TRIP_CONFLICT if an unclosed active trip exists.
--- On success it ALSO marks service_closing=true (+ timestamp) so start_rider_trip rejects
--- new trips until end_service_close() (or the 30-min staleness guard) clears it — closing
--- the gate↔cleanup race. Advisory-locked, service-role-only.
+-- On success it ALSO writes a crash-safe service_closing marker so start_rider_trip rejects
+-- new trips until end_service_close(close_id) clears that exact marker. Advisory-locked,
+-- service-role-only.
 -- ─────────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE FUNCTION public.begin_service_close_if_idle()
+CREATE OR REPLACE FUNCTION public.begin_service_close_if_idle(
+  p_service_date text DEFAULT NULL,
+  p_source       text DEFAULT 'backend'
+)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_ds     jsonb;
-  v_active jsonb;
+  v_ds       jsonb;
+  v_active   jsonb;
+  v_marker   jsonb;
+  v_close_id text;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('LA_DIECI_DRIVER_STATO'));
 
@@ -325,11 +348,27 @@ BEGIN
   SELECT COALESCE(NULLIF(valore,'')::jsonb, '{}'::jsonb) INTO v_ds
   FROM public.config WHERE chiave = 'DRIVER_STATO' FOR UPDATE;
   v_active := v_ds->'active_trip';
+  v_marker := v_ds->'service_closing';
+
+  -- Crash/restart resume: the same in-progress close keeps its close_id and marker.
+  IF v_marker IS NOT NULL AND v_marker <> 'null'::jsonb THEN
+    RETURN jsonb_build_object('ok', true, 'code', 'OK', 'marker', v_marker,
+                              'close_id', v_marker->>'close_id', 'resumed', true);
+  END IF;
 
   -- Refuse to reset over an unclosed active trip (never destroy an active snapshot).
   IF v_active IS NOT NULL AND (v_active->>'status') = 'ACTIVE' THEN
     RETURN jsonb_build_object('ok', false, 'code', 'ACTIVE_TRIP_CONFLICT');
   END IF;
+
+  v_close_id := gen_random_uuid()::text;
+  v_marker := jsonb_build_object(
+    'close_id',     v_close_id,
+    'service_date', COALESCE(NULLIF(p_service_date, ''), CURRENT_DATE::text),
+    'started_at',   to_jsonb(now()),
+    'source',       COALESCE(NULLIF(p_source, ''), 'backend'),
+    'phase',        'started'
+  );
 
   -- Idle fields + service-closing marker; preserve schema / trip_seq / last_closed_trip.
   v_ds := v_ds || jsonb_build_object(
@@ -339,20 +378,20 @@ BEGIN
     'n_ordini',           0,
     'rientro_stimato',    'null'::jsonb,
     'active_trip',        'null'::jsonb,
-    'service_closing',    true,
-    'service_closing_at', to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    'service_closing',    v_marker
   );
   IF NOT (v_ds ? 'schema')   THEN v_ds := v_ds || jsonb_build_object('schema', 2); END IF;
   IF NOT (v_ds ? 'trip_seq') THEN v_ds := v_ds || jsonb_build_object('trip_seq', 0); END IF;
 
   UPDATE public.config SET valore = v_ds::text WHERE chiave = 'DRIVER_STATO';
-  RETURN jsonb_build_object('ok', true, 'code', 'OK', 'stato', 'LIBERO');
+  RETURN jsonb_build_object('ok', true, 'code', 'OK', 'stato', 'LIBERO',
+                            'marker', v_marker, 'close_id', v_close_id, 'resumed', false);
 END;
 $$;
 
--- end_service_close() — clears the service_closing marker after the destructive cleanup
--- completes (success or controlled failure). Idempotent; never touches trip snapshots.
-CREATE OR REPLACE FUNCTION public.end_service_close()
+-- end_service_close(close_id) — clears only the matching service_closing marker after the
+-- destructive cleanup completes. A wrong close_id never frees another close.
+CREATE OR REPLACE FUNCTION public.end_service_close(p_close_id text)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY INVOKER
@@ -365,7 +404,13 @@ BEGIN
   INSERT INTO public.config(chiave, valore) VALUES ('DRIVER_STATO', '{}') ON CONFLICT (chiave) DO NOTHING;
   SELECT COALESCE(NULLIF(valore,'')::jsonb, '{}'::jsonb) INTO v_ds
   FROM public.config WHERE chiave = 'DRIVER_STATO' FOR UPDATE;
-  v_ds := v_ds - 'service_closing' - 'service_closing_at';
+  IF NOT (v_ds ? 'service_closing') THEN
+    RETURN jsonb_build_object('ok', true, 'code', 'IDEMPOTENT');
+  END IF;
+  IF COALESCE(v_ds->'service_closing'->>'close_id', '') <> COALESCE(p_close_id, '') THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'SERVICE_CLOSE_ID_MISMATCH');
+  END IF;
+  v_ds := v_ds - 'service_closing';
   UPDATE public.config SET valore = v_ds::text WHERE chiave = 'DRIVER_STATO';
   RETURN jsonb_build_object('ok', true, 'code', 'OK');
 END;
@@ -402,6 +447,53 @@ BEGIN
 END;
 $$;
 
+-- delete_conversation_if_not_active(wa_id) — S2-1H conversation delete guard. Deletes the
+-- same conversation rows as the legacy handler, but only after atomically proving that none
+-- of the wa_id-linked orders belongs to the active_trip snapshot.
+CREATE OR REPLACE FUNCTION public.delete_conversation_if_not_active(p_wa_id text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_ds          jsonb;
+  v_active      jsonb;
+  v_order_ids   text[];
+  v_conv_del    int;
+  v_msgs_del    int;
+  v_orders_del  int;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('LA_DIECI_DRIVER_STATO'));
+  SELECT COALESCE(NULLIF(valore,'')::jsonb, '{}'::jsonb) INTO v_ds
+  FROM public.config WHERE chiave = 'DRIVER_STATO' FOR UPDATE;
+  v_active := v_ds->'active_trip';
+
+  SELECT COALESCE(array_agg(id), ARRAY[]::text[]) INTO v_order_ids
+  FROM public.ordenes
+  WHERE wa_id = p_wa_id;
+
+  IF v_active IS NOT NULL AND (v_active->>'status') = 'ACTIVE'
+     AND EXISTS (
+       SELECT 1
+       FROM unnest(v_order_ids) AS oid(order_id)
+       WHERE v_active->'order_ids' ? oid.order_id
+     ) THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'ACTIVE_TRIP_MEMBER_CONFLICT');
+  END IF;
+
+  DELETE FROM public.conv WHERE wa_id = p_wa_id;
+  GET DIAGNOSTICS v_conv_del = ROW_COUNT;
+  DELETE FROM public.wa_msgs WHERE wa_id = p_wa_id;
+  GET DIAGNOSTICS v_msgs_del = ROW_COUNT;
+  DELETE FROM public.ordenes WHERE wa_id = p_wa_id;
+  GET DIAGNOSTICS v_orders_del = ROW_COUNT;
+
+  RETURN jsonb_build_object('ok', true, 'code', 'OK',
+    'deleted', jsonb_build_object('conv', v_conv_del, 'wa_msgs', v_msgs_del, 'ordenes', v_orders_del));
+END;
+$$;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Privileges: PostgreSQL grants EXECUTE to PUBLIC by default — revoke, then grant
 -- only to service_role (backend). Exact signatures used everywhere.
@@ -409,15 +501,17 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.start_rider_trip(text)                    FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.complete_rider_stop(text, boolean, text)  FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.close_rider_trip(text)                    FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.begin_service_close_if_idle()             FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.end_service_close()                       FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.begin_service_close_if_idle(text, text)    FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.end_service_close(text)                    FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.delete_order_if_not_active(text)          FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.delete_conversation_if_not_active(text)    FROM PUBLIC, anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION public.start_rider_trip(text)                     TO service_role;
 GRANT EXECUTE ON FUNCTION public.complete_rider_stop(text, boolean, text)   TO service_role;
 GRANT EXECUTE ON FUNCTION public.close_rider_trip(text)                     TO service_role;
-GRANT EXECUTE ON FUNCTION public.begin_service_close_if_idle()              TO service_role;
-GRANT EXECUTE ON FUNCTION public.end_service_close()                        TO service_role;
+GRANT EXECUTE ON FUNCTION public.begin_service_close_if_idle(text, text)     TO service_role;
+GRANT EXECUTE ON FUNCTION public.end_service_close(text)                     TO service_role;
 GRANT EXECUTE ON FUNCTION public.delete_order_if_not_active(text)           TO service_role;
+GRANT EXECUTE ON FUNCTION public.delete_conversation_if_not_active(text)     TO service_role;
 
 COMMIT;
