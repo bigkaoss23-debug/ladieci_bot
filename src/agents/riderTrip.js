@@ -24,6 +24,9 @@ const CODE_TO_HTTP = Object.freeze({
   NOT_FOUND: 404,           // absent anchor/order
   INVALID_STATE: 409,       // wrong source state / invalid transition
   ACTIVE_TRIP_CONFLICT: 409,
+  ACTIVE_TRIP_MEMBER_CONFLICT: 409, // hard delete of an active-trip member is refused
+  MISSING_TRIP_MEMBER: 409, // a snapshot member row is gone -> cannot close
+  SERVICE_CLOSING: 409,     // no trip may start during service close
   EARLY_CLOSE: 409,
   NO_ACTIVE_TRIP: 409,
   BAD_REQUEST: 400,
@@ -67,10 +70,28 @@ async function closeTrip(triggerOrderId) {
   return mapResult(r);
 }
 
-// resetIfIdle() — sole lifecycle idle reset (end-of-service). Rejects if a trip is active.
-async function resetIfIdle() {
-  const r = await sbRpc("reset_rider_state_if_idle", {});
+// beginServiceCloseIfIdle() — service-close gate + idle reset. Rejects (409) if a trip is
+// active; on success marks service_closing so no new trip can start during cleanup.
+async function beginServiceCloseIfIdle() {
+  const r = await sbRpc("begin_service_close_if_idle", {});
   return mapResult(r);
 }
 
-module.exports = { startTrip, completeStop, closeTrip, resetIfIdle, mapResult, CODE_TO_HTTP };
+// endServiceClose() — clears the service_closing marker after cleanup (idempotent).
+async function endServiceClose() {
+  const r = await sbRpc("end_service_close", {});
+  return mapResult(r);
+}
+
+// deleteOrder(id) — transactional hard-delete guard: refuses (409) if the order is an
+// active-trip member; otherwise deletes the non-member order.
+async function deleteOrder(orderId) {
+  const r = await sbRpc("delete_order_if_not_active", { p_order_id: String(orderId) });
+  return mapResult(r);
+}
+
+module.exports = {
+  startTrip, completeStop, closeTrip,
+  beginServiceCloseIfIdle, endServiceClose, deleteOrder,
+  mapResult, CODE_TO_HTTP,
+};

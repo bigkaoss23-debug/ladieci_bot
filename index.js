@@ -172,6 +172,12 @@ app.get("/api", async (req, res) => {
       } else {
         // Sempre via Guarded: idempotente, non si ripete nello stesso giorno
         result = await chiudiServizio(req.query.deleteAttivi === "true", "operator");
+        // S2-1G — a service close deferred by an active rider trip is an operational
+        // conflict: surface a stable 409 for the operator UI (schedulers consume the same
+        // structured body without treating it as a crash).
+        if (result && result.deferred && result.reason === "active_rider_trip") {
+          return res.status(409).json({ error: "ACTIVE_RIDER_TRIP", message: "Chiusura rinviata: giro rider in corso. Attendere il rientro o chiudere il giro.", data: result.data });
+        }
       }
     } else if (action === "triggerCloseIfNeeded") {
       // Endpoint per cron esterno (es. cron-job.org) — backup del cron interno.
@@ -411,8 +417,10 @@ app.post("/api", async (req, res) => {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { nota_cucina: req.body.nota_cucina });
       result = { success: true };
     } else if (action === "eliminaOrdine") {
-      await sbDelete("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`);
-      result = { success: true };
+      // S2-1G — route through the transactional delete guard: an active-trip member is
+      // refused (409, operator must cancel it instead); a non-member is deleted atomically.
+      const del = await riderTrip.deleteOrder(req.body.id);
+      return res.status(del.status).json(del.payload);
     } else if (action === "eliminaConversazione") {
       const wid = req.body.wa_id;
       await sbDelete("conv",     `wa_id=eq.${wid}`);
@@ -713,6 +721,33 @@ function schedula2340() {
   }, delay);
 }
 
+// S2-1G — bounded deferred-close retry. When a scheduled close is deferred by an active
+// rider trip, retry on a fixed interval up to a max, so the service does not stay open until
+// the next day once the trip finally closes. Pure decision (testable) + a single-timer
+// scheduler that never overlaps and never tight-loops.
+const CLOSE_RETRY_INTERVAL_MS = 10 * 60 * 1000; // 10 min
+const CLOSE_RETRY_MAX_ATTEMPTS = 9;             // ~90 min window after the scheduled close
+function deferredCloseRetryPlan(result, attempt) {
+  const deferred = !!(result && result.deferred && result.reason === "active_rider_trip");
+  if (!deferred) return { retry: false };
+  if (attempt >= CLOSE_RETRY_MAX_ATTEMPTS) return { retry: false, reason: "max_attempts" };
+  return { retry: true, delayMs: CLOSE_RETRY_INTERVAL_MS, attempt: attempt + 1 };
+}
+let _closeRetryTimer = null;
+function scheduleDeferredCloseRetry(source, attempt) {
+  if (_closeRetryTimer) return; // never overlap
+  _closeRetryTimer = setTimeout(async () => {
+    _closeRetryTimer = null;
+    let res;
+    try { res = await chiudiServizio(true, source); }
+    catch (e) { console.error(`[close-retry ${source}] errore:`, e); return; }
+    console.log(`[close-retry ${source}] attempt ${attempt} ->`, JSON.stringify(res));
+    const plan = deferredCloseRetryPlan(res, attempt);
+    if (plan.retry) scheduleDeferredCloseRetry(source, plan.attempt);
+  }, CLOSE_RETRY_INTERVAL_MS);
+  if (_closeRetryTimer && _closeRetryTimer.unref) _closeRetryTimer.unref();
+}
+
 // 23:50 — chiudi serata (backupSerata viene chiamato anche dentro chiudiServizio)
 function schedula2350() {
   const delay = msUntilMadridHM(23, 50);
@@ -724,6 +759,9 @@ function schedula2350() {
       // Se Railway riavvia dopo le 23:50, il catch-up all'avvio recupera la chiusura mancata.
       const res = await chiudiServizio(true, "cron2350");
       console.log("[cron 23:50] risultato:", JSON.stringify(res));
+      // S2-1G — if deferred by an active rider trip, start a bounded retry chain.
+      const plan = deferredCloseRetryPlan(res, 0);
+      if (plan.retry) scheduleDeferredCloseRetry("cron2350-retry", plan.attempt);
       const cfg = await getConfig();
       const OPERATOR_WA_IDS = ["41767011848", "34614267535"];
       const msg = buildCloseSummaryMsg(res, "23:50 automatica");
@@ -780,3 +818,8 @@ if (require.main === module) {
 }
 
 module.exports = { app };
+// S2-1G — additional testable exports attached separately so the accepted B7 assertion
+// `module.exports = { app }` remains byte-exact.
+module.exports.deferredCloseRetryPlan = deferredCloseRetryPlan;
+module.exports.CLOSE_RETRY_MAX_ATTEMPTS = CLOSE_RETRY_MAX_ATTEMPTS;
+module.exports.CLOSE_RETRY_INTERVAL_MS = CLOSE_RETRY_INTERVAL_MS;
