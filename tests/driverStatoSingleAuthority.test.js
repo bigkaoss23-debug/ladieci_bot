@@ -1,47 +1,86 @@
-// tests/driverStatoSingleAuthority.test.js — S2-1C.
-// Static proof that (a) the guard is flag-gated, (b) trip-primitive actions route to the
-// single transactional authority BEFORE any legacy DRIVER_STATO writer, (c) setConfig cannot
-// write DRIVER_STATO, and (d) no NEW fresh five-field DRIVER_STATO object is constructed by
-// the trip path. Run: node tests/driverStatoSingleAuthority.test.js
+// tests/driverStatoSingleAuthority.test.js — S2-1D.
+// Static proof (comments stripped) that DRIVER_STATO/trip state has ONE mutation authority:
+// the Supabase rider-trip RPC migration. No JS production path writes a fresh five-field
+// object, replaces DRIVER_STATO, sets rientro_stimato, snapshots, or inserts a delivery log
+// independently. Run: node tests/driverStatoSingleAuthority.test.js
 const fs = require("fs");
 const path = require("path");
 let pass = 0, fail = 0;
 const check = (l, c) => { if (c) { pass++; console.log("  ✓ " + l); } else { fail++; console.log("  ✗ " + l); } };
+const strip = (s) => s.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+const read = (p) => strip(fs.readFileSync(path.join(__dirname, "..", p), "utf8"));
 
-const idx = fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8");
+const idx = read("index.js");
+const tele = read("src/utils/driverTelemetry.js");
+const ordini = read("src/agents/agentOrdini.js");
+const rpc = read("migrations/2026-07-20_rider_trip_rpcs.sql");
+const servizio = read("src/utils/servizio.js");
 
-// (a) Guard activation — flag-gated, both modes representable.
-check("guard mounted only when AUTH_V2_LEGACY_GUARD_ENABLED === 'true'",
-  /if\s*\(\s*process\.env\.AUTH_V2_LEGACY_GUARD_ENABLED === "true"\s*\)\s*\{\s*app\.use\("\/api", legacyAuthGuardMiddleware\(\)\);/.test(idx));
-check("exactly one guard mount, and it is inside the flag block (flag-off => unguarded)",
-  (idx.match(/legacyAuthGuardMiddleware\(\)/g) || []).length === 1 &&
+// (1) Only the RPC migration writes extended trip state (config UPDATE + snapshot + one log).
+check("RPC writes DRIVER_STATO config", /UPDATE public\.config SET valore = v_ds::text WHERE chiave = 'DRIVER_STATO'/.test(rpc));
+check("RPC writes exactly one delivery_logs insert on close", (rpc.match(/INSERT INTO public\.delivery_logs/g) || []).length === 1);
+
+// Extract a single async-function body: from "async function NAME" up to the next
+// "async function" or "module.exports".
+function funcBody(src, name) {
+  const start = src.indexOf("async function " + name);
+  if (start === -1) return "";
+  const rest = src.slice(start + 10);
+  const nextFn = rest.indexOf("async function ");
+  const nextExp = rest.indexOf("module.exports");
+  let end = rest.length;
+  if (nextFn !== -1) end = Math.min(end, nextFn);
+  if (nextExp !== -1) end = Math.min(end, nextExp);
+  return rest.slice(0, end);
+}
+
+// (2) No JS module constructs a WRITABLE five-field DRIVER_STATO object. driverTelemetry
+// makes NO sbUpsert/sbInsert calls at all (writeDriverStato is a disabled no-op, and it
+// has no callers).
+check("driverTelemetry makes no sbUpsert/sbInsert calls", !/sbUpsert\(/.test(tele) && !/sbInsert\(/.test(tele));
+check("no active writeDriverStato caller (definition only)",
+  !/writeDriverStato\(/.test(tele.replace(/async function writeDriverStato\(_obj\)/, "")));
+
+// (3) The ONLY sanctioned non-RPC DRIVER_STATO write is the end-of-service reset to LIBERO.
+check("index legacy has no DRIVER_STATO sbUpsert", !/sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(idx));
+check("only sanctioned non-RPC write is servizio LIBERO reset",
+  /sbUpsert\("config", \{ chiave: "DRIVER_STATO",\s*valore: JSON\.stringify\(\{ stato: "LIBERO" \}\)/.test(servizio));
+
+// (4) recordRiderOut — obsolete, no write.
+const rroBody = funcBody(tele, "recordRiderOut");
+check("recordRiderOut is an inert stub (no write)",
+  /obsolete_use_start_rider_trip/.test(rroBody) && !/writeDriverStato|sbUpsert|sbInsert/.test(rroBody));
+
+// (5) closeGiroInternal — thin RPC wrapper; no direct write / log / idempotency calc.
+const cgiBody = funcBody(tele, "closeGiroInternal");
+check("closeGiroInternal delegates to riderTrip.closeTrip", /riderTrip\.closeTrip\(\)/.test(cgiBody));
+check("closeGiroInternal has no direct writeDriverStato / delivery_logs insert",
+  !/writeDriverStato|sbInsert\("delivery_logs"|sbUpsert/.test(cgiBody));
+
+// (6) recordDeliveryAndMaybeReturn — only requests close via closeGiroInternal.
+const rdBody = funcBody(tele, "recordDeliveryAndMaybeReturn");
+check("recordDeliveryAndMaybeReturn routes to closeGiroInternal only",
+  /closeGiroInternal\(\)/.test(rdBody) && !/writeDriverStato|sbInsert|sbUpsert/.test(rdBody));
+
+// (7) agentOrdini reconciliation calls only close reconciliation, no recordRiderOut.
+check("agentOrdini hook no longer calls recordRiderOut", !/await recordRiderOut\(/.test(ordini));
+check("agentOrdini reconciliation uses recordDeliveryAndMaybeReturn", /await recordDeliveryAndMaybeReturn\(/.test(ordini));
+
+// (8) setConfig rejects DRIVER_STATO.
+check("setConfig rejects DRIVER_STATO with 403", /chiave === "DRIVER_STATO"[\s\S]{0,160}403/.test(idx));
+
+// (9) Guard flag-gated; trip routing precedes legacy branches; all roles use wrapper.
+check("guard mounted only under flag",
   /AUTH_V2_LEGACY_GUARD_ENABLED === "true"\s*\)\s*\{\s*app\.use\("\/api", legacyAuthGuardMiddleware\(\)\);\s*\}/.test(idx));
-
-// (b) Single authority: trip-primitive routing happens for ALL roles (rule.tripPrimitive),
-// at the top of the POST handler, BEFORE the legacy action branches.
 const postIdx = idx.indexOf('app.post("/api"');
-const firstCambia = idx.indexOf('action === "cambiaStato"', postIdx);
-const tripRoute = idx.indexOf("rule.tripPrimitive", postIdx);
-check("trip routing present in POST handler", tripRoute !== -1);
-check("trip routing precedes legacy action branches", tripRoute !== -1 && tripRoute < firstCambia);
-check("trip routing is role-agnostic (not rider-only)",
-  /req\.authCtx\.rule && req\.authCtx\.rule\.tripPrimitive/.test(idx) &&
-  !/role === "rider"[\s\S]{0,80}tripPrimitive/.test(idx));
-check("routes to riderTrip wrapper", /riderTrip\.startTrip|riderTrip\.completeStop|riderTrip\.closeTrip/.test(idx));
-
-// (c) setConfig cannot write DRIVER_STATO.
-check("setConfig rejects DRIVER_STATO with 403",
-  /chiave === "DRIVER_STATO"[\s\S]{0,160}403/.test(idx));
-
-// (d) The trip routing helper does not build a fresh five-field DRIVER_STATO object.
-const helper = idx.slice(idx.indexOf("async function routeRiderTripAction"), idx.indexOf("app.post(\"/api\""));
-check("trip helper writes no DRIVER_STATO object",
-  !/partito_alle|rientro_stimato|n_ordini/.test(helper));
-
-// (e) Legacy registrarSalidaDriver fresh-writer still exists but is only reachable when the
-// guard is OFF (flag-off compatibility); when the guard is ON it is bypassed by the route.
-check("legacy registrarSalidaDriver handler retained for flag-off compatibility",
-  /DRIVER_STATO[\s\S]{0,200}sbUpsert\("config"/.test(idx) || /registrarSalidaDriver/.test(idx));
+check("trip routing precedes legacy branches",
+  idx.indexOf("rule.tripPrimitive", postIdx) !== -1 &&
+  idx.indexOf("rule.tripPrimitive", postIdx) < idx.indexOf('action === "cambiaStato"', postIdx));
+check("trip routing role-agnostic (rule.tripPrimitive, not rider-only)",
+  /req\.authCtx\.rule && req\.authCtx\.rule\.tripPrimitive/.test(idx));
+check("legacy registrarSalidaDriver is an inert no-op (no DRIVER_STATO write)",
+  /action === "registrarSalidaDriver"[\s\S]{0,260}managed_by_trip_rpc/.test(idx) &&
+  !/action === "registrarSalidaDriver"[\s\S]{0,260}sbUpsert/.test(idx));
 
 console.log(`\ndriverStatoSingleAuthority: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
