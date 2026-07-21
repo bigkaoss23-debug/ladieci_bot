@@ -323,12 +323,6 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   const oggi = madridDateStr();
   const diaSemana = diaSemanaIta();
 
-  // ─── PASSO 1: già chiuso oggi? ────────────────────────────────
-  const existing = await sbSelect("serata_summary", `fecha=eq.${oggi}`);
-  if (Array.isArray(existing) && existing.length > 0) {
-    return { skipped: true, reason: "already_closed_today", data: oggi };
-  }
-
   // ─── PASSO 1b (S2-1F): ACTIVE-TRIP GATE ───────────────────────
   // A service close must NEVER run destructively over an active rider trip (PASSO 6/10
   // archive+delete ordenes, which would hide/erase active-trip members). The transactional
@@ -339,12 +333,18 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   // No direct config read is used as the authority.
   let riderGate;
   try {
-    riderGate = await require("../agents/riderTrip").beginServiceCloseIfIdle();
+    riderGate = await require("../agents/riderTrip").beginServiceCloseIfIdle({ serviceDate: oggi, source });
   } catch (e) {
     console.warn(`[chiudiServizio ${source}] rider-state gate failed:`, e?.message || e);
     return { success: false, error: "rider_state_gate_failed", deferred: true, data: oggi };
   }
   const gateBody = riderGate && riderGate.payload;
+  const closeId = gateBody && (gateBody.close_id || gateBody.marker?.close_id);
+  const resumedClose = gateBody && gateBody.resumed === true;
+  const endClose = async (label) => {
+    try { await require("../agents/riderTrip").endServiceClose(closeId); }
+    catch (e) { console.warn(`[chiudiServizio] endServiceClose (${label}) failed:`, e?.message || e); }
+  };
   if (gateBody && gateBody.error === "ACTIVE_TRIP_CONFLICT") {
     console.warn(`[chiudiServizio ${source}] DEFERRED — active rider trip in progress; no archival/deletion performed`);
     return { skipped: true, deferred: true, reason: "active_rider_trip", data: oggi };
@@ -352,6 +352,18 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   if (!(gateBody && gateBody.ok)) {
     console.warn(`[chiudiServizio ${source}] rider-state gate not ok; failing closed`);
     return { success: false, error: "rider_state_gate_failed", deferred: true, data: oggi };
+  }
+
+  // ─── PASSO 1: già chiuso oggi? ────────────────────────────────
+  // If a previous close crashed after creating serata_summary, the persisted marker makes
+  // this a recovery pass: continue through idempotent archive/cleanup and release only on
+  // full success. Without a resumed marker, preserve the historical skip and release the
+  // just-created gate before any destructive operation.
+  const existing = await sbSelect("serata_summary", `fecha=eq.${oggi}`);
+  const summaryAlreadyExists = Array.isArray(existing) && existing.length > 0;
+  if (summaryAlreadyExists && !resumedClose) {
+    await endClose("already-closed");
+    return { skipped: true, reason: "already_closed_today", data: oggi };
   }
 
   // ─── PASSO 2: backup raw SUBITO (safety net) ──────────────────
@@ -373,14 +385,16 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
 
   // ─── PASSO 5: lock via INSERT serata_summary (PK su fecha) ────
   // Se due processi tentano contemporaneamente, solo uno passa.
-  const lockResult = await sbInsert("serata_summary", summary);
+  const lockResult = summaryAlreadyExists ? [{ recovered: true }] : await sbInsert("serata_summary", summary);
   const lockOk = Array.isArray(lockResult) && lockResult.length > 0;
   if (!lockOk) {
     // Conflitto chiave primaria → un altro processo è già passato in mezzo a noi
     const errCode = lockResult?.code || lockResult?.[0]?.code || "";
     if (errCode === "23505") {
+      await endClose("race-lost");
       return { skipped: true, reason: "race_lost", data: oggi };
     }
+    await endClose("lock-failed");
     return { success: false, error: "lock_failed", details: lockResult };
   }
 
@@ -441,9 +455,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
     // L'operatore vede l'errore, può riprovare. Backup raw resta in backup_serata.
     await sbDelete("storico", `fecha=eq.${oggi}`);
     await sbDelete("serata_summary", `fecha=eq.${oggi}`);
-    // S2-1G — clear the service_closing marker so rider trips can resume after this
-    // aborted close (best-effort; never a direct DRIVER_STATO write).
-    try { await require("../agents/riderTrip").endServiceClose(); } catch (e) { console.warn("[chiudiServizio] endServiceClose (verify-fail) failed:", e?.message || e); }
+    // S2-1H — archive/rollback has begun; keep the service_closing marker for recovery.
     return {
       success: false,
       error: "verify_failed",
@@ -500,7 +512,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
   // S2-1G — destructive cleanup done: release the service_closing marker so new rider
   // trips may start again (idempotent; never a direct DRIVER_STATO write).
-  try { await require("../agents/riderTrip").endServiceClose(); } catch (e) { console.warn("[chiudiServizio] endServiceClose failed:", e?.message || e); }
+  await endClose("success");
 
   // ─── DONE ────────────────────────────────────────────────────
   return {

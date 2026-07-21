@@ -25,8 +25,10 @@ const CODE_TO_HTTP = Object.freeze({
   INVALID_STATE: 409,       // wrong source state / invalid transition
   ACTIVE_TRIP_CONFLICT: 409,
   ACTIVE_TRIP_MEMBER_CONFLICT: 409, // hard delete of an active-trip member is refused
+  INVALID_TRIP_SNAPSHOT: 409, // corrupted active_trip snapshot: no close/log/write
   MISSING_TRIP_MEMBER: 409, // a snapshot member row is gone -> cannot close
   SERVICE_CLOSING: 409,     // no trip may start during service close
+  SERVICE_CLOSE_ID_MISMATCH: 409,
   EARLY_CLOSE: 409,
   NO_ACTIVE_TRIP: 409,
   BAD_REQUEST: 400,
@@ -72,14 +74,17 @@ async function closeTrip(triggerOrderId) {
 
 // beginServiceCloseIfIdle() — service-close gate + idle reset. Rejects (409) if a trip is
 // active; on success marks service_closing so no new trip can start during cleanup.
-async function beginServiceCloseIfIdle() {
-  const r = await sbRpc("begin_service_close_if_idle", {});
+async function beginServiceCloseIfIdle(opts = {}) {
+  const r = await sbRpc("begin_service_close_if_idle", {
+    p_service_date: opts.serviceDate == null ? null : String(opts.serviceDate),
+    p_source: opts.source == null ? "backend" : String(opts.source),
+  });
   return mapResult(r);
 }
 
-// endServiceClose() — clears the service_closing marker after cleanup (idempotent).
-async function endServiceClose() {
-  const r = await sbRpc("end_service_close", {});
+// endServiceClose(closeId) — clears the matching service_closing marker after cleanup.
+async function endServiceClose(closeId) {
+  const r = await sbRpc("end_service_close", { p_close_id: closeId == null ? "" : String(closeId) });
   return mapResult(r);
 }
 
@@ -90,8 +95,14 @@ async function deleteOrder(orderId) {
   return mapResult(r);
 }
 
+// deleteConversation(waId) — transactional conversation hard-delete guard.
+async function deleteConversation(waId) {
+  const r = await sbRpc("delete_conversation_if_not_active", { p_wa_id: String(waId) });
+  return mapResult(r);
+}
+
 module.exports = {
   startTrip, completeStop, closeTrip,
-  beginServiceCloseIfIdle, endServiceClose, deleteOrder,
+  beginServiceCloseIfIdle, endServiceClose, deleteOrder, deleteConversation,
   mapResult, CODE_TO_HTTP,
 };

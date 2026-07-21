@@ -422,11 +422,10 @@ app.post("/api", async (req, res) => {
       const del = await riderTrip.deleteOrder(req.body.id);
       return res.status(del.status).json(del.payload);
     } else if (action === "eliminaConversazione") {
-      const wid = req.body.wa_id;
-      await sbDelete("conv",     `wa_id=eq.${wid}`);
-      await sbDelete("wa_msgs",  `wa_id=eq.${wid}`);
-      await sbDelete("ordenes",  `wa_id=eq.${wid}`);
-      result = { success: true };
+      // S2-1H — conversation hard-delete is guarded transactionally because one wa_id can
+      // own multiple orders and any one of them may be an active-trip member.
+      const del = await riderTrip.deleteConversation(req.body.wa_id);
+      return res.status(del.status).json(del.payload);
     } else if (action === "upsertCliente") {
       // Upsert cliente (preferito). Match per id se passato, altrimenti per alias (UPPER) o tel.
       // Ritorna sempre l'id finale, così il frontend può attaccarlo a createOrden.
