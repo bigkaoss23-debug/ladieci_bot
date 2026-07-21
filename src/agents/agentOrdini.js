@@ -10,7 +10,9 @@ const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime")
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
 // DRIVER_STATO = telemetria visiva OPZIONALE (best-effort, mai blocca la
 // transizione). Vedi src/utils/driverTelemetry.js per il contratto.
-const { recordRiderOut, recordDeliveryAndMaybeReturn, countActiveDeliveries } = require("../utils/driverTelemetry");
+// S2-1F — only the snapshot-authoritative reconciliation hook is used now; the old
+// "driver out" writer and the global active-delivery count are no longer imported.
+const { recordDeliveryAndMaybeReturn } = require("../utils/driverTelemetry");
 const {
   buildStateTimestampPatch,
   logOrderStateTransition,
@@ -650,6 +652,12 @@ async function modificaOrdine(ordenId, updates) {
   return { success: true };
 }
 
+// S2-1F — delivery terminal states that may satisfy the active-trip completion predicate.
+// Mirrors close_rider_trip's terminal set: delivered (RETIRADO/COMPLETADO/COMPLETATO) and
+// cancelled/void (CANCELADO/ANULADO). A domicilio order reaching any of these requests
+// snapshot reconciliation; the RPC's membership check keeps pickup/non-member safe.
+const RECONCILE_TERMINAL_STATES = new Set(["RETIRADO", "COMPLETADO", "COMPLETATO", "CANCELADO", "ANULADO"]);
+
 // extras: { metodo_pago, cobrado, hora_entrega, hora_salida, repartidor, llegado, cucina_check, actor_type, actor_id, origin }
 // Scrittura atomica singola — niente cerotti, niente race tra metodo_pago e estado.
 async function cambiaStato(ordenId, nuovoStato, extras = {}) {
@@ -803,14 +811,15 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     }
   }
 
-  // ── DRIVER_STATO reconciliation (S2-1D) — single authority ──────────────
+  // ── DRIVER_STATO reconciliation (S2-1D/1F) — single authority ───────────
   // DRIVER_STATO/trip lifecycle is owned exclusively by the rider trip RPCs. An operator/
-  // admin generic transition NEVER writes DRIVER_STATO directly here: on a domicilio
-  // RETIRADO it may only REQUEST close reconciliation (recordDeliveryAndMaybeReturn ->
-  // close_rider_trip), which is a controlled no-op unless every active-trip member is
-  // terminal. There is no "driver out" writer anymore (start is start_rider_trip only).
-  // Any RPC failure is swallowed with a warn and never triggers a legacy direct write.
-  if (!_isNoop && nuovoStato === "RETIRADO") {
+  // admin generic transition NEVER writes DRIVER_STATO directly here: on a domicilio order
+  // reaching ANY delivery terminal state (delivered OR cancelled/void), it may only REQUEST
+  // close reconciliation (recordDeliveryAndMaybeReturn -> close_rider_trip(order.id)). The
+  // RPC alone decides membership + snapshot completion; a non-member or incomplete trip is a
+  // controlled no-op. No global count is used; there is no "driver out" writer. Any RPC
+  // failure is swallowed with a warn and never triggers a legacy direct write.
+  if (!_isNoop && RECONCILE_TERMINAL_STATES.has(nuovoStato)) {
     try {
       const dRows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,tipo_consegna,zona,manual_giro_id`);
       const dOrd = dRows?.[0];
