@@ -42,7 +42,9 @@ assert('exactly one login route, exact static path', (INT.match(/app\.post\(LOGI
 assert('login route is unauthenticated: no JWT verify, no X-Api-Key check in integration', !/verifyToken|Bearer|x-api-key|DASHBOARD_API_KEY|authorization/i.test(INT.slice(INT.indexOf('function integrateLoginRoute'), INT.indexOf('function createAuthV2IntegrationApp'))));
 assert('reuses accepted B3 handler (createLoginHandler); no second PIN verifier', /createLoginHandler/.test(INT) && !/scrypt|verifyPin\(pin|new PinVerifier|hashCompare/.test(INT.slice(INT.indexOf('function integrateLoginRoute'))));
 assert('does not query PIN hashes from the integration', !/pin_hash|getActorForVerify_SENSITIVE|select=[^)]*pin_hash/i.test(INT));
-assert('only accepted request fields forwarded (role/pin/actor/trustedClientIp)', /handler\(\{ role: b\.role, pin: b\.pin, actor: b\.actor, trustedClientIp: extractClientIp\(req\) \}\)/.test(INT));
+assert('universal forwards pin/IP only; compatibility forwards role/pin/actor/IP',
+  /universalHandler\(\{ pin: b\.pin, trustedClientIp \}\)/.test(INT) &&
+  /compatibilityHandler\(\{ role: b\.role, pin: b\.pin, actor: b\.actor, trustedClientIp \}\)/.test(INT));
 assert('PIN passed verbatim (no trim/normalize/log on b.pin)', !/b\.pin\.trim|b\.pin\.toLowerCase|b\.pin\.replace|normalize\([^)]*pin/i.test(INT));
 assert('server-owned IP via accepted boundary (extractClientIp), no body ip', /extractClientIp\(req\)/.test(INT) && !/b\.(ip|ipHash|trustedClientIp|forwarded)/.test(INT));
 assert('login-scoped parser sanitizer: login path ONLY, others pass through', /function loginScopedJsonError\(err, req, res, next\)/.test(INT) && /p === LOGIN_PATH/.test(INT) && /return next\(err\)/.test(INT));

@@ -44,7 +44,7 @@ function mk(opts = {}) {
   const fin = fakeFinancialService();
   const deps = {
     dashboardApiKey: opts.dashboardApiKey,
-    login: { env: { AUTH_V2_LOGIN_HTTP_ENABLED: opts.loginFlag }, loginHandler: login.handler, logger: opts.logger },
+    login: { env: { AUTH_V2_LOGIN_HTTP_ENABLED: opts.loginFlag }, loginHandler: login.handler, universalLoginHandler: login.handler, logger: opts.logger },
     financial: { env: { AUTH_V2_FINANCIAL_HTTP_ENABLED: opts.finFlag }, service: fin, verifyToken: () => ({ role: 'admin', sub: 'owner', sv: 1 }), getActor: async () => ({ actor: 'owner', role: 'admin', active: true, session_version: 1 }) },
   };
   const built = createAuthV2IntegrationApp(deps);
@@ -65,6 +65,10 @@ function mk(opts = {}) {
   assert('enabled: valid login → 200 with accepted envelope, handler called once', r.status === 200 && r.json.token === 'TOKENVALUE' && r.json.tokenVersion === 2 && t.login.calls.length === 1);
   assert('enabled: exact request fields passed (role/pin/actor/trustedClientIp) only', JSON.stringify(Object.keys(t.login.calls[0]).sort()) === JSON.stringify(['actor', 'pin', 'role', 'trustedClientIp'].sort()));
   assert('enabled: caller role/session/token/claims not forwarded as authority', (() => { const k = Object.keys(t.login.calls[0]); return !k.includes('sv') && !k.includes('session_version') && !k.includes('token') && !k.includes('expiresIn') && !k.includes('active') && !k.includes('failed_count'); })());
+
+  t = mk({ loginFlag: 'true' });
+  await inject(t.app, { method: 'POST', url: LOGIN_PATH, headers: H(), body: jbody({ pin: '778899', roleHint: 'admin', actorHint: 'owner' }) });
+  assert('universal contract forwards PIN and server-owned IP only', JSON.stringify(Object.keys(t.login.calls[0]).sort()) === JSON.stringify(['pin', 'trustedClientIp'].sort()));
 
   // operator actor forwarded; server-owned IP used
   t = mk({ loginFlag: 'true' });

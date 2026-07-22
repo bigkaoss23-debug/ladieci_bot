@@ -53,6 +53,11 @@ async function throwsCode(fn, code) {
   assert('sensitive read includes pin_hash', s && 'pin_hash' in s);
   assert('sensitive read name is clearly marked', typeof dao.getActorForVerify_SENSITIVE === 'function');
 
+  reset(() => ({ bodyObj: [{ actor: 'owner', role: 'admin', active: true, pin_hash: 'scrypt$1$X' }] }));
+  const universalRows = await dao.listActorsForVerify_SENSITIVE();
+  assert('universal sensitive read returns canonical rows', universalRows.length === 1 && universalRows[0].actor === 'owner');
+  assert('universal sensitive query is fixed to four canonical actors', /actor=(?:in\.|in%2E)\((?:owner|owner%2Coperator_primary)/.test(calls[0].url) && /order=actor(?:\.|%2E)asc/.test(calls[0].url), calls[0].url);
+
   // 3 — meta sanitization: accept clean incl. auth_method; reject sensitive forms/limits
   assert('accepts clean meta', (() => { try { audit.sanitizeMeta({ info: 'x', n: 2, nested: { a: 1 } }); return true; } catch (_) { return false; } })());
   assert('accepts innocuous key auth_method', (() => { try { audit.sanitizeMeta({ auth_method: 'pin_flow', authMethod: 'x' }); return true; } catch (_) { return false; } })());
