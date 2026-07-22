@@ -78,6 +78,24 @@ function assicuraFirma(testo) {
   return testo + "\n*La Dieci* 🇮🇹🍕";
 }
 
+function emitDynamicMenuShadowDiagnostic(diagnostic) {
+  // Strict allow-list: never spread caller data into logs. In particular there is
+  // no message, customer, address, phone, note, readable product or token field.
+  console.info(JSON.stringify({
+    event: "dynamic_menu_shadow",
+    inputHash: diagnostic.inputHash,
+    classification: diagnostic.classification,
+    legacyKind: diagnostic.legacyKind,
+    legacyCanonicalId: diagnostic.legacyCanonicalId,
+    dynamicKind: diagnostic.dynamicKind,
+    dynamicCanonicalId: diagnostic.dynamicCanonicalId,
+    menuSource: diagnostic.menuSource,
+    durationMs: diagnostic.durationMs,
+    errorCode: diagnostic.errorCode,
+    counters: diagnostic.counters,
+  }));
+}
+
 async function interpreta(testo, cfg, clienteInfo, chatHistory, shadowDeps = {}) {
   const cTempo = contestoTempo();
   const direccionPreDetectada = preDetectaDireccion(testo);
@@ -174,7 +192,7 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory, shadowDeps = {})
       enabled: shadowDeps.enabled ?? process.env.DYNAMIC_MENU_SHADOW_ENABLED === "true",
       legacyItems: normalizedItems,
       loadCanonicalMenu: shadowDeps.loadCanonicalMenu || getCanonicalMenu,
-      emitDiagnostic: shadowDeps.emitDiagnostic,
+      emitDiagnostic: shadowDeps.emitDiagnostic || emitDynamicMenuShadowDiagnostic,
     });
     const esDomicilio = direccionPreDetectada || parsed.tipo_consegna === "DOMICILIO";
     return {

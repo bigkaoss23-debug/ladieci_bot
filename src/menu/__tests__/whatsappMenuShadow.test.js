@@ -26,11 +26,13 @@ test("flag off executes no loader, resolver or diagnostic", async () => {
 test("flag on loads canonical menu once and legacy remains authoritative", async () => {
   let loads = 0;
   const diagnostics = [];
-  const out = await runWhatsappMenuShadow({ enabled: true, legacyItems: LEGACY, loadCanonicalMenu: async () => { loads++; return MENU; }, emitDiagnostic: (value) => diagnostics.push(value) });
+  const ticks = [100, 107, 107, 107];
+  const out = await runWhatsappMenuShadow({ enabled: true, legacyItems: LEGACY, loadCanonicalMenu: async () => { loads++; return MENU; }, emitDiagnostic: (value) => diagnostics.push(value), now: () => ticks.shift() ?? 107 });
   assert.equal(loads, 1);
   assert.strictEqual(out.legacyItems, LEGACY);
   assert.deepStrictEqual(out.legacyItems, [{ n: "El Pelusa", q: 2, p: 12, e: "🍕", sub: "extra Coppa, sin cebolla" }]);
   assert.deepStrictEqual(diagnostics.map((item) => item.classification), ["MATCH", "MATCH", "MATCH"]);
+  assert.ok(diagnostics.every((item) => item.event === "dynamic_menu_shadow" && item.durationMs === 7 && item.errorCode === null));
 });
 
 test("menu error never blocks or mutates legacy output", async () => {
@@ -39,6 +41,7 @@ test("menu error never blocks or mutates legacy output", async () => {
   assert.equal(out.error, true);
   assert.strictEqual(out.legacyItems, LEGACY);
   assert.equal(emitted[0].classification, "ERROR");
+  assert.equal(emitted[0].errorCode, "MENU_LOAD_FAILED");
 });
 
 test("diagnostic sink failure never blocks legacy", async () => {

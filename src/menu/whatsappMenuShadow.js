@@ -30,16 +30,21 @@ async function runWhatsappMenuShadow({
   legacyItems,
   loadCanonicalMenu,
   emitDiagnostic = () => {},
+  now = () => Date.now(),
 } = {}) {
   if (!enabled) return { executed: false, diagnostics: [], legacyItems };
   if (typeof loadCanonicalMenu !== "function") return { executed: true, diagnostics: [], legacyItems, error: true };
 
   try {
+    const startedAt = now();
     const canonical = await loadCanonicalMenu();
     const source = canonical?.cacheMeta?.source || "unknown";
-    const diagnostics = legacyReferences(legacyItems).map((reference) =>
-      compareLegacyAndDynamicResolution({ ...reference, canonicalMenu: canonical, menuSource: source }).diagnostic
-    );
+    const diagnostics = legacyReferences(legacyItems).map((reference) => ({
+      ...compareLegacyAndDynamicResolution({ ...reference, canonicalMenu: canonical, menuSource: source }).diagnostic,
+      event: "dynamic_menu_shadow",
+      durationMs: Math.max(0, now() - startedAt),
+      errorCode: null,
+    }));
     for (const diagnostic of diagnostics) {
       try { emitDiagnostic(diagnostic); } catch (_) { /* diagnostics never affect operations */ }
     }
@@ -51,8 +56,14 @@ async function runWhatsappMenuShadow({
       canonicalMenu: null,
       menuSource: "error",
     });
-    try { emitDiagnostic(comparison.diagnostic); } catch (_) { /* best effort only */ }
-    return { executed: true, diagnostics: [comparison.diagnostic], legacyItems, error: true };
+    const diagnostic = {
+      ...comparison.diagnostic,
+      event: "dynamic_menu_shadow",
+      durationMs: 0,
+      errorCode: "MENU_LOAD_FAILED",
+    };
+    try { emitDiagnostic(diagnostic); } catch (_) { /* best effort only */ }
+    return { executed: true, diagnostics: [diagnostic], legacyItems, error: true };
   }
 }
 

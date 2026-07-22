@@ -28,6 +28,8 @@ const MENU = {
   assert.equal(loads, 0, "default-off must not load menu");
   assert.equal(emits, 0, "default-off must not emit diagnostic");
 
+  const piiInput = "Mario +34600000000 Calle Mayor 12";
+  const offPii = await interpreta(piiInput, {}, null, [], { enabled: false });
   process.env.DYNAMIC_MENU_SHADOW_ENABLED = "true";
   const diagnostics = [];
   const on = await interpreta("una el pelusa", {}, null, [], {
@@ -41,5 +43,26 @@ const MENU = {
   assert.equal(diagnostics.length, 1);
   assert.equal(diagnostics[0].classification, "MATCH");
   assert.ok(!JSON.stringify(diagnostics[0]).includes("una el pelusa"));
-  console.log("agentWhatsappShadowIntegration: 7 passed, 0 failed");
+
+  process.env.DYNAMIC_MENU_SHADOW_ENABLED = "true";
+  const structuredLogs = [];
+  const originalInfo = console.info;
+  console.info = (line) => structuredLogs.push(line);
+  let runtime;
+  try {
+    runtime = await interpreta(piiInput, {}, null, [], {
+      loadCanonicalMenu: async () => MENU,
+    });
+  } finally {
+    console.info = originalInfo;
+    delete process.env.DYNAMIC_MENU_SHADOW_ENABLED;
+  }
+  assert.deepStrictEqual(runtime, offPii, "runtime logger must not alter legacy output");
+  assert.equal(structuredLogs.length, 1, "runtime sink must be non-noop when enabled");
+  const log = JSON.parse(structuredLogs[0]);
+  assert.deepStrictEqual(Object.keys(log).sort(), ["classification", "counters", "durationMs", "dynamicCanonicalId", "dynamicKind", "errorCode", "event", "inputHash", "legacyCanonicalId", "legacyKind", "menuSource"].sort());
+  assert.match(log.inputHash, /^[a-f0-9]{64}$/);
+  const serialized = JSON.stringify(log);
+  for (const forbidden of ["Mario", "34600000000", "Calle Mayor", "El Pelusa"]) assert.ok(!serialized.includes(forbidden));
+  console.log("agentWhatsappShadowIntegration: 13 passed, 0 failed");
 })().catch((error) => { delete process.env.DYNAMIC_MENU_SHADOW_ENABLED; console.error(error.stack || error); process.exit(1); });
