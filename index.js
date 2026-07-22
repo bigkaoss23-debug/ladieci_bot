@@ -35,6 +35,7 @@ const { ipHash } = require("./src/auth/ipSecurity");
 const { legacyAuthGuardMiddleware } = require("./src/auth/legacyAuthGuard");
 const riderTrip = require("./src/agents/riderTrip");
 const riderReads = require("./src/agents/riderReads");
+const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceCloseout");
 
 const app = express();
 app.use(express.json());
@@ -287,6 +288,9 @@ app.get("/api", async (req, res) => {
       // S3-1B: read-only catalogue consumer. Auth/role enforcement happens in the
       // legacy guard before this dispatcher; the facade hides storage and fallback.
       result = await getCanonicalMenu();
+    } else if (action === "getCurrentServiceCloseout") {
+      // Server-selected current Madrid service only: no caller-supplied date/range.
+      result = await getCurrentServiceCloseout();
     }
     // ── Private authenticated READ contracts (P0). Fixed queries only. ──────
     // Params arrivano da querystring; ogni action valida i propri input e cappa

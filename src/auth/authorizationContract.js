@@ -28,7 +28,7 @@ const HUMAN_PRINCIPALS = Object.freeze(['admin', 'operator', 'rider']);
 const CANONICAL_ACTIONS = Object.freeze([
   'getOrdenes', 'getWaMsgs', 'getConfig', 'chiudiServizio', 'triggerCloseIfNeeded',
   'scanServizio', 'backupSerata', 'rigeneraSuggerimenti', 'approvaSuggerimento',
-  'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'debugMenuShadow', 'getManualGiros', 'getMenu',
+  'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'debugMenuShadow', 'getManualGiros', 'getMenu', 'getCurrentServiceCloseout',
   'getDriverStatus', 'getOrdenesRecent', 'getWaMessages', 'getStorico', 'getOrdenesArchivio',
   'getDeliveryLogs', 'getSuggerimenti', 'getConversacionesActivas', 'getClienteByTelefono',
   'getWaMessageById', 'getOrdenById', 'getConvByWaId', 'getConvChats', 'cambiaStato',
@@ -77,7 +77,7 @@ const FRESH_AUTH_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes', 'getStorico',
   'getOrdenesArchivio', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine',
   'eliminaConversazione', 'getSuggerimenti',
-  'getAuthActors', 'setActorPin',
+  'getAuthActors', 'setActorPin', 'getCurrentServiceCloseout',
 ]);
 const FRESH_AUTH_SET = Object.freeze(new Set(FRESH_AUTH_ACTIONS));
 
