@@ -55,6 +55,10 @@ async function getActorForVerify_SENSITIVE(actor) {
   return rows[0] || null;
 }
 
+async function listActorsForVerify_SENSITIVE() {
+  return restSelect(`select=actor,role,active,session_version,pin_hash,failed_count,locked_until&actor=in.(${ACTORS.join(',')})&order=actor.asc`);
+}
+
 // ── lock state (read-only, computed) ─────────────────────────────────────────
 async function getLockState(actor) {
   const a = await getActor(actor);
@@ -90,7 +94,7 @@ function setActorActive({ actor, active, byActor, meta = {} }) {
 
 module.exports = {
   AuthDaoError, ACTORS,
-  getActor, getActorsByRole, listActorsSafe, getActorForVerify_SENSITIVE, getLockState,
+  getActor, getActorsByRole, listActorsSafe, getActorForVerify_SENSITIVE, listActorsForVerify_SENSITIVE, getLockState,
   recordFailedAttempt, resetFailedAttempts,
   setActorPinHash, incrementSessionVersion, setActorActive,
 };

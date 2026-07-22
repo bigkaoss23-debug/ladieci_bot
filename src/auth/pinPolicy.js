@@ -55,4 +55,10 @@ function validatePinFormat(pin, role) {
   return { ok: true };
 }
 
-module.exports = { ROLE_PIN_RULES, validatePinFormat, isAllSame, isSequential, isRepeatedBlock };
+function validateUniversalPinFormat(pin) {
+  if (typeof pin !== 'string' || !/^\d{6,12}$/.test(pin)) return { ok: false, reason: 'invalid_format' };
+  if (isAllSame(pin) || isSequential(pin) || isRepeatedBlock(pin) || WEAK_PINS.has(pin)) return { ok: false, reason: 'weak' };
+  return { ok: true };
+}
+
+module.exports = { ROLE_PIN_RULES, validatePinFormat, validateUniversalPinFormat, isAllSame, isSequential, isRepeatedBlock };

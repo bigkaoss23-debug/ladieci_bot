@@ -15,7 +15,7 @@
 // verification, query PIN hashes, or reconstruct JWT claims.
 
 const express = require('express');
-const { createLoginHandler } = require('./login');
+const { createLoginHandler, createUniversalLoginHandler } = require('./login');
 const { extractClientIp } = require('./financialHttpHandlers'); // reuse the accepted server-owned IP boundary
 const { integrateFinancialRoutes } = require('./financialHttpIntegration'); // combined harness only
 
@@ -35,21 +35,22 @@ function isLoginHttpEnabled(env) {
 // JWT, PIN policy, scrypt verifier, IP hashing + limiter and audit boundaries — no second
 // PIN verifier, no PIN-hash query from this layer.
 let _decoyHashPromise = null;
-function buildDefaultLoginHandler() {
+function buildDefaultLoginHandlers() {
   const dao = require('./dao');
   const jwt = require('./jwt');
   const pinPolicy = require('./pinPolicy');
   const { verifyPin, hashPin } = require('./scrypt');
   const { ipHash, createIpLimiter } = require('./ipSecurity');
   const audit = require('./audit');
-  // one process-lifetime decoy hash (constant, non-secret) → single scrypt derivation for
-  // absent/inactive actors, preserving the accepted anti-enumeration timing property.
+  // One process-lifetime decoy hash (constant, non-secret). Universal login uses it for
+  // every absent/inactive canonical slot, preserving a fixed four-comparison shape.
   if (!_decoyHashPromise) _decoyHashPromise = hashPin('decoy-not-a-real-pin-000000');
-  return createLoginHandler({
+  const deps = {
     dao, jwt, pinPolicy, verifyPin,
     decoyHashPromise: _decoyHashPromise,
     ipHash, ipLimiter: createIpLimiter(), audit,
-  });
+  };
+  return { universal: createUniversalLoginHandler(deps), compatibility: createLoginHandler(deps) };
 }
 
 function bodyOf(req) {
@@ -66,17 +67,31 @@ function integrateLoginRoute(app, deps = {}) {
   if (!isLoginHttpEnabled(env)) {
     return Object.freeze({ enabled: false, path: LOGIN_PATH, routes: Object.freeze([]) });
   }
-  const handler = typeof deps.loginHandler === 'function' ? deps.loginHandler : buildDefaultLoginHandler();
+  let defaults = null;
+  const getDefaults = () => {
+    if (!defaults) defaults = buildDefaultLoginHandlers();
+    return defaults;
+  };
+  const universalHandler = typeof deps.universalLoginHandler === 'function'
+    ? deps.universalLoginHandler
+    : (request) => getDefaults().universal(request);
+  const compatibilityHandler = typeof deps.loginHandler === 'function'
+    ? deps.loginHandler
+    : (request) => getDefaults().compatibility(request);
   const logger = deps.logger || null;
 
   async function loginRoute(req, res) {
     const b = bodyOf(req);
     let result;
     try {
-      // Only the accepted B3 request fields; role/session/claims/active/failed-count/lockout
-      // are never accepted from the caller. PIN passed verbatim (no trim/normalize/log). IP
-      // comes from the server-owned request context, never the body.
-      result = await handler({ role: b.role, pin: b.pin, actor: b.actor, trustedClientIp: extractClientIp(req) });
+      // `{pin}` is the universal contract. The explicit role/actor shape is retained only
+      // as a temporary rollback/test compatibility path and is not used by the frontend.
+      // Session/claims/active/lockout are never accepted from the caller. IP comes from
+      // server-owned request context, never the body.
+      const trustedClientIp = extractClientIp(req);
+      result = (b.role === undefined && b.actor === undefined)
+        ? await universalHandler({ pin: b.pin, trustedClientIp })
+        : await compatibilityHandler({ role: b.role, pin: b.pin, actor: b.actor, trustedClientIp });
     } catch (_) {
       if (logger && logger.info) { try { logger.info({ op: 'login', status: 500 }); } catch (_e) { /* never throw */ } }
       return res.status(500).json({ error: 'error interno' }); // fail-closed, sanitized

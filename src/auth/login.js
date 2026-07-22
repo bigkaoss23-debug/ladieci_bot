@@ -2,7 +2,8 @@
 // Access Control V2 — Block B3: DB login → JWT v2. NOT wired (no index.js).
 // Factory receiving explicit dependencies for testability. Never logs. Never
 // leaks actor existence / PIN config / failed_count / DB detail / hash / other
-// actor's lock. Exactly one scrypt derivation per attempt (real or decoy).
+// actor's lock. The compatibility handler performs one derivation; universal
+// login performs one real-or-decoy derivation for every canonical actor slot.
 // No needsRehash (B1 accepts only the current exact format).
 
 const ROLE_ACTORS = Object.freeze({
@@ -117,4 +118,53 @@ function createLoginHandler(deps) {
   };
 }
 
-module.exports = { createLoginHandler, ROLE_ACTORS, OPERATOR_ACTORS };
+function createUniversalLoginHandler(deps) {
+  const { dao, jwt, pinPolicy, verifyPin, decoyHashPromise, ipHash, ipLimiter, audit } = deps;
+  const actorOrder = Object.freeze(['owner', 'operator_primary', 'operator_backup', 'rider']);
+  const roleForActor = Object.freeze({ owner: 'admin', operator_primary: 'operator', operator_backup: 'operator', rider: 'rider' });
+  async function bestEffortAudit(rec) {
+    try { if (audit && audit.writeAuthAuditBestEffort) await audit.writeAuthAuditBestEffort(rec); }
+    catch (_) { /* audit never changes the login result */ }
+  }
+  return async function universalLogin(req = {}) {
+    const { pin, trustedClientIp } = req;
+    if (!pinPolicy.validateUniversalPinFormat(pin).ok) return ERR.cred;
+    if (!jwt.isReady()) return ERR.unavail;
+    const ipH = ipHash ? ipHash(trustedClientIp) : null;
+    if (ipLimiter) { const c = ipLimiter.check(ipH); if (c.blocked) return ERR.blocked(c.retryAfterSec); }
+    let rows = [];
+    try { rows = await dao.listActorsForVerify_SENSITIVE(); } catch (_) { rows = []; }
+    const byActor = new Map(rows.map((row) => [row.actor, row]));
+    const checks = await Promise.all(actorOrder.map(async (actor) => {
+      const row = byActor.get(actor);
+      const usable = !!(row && row.active && row.pin_hash && roleForActor[actor] === row.role);
+      const stored = usable ? row.pin_hash : await decoyHashPromise;
+      let matched = false;
+      try { matched = await verifyPin(pin, stored); } catch (_) { /* treated as mismatch */ }
+      return usable && matched ? row : null;
+    }));
+    const matches = checks.filter(Boolean);
+    if (matches.length !== 1) {
+      if (ipLimiter) ipLimiter.recordFailure(ipH);
+      await bestEffortAudit({ event: 'login_fail', targetActor: null, ipHash: ipH, meta: { universal: true } });
+      return ERR.cred;
+    }
+    const row = matches[0];
+    const actor = row.actor;
+    const role = roleForActor[actor];
+    try {
+      const ls = await dao.getLockState(actor);
+      if (ls && ls.locked) return ERR.blocked(ls.retryAfterSec);
+    } catch (_) { return ERR.cred; }
+    let reset;
+    try { reset = await dao.resetFailedAttempts(actor); } catch (_) { return ERR.unavail; }
+    if (!reset || reset.active === false) return ERR.cred;
+    const token = jwt.signToken({ role, sub: actor, sv: reset.session_version });
+    if (!token) return ERR.unavail;
+    if (ipLimiter) ipLimiter.reset(ipH);
+    await bestEffortAudit({ event: 'login_ok', targetActor: actor, ipHash: ipH, meta: { role, universal: true } });
+    return { status: 200, body: { token, role, actor, expiresIn: jwt.expiresInFor(role), tokenVersion: 2 } };
+  };
+}
+
+module.exports = { createLoginHandler, createUniversalLoginHandler, ROLE_ACTORS, OPERATOR_ACTORS };
