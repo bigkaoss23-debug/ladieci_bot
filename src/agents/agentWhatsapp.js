@@ -7,6 +7,8 @@ const { sbSelect, sbUpdate, sbUpsert } = require("../utils/supabase");
 const { isBevanda } = require("../utils/helpers");
 const { MENU_LISTA, INFO_RISTORANTE, ABBINAMENTI_NOMI, COSTO_CONSEGNA } = require("../config");
 const { KEYWORDS_ZONA } = require("../utils/zones");
+const { getCanonicalMenu } = require("../menu/menuFacade");
+const { runWhatsappMenuShadow } = require("../menu/whatsappMenuShadow");
 
 // Tipi di via spagnoli non ambigui come marcatori di indirizzo postale
 const RE_TIPOS_VIA = /\b(calle|c\/|avenida|avda?\.?|paseo|carretera|ctra\.?|bulevar|boulevard|urbanizaci[oó]n|urb\.?|ronda|traves[íi]a|autov[íi]a|plaza)[\s.]+\w/i;
@@ -76,7 +78,7 @@ function assicuraFirma(testo) {
   return testo + "\n*La Dieci* 🇮🇹🍕";
 }
 
-async function interpreta(testo, cfg, clienteInfo, chatHistory) {
+async function interpreta(testo, cfg, clienteInfo, chatHistory, shadowDeps = {}) {
   const cTempo = contestoTempo();
   const direccionPreDetectada = preDetectaDireccion(testo);
   let contestoCliente = "";
@@ -168,6 +170,12 @@ async function interpreta(testo, cfg, clienteInfo, chatHistory) {
       n: it.n || "", q: Number(it.q) || 1, p: Number(it.p) || 0,
       e: it.e || "", sub: (it.sub != null) ? String(it.sub) : ""
     }));
+    await runWhatsappMenuShadow({
+      enabled: shadowDeps.enabled ?? process.env.DYNAMIC_MENU_SHADOW_ENABLED === "true",
+      legacyItems: normalizedItems,
+      loadCanonicalMenu: shadowDeps.loadCanonicalMenu || getCanonicalMenu,
+      emitDiagnostic: shadowDeps.emitDiagnostic,
+    });
     const esDomicilio = direccionPreDetectada || parsed.tipo_consegna === "DOMICILIO";
     return {
       items: normalizedItems,
