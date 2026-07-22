@@ -38,6 +38,7 @@ const CANONICAL_ACTIONS = Object.freeze([
   'resolveAddress', 'previewOrderTiming', 'createOrden', 'updateNotaCucina', 'eliminaOrdine',
   'eliminaConversazione', 'upsertCliente', 'parseOrdineDaRisposta', 'createManualGiro',
   'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro',
+  'getAuthActors', 'setActorPin',
 ]);
 const CANONICAL_SET = Object.freeze(new Set(CANONICAL_ACTIONS));
 
@@ -58,6 +59,7 @@ const ADMIN_ONLY_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes',
   'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getDeliveryLogs', 'getSuggerimenti',
   'setConfig', 'eliminaOrdine', 'eliminaConversazione',
+  'getAuthActors', 'setActorPin',
 ]);
 const ADMIN_ONLY_SET = Object.freeze(new Set(ADMIN_ONLY_ACTIONS));
 
@@ -75,6 +77,7 @@ const FRESH_AUTH_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes', 'getStorico',
   'getOrdenesArchivio', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine',
   'eliminaConversazione', 'getSuggerimenti',
+  'getAuthActors', 'setActorPin',
 ]);
 const FRESH_AUTH_SET = Object.freeze(new Set(FRESH_AUTH_ACTIONS));
 

@@ -33,10 +33,33 @@ function makeDao(roleByActor, over = {}) {
 function makeLogger() { const rec = []; const f = (...a) => rec.push(a); return { rec, info: f, warn: f, error: f, debug: f, log: f }; }
 let hashCalls; const hashPin = async (pin) => { hashCalls.push(pin); return 'scrypt$1$32768$8$1$c2FsdA$ZGln'; };
 const ipOK = (ip) => (ip ? 'a'.repeat(32) : null);           // hash for any truthy ip, else null (disabled)
-const svc = (deps) => createAdminAccessService(deps);
+const svc = (deps) => createAdminAccessService({
+  listActorsForVerify: async () => [],
+  verifyPin: async () => false,
+  ...deps,
+});
 
 (async () => {
   // ══ SET PIN ════════════════════════════════════════════════════════════════
+  {
+    const { dao, calls } = makeDao({ operator_primary: 'operator' });
+    const checked = [];
+    const s = svc({
+      dao, hashPin, pinPolicy, ipHash: ipOK,
+      listActorsForVerify: async () => [
+        { actor: 'owner', active: true, pin_hash: 'OWNER_HASH' },
+        { actor: 'operator_backup', active: false, pin_hash: 'INACTIVE_HASH' },
+        { actor: 'rider', active: true, pin_hash: 'RIDER_HASH' },
+      ],
+      verifyPin: async (_pin, hash) => { checked.push(hash); return hash === 'RIDER_HASH'; },
+    });
+    hashCalls = [];
+    const r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
+    assert('set_pin: duplicate PIN among active actors fails closed', r === ADMIN_FAIL && calls.setPin.length === 0);
+    assert('set_pin: duplicate check ignores inactive actors and runs all active comparisons',
+      checked.join(',') === 'OWNER_HASH,RIDER_HASH');
+    assert('set_pin: duplicate PIN is never hashed or sent to mutation RPC', hashCalls.length === 0);
+  }
   {
     const { dao, calls } = makeDao({ operator_primary: 'operator', owner: 'admin', rider: 'rider' });
     const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK });

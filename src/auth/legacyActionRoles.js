@@ -44,6 +44,8 @@ const ADMIN_ONLY = Object.freeze([
   "debugInterpreta",
   "debugMenuShadow",
   "parseOrdineDaRisposta",
+  "getAuthActors",
+  "setActorPin",
 ]);
 
 // The complete set of legacy actions handled by the index.js dispatcher (GET + POST),
@@ -57,6 +59,7 @@ const ALL_ACTIONS = Object.freeze([
   "getConvThread", "generaRispostaIA", "getClientes", "debugInterpreta", "debugMenuShadow",
   "getManualGiros", "getDriverStatus", "getMenu", "getOrdenesRecent", "getWaMessages",
   "getStorico", "getOrdenesArchivio", "getDeliveryLogs", "getSuggerimenti",
+  "getAuthActors",
   "getConversacionesActivas", "getClienteByTelefono", "getWaMessageById",
   "getOrdenById", "getConvByWaId", "getConvChats",
   // ── POST writes ──
@@ -67,6 +70,7 @@ const ALL_ACTIONS = Object.freeze([
   "createOrden", "updateNotaCucina", "eliminaOrdine", "eliminaConversazione",
   "upsertCliente", "parseOrdineDaRisposta", "createManualGiro", "addOrderToManualGiro",
   "removeOrderFromManualGiro", "dissolveManualGiro",
+  "setActorPin",
   // ── special REST path ──
   "shadowPreview",
 ]);

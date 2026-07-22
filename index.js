@@ -25,6 +25,12 @@ const {
 const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
 const { integrateFinancialRoutes } = require("./src/auth/financialHttpIntegration");
 const { integrateLoginRoute } = require("./src/auth/loginHttpIntegration");
+const authDao = require("./src/auth/dao");
+const adminAccessDao = require("./src/auth/adminAccessDao");
+const { createAdminAccessService } = require("./src/auth/adminAccessService");
+const pinPolicy = require("./src/auth/pinPolicy");
+const { hashPin, verifyPin } = require("./src/auth/scrypt");
+const { ipHash } = require("./src/auth/ipSecurity");
 // S2-1B — backend-authoritative legacy authorization + transactional rider trip primitives.
 const { legacyAuthGuardMiddleware } = require("./src/auth/legacyAuthGuard");
 const riderTrip = require("./src/agents/riderTrip");
@@ -99,6 +105,21 @@ async function routeRiderTripAction(action, body) {
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || "ladieci_webhook_2026";
 const PORT = process.env.PORT || 3000;
 
+function trustedClientIp(req) {
+  if (req && typeof req.ip === "string" && req.ip) return req.ip;
+  return req && req.socket && typeof req.socket.remoteAddress === "string"
+    ? req.socket.remoteAddress : null;
+}
+
+const adminAccessService = createAdminAccessService({
+  dao: adminAccessDao,
+  hashPin,
+  verifyPin,
+  pinPolicy,
+  ipHash,
+  listActorsForVerify: authDao.listActorsForVerify_SENSITIVE,
+});
+
 // --- WEBHOOK WHATSAPP ---
 
 app.get("/webhook", (req, res) => {
@@ -137,6 +158,9 @@ app.get("/api/delivery/shadow-preview", (req, res) => {
 app.get("/api", async (req, res) => {
   const action = req.query.action;
   try {
+    if (["getAuthActors"].includes(action) && (!req.authCtx || req.authCtx.role !== "admin")) {
+      return res.status(403).json({ error: "ROLE_FORBIDDEN" });
+    }
     const cfg = await getConfig();
     let result;
 
@@ -279,6 +303,9 @@ app.get("/api", async (req, res) => {
       result = await readActions.getDeliveryLogs({ limit: req.query.limit });
     } else if (action === "getSuggerimenti") {
       result = await readActions.getSuggerimenti();
+    } else if (action === "getAuthActors") {
+      const rows = await authDao.listActorsSafe();
+      result = rows.map(({ actor, role, active }) => ({ actor, role, active }));
     } else if (action === "getConversacionesActivas") {
       result = await readActions.getConversacionesActivas();
     } else if (action === "getClienteByTelefono") {
@@ -309,6 +336,9 @@ app.get("/api", async (req, res) => {
 app.post("/api", async (req, res) => {
   const action = req.query.action || req.body.action;
   try {
+    if (["setActorPin"].includes(action) && (!req.authCtx || req.authCtx.role !== "admin")) {
+      return res.status(403).json({ error: "ROLE_FORBIDDEN" });
+    }
     let result;
 
     // S2-1B/1C — the trip primitives are the SINGLE transactional DRIVER_STATO authority
@@ -343,6 +373,18 @@ app.post("/api", async (req, res) => {
       }
       await sbUpsert("config", { chiave: req.body.chiave, valore: req.body.valore });
       result = { success: true };
+    } else if (action === "setActorPin") {
+      const targetActor = req.body && req.body.targetActor;
+      const out = await adminAccessService.setActorPin({
+        byActor: req.authCtx.actor,
+        targetActor,
+        newPin: req.body && req.body.newPin,
+        confirmation: targetActor === "owner" ? "CHANGE_OWNER_PIN" : null,
+        trustedClientIp: trustedClientIp(req),
+        metadata: { source: "admin_pin_management" },
+      });
+      if (!out.ok) return res.status(400).json({ ok: false, error: "admin_action_failed" });
+      result = { ok: true, actor: out.actor, selfChanged: out.actor === req.authCtx.actor };
     } else if (action === "rispondiWA") {
       const cfg = await getConfig();
       await invia(req.body.wa_id || req.body.tel, req.body.testo, cfg);

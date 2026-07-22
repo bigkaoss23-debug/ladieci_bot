@@ -1,5 +1,5 @@
 'use strict';
-// Access Control V2 — Block B6B: routine admin-access ORCHESTRATION service (UNWIRED).
+// Access Control V2 — routine admin-access orchestration service.
 // Day-to-day admin management of any actor's PIN / sessions / active-state / lock.
 // NOT a human-JWT flow here and NOT a B4 router action — this module exposes NO
 // Express route and is NOT imported by index.js. All dependencies are injected for
@@ -13,7 +13,8 @@
 // SQL re-verifies under lock — closing the role-change race), hashes the PIN (B1),
 // derives the approved IP hash (B3), sanitizes metadata, and issues ONE atomic RPC.
 //
-// deps: { dao, hashPin, pinPolicy, ipHash, getTargetActor?, logger? }
+// deps: { dao, hashPin, verifyPin, pinPolicy, ipHash, getTargetActor?,
+//         listActorsForVerify?, logger? }
 //   dao          : { adminSetActorPin, adminRevokeActorSessions, adminSetActorActive,
 //                    adminUnlockActor, getActorSafe }
 //   hashPin      : async (pin) => scryptHash                 (B1 scrypt.hashPin)
@@ -58,8 +59,9 @@ function sanitizeAdminMeta(meta) {
 }
 
 function createAdminAccessService(deps = {}) {
-  const { dao, hashPin, pinPolicy, ipHash } = deps;
+  const { dao, hashPin, verifyPin, pinPolicy, ipHash } = deps;
   const getTargetActor = deps.getTargetActor || (dao && dao.getActorSafe);
+  const listActorsForVerify = deps.listActorsForVerify;
 
   // Approved IP hash or null (fail-closed). Raw IP never leaves this function.
   function resolveIpHash(trustedClientIp) {
@@ -96,6 +98,24 @@ function createAdminAccessService(deps = {}) {
 
       // policy BEFORE any hashing (cheap format/policy gate)
       if (!pinPolicy || !pinPolicy.validatePinFormat(newPin, role).ok) return ADMIN_FAIL;
+
+      // Fail closed when the proposed PIN already belongs to another ACTIVE actor.
+      // This intentionally reuses the accepted scrypt verifier and the login-only
+      // sensitive DAO read. Hashes never leave this backend boundary and are neither
+      // returned nor logged. All four comparisons are performed to avoid exposing the
+      // matching actor through early-exit timing.
+      if (typeof listActorsForVerify !== 'function' || typeof verifyPin !== 'function') return ADMIN_FAIL;
+      let actors;
+      try { actors = await listActorsForVerify(); } catch (_) { return ADMIN_FAIL; }
+      if (!Array.isArray(actors)) return ADMIN_FAIL;
+      let duplicate = false;
+      for (const actorRow of actors) {
+        if (!actorRow || actorRow.active !== true || actorRow.actor === targetActor) continue;
+        let matched = false;
+        try { matched = await verifyPin(newPin, actorRow.pin_hash); } catch (_) { matched = false; }
+        if (matched) duplicate = true;
+      }
+      if (duplicate) return ADMIN_FAIL;
 
       // owner self-change requires the exact phrase (no normalization); passed to
       // SQL only for owner→owner, never stored/returned/logged.

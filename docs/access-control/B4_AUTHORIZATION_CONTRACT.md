@@ -111,11 +111,11 @@ change B3 JWT/login/PIN behavior.
 
 ```
 PRINCIPALS: admin, operator, rider, service
-CANONICAL_COUNT: 57
+CANONICAL_COUNT: 59
 SERVICE_ONLY: triggerCloseIfNeeded
-ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, debugMenuShadow, getStorico, getOrdenesArchivio, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione
+ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, debugMenuShadow, getStorico, getOrdenesArchivio, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione, getAuthActors, setActorPin
 RIDER_ENABLED: getDriverStatus, updateEstado, marcarEnEntrega, marcarEntregado, registrarSalidaDriver, chiudiGiro, marcarLlegado
-FRESH_AUTH: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, getStorico, getOrdenesArchivio, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione
+FRESH_AUTH: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, getStorico, getOrdenesArchivio, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione, getAuthActors, setActorPin
 PREDICATE getDriverStatus: RIDER_OWN_DRIVER_STATUS
 PREDICATE updateEstado: RIDER_UPDATE_ESTADO_SCOPE
 PREDICATE marcarEnEntrega: RIDER_MARK_EN_ENTREGA_SCOPE
@@ -124,7 +124,7 @@ PREDICATE registrarSalidaDriver: RIDER_REGISTER_SALIDA_SCOPE
 PREDICATE chiudiGiro: RIDER_CLOSE_GIRO_SCOPE
 PREDICATE marcarLlegado: RIDER_MARK_LLEGADO_SCOPE
 ALIAS_MAP: EMPTY
-TOTAL admin: 56
+TOTAL admin: 58
 TOTAL operator: 43
 TOTAL rider: 7
 TOTAL service: 1

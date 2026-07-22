@@ -1,7 +1,7 @@
 'use strict';
-// B6B static unwired-boundary tests. Run: node tests/adminAccessBoundary.static.test.js
-// Proves the B6B Node modules are isolated: not wired into index.js, no Express
-// route, no JWT/B4 enforcement, no second hasher/policy/ip-hash, no direct table
+// B6B boundary tests. Run: node tests/adminAccessBoundary.static.test.js
+// Proves the B6B modules keep transport/auth outside the service, no second
+// hasher/policy/ip-hash, no direct table
 // write, no frozen-B2 RPC usage, and the B6A migration is not executed by tests.
 const fs = require('fs');
 const path = require('path');
@@ -17,9 +17,9 @@ const SVC = stripComments(read('src/auth/adminAccessService.js'));
 const B6B = DAO + '\n' + SVC;
 const INDEX = read('index.js');
 
-// ── not wired into index.js ──────────────────────────────────────────────────
-assert('index.js does not require adminAccessDao', !/adminAccessDao/.test(INDEX));
-assert('index.js does not require adminAccessService', !/adminAccessService/.test(INDEX));
+// ── wired once through the guarded legacy dispatcher ─────────────────────────
+assert('index.js wires adminAccessDao', /adminAccessDao/.test(INDEX));
+assert('index.js wires adminAccessService', /adminAccessService/.test(INDEX));
 assert('index.js has no auth_admin_ RPC reference', !/auth_admin_/.test(INDEX));
 
 // ── no Express route / HTTP wiring inside B6B ────────────────────────────────
@@ -58,8 +58,8 @@ const rpcRefs = (DAO.match(/auth_admin_[a-z_]+/g) || []);
 const EXPECTED = ['auth_admin_set_actor_pin', 'auth_admin_revoke_actor_sessions', 'auth_admin_set_actor_active', 'auth_admin_unlock_actor'];
 assert('B6B references exactly the four B6A RPC names', EXPECTED.every((n) => rpcRefs.includes(n)) && rpcRefs.every((n) => EXPECTED.includes(n)));
 
-// ── nobody except tests imports B6B (no frontend/Netlify/index coupling) ─────
-assert('no non-test source imports B6B', (() => {
+// ── only index.js imports B6B ────────────────────────────────────────────────
+assert('only index.js imports B6B', (() => {
   const roots = ['src', 'index.js'];
   const files = [];
   const walk = (p) => {
@@ -68,8 +68,9 @@ assert('no non-test source imports B6B', (() => {
     if (p.endsWith('.js')) files.push(p);
   };
   for (const r of roots) walk(path.join(__dirname, '..', r));
-  return files.filter((f) => !/adminAccessDao\.js$|adminAccessService\.js$/.test(f))
-    .every((f) => { const s = fs.readFileSync(f, 'utf8'); return !/require\(['"]\.[^'"]*adminAccess/.test(s); });
+  const imports = files.filter((f) => !/adminAccessDao\.js$|adminAccessService\.js$/.test(f))
+    .filter((f) => /require\(['"]\.[^'"]*adminAccess/.test(fs.readFileSync(f, 'utf8')));
+  return imports.length === 1 && imports[0].endsWith('index.js');
 })());
 
 // ── B6A migration not applied / executed by tests ────────────────────────────

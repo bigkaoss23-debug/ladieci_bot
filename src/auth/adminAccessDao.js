@@ -2,7 +2,7 @@
 // Access Control V2 — Block B6B: routine admin-access DAO (service_role only).
 // Thin wrappers over the four B6A atomic RPCs (auth_admin_set_actor_pin,
 // auth_admin_revoke_actor_sessions, auth_admin_set_actor_active,
-// auth_admin_unlock_actor). UNWIRED: not imported by index.js, no route.
+// auth_admin_unlock_actor). Used only behind the Auth V2 admin boundary.
 //
 // Contract:
 //  * passes the EXACT B6A parameter names; never a frozen B2 RPC substitute;
