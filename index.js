@@ -10,7 +10,8 @@ const { getDriverStatus, closeGiroInternal } = require("./src/utils/driverTeleme
 // no generic table access. Reachable only behind the shared X-Api-Key (trusted proxy).
 const readActions = require("./src/utils/readActions");
 const { previewOrderTiming } = require("./src/agents/previewTiming");
-const { invia } = require("./src/agents/agentWhatsapp");
+const { invia, emitDynamicMenuShadowDiagnostic } = require("./src/agents/agentWhatsapp");
+const { runWhatsappMenuShadow } = require("./src/menu/whatsappMenuShadow");
 const { chiudiServizio, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
 const { getCanonicalMenu } = require("./src/menu/menuFacade");
@@ -232,6 +233,20 @@ app.get("/api", async (req, res) => {
       const regex = preDetectaDireccion(testo);
       const tipoConsegna = (ia.tipo_consegna === "DOMICILIO" || regex) ? "DOMICILIO" : "RITIRO";
       result = { ia, regex_match: regex, tipoConsegna_calcolato: tipoConsegna };
+    } else if (action === "debugMenuShadow") {
+      if (process.env.DYNAMIC_MENU_SHADOW_DEBUG_ENABLED !== "true") return res.status(404).json({ error: "not found" });
+      let legacyResult;
+      try { legacyResult = JSON.parse(req.query.legacyResult || "null"); } catch (_) { return res.status(400).json({ error: "invalid legacyResult" }); }
+      const input = typeof req.query.input === "string" ? req.query.input : "";
+      if (!legacyResult || typeof legacyResult.matched !== "boolean") return res.status(400).json({ error: "invalid legacyResult" });
+      const replay = await runWhatsappMenuShadow({
+        enabled: true,
+        legacyItems: Object.freeze([]),
+        references: [{ input, legacyResult }],
+        loadCanonicalMenu: getCanonicalMenu,
+        emitDiagnostic: emitDynamicMenuShadowDiagnostic,
+      });
+      result = { executed: replay.executed, classification: replay.diagnostics[0]?.classification || "ERROR", legacyResult };
     } else if (action === "getManualGiros") {
       // DELIVERY-MANUAL-GIRO-01 P1C.1: list active manual giros for a
       // service day. Default = today (Madrid TZ) and only non-dissolved.

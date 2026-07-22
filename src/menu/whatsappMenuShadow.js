@@ -28,6 +28,7 @@ function legacyReferences(items) {
 async function runWhatsappMenuShadow({
   enabled = false,
   legacyItems,
+  references,
   loadCanonicalMenu,
   emitDiagnostic = () => {},
   now = () => Date.now(),
@@ -39,7 +40,8 @@ async function runWhatsappMenuShadow({
     const startedAt = now();
     const canonical = await loadCanonicalMenu();
     const source = canonical?.cacheMeta?.source || "unknown";
-    const diagnostics = legacyReferences(legacyItems).map((reference) => ({
+    const resolvedReferences = Array.isArray(references) ? references : legacyReferences(legacyItems);
+    const diagnostics = resolvedReferences.map((reference) => ({
       ...compareLegacyAndDynamicResolution({ ...reference, canonicalMenu: canonical, menuSource: source }).diagnostic,
       event: "dynamic_menu_shadow",
       durationMs: Math.max(0, now() - startedAt),

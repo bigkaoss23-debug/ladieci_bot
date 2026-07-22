@@ -4,7 +4,10 @@
 
 async function chiamaClaude(systemPrompt, userMessage, cfg, maxTokens = 400) {
   const apiKey = cfg["ANTHROPIC_KEY"] || process.env.ANTHROPIC_KEY;
-  if (!apiKey || apiKey.includes("INSERISCI")) return null;
+  if (!apiKey || apiKey.includes("INSERISCI")) {
+    console.error(JSON.stringify({ event: "llm_diagnostic", phase: "configuration", code: "LLM_KEY_MISSING", provider: "anthropic", configKeyPresent: Boolean(cfg["ANTHROPIC_KEY"]), envKeyPresent: Boolean(process.env.ANTHROPIC_KEY), externalStatus: null }));
+    return null;
+  }
   const modello = cfg["AI_MODELLO"] || process.env.AI_MODELLO || "claude-haiku-4-5-20251001";
 
   try {
@@ -23,14 +26,13 @@ async function chiamaClaude(systemPrompt, userMessage, cfg, maxTokens = 400) {
       })
     });
     if (!res.ok) {
-      const err = await res.text();
-      console.error("chiamaClaude HTTP", res.status, err.slice(0, 200));
+      console.error(JSON.stringify({ event: "llm_diagnostic", phase: "provider_request", code: "LLM_HTTP_ERROR", provider: "anthropic", configKeyPresent: Boolean(cfg["ANTHROPIC_KEY"]), envKeyPresent: Boolean(process.env.ANTHROPIC_KEY), externalStatus: res.status }));
       return null;
     }
     const data = await res.json();
     return data.content?.[0]?.text || null;
   } catch (err) {
-    console.error("chiamaClaude exception:", err.message);
+    console.error(JSON.stringify({ event: "llm_diagnostic", phase: "provider_request", code: "LLM_NETWORK_ERROR", provider: "anthropic", configKeyPresent: Boolean(cfg["ANTHROPIC_KEY"]), envKeyPresent: Boolean(process.env.ANTHROPIC_KEY), externalStatus: null }));
     return null;
   }
 }

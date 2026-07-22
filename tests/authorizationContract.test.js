@@ -14,7 +14,7 @@ const setEq = (a, b) => { const A2 = new Set(a), B2 = new Set(b); return A2.size
 const SPEC_ALL_56 = [
   'getOrdenes', 'getWaMsgs', 'getConfig', 'chiudiServizio', 'triggerCloseIfNeeded',
   'scanServizio', 'backupSerata', 'rigeneraSuggerimenti', 'approvaSuggerimento',
-  'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'getManualGiros', 'getMenu',
+  'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'debugMenuShadow', 'getManualGiros', 'getMenu',
   'getDriverStatus', 'getOrdenesRecent', 'getWaMessages', 'getStorico', 'getOrdenesArchivio',
   'getDeliveryLogs', 'getSuggerimenti', 'getConversacionesActivas', 'getClienteByTelefono',
   'getWaMessageById', 'getOrdenById', 'getConvByWaId', 'getConvChats', 'cambiaStato',
@@ -28,7 +28,7 @@ const SPEC_ALL_56 = [
 const SPEC_SERVICE_ONLY = ['triggerCloseIfNeeded'];
 const SPEC_ADMIN_ONLY = [
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes',
-  'debugInterpreta', 'getStorico', 'getOrdenesArchivio', 'getDeliveryLogs',
+  'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getDeliveryLogs',
   'setConfig', 'eliminaOrdine', 'eliminaConversazione',
 ];
 const SPEC_RIDER = [
@@ -66,22 +66,22 @@ for (const p of ['owner', 'Admin', 'ADMIN', '', ' admin', 'operator ', null, und
 }
 
 // ── B. Canonical set integrity + module↔spec transcription ──────────────────
-assert('B: module CANONICAL_ACTIONS length 56', A.CANONICAL_ACTIONS.length === 56);
+assert('B: module CANONICAL_ACTIONS length 57', A.CANONICAL_ACTIONS.length === 57);
 assert('B: module canonical set == spec 56 (independent transcription)', setEq(A.CANONICAL_ACTIONS, SPEC_ALL_56));
 assert('B: no duplicate canonical action', new Set(A.CANONICAL_ACTIONS).size === A.CANONICAL_ACTIONS.length);
-assert('B: module ADMIN_ONLY == spec (11)', setEq(A.ADMIN_ONLY_ACTIONS, SPEC_ADMIN_ONLY) && A.ADMIN_ONLY_ACTIONS.length === 11);
+assert('B: module ADMIN_ONLY == spec (12)', setEq(A.ADMIN_ONLY_ACTIONS, SPEC_ADMIN_ONLY) && A.ADMIN_ONLY_ACTIONS.length === 12);
 assert('B: module RIDER_ENABLED == spec (7)', setEq(A.RIDER_ENABLED_ACTIONS, SPEC_RIDER) && A.RIDER_ENABLED_ACTIONS.length === 7);
 assert('B: module SERVICE_ONLY == spec (1)', setEq(A.SERVICE_ONLY_ACTIONS, SPEC_SERVICE_ONLY) && A.SERVICE_ONLY_ACTIONS.length === 1);
 
 // ── C. Dynamic router equality + negative controls ──────────────────────────
 const routerActions = extractRouterActions();
-assert('C: extractor found 56 router actions (anti-no-op)', routerActions.length === 56, `found ${routerActions.length}`);
+assert('C: extractor found 57 router actions (anti-no-op)', routerActions.length === 57, `found ${routerActions.length}`);
 for (const anchor of ['getOrdenes', 'triggerCloseIfNeeded', 'dissolveManualGiro', 'cambiaStato']) {
   assert(`C: extractor anti-no-op anchor present: ${anchor}`, routerActions.includes(anchor));
 }
 const cov = A.assertContractCoversRouter(routerActions);
 assert('C: router == matrix (no router-only, no matrix-only, no dup)', cov.ok, JSON.stringify(cov));
-assert('C: no duplicate router action', extractRouterActionsWithDuplicates().length === 56);
+assert('C: no duplicate router action', extractRouterActionsWithDuplicates().length === 57);
 // negative controls (synthetic sources / mutated sets)
 assert('C-neg: fake router-only action fails equality',
   A.assertContractCoversRouter([...routerActions, 'totallyNewAction']).ok === false);
@@ -113,7 +113,7 @@ assert('D: full 56x4 decision surface matches independent spec oracle', surfaceO
 // ── E. Totals (secondary sanity, not primary proof) ─────────────────────────
 const totals = { admin: 0, operator: 0, rider: 0, service: 0 };
 for (const action of SPEC_ALL_56) for (const p of ['admin', 'operator', 'rider', 'service']) if (A.isAllowed(p, action)) totals[p]++;
-assert('E: admin total 55', totals.admin === 55, `got ${totals.admin}`);
+assert('E: admin total 56', totals.admin === 56, `got ${totals.admin}`);
 assert('E: operator total 44', totals.operator === 44, `got ${totals.operator}`);
 assert('E: rider total 7', totals.rider === 7, `got ${totals.rider}`);
 assert('E: service total 1', totals.service === 1, `got ${totals.service}`);

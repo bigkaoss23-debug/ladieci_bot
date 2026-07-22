@@ -35,6 +35,7 @@ const RIDER_ALLOWED = Object.freeze([
 const ADMIN_ONLY = Object.freeze([
   "setConfig",
   "debugInterpreta",
+  "debugMenuShadow",
   "parseOrdineDaRisposta",
 ]);
 
@@ -46,7 +47,7 @@ const ALL_ACTIONS = Object.freeze([
   // ── GET reads ──
   "getOrdenes", "getWaMsgs", "getConfig", "chiudiServizio", "triggerCloseIfNeeded",
   "scanServizio", "backupSerata", "rigeneraSuggerimenti", "approvaSuggerimento",
-  "getConvThread", "generaRispostaIA", "getClientes", "debugInterpreta",
+  "getConvThread", "generaRispostaIA", "getClientes", "debugInterpreta", "debugMenuShadow",
   "getManualGiros", "getDriverStatus", "getMenu", "getOrdenesRecent", "getWaMessages",
   "getStorico", "getOrdenesArchivio", "getDeliveryLogs", "getSuggerimenti",
   "getConversacionesActivas", "getClienteByTelefono", "getWaMessageById",

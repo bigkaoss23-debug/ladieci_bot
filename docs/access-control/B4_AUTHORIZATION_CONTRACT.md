@@ -111,9 +111,9 @@ change B3 JWT/login/PIN behavior.
 
 ```
 PRINCIPALS: admin, operator, rider, service
-CANONICAL_COUNT: 56
+CANONICAL_COUNT: 57
 SERVICE_ONLY: triggerCloseIfNeeded
-ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, getStorico, getOrdenesArchivio, getDeliveryLogs, setConfig, eliminaOrdine, eliminaConversazione
+ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, debugMenuShadow, getStorico, getOrdenesArchivio, getDeliveryLogs, setConfig, eliminaOrdine, eliminaConversazione
 RIDER_ENABLED: getDriverStatus, updateEstado, marcarEnEntrega, marcarEntregado, registrarSalidaDriver, chiudiGiro, marcarLlegado
 FRESH_AUTH: getConfig, approvaSuggerimento, getClientes, getStorico, getOrdenesArchivio, getDeliveryLogs, setConfig, eliminaOrdine, eliminaConversazione
 PREDICATE getDriverStatus: RIDER_OWN_DRIVER_STATUS
@@ -124,7 +124,7 @@ PREDICATE registrarSalidaDriver: RIDER_REGISTER_SALIDA_SCOPE
 PREDICATE chiudiGiro: RIDER_CLOSE_GIRO_SCOPE
 PREDICATE marcarLlegado: RIDER_MARK_LLEGADO_SCOPE
 ALIAS_MAP: EMPTY
-TOTAL admin: 55
+TOTAL admin: 56
 TOTAL operator: 44
 TOTAL rider: 7
 TOTAL service: 1

@@ -28,7 +28,7 @@ const HUMAN_PRINCIPALS = Object.freeze(['admin', 'operator', 'rider']);
 const CANONICAL_ACTIONS = Object.freeze([
   'getOrdenes', 'getWaMsgs', 'getConfig', 'chiudiServizio', 'triggerCloseIfNeeded',
   'scanServizio', 'backupSerata', 'rigeneraSuggerimenti', 'approvaSuggerimento',
-  'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'getManualGiros', 'getMenu',
+  'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'debugMenuShadow', 'getManualGiros', 'getMenu',
   'getDriverStatus', 'getOrdenesRecent', 'getWaMessages', 'getStorico', 'getOrdenesArchivio',
   'getDeliveryLogs', 'getSuggerimenti', 'getConversacionesActivas', 'getClienteByTelefono',
   'getWaMessageById', 'getOrdenById', 'getConvByWaId', 'getConvChats', 'cambiaStato',
@@ -56,7 +56,7 @@ const SERVICE_ONLY_SET = Object.freeze(new Set(SERVICE_ONLY_ACTIONS));
 // admin-only (11): admin allowed; operator/rider/service denied.
 const ADMIN_ONLY_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes',
-  'debugInterpreta', 'getStorico', 'getOrdenesArchivio', 'getDeliveryLogs',
+  'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getDeliveryLogs',
   'setConfig', 'eliminaOrdine', 'eliminaConversazione',
 ]);
 const ADMIN_ONLY_SET = Object.freeze(new Set(ADMIN_ONLY_ACTIONS));
