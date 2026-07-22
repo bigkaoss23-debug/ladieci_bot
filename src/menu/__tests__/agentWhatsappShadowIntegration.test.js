@@ -46,20 +46,21 @@ const MENU = {
 
   process.env.DYNAMIC_MENU_SHADOW_ENABLED = "true";
   const structuredLogs = [];
-  const originalInfo = console.info;
-  console.info = (line) => structuredLogs.push(line);
+  const originalLog = console.log;
+  console.log = (line) => structuredLogs.push(line);
   let runtime;
   try {
     runtime = await interpreta(piiInput, {}, null, [], {
       loadCanonicalMenu: async () => MENU,
     });
   } finally {
-    console.info = originalInfo;
+    console.log = originalLog;
     delete process.env.DYNAMIC_MENU_SHADOW_ENABLED;
   }
   assert.deepStrictEqual(runtime, offPii, "runtime logger must not alter legacy output");
-  assert.equal(structuredLogs.length, 1, "runtime sink must be non-noop when enabled");
-  const log = JSON.parse(structuredLogs[0]);
+  const shadowLogs = structuredLogs.map((line) => { try { return JSON.parse(line); } catch (_) { return null; } }).filter((line) => line?.event === "dynamic_menu_shadow");
+  assert.equal(shadowLogs.length, 1, "runtime sink must be non-noop when enabled");
+  const log = shadowLogs[0];
   assert.deepStrictEqual(Object.keys(log).sort(), ["classification", "counters", "durationMs", "dynamicCanonicalId", "dynamicKind", "errorCode", "event", "inputHash", "legacyCanonicalId", "legacyKind", "menuSource"].sort());
   assert.match(log.inputHash, /^[a-f0-9]{64}$/);
   const serialized = JSON.stringify(log);

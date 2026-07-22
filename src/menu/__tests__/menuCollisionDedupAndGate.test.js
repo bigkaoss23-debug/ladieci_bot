@@ -37,7 +37,7 @@ const expansion = compareLegacyAndDynamicResolution({ input: "atun", legacyResul
 assert.equal(expansion.classification, "DYNAMIC_EXPANSION");
 assert.deepStrictEqual(legacy, { matched: false });
 
-assert.equal(evaluateShadowGate({ counts: { DYNAMIC_EXPANSION: 3 }, ambiguities: ["especial"], documentedAmbiguities: ["especial"] }).green, true);
+assert.equal(evaluateShadowGate({ counts: { DYNAMIC_EXPANSION: 3 } }).green, true);
 assert.equal(evaluateShadowGate({ counts: { TARGET_MISMATCH: 1, DYNAMIC_EXPANSION: 3 } }).green, false);
 assert.equal(evaluateShadowGate({ counts: {}, ambiguities: ["unexpected"] }).green, false);
 

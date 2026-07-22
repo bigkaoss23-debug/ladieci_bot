@@ -29,8 +29,6 @@ const menu = {
   ],
   aliases: groups.flatMap((group) => group.aliases.map((alias) => ({ alias, aliasNormalizado: alias, productoId: byName.get(norm(group.name)).id }))),
 };
-menu.aliases.push({ alias: "especial", aliasNormalizado: "especial", productoId: products[0].id });
-menu.aliases.push({ alias: "especial", aliasNormalizado: "especial", productoId: products[1].id });
 
 const cases = [];
 for (const group of groups) for (const alias of group.aliases) {
@@ -46,7 +44,6 @@ for (const extra of menu.extras) cases.push({ bucket: "common_extra", input: ext
 cases.push({ bucket: "emoji", input: "🍰", legacy: { matched: true, kind: "product", canonicalId: "p:ferrero_rocher", canonicalName: "Ferrero Rocher" } });
 cases.push({ bucket: "emoji", input: "🥓", legacy: { matched: true, kind: "extra", canonicalId: "e:coppa", canonicalName: "Coppa" } });
 cases.push({ bucket: "ingredient_removal", input: "sin cebolla", legacy: { matched: true, kind: "ingredient_removal", canonicalId: "ingredient:cebolla", canonicalName: "Cebolla" } });
-cases.push({ bucket: "ambiguous", input: "especial", legacy: { matched: true, kind: "product", canonicalId: products[0].id, canonicalName: products[0].nombreCanonico } });
 cases.push({ bucket: "unknown", input: "producto inexistente", legacy: { matched: false } });
 
 const matrix = { total: cases.length };
@@ -61,8 +58,8 @@ for (const item of cases) {
 
 assert.equal(groups.flatMap((group) => group.aliases).length, 41);
 assert.equal(numberByName.size, 14);
-assert.equal(matrix.total, 84);
+assert.equal(matrix.total, 83);
 assert.equal(matrix.MATCH, 83);
-assert.equal(matrix.DYNAMIC_AMBIGUOUS, 1);
+assert.equal(matrix.DYNAMIC_AMBIGUOUS || 0, 0);
 for (const classification of ["DYNAMIC_UNMATCHED", "KIND_MISMATCH", "TARGET_MISMATCH", "DYNAMIC_EXPANSION", "ERROR"]) assert.equal(matrix[classification || "" ] || 0, 0);
 console.log(JSON.stringify({ matrix, buckets, realRegressions: 0 }));

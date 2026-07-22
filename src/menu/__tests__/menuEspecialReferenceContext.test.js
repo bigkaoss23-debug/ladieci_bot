@@ -1,0 +1,15 @@
+"use strict";
+const assert=require("assert"),fs=require("fs"),path=require("path");
+const {classifyLegacyMenuReferenceContext}=require("../menuLegacyReferenceContext");
+const config=require("../../config");
+const standalone=classifyLegacyMenuReferenceContext("especial");
+assert.deepStrictEqual(standalone,{classification:"NON_REFERENCE_CONTEXT",legacyMatched:false,dynamic:null});
+assert(!config.ABBINAMENTI_NOMI.split(", ").some(group=>group.slice(0,group.lastIndexOf("=")).split("/").includes("especial")));
+assert(config.MENU_LISTA.some(line=>/Misu Especial/i.test(line)));
+assert(!config.MENU_LISTA.some(line=>/^especial(?:\s|$)/i.test(line)));
+const corpus=fs.readFileSync(path.join(__dirname,"menuShadowCorpus.test.js"),"utf8");
+assert(!/input:\s*["']especial["']/.test(corpus));
+const agent=fs.readFileSync(path.join(__dirname,"../../agents/agentWhatsapp.js"),"utf8");
+assert(/console\.log\(JSON\.stringify\(\{\s*event:\s*["']dynamic_menu_shadow/.test(agent));
+assert(!/console\.log\(JSON\.stringify\(\{[\s\S]{0,500}(message|phone|address|customer|note|token|pin)\s*:/.test(agent.slice(agent.indexOf("function emitDynamicMenuShadowDiagnostic"),agent.indexOf("async function interpreta"))));
+console.log("menuEspecialReferenceContext: ok");

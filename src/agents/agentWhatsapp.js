@@ -81,7 +81,7 @@ function assicuraFirma(testo) {
 function emitDynamicMenuShadowDiagnostic(diagnostic) {
   // Strict allow-list: never spread caller data into logs. In particular there is
   // no message, customer, address, phone, note, readable product or token field.
-  console.info(JSON.stringify({
+  console.log(JSON.stringify({
     event: "dynamic_menu_shadow",
     inputHash: diagnostic.inputHash,
     classification: diagnostic.classification,
