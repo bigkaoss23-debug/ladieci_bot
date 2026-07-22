@@ -122,7 +122,9 @@ for (const file of PROD_FILES) {
 {
   const src = read('src/utils/servizio.js');
   const completedSelects = src.match(/ordenes",\s*["`][^"`]*estado=in\.\(RETIRADO,[^)]*\)/g) || [];
-  const completedDeletes = src.match(/sbDelete\("ordenes",\s*["`][^"`]*estado=in\.\(RETIRADO,[^)]*\)/g) || [];
+  // S2-6A3B: ordenes deletions go through sbDeleteVerified (the delete result is checked);
+  // the terminal-spelling guard must cover the verified wrapper as well as the raw call.
+  const completedDeletes = src.match(/sbDelete(?:Verified)?\("ordenes",\s*["`][^"`]*estado=in\.\(RETIRADO,[^)]*\)/g) || [];
   assert('[P4.2a] servizio close/scan completed SELECTs recognize both (>=2)',
     completedSelects.length >= 2 && completedSelects.every(hasBoth), completedSelects.join(' | '));
   assert('[P4.2b] servizio close completed DELETE recognizes both (>=1)',

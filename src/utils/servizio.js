@@ -47,6 +47,42 @@ async function bumpGeoCacheDelivered(direccion, geoSource) {
 
 
 // ─── Date helpers ────────────────────────────────────────────────
+// S2-6A3B — PostgREST returns 204/empty on a successful DELETE and a structured
+// {code,message,details} body when the statement is rejected (a RESTRICT foreign key
+// from order_financial_events, for instance). The old close path discarded that body
+// and declared success, so an order that survived deletion was archived again every
+// night. Every destructive delete now goes through this helper: the response is
+// inspected AND the residue is re-read, so "deleted" means observed-absent.
+function sbErrorOf(res) {
+  if (!res) return null;
+  if (Array.isArray(res)) return null;
+  if (typeof res === "string") return res.trim() ? { code: "delete_unexpected_body", message: res.trim().slice(0, 300) } : null;
+  if (typeof res === "object" && (res.code || res.message)) {
+    return { code: res.code || "delete_error", message: String(res.message || "").slice(0, 300) };
+  }
+  return null;
+}
+
+async function sbDeleteVerified(table, query) {
+  const res = await sbDelete(table, query);
+  const err = sbErrorOf(res);
+  const left = await sbSelect(table, `${query}&select=id`);
+  if (!Array.isArray(left)) {
+    return { ok: false, code: err?.code || "delete_verify_unreadable", message: err?.message || "residue unreadable", remaining: null, ids: [] };
+  }
+  if (left.length > 0) {
+    return {
+      ok: false,
+      code: err?.code || "delete_incomplete",
+      message: err?.message || `${left.length} row(s) survived the delete`,
+      remaining: left.length,
+      ids: left.map(r => r.id).slice(0, 20)
+    };
+  }
+  if (err) return { ok: false, code: err.code, message: err.message, remaining: 0, ids: [] };
+  return { ok: true, remaining: 0, ids: [] };
+}
+
 function madridDateStr(d = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
   const y = parts.find(p => p.type === "year").value;
@@ -479,9 +515,20 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
 
   // ─── PASSO 8: VERIFY ──────────────────────────────────────────
   // Numero righe storico per fecha=oggi >= ordini archiviati attesi?
+  // S2-6A3B — the archive is keyed on (service_session_id, orden_id) and upserted, so a
+  // resumed close rewrites its own rows instead of appending. Verification is therefore
+  // an exact structural match — one archive row per archived order, no extras — rather
+  // than the old ">=", which silently tolerated the duplicates a retry used to create.
   const storicoCheck = await sbSelect("storico", `${sessionFilter}&select=orden_id,service_session_id`);
   const storicoActual = Array.isArray(storicoCheck) ? storicoCheck.length : 0;
-  const verifyOk = storicoActual >= storicoOk && erroriStorico.length === 0;
+  const storicoDistinct = Array.isArray(storicoCheck) ? new Set(storicoCheck.map(r => String(r.orden_id))).size : 0;
+  const expectedIds = new Set(ordiniDaArch.map(o => String(o.id)));
+  const storicoDuplicates = storicoActual - storicoDistinct;
+  const verifyOk =
+    erroriStorico.length === 0 &&
+    storicoDuplicates === 0 &&
+    storicoDistinct === expectedIds.size &&
+    storicoActual === storicoOk;
 
   if (!verifyOk) {
     // ROLLBACK: cancella storico e serata_summary di oggi. NON tocca ordenes.
@@ -495,6 +542,8 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
       details: {
         expected: storicoOk,
         actual:   storicoActual,
+        duplicates: storicoDuplicates,
+        distinct: storicoDistinct,
         erroriStorico,
         erroriConv,
         backupOk: !!bkp?.success
@@ -527,14 +576,35 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   }
 
   // ─── PASSO 10: cleanup ordenes/conv/wa_msgs ───────────────────
+  // Financial events are never deleted here — they are immutable evidence and outlive
+  // the live order by design. Only conv/wa_msgs/ordenes rows of THIS session are removed.
   await sbDelete("conv",    "stato_ordine=in.(ritirata,confermata,chiusa)");
   await sbDelete("wa_msgs", "stato=in.(COMPLETATO,COCINA)");
-  await sbDelete("ordenes", `${sessionFilter}&estado=in.(RETIRADO,COMPLETADO,COMPLETATO)`);
+
+  const deleteFailures = [];
+  const delTerminali = await sbDeleteVerified("ordenes", `${sessionFilter}&estado=in.(RETIRADO,COMPLETADO,COMPLETATO)`);
+  if (!delTerminali.ok) deleteFailures.push({ scope: "terminali", ...delTerminali });
 
   if (deleteAttivi) {
     await sbDelete("conv",    "stato_ordine=not.in.(ritirata,confermata,chiusa)");
     await sbDelete("wa_msgs", "stato=neq.COMPLETATO");
-    await sbDelete("ordenes", `${sessionFilter}&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)`);
+    const delAttivi = await sbDeleteVerified("ordenes", `${sessionFilter}&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)`);
+    if (!delAttivi.ok) deleteFailures.push({ scope: "attivi", ...delAttivi });
+  }
+
+  // A service is closed only once its orders are observed gone. If any survived, the
+  // session stays `closing`: the operator sees a controlled, observable error and the
+  // next attempt resumes THIS session, upserting the same archive rows instead of
+  // appending a fresh CHIUSO_FORZATO duplicate every night.
+  if (deleteFailures.length > 0) {
+    console.error(`[chiudiServizio ${source}] ORDER CLEANUP FAILED — session ${serviceSessionId} left closing:`, JSON.stringify(deleteFailures));
+    return {
+      success: false,
+      error: "ordenes_delete_failed",
+      service_session_id: serviceSessionId,
+      data: oggi,
+      details: { failures: deleteFailures, ordini_storico: storicoOk, backupOk: !!bkp?.success }
+    };
   }
 
   // ─── PASSO 11: reset config ───────────────────────────────────

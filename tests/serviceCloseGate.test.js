@@ -10,17 +10,20 @@ let deletes = [], inserts = [], upserts = [];
 let existingSummary = [];
 let completedOrders = [];
 let throwStorico = false;
+let ordersDeleted = false;
 require.cache[supaPath].exports = Object.assign({}, realSupa, {
   sbSelect: async (t, q) => {
     if (t === "serata_summary") return existingSummary;
-    if (t === "ordenes") return completedOrders;
+    // S2-6A3B: the close now re-reads ordenes after deleting to prove the rows are gone,
+    // so the stub must model deletion instead of always replaying the same rows.
+    if (t === "ordenes") return ordersDeleted ? [] : completedOrders;
     if (t === "storico" && /select=orden_id/.test(q || "")) return completedOrders.map(o => ({ orden_id: o.id }));
     return [];
   },
   sbInsert: async (t, d) => { inserts.push(t); return [{ ...d }]; }, // serata_summary lock OK
   sbUpsert: async (t) => { if (throwStorico && t === "storico") throw new Error("archive crash"); upserts.push(t); return [{}]; },
   sbUpdate: async () => [{}],
-  sbDelete: async (t, q) => { deletes.push([t, q]); return []; },
+  sbDelete: async (t, q) => { deletes.push([t, q]); if (t === "ordenes") ordersDeleted = true; return []; },
 });
 
 const rtPath = require.resolve("../src/agents/riderTrip");
@@ -53,7 +56,7 @@ const check = (l, c) => { if (c) { pass++; console.log("  ✓ " + l); } else { f
 const session = { id:"00000000-0000-4000-8000-000000000001", business_date:"2026-07-22", status:"closing" };
 const order = { id: "O1", service_session_id:session.id, wa_id: "wa1", tel: "wa1", estado: "RETIRADO", items: [], tipo_consegna: "DOMICILIO", totale: 10 };
 const reset = () => {
-  deletes = []; inserts = []; upserts = []; throwReset = false; endCalls = 0; beginCalls = 0; endIds = [];
+  deletes = []; inserts = []; upserts = []; ordersDeleted = false; throwReset = false; endCalls = 0; beginCalls = 0; endIds = [];
   existingSummary = []; completedOrders = []; throwStorico = false;
   SESSION_CURRENT = { ok:true, code:"OK", session:{...session,status:"open"} };
   SESSION_BEGIN = { ok:true, code:"CLOSING", session }; sessionCompleteCalls=[];
