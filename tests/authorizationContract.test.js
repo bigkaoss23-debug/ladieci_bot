@@ -29,15 +29,15 @@ const SPEC_SERVICE_ONLY = ['triggerCloseIfNeeded'];
 const SPEC_ADMIN_ONLY = [
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes',
   'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getDeliveryLogs',
-  'setConfig', 'eliminaOrdine', 'eliminaConversazione',
+  'getSuggerimenti', 'setConfig', 'eliminaOrdine', 'eliminaConversazione',
 ];
 const SPEC_RIDER = [
   'getDriverStatus', 'updateEstado', 'marcarEnEntrega', 'marcarEntregado',
   'registrarSalidaDriver', 'chiudiGiro', 'marcarLlegado',
 ];
 const SPEC_FRESH = [
-  'getConfig', 'approvaSuggerimento', 'getClientes', 'getStorico',
-  'getOrdenesArchivio', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine', 'eliminaConversazione',
+  'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes', 'getStorico',
+  'getOrdenesArchivio', 'getDeliveryLogs', 'getSuggerimenti', 'setConfig', 'eliminaOrdine', 'eliminaConversazione',
 ];
 const SPEC_PREDICATES = {
   getDriverStatus: 'RIDER_OWN_DRIVER_STATUS',
@@ -69,7 +69,7 @@ for (const p of ['owner', 'Admin', 'ADMIN', '', ' admin', 'operator ', null, und
 assert('B: module CANONICAL_ACTIONS length 57', A.CANONICAL_ACTIONS.length === 57);
 assert('B: module canonical set == spec 56 (independent transcription)', setEq(A.CANONICAL_ACTIONS, SPEC_ALL_56));
 assert('B: no duplicate canonical action', new Set(A.CANONICAL_ACTIONS).size === A.CANONICAL_ACTIONS.length);
-assert('B: module ADMIN_ONLY == spec (12)', setEq(A.ADMIN_ONLY_ACTIONS, SPEC_ADMIN_ONLY) && A.ADMIN_ONLY_ACTIONS.length === 12);
+assert('B: module ADMIN_ONLY == spec (13)', setEq(A.ADMIN_ONLY_ACTIONS, SPEC_ADMIN_ONLY) && A.ADMIN_ONLY_ACTIONS.length === 13);
 assert('B: module RIDER_ENABLED == spec (7)', setEq(A.RIDER_ENABLED_ACTIONS, SPEC_RIDER) && A.RIDER_ENABLED_ACTIONS.length === 7);
 assert('B: module SERVICE_ONLY == spec (1)', setEq(A.SERVICE_ONLY_ACTIONS, SPEC_SERVICE_ONLY) && A.SERVICE_ONLY_ACTIONS.length === 1);
 
@@ -114,7 +114,7 @@ assert('D: full 56x4 decision surface matches independent spec oracle', surfaceO
 const totals = { admin: 0, operator: 0, rider: 0, service: 0 };
 for (const action of SPEC_ALL_56) for (const p of ['admin', 'operator', 'rider', 'service']) if (A.isAllowed(p, action)) totals[p]++;
 assert('E: admin total 56', totals.admin === 56, `got ${totals.admin}`);
-assert('E: operator total 44', totals.operator === 44, `got ${totals.operator}`);
+assert('E: operator total 43', totals.operator === 43, `got ${totals.operator}`);
 assert('E: rider total 7', totals.rider === 7, `got ${totals.rider}`);
 assert('E: service total 1', totals.service === 1, `got ${totals.service}`);
 
@@ -133,24 +133,23 @@ assert('F: humans DENIED all machine-only actions', humansMachineDenied);
 // admin denied ONLY triggerCloseIfNeeded
 assert('F: admin denied set == {triggerCloseIfNeeded}',
   setEq(SPEC_ALL_56.filter((a) => !A.isAllowed('admin', a)), ['triggerCloseIfNeeded']));
-// operator denied set == service-only + 11 admin-only
-assert('F: operator denied set == triggerCloseIfNeeded + 11 admin-only',
+// operator denied set == service-only + admin-only
+assert('F: operator denied set == triggerCloseIfNeeded + 13 admin-only',
   setEq(SPEC_ALL_56.filter((a) => !A.isAllowed('operator', a)), ['triggerCloseIfNeeded', ...SPEC_ADMIN_ONLY]));
 // rider allowed set == exactly the 7
 assert('F: rider allowed set == the 7 rider actions',
   setEq(SPEC_ALL_56.filter((a) => A.isAllowed('rider', a)), SPEC_RIDER));
 
 // ── G. Fresh-auth exact set + not-inferred ──────────────────────────────────
-assert('G: requiresFreshAuth set == spec 9', setEq(SPEC_ALL_56.filter((a) => A.requiresFreshAuth(a)), SPEC_FRESH));
+assert('G: requiresFreshAuth set == spec 11', setEq(SPEC_ALL_56.filter((a) => A.requiresFreshAuth(a)), SPEC_FRESH));
 assert('G: FRESH is subset of canonical', SPEC_FRESH.every((a) => A.isCanonicalAction(a)));
 // explicit non-fresh examples (owner §11): not inferred from admin-only / names / mutation
-for (const a of ['rigeneraSuggerimenti', 'debugInterpreta', 'chiudiServizio']) {
+for (const a of ['debugInterpreta', 'chiudiServizio']) {
   assert(`G: ${a} NOT fresh (not inferred from admin-only/name)`, A.requiresFreshAuth(a) === false);
 }
 for (const a of SPEC_RIDER) assert(`G: rider action ${a} NOT fresh`, A.requiresFreshAuth(a) === false);
-// rigeneraSuggerimenti is admin-only but NOT fresh — proves fresh != admin-only
-assert('G: admin-only rigeneraSuggerimenti is NOT fresh (fresh != admin-only)',
-  A.ADMIN_ONLY_ACTIONS.includes('rigeneraSuggerimenti') && !A.requiresFreshAuth('rigeneraSuggerimenti'));
+assert('G: admin-only rigeneraSuggerimenti requires fresh auth',
+  A.ADMIN_ONLY_ACTIONS.includes('rigeneraSuggerimenti') && A.requiresFreshAuth('rigeneraSuggerimenti'));
 assert('G: unknown action requiresFreshAuth = false', A.requiresFreshAuth('nope') === false);
 
 // ── H. Predicate exact assignments + rider-only + never evaluated ───────────

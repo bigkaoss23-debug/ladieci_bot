@@ -78,7 +78,7 @@ targets, and be added here + to the module + to the tests explicitly.
 | Principal | Allowed actions |
 |---|---|
 | `admin` | 54 (every routed action except `triggerCloseIfNeeded`) |
-| `operator` | 43 (every action except `triggerCloseIfNeeded` + the 11 admin-only) |
+| `operator` | 43 (every action except `triggerCloseIfNeeded` + the 13 admin-only) |
 | `rider` | 7 (the rider-enabled actions) |
 | `service` | 1 (`triggerCloseIfNeeded`) |
 
@@ -113,9 +113,9 @@ change B3 JWT/login/PIN behavior.
 PRINCIPALS: admin, operator, rider, service
 CANONICAL_COUNT: 57
 SERVICE_ONLY: triggerCloseIfNeeded
-ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, debugMenuShadow, getStorico, getOrdenesArchivio, getDeliveryLogs, setConfig, eliminaOrdine, eliminaConversazione
+ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, debugMenuShadow, getStorico, getOrdenesArchivio, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione
 RIDER_ENABLED: getDriverStatus, updateEstado, marcarEnEntrega, marcarEntregado, registrarSalidaDriver, chiudiGiro, marcarLlegado
-FRESH_AUTH: getConfig, approvaSuggerimento, getClientes, getStorico, getOrdenesArchivio, getDeliveryLogs, setConfig, eliminaOrdine, eliminaConversazione
+FRESH_AUTH: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, getStorico, getOrdenesArchivio, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione
 PREDICATE getDriverStatus: RIDER_OWN_DRIVER_STATUS
 PREDICATE updateEstado: RIDER_UPDATE_ESTADO_SCOPE
 PREDICATE marcarEnEntrega: RIDER_MARK_EN_ENTREGA_SCOPE
@@ -125,7 +125,7 @@ PREDICATE chiudiGiro: RIDER_CLOSE_GIRO_SCOPE
 PREDICATE marcarLlegado: RIDER_MARK_LLEGADO_SCOPE
 ALIAS_MAP: EMPTY
 TOTAL admin: 56
-TOTAL operator: 44
+TOTAL operator: 43
 TOTAL rider: 7
 TOTAL service: 1
 ```

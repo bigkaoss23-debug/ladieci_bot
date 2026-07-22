@@ -33,6 +33,13 @@ const RIDER_ALLOWED = Object.freeze([
 // tooling. B7 financial/Auth administration is NOT here — it lives on separate
 // protected routes (/api/financial/*, /api/auth/v2/login) and never reaches this map.
 const ADMIN_ONLY = Object.freeze([
+  "getConfig",
+  "getStorico",
+  "getOrdenesArchivio",
+  "getDeliveryLogs",
+  "getSuggerimenti",
+  "rigeneraSuggerimenti",
+  "approvaSuggerimento",
   "setConfig",
   "debugInterpreta",
   "debugMenuShadow",

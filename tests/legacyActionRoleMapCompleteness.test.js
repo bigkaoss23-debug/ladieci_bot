@@ -48,7 +48,11 @@ check("rider denied read-only menu catalogue", !map.isAllowed("rider", "getMenu"
 check("admin/operator allowed read-only menu catalogue", map.isAllowed("admin", "getMenu") && map.isAllowed("operator", "getMenu"));
 
 // Operator denied admin-only config/dev actions, allowed normal ops.
-for (const a of ["setConfig","debugInterpreta","parseOrdineDaRisposta"]) check("operator denied admin-only: " + a, !map.isAllowed("operator", a));
+for (const a of map.ADMIN_ONLY) {
+  check("operator denied admin-only: " + a, !map.isAllowed("operator", a));
+  check("rider denied admin-only: " + a, !map.isAllowed("rider", a));
+  check("admin allowed admin-only: " + a, map.isAllowed("admin", a));
+}
 for (const a of ["createOrden","updateOrden","cambiaStato","updateEstado","createManualGiro","dissolveManualGiro","previewOrderTiming","chiudiServizio","upsertCliente"]) check("operator allowed normal op: " + a, map.isAllowed("operator", a));
 
 // Every rule requires a fresh session.

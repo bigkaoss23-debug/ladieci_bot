@@ -53,10 +53,10 @@ const ALIAS_MAP = Object.freeze(Object.create(null));
 const SERVICE_ONLY_ACTIONS = Object.freeze(['triggerCloseIfNeeded']);
 const SERVICE_ONLY_SET = Object.freeze(new Set(SERVICE_ONLY_ACTIONS));
 
-// admin-only (11): admin allowed; operator/rider/service denied.
+// admin-only: admin allowed; operator/rider/service denied.
 const ADMIN_ONLY_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes',
-  'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getDeliveryLogs',
+  'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getDeliveryLogs', 'getSuggerimenti',
   'setConfig', 'eliminaOrdine', 'eliminaConversazione',
 ]);
 const ADMIN_ONLY_SET = Object.freeze(new Set(ADMIN_ONLY_ACTIONS));
@@ -69,12 +69,12 @@ const RIDER_ENABLED_ACTIONS = Object.freeze([
 ]);
 const RIDER_ENABLED_SET = Object.freeze(new Set(RIDER_ENABLED_ACTIONS));
 
-// fresh-auth (9): EXPLICIT metadata — never inferred from admin-only status,
+// fresh-auth: EXPLICIT metadata — never inferred from admin-only status,
 // action name, mutation/read class, or substrings.
 const FRESH_AUTH_ACTIONS = Object.freeze([
-  'getConfig', 'approvaSuggerimento', 'getClientes', 'getStorico',
+  'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes', 'getStorico',
   'getOrdenesArchivio', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine',
-  'eliminaConversazione',
+  'eliminaConversazione', 'getSuggerimenti',
 ]);
 const FRESH_AUTH_SET = Object.freeze(new Set(FRESH_AUTH_ACTIONS));
 
