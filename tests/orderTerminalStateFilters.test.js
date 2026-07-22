@@ -121,8 +121,8 @@ for (const file of PROD_FILES) {
 // 4.2 service-close COMPLETED selections (scan + close read + close delete) → both.
 {
   const src = read('src/utils/servizio.js');
-  const completedSelects = src.match(/ordenes",\s*"estado=in\.\(RETIRADO,[^)]*\)/g) || [];
-  const completedDeletes = src.match(/sbDelete\("ordenes",\s*"estado=in\.\(RETIRADO,[^)]*\)/g) || [];
+  const completedSelects = src.match(/ordenes",\s*["`][^"`]*estado=in\.\(RETIRADO,[^)]*\)/g) || [];
+  const completedDeletes = src.match(/sbDelete\("ordenes",\s*["`][^"`]*estado=in\.\(RETIRADO,[^)]*\)/g) || [];
   assert('[P4.2a] servizio close/scan completed SELECTs recognize both (>=2)',
     completedSelects.length >= 2 && completedSelects.every(hasBoth), completedSelects.join(' | '));
   assert('[P4.2b] servizio close completed DELETE recognizes both (>=1)',
@@ -131,7 +131,7 @@ for (const file of PROD_FILES) {
 // 4.3 service-close ACTIVE selections (read + delete) exclude both completed.
 {
   const src = read('src/utils/servizio.js');
-  const activeOrdenes = src.match(/ordenes",\s*"estado=not\.in\.\(RETIRADO,[^)]*\)/g) || [];
+  const activeOrdenes = src.match(/ordenes",\s*["`][^"`]*estado=not\.in\.\(RETIRADO,[^)]*\)/g) || [];
   assert('[P4.3] servizio close active SELECT/DELETE exclude both completed (>=2)',
     activeOrdenes.length >= 2 && activeOrdenes.every(hasBoth), activeOrdenes.join(' | '));
 }

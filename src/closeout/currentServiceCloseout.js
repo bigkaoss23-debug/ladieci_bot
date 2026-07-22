@@ -1,7 +1,7 @@
 "use strict";
 
 const { sbSelect } = require("../utils/supabase");
-const { madridDateStr } = require("../utils/servizio");
+const { lifecycle } = require("../serviceSessions/serviceSessionLifecycle");
 
 const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
 const CANCELLED = new Set(["CANCELADO", "CANCELLED", "ANULADO", "CHIUSO_FORZATO"]);
@@ -47,7 +47,8 @@ function safeTicket(order, events) {
   });
 }
 
-function aggregate(serviceDate, status, orders, events) {
+function aggregate(session, orders, events) {
+  const status = session ? session.status : "none";
   const byOrder = new Map();
   for (const event of events || []) {
     const id = String(event.order_id || event.orden_id || "");
@@ -73,7 +74,10 @@ function aggregate(serviceDate, status, orders, events) {
     ok: true,
     available: status !== "none",
     code: status === "none" ? "NO_CURRENT_SERVICE" : "OK",
-    serviceDate,
+    serviceSessionId: session?.id || null,
+    businessDate: session?.business_date || null,
+    openedAt: session?.opened_at || null,
+    closedAt: session?.closed_at || null,
     status,
     tickets,
     totals: { gross: grossTotal, collected: collectedTotal, refunded: refundedTotal, unpaid: unpaidTotal, difference: round(grossTotal - collectedTotal) },
@@ -87,21 +91,30 @@ function aggregate(serviceDate, status, orders, events) {
   };
 }
 
-function createCurrentServiceCloseout({ select = sbSelect, now = () => new Date() } = {}) {
+function createCurrentServiceCloseout({ select = sbSelect, sessionLifecycle = lifecycle } = {}) {
   return async function getCurrentServiceCloseout() {
-    const serviceDate = madridDateStr(now());
-    const marker = await select("serata_summary", `fecha=eq.${encodeURIComponent(serviceDate)}&limit=1`);
-    const closed = Array.isArray(marker) && marker.length > 0;
-    const orders = await select(closed ? "storico" : "ordenes", closed
-      ? `fecha=eq.${encodeURIComponent(serviceDate)}&order=ts.asc`
-      : "order=ts.asc");
+    const identity = await sessionLifecycle.currentCloseout();
+    if (!identity?.ok) throw Object.assign(new Error("service session identity invalid"), { code: identity?.code || "SERVICE_SESSION_IDENTITY_ERROR" });
+    if (identity.code === "NO_SERVICE_SESSION") return aggregate(null, [], []);
+    const session = identity.session;
+    if (!session?.id || !["open", "closing", "closed"].includes(session.status)) {
+      throw Object.assign(new Error("service session state corrupt"), { code: "SERVICE_SESSION_STATE_CORRUPT" });
+    }
+    const closed = session.status === "closed";
+    const sessionFilter = `service_session_id=eq.${encodeURIComponent(session.id)}`;
+    const orders = await select(closed ? "storico" : "ordenes", `${sessionFilter}&order=ts.asc`);
     const list = Array.isArray(orders) ? orders : [];
-    if (!closed && list.length === 0) return aggregate(serviceDate, "none", [], []);
+    if (list.some((row) => String(row.service_session_id || "") !== String(session.id))) {
+      throw Object.assign(new Error("mixed service session rows"), { code: "MIXED_SERVICE_SESSION_ROWS" });
+    }
     const ids = list.map((o) => o.id || o.orden_id).filter(Boolean);
     const events = ids.length
-      ? await select("order_financial_events", `order_id=in.(${ids.map((id) => encodeURIComponent(String(id))).join(",")})&order=created_at.asc`)
+      ? await select("order_financial_events", `${sessionFilter}&order_id=in.(${ids.map((id) => encodeURIComponent(String(id))).join(",")})&order=created_at.asc`)
       : [];
-    return aggregate(serviceDate, closed ? "closed" : "open", list, Array.isArray(events) ? events : []);
+    if ((events || []).some((row) => String(row.service_session_id || "") !== String(session.id))) {
+      throw Object.assign(new Error("mixed financial session rows"), { code: "MIXED_FINANCIAL_SESSION_ROWS" });
+    }
+    return aggregate(session, list, Array.isArray(events) ? events : []);
   };
 }
 

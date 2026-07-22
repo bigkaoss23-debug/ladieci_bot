@@ -70,7 +70,7 @@ const ALL_ACTIONS = Object.freeze([
   "createOrden", "updateNotaCucina", "eliminaOrdine", "eliminaConversazione",
   "upsertCliente", "parseOrdineDaRisposta", "createManualGiro", "addOrderToManualGiro",
   "removeOrderFromManualGiro", "dissolveManualGiro",
-  "setActorPin",
+  "setActorPin", "openServiceSession",
   // ── special REST path ──
   "shadowPreview",
 ]);

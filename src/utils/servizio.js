@@ -18,6 +18,7 @@
 
 const { sbSelect, sbInsert, sbUpsert, sbUpdate, sbDelete } = require("./supabase");
 const { calcolaTotale, calcolaTotaleOrdine, deliveryFeeFor, isBevanda, isDesert, direccionToCacheKey } = require("./helpers");
+const { lifecycle: serviceSessionLifecycle } = require("../serviceSessions/serviceSessionLifecycle");
 
 // Incrementa n_ordini_consegnati sulla riga di geo_cache associata all'indirizzo dell'ordine.
 // Chiamata da chiudiServizio per ogni ordine archiviato → la "conferma indirizzo" non dipende dal bottone driver.
@@ -164,13 +165,14 @@ function metodoPagoKey(m) {
 
 // ─── Costruisci payload storico COMPLETO da un ordine ────────────
 // Ogni colonna di ordenes che ha senso archiviare → finisce qui.
-function buildStoricoPayload(o, oggi, diaSemana, estadoOverride = null) {
+function buildStoricoPayload(o, oggi, diaSemana, estadoOverride = null, serviceSessionId = null) {
   const tipoConsegna = o.tipo_consegna || "RITIRO";
   const deliveryFee  = (o.delivery_fee != null) ? Number(o.delivery_fee) : deliveryFeeFor(tipoConsegna);
   const totale       = (Number(o.totale) > 0) ? Number(o.totale) : calcolaTotaleOrdine(o.items || [], tipoConsegna);
 
   return {
     orden_id:       o.id || "",
+    service_session_id: serviceSessionId || o.service_session_id || null,
     client_req_id:  o.client_req_id || null,
     cliente_id:     o.cliente_id || null,
     nombre:         o.nombre || "",
@@ -319,9 +321,22 @@ async function computeSummary(ordiniDaArch, oggi, diaSemana, source) {
 //   { success: true, summary: {...}, data: "YYYY-MM-DD" }
 //   { skipped: true, reason: "already_closed_today" | "race_lost", data }
 //   { success: false, error: "verify_failed" | "...", details: {...} }
-async function chiudiServizio(deleteAttivi = false, source = "manual") {
-  const oggi = madridDateStr();
-  const diaSemana = diaSemanaIta();
+async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "system") {
+  // Session identity is established by the authoritative lifecycle pointer, never
+  // by today's date or by selecting the newest summary.
+  const currentIdentity = await serviceSessionLifecycle.currentCloseout();
+  if (!currentIdentity?.ok) return { success: false, error: currentIdentity?.code || "service_session_identity_failed" };
+  if (currentIdentity.code === "NO_SERVICE_SESSION") return { success: false, error: "NO_SERVICE_SESSION" };
+  if (currentIdentity.session?.status === "closed") {
+    return { skipped: true, reason: "already_closed_session", service_session_id: currentIdentity.session.id };
+  }
+  if (!currentIdentity.session?.id || !currentIdentity.session.business_date || !["open","closing"].includes(currentIdentity.session.status)) {
+    return { success: false, error: "invalid_service_session_identity" };
+  }
+  const oggi = currentIdentity.session.business_date;
+  // Derived from the immutable opening business date, not the close clock date
+  // (a service may close after midnight).
+  const diaSemana = diaSemanaIta(new Date(`${oggi}T12:00:00Z`));
 
   // ─── PASSO 1b (S2-1F): ACTIVE-TRIP GATE ───────────────────────
   // A service close must NEVER run destructively over an active rider trip (PASSO 6/10
@@ -340,7 +355,6 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   }
   const gateBody = riderGate && riderGate.payload;
   const closeId = gateBody && (gateBody.close_id || gateBody.marker?.close_id);
-  const resumedClose = gateBody && gateBody.resumed === true;
   const endClose = async (label) => {
     try { await require("../agents/riderTrip").endServiceClose(closeId); }
     catch (e) { console.warn(`[chiudiServizio] endServiceClose (${label}) failed:`, e?.message || e); }
@@ -354,17 +368,31 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
     return { success: false, error: "rider_state_gate_failed", deferred: true, data: oggi };
   }
 
+  // Only after the active-trip gate succeeds may the service become `closing`.
+  // A deferred rider trip therefore leaves the session open and orderable.
+  const sessionClose = await serviceSessionLifecycle.beginClose({ actor, source });
+  if (!sessionClose?.ok) { await endClose("session-begin-failed"); return { success: false, error: sessionClose?.code || "service_session_close_failed" }; }
+  if (sessionClose.code === "ALREADY_CLOSED") {
+    await endClose("already-closed-session");
+    return { skipped: true, reason: "already_closed_session", service_session_id: sessionClose.session?.id || null };
+  }
+  const serviceSession = sessionClose.session;
+  if (!serviceSession?.id || serviceSession.business_date !== oggi || serviceSession.status !== "closing") {
+    await endClose("session-identity-mismatch");
+    return { success: false, error: "invalid_service_session_identity" };
+  }
+  const serviceSessionId = serviceSession.id;
+  const sessionFilter = `service_session_id=eq.${encodeURIComponent(serviceSessionId)}`;
+
   // ─── PASSO 1: già chiuso oggi? ────────────────────────────────
   // If a previous close crashed after creating serata_summary, the persisted marker makes
   // this a recovery pass: continue through idempotent archive/cleanup and release only on
   // full success. Without a resumed marker, preserve the historical skip and release the
   // just-created gate before any destructive operation.
-  const existing = await sbSelect("serata_summary", `fecha=eq.${oggi}`);
+  const existing = await sbSelect("serata_summary", `${sessionFilter}&limit=1`);
   const summaryAlreadyExists = Array.isArray(existing) && existing.length > 0;
-  if (summaryAlreadyExists && !resumedClose) {
-    await endClose("already-closed");
-    return { skipped: true, reason: "already_closed_today", data: oggi };
-  }
+  // An existing summary for this exact session means crash recovery. A duplicate
+  // completed close was already handled by the lifecycle's explicit recent pointer.
 
   // ─── PASSO 2: backup raw SUBITO (safety net) ──────────────────
   const bkp = await backupSerata().catch(e => {
@@ -373,8 +401,8 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   });
 
   // ─── PASSO 3: leggi tutti gli ordini target ───────────────────
-  const ordCompletati = await sbSelect("ordenes", "estado=in.(RETIRADO,COMPLETADO,COMPLETATO)") || [];
-  const ordAttivi     = deleteAttivi ? (await sbSelect("ordenes", "estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)") || []) : [];
+  const ordCompletati = await sbSelect("ordenes", `${sessionFilter}&estado=in.(RETIRADO,COMPLETADO,COMPLETATO)`) || [];
+  const ordAttivi     = deleteAttivi ? (await sbSelect("ordenes", `${sessionFilter}&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)`) || []) : [];
   const ordiniDaArch  = [
     ...(Array.isArray(ordCompletati) ? ordCompletati : []),
     ...(Array.isArray(ordAttivi)     ? ordAttivi.map(o => ({ ...o, estado: "CHIUSO_FORZATO" })) : [])
@@ -382,6 +410,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
 
   // ─── PASSO 4: compute summary ─────────────────────────────────
   const summary = await computeSummary(ordiniDaArch, oggi, diaSemana, source);
+  summary.service_session_id = serviceSessionId;
 
   // ─── PASSO 5: lock via INSERT serata_summary (PK su fecha) ────
   // Se due processi tentano contemporaneamente, solo uno passa.
@@ -405,8 +434,12 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   let storicoOk = 0;
   for (const o of ordiniDaArch) {
     const isAttivo = deleteAttivi && o.estado === "CHIUSO_FORZATO";
-    const payload = buildStoricoPayload(o, oggi, diaSemana, isAttivo ? "CHIUSO_FORZATO" : null);
-    const res = await sbUpsert("storico", payload, "orden_id,fecha");
+    if (String(o.service_session_id || "") !== String(serviceSessionId)) {
+      erroriStorico.push(o.id || "?");
+      continue;
+    }
+    const payload = buildStoricoPayload(o, oggi, diaSemana, isAttivo ? "CHIUSO_FORZATO" : null, serviceSessionId);
+    const res = await sbUpsert("storico", payload, "service_session_id,orden_id");
     if (!Array.isArray(res) || res.length === 0) erroriStorico.push(o.id || "?");
     else {
       storicoOk++;
@@ -446,15 +479,15 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
 
   // ─── PASSO 8: VERIFY ──────────────────────────────────────────
   // Numero righe storico per fecha=oggi >= ordini archiviati attesi?
-  const storicoCheck = await sbSelect("storico", `fecha=eq.${oggi}&select=orden_id`);
+  const storicoCheck = await sbSelect("storico", `${sessionFilter}&select=orden_id,service_session_id`);
   const storicoActual = Array.isArray(storicoCheck) ? storicoCheck.length : 0;
   const verifyOk = storicoActual >= storicoOk && erroriStorico.length === 0;
 
   if (!verifyOk) {
     // ROLLBACK: cancella storico e serata_summary di oggi. NON tocca ordenes.
     // L'operatore vede l'errore, può riprovare. Backup raw resta in backup_serata.
-    await sbDelete("storico", `fecha=eq.${oggi}`);
-    await sbDelete("serata_summary", `fecha=eq.${oggi}`);
+    await sbDelete("storico", sessionFilter);
+    await sbDelete("serata_summary", sessionFilter);
     // S2-1H — archive/rollback has begun; keep the service_closing marker for recovery.
     return {
       success: false,
@@ -471,7 +504,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
 
   // ─── PASSO 9: aggiorna serata_summary con eventuali errori conv ─
   if (erroriConv.length > 0) {
-    await sbUpdate("serata_summary", `fecha=eq.${oggi}`, {
+    await sbUpdate("serata_summary", sessionFilter, {
       errori: { storico: erroriStorico, conv: erroriConv }
     });
   }
@@ -496,12 +529,12 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   // ─── PASSO 10: cleanup ordenes/conv/wa_msgs ───────────────────
   await sbDelete("conv",    "stato_ordine=in.(ritirata,confermata,chiusa)");
   await sbDelete("wa_msgs", "stato=in.(COMPLETATO,COCINA)");
-  await sbDelete("ordenes", "estado=in.(RETIRADO,COMPLETADO,COMPLETATO)");
+  await sbDelete("ordenes", `${sessionFilter}&estado=in.(RETIRADO,COMPLETADO,COMPLETATO)`);
 
   if (deleteAttivi) {
     await sbDelete("conv",    "stato_ordine=not.in.(ritirata,confermata,chiusa)");
     await sbDelete("wa_msgs", "stato=neq.COMPLETATO");
-    await sbDelete("ordenes", "estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)");
+    await sbDelete("ordenes", `${sessionFilter}&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)`);
   }
 
   // ─── PASSO 11: reset config ───────────────────────────────────
@@ -510,6 +543,10 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   // No direct DRIVER_STATO write occurs anywhere in this flow.
   await sbUpsert("config", { chiave: "ORDER_RESET_TS",  valore: String(Date.now()) }, "chiave");
   await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
+  const completedSession = await serviceSessionLifecycle.completeClose({ sessionId: serviceSessionId, actor, source });
+  if (!completedSession?.ok) {
+    return { success: false, error: completedSession?.code || "service_session_complete_failed", service_session_id: serviceSessionId };
+  }
   // S2-1G — destructive cleanup done: release the service_closing marker so new rider
   // trips may start again (idempotent; never a direct DRIVER_STATO write).
   await endClose("success");
@@ -517,6 +554,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
   // ─── DONE ────────────────────────────────────────────────────
   return {
     success: true,
+    service_session_id: serviceSessionId,
     data: oggi,
     summary,
     conv_archiviate: convOk,

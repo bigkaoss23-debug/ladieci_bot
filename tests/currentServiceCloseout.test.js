@@ -4,70 +4,58 @@ const test = require("node:test");
 const { createCurrentServiceCloseout } = require("../src/closeout/currentServiceCloseout");
 const roles = require("../src/auth/legacyActionRoles");
 
-const fixedNow = () => new Date("2026-07-22T20:00:00Z");
+const session = (overrides={}) => ({ id:"00000000-0000-4000-8000-00000000000a", business_date:"2026-07-22", opened_at:"2026-07-22T17:00:00Z", closed_at:null, status:"open", ...overrides });
+const identity = (value) => ({ currentCloseout: async()=>value });
 
-test("open service uses only today's live orders and safe ticket projection", async () => {
-  const calls = [];
-  const select = async (table, query) => {
-    calls.push([table, query]);
-    if (table === "serata_summary") return [];
-    if (table === "ordenes") return [{ id: "o1", numero: 7, hora: "21:00", estado: "COMPLETADO", totale: 20, nombre: "SECRET", tel: "PII", metodo_pago: "efectivo", cobrado: true }];
-    return [];
-  };
-  const result = await createCurrentServiceCloseout({ select, now: fixedNow })();
-  assert.equal(result.status, "open");
-  assert.equal(result.serviceDate, "2026-07-22");
-  assert.deepEqual(result.paymentTotals, { efectivo: 20, tarjeta: 0, bizum: 0, other: 0 });
-  assert.deepEqual(Object.keys(result.tickets[0]), ["id", "number", "time", "state", "amount", "paymentMethod", "paymentState", "collectedAmount", "refundedAmount", "cancelled", "refunded"]);
-  assert.equal(JSON.stringify(result).includes("SECRET"), false);
-  assert.equal(calls.some(([table, query]) => table === "ordenes" && !query.includes("fecha")), true);
+test("open closeout scopes live tickets and financial events exclusively by session identity", async()=>{
+  const s=session(); const calls=[];
+  const select=async(table,query)=>{ calls.push([table,query]); if(table==="ordenes") return [{id:"o1",service_session_id:s.id,totale:20,cobrado:true,metodo_pago:"efectivo",nombre:"SECRET"}]; return []; };
+  const out=await createCurrentServiceCloseout({select,sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+  assert.equal(out.serviceSessionId,s.id); assert.equal(out.businessDate,"2026-07-22"); assert.equal(out.openedAt,s.opened_at);
+  assert.equal(JSON.stringify(out).includes("SECRET"),false);
+  assert.ok(calls.every(([,q])=>q.includes(`service_session_id=eq.${s.id}`)));
+  assert.equal(calls.some(([,q])=>/fecha=|order=opened_at|limit=1/.test(q)),false);
 });
 
-test("closed service reads the same fixed service date, never a previous period", async () => {
-  const calls = [];
-  const select = async (table, query) => {
-    calls.push([table, query]);
-    if (table === "serata_summary") return [{ fecha: "2026-07-22" }];
-    if (table === "storico") return [{ orden_id: "o2", totale: 15, estado: "COMPLETADO", metodo_pago: "tarjeta", cobrado: true }];
-    return [];
-  };
-  const result = await createCurrentServiceCloseout({ select, now: fixedNow })();
-  assert.equal(result.status, "closed");
-  assert.match(calls.find(([table]) => table === "storico")[1], /fecha=eq\.2026-07-22/);
-  assert.equal(calls.some(([, query]) => /limit=30|gte\.|lte\.|month|range/.test(query)), false);
+test("closed closeout uses lifecycle-authorized archive session, not date or latest row",async()=>{
+  const s=session({id:"00000000-0000-4000-8000-00000000000b",status:"closed",closed_at:"2026-07-22T22:00:00Z"}); const calls=[];
+  const select=async(table,q)=>{calls.push([table,q]); return table==="storico"?[{orden_id:"o2",service_session_id:s.id,totale:15,cobrado:true}]:[];};
+  const out=await createCurrentServiceCloseout({select,sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+  assert.equal(out.status,"closed"); assert.equal(out.closedAt,s.closed_at); assert.equal(calls[0][0],"storico");
+  assert.match(calls[0][1],new RegExp(s.id)); assert.doesNotMatch(calls[0][1],/fecha|desc|limit/);
 });
 
-test("no open marker and no live tickets returns controlled no-session state", async () => {
-  const result = await createCurrentServiceCloseout({ select: async () => [], now: fixedNow })();
-  assert.equal(result.available, false);
-  assert.equal(result.code, "NO_CURRENT_SERVICE");
-  assert.deepEqual(result.totals, { gross: 0, collected: 0, refunded: 0, unpaid: 0, difference: 0 });
+test("no lifecycle session is controlled and does not query data",async()=>{
+  let reads=0; const out=await createCurrentServiceCloseout({select:async()=>{reads++;},sessionLifecycle:identity({ok:true,code:"NO_SERVICE_SESSION"})})();
+  assert.equal(out.available,false); assert.equal(out.code,"NO_CURRENT_SERVICE"); assert.equal(reads,0);
 });
 
-test("financial events reconcile payments, refunds, unpaid and cancelled tickets", async () => {
-  const select = async (table) => {
-    if (table === "serata_summary") return [];
-    if (table === "ordenes") return [
-      { id: "paid", totale: 20, estado: "COMPLETADO" },
-      { id: "refund", totale: 10, estado: "COMPLETADO" },
-      { id: "unpaid", totale: 8, estado: "COMPLETADO" },
-      { id: "void", totale: 12, estado: "CANCELADO" },
-    ];
-    return [
-      { order_id: "paid", event_type: "payment", amount: 20, payment_method: "tarjeta" },
-      { order_id: "refund", event_type: "payment", amount: 10, payment_method: "bizum" },
-      { order_id: "refund", event_type: "refund", amount: 10, payment_method: "bizum" },
-    ];
-  };
-  const result = await createCurrentServiceCloseout({ select, now: fixedNow })();
-  assert.deepEqual(result.counts, { tickets: 4, cancelled: 1, refunded: 1, unpaid: 1 });
-  assert.deepEqual(result.totals, { gross: 38, collected: 30, refunded: 10, unpaid: 8, difference: 8 });
-  assert.deepEqual(result.paymentTotals, { efectivo: 0, tarjeta: 20, bizum: 10, other: 0 });
+test("multiple active sessions and mixed membership fail closed",async()=>{
+  await assert.rejects(createCurrentServiceCloseout({select:async()=>[],sessionLifecycle:identity({ok:false,code:"MULTIPLE_ACTIVE_SERVICE_SESSIONS"})})(),e=>e.code==="MULTIPLE_ACTIVE_SERVICE_SESSIONS");
+  const s=session();
+  await assert.rejects(createCurrentServiceCloseout({select:async(t)=>t==="ordenes"?[{id:"x",service_session_id:"wrong"}]:[],sessionLifecycle:identity({ok:true,code:"OK",session:s})})(),e=>e.code==="MIXED_SERVICE_SESSION_ROWS");
 });
 
-test("role boundary allows fresh admin/operator and denies rider", () => {
-  assert.equal(roles.isAllowed("admin", "getCurrentServiceCloseout"), true);
-  assert.equal(roles.isAllowed("operator", "getCurrentServiceCloseout"), true);
-  assert.equal(roles.isAllowed("rider", "getCurrentServiceCloseout"), false);
-  assert.equal(roles.getActionRule("getCurrentServiceCloseout").fresh, true);
+test("lunch and dinner on one business date never mix",async()=>{
+  const lunch=session({id:"00000000-0000-4000-8000-00000000000a",status:"closed",closed_at:"2026-07-22T13:00:00Z"});
+  const dinner=session({id:"00000000-0000-4000-8000-00000000000b",status:"open",opened_at:"2026-07-22T16:00:00Z"});
+  assert.notEqual(lunch.id,dinner.id); assert.equal(lunch.business_date,dinner.business_date);
+  const rows=[{id:"d1",service_session_id:dinner.id,totale:12}];
+  const out=await createCurrentServiceCloseout({select:async(t)=>t==="ordenes"?rows:[],sessionLifecycle:identity({ok:true,code:"OK",session:dinner})})();
+  assert.deepEqual(out.tickets.map(t=>t.id),["d1"]);
+});
+
+test("service crossing midnight keeps opening business date and one identity",async()=>{
+  const s=session({opened_at:"2026-07-22T17:00:00Z",closed_at:"2026-07-22T22:30:00Z",status:"closed"});
+  const out=await createCurrentServiceCloseout({select:async()=>[],sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+  assert.equal(out.businessDate,"2026-07-22"); assert.equal(out.serviceSessionId,s.id); assert.equal(out.closedAt,"2026-07-22T22:30:00Z");
+});
+
+test("financial reconciliation and role boundary remain intact",async()=>{
+  const s=session(); const orders=[{id:"p",service_session_id:s.id,totale:20},{id:"u",service_session_id:s.id,totale:8}];
+  const events=[{order_id:"p",service_session_id:s.id,type:"payment",amount:20,payment_method:"tarjeta"}];
+  const out=await createCurrentServiceCloseout({select:async(t)=>t==="ordenes"?orders:events,sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+  assert.equal(out.totals.collected,20); assert.equal(out.totals.unpaid,8);
+  assert.equal(roles.isAllowed("admin","getCurrentServiceCloseout"),true); assert.equal(roles.isAllowed("operator","getCurrentServiceCloseout"),true); assert.equal(roles.isAllowed("rider","getCurrentServiceCloseout"),false);
+  assert.equal(roles.isAllowed("admin","openServiceSession"),true); assert.equal(roles.isAllowed("operator","openServiceSession"),true); assert.equal(roles.isAllowed("rider","openServiceSession"),false);
 });

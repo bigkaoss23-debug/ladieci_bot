@@ -36,6 +36,7 @@ const { legacyAuthGuardMiddleware } = require("./src/auth/legacyAuthGuard");
 const riderTrip = require("./src/agents/riderTrip");
 const riderReads = require("./src/agents/riderReads");
 const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceCloseout");
+const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/serviceSessionLifecycle");
 
 const app = express();
 app.use(express.json());
@@ -198,7 +199,7 @@ app.get("/api", async (req, res) => {
         result = { success: false, error: `Chiusura permessa solo dopo le 22:00 Madrid (ora attuale: ${h}:00). Per forzare aggiungere &force=true.` };
       } else {
         // Sempre via Guarded: idempotente, non si ripete nello stesso giorno
-        result = await chiudiServizio(req.query.deleteAttivi === "true", "operator");
+        result = await chiudiServizio(req.query.deleteAttivi === "true", "operator", req.authCtx?.actor || "operator");
         // S2-1G — a service close deferred by an active rider trip is an operational
         // conflict: surface a stable 409 for the operator UI (schedulers consume the same
         // structured body without treating it as a crash).
@@ -349,7 +350,10 @@ app.post("/api", async (req, res) => {
     // for EVERY authorized role. When the guard authenticated any caller on a trip-primitive
     // action (marcarEnEntrega/registrarSalidaDriver/marcarEntregado/chiudiGiro), route to the
     // RPC-backed wrapper and return, bypassing the old direct DRIVER_STATO writers below.
-    if (req.authCtx && req.authCtx.rule && req.authCtx.rule.tripPrimitive) {
+    if (action === "openServiceSession") {
+      result = await serviceSessionLifecycle.open({ actor: req.authCtx?.actor || "operator", source: "operator" });
+      if (!result.ok) return res.status(409).json({ error: result.code || "SERVICE_SESSION_OPEN_FAILED" });
+    } else if (req.authCtx && req.authCtx.rule && req.authCtx.rule.tripPrimitive) {
       const mapped = await routeRiderTripAction(action, req.body);
       return res.status(mapped.status).json(mapped.payload);
     }

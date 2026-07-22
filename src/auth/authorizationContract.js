@@ -38,7 +38,7 @@ const CANONICAL_ACTIONS = Object.freeze([
   'resolveAddress', 'previewOrderTiming', 'createOrden', 'updateNotaCucina', 'eliminaOrdine',
   'eliminaConversazione', 'upsertCliente', 'parseOrdineDaRisposta', 'createManualGiro',
   'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro',
-  'getAuthActors', 'setActorPin',
+  'getAuthActors', 'setActorPin', 'openServiceSession',
 ]);
 const CANONICAL_SET = Object.freeze(new Set(CANONICAL_ACTIONS));
 
@@ -77,7 +77,7 @@ const FRESH_AUTH_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes', 'getStorico',
   'getOrdenesArchivio', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine',
   'eliminaConversazione', 'getSuggerimenti',
-  'getAuthActors', 'setActorPin', 'getCurrentServiceCloseout',
+  'getAuthActors', 'setActorPin', 'getCurrentServiceCloseout', 'openServiceSession',
 ]);
 const FRESH_AUTH_SET = Object.freeze(new Set(FRESH_AUTH_ACTIONS));
 

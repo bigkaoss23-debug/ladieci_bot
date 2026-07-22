@@ -36,14 +36,27 @@ require.cache[rtPath].exports = Object.assign({}, realRt, {
   closeTrip: async () => ({ status: 200, payload: { ok: true, code: "NO_ACTIVE_TRIP" } }),
 });
 
+const ssPath = require.resolve("../src/serviceSessions/serviceSessionLifecycle");
+const realSs = require(ssPath);
+let SESSION_CURRENT, SESSION_BEGIN, sessionCompleteCalls = [];
+const sessionLifecycle = {
+  currentCloseout: async () => SESSION_CURRENT,
+  beginClose: async () => SESSION_BEGIN,
+  completeClose: async (args) => { sessionCompleteCalls.push(args); return { ok:true, code:"CLOSED", session:SESSION_BEGIN.session }; },
+};
+require.cache[ssPath].exports = Object.assign({}, realSs, { lifecycle: sessionLifecycle });
+
 const { chiudiServizio } = require("../src/utils/servizio");
 
 let pass = 0, fail = 0;
 const check = (l, c) => { if (c) { pass++; console.log("  ✓ " + l); } else { fail++; console.log("  ✗ " + l); } };
-const order = { id: "O1", wa_id: "wa1", tel: "wa1", estado: "RETIRADO", items: [], tipo_consegna: "DOMICILIO", totale: 10 };
+const session = { id:"00000000-0000-4000-8000-000000000001", business_date:"2026-07-22", status:"closing" };
+const order = { id: "O1", service_session_id:session.id, wa_id: "wa1", tel: "wa1", estado: "RETIRADO", items: [], tipo_consegna: "DOMICILIO", totale: 10 };
 const reset = () => {
   deletes = []; inserts = []; upserts = []; throwReset = false; endCalls = 0; beginCalls = 0; endIds = [];
   existingSummary = []; completedOrders = []; throwStorico = false;
+  SESSION_CURRENT = { ok:true, code:"OK", session:{...session,status:"open"} };
+  SESSION_BEGIN = { ok:true, code:"CLOSING", session }; sessionCompleteCalls=[];
 };
 
 (async () => {
@@ -80,13 +93,12 @@ const reset = () => {
   check("idle -> service_closing marker released after cleanup (endServiceClose)", endCalls === 1);
   check("idle -> releases matching close_id", endIds[0] === "close-ok");
 
-  // ── Already closed with no resumed marker -> releases just-created marker and skips ──
+  // ── Duplicate close is identified by the explicit lifecycle pointer ──
   reset();
-  existingSummary = [{ fecha: "today" }];
-  RESET = { status: 200, payload: { ok: true, code: "OK", close_id: "close-new", marker: { close_id: "close-new" }, resumed: false } };
+  SESSION_CURRENT = { ok:true, code:"OK", session:{...session,status:"closed"} };
   r = await chiudiServizio(false, "manual");
-  check("already closed non-recovery -> skipped", r.skipped === true && r.reason === "already_closed_today");
-  check("already closed non-recovery -> marker released", endCalls === 1 && endIds[0] === "close-new");
+  check("already closed session -> idempotent skip", r.skipped === true && r.reason === "already_closed_session");
+  check("already closed session -> rider close gate not opened", beginCalls === 0 && endCalls === 0);
 
   // ── Crash after archival begins -> marker is NOT released ──
   reset();
@@ -100,13 +112,14 @@ const reset = () => {
 
   // ── Recovery resumes same close_id and concludes without taking a new summary lock ──
   reset();
-  existingSummary = [{ fecha: "today" }];
+  existingSummary = [{ service_session_id: session.id }];
   completedOrders = [order];
   RESET = { status: 200, payload: { ok: true, code: "OK", close_id: "close-crash", marker: { close_id: "close-crash" }, resumed: true } };
   r = await chiudiServizio(false, "startup_recovery");
   check("recovery resumed close succeeds", r.success === true && endIds[0] === "close-crash");
   check("recovery does not create overlapping serata_summary lock", !inserts.includes("serata_summary"));
   check("overlapping retry uses one begin call / same marker", beginCalls === 1 && RESET.payload.close_id === "close-crash");
+  check("successful close completes exact service session", sessionCompleteCalls[0]?.sessionId === session.id);
 
   console.log(`\nserviceCloseGate: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
