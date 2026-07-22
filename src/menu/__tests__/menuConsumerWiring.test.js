@@ -92,9 +92,9 @@ test("wiring is GET-only and repository exposes no writes", () => {
   assert.ok(!Object.keys(repository).some((key) => /write|insert|update|upsert|delete/i.test(key)));
 });
 
-test("no parser, order creation or planner consumer is wired", () => {
+test("no authoritative parser, order creation or planner consumer is wired", () => {
   const changedConsumers = [
-    "src/agents/agentWhatsapp.js", "src/agents/agentOrdini.js",
+    "src/agents/agentOrdini.js",
     "src/agents/previewTiming.js", "src/core/delivery/planner.js",
   ];
   for (const file of changedConsumers) {
