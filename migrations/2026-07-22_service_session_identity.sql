@@ -50,7 +50,6 @@ ALTER TABLE public.order_financial_events DROP CONSTRAINT ofe_order_id_fk;
 
 ALTER TABLE public.serata_summary DROP CONSTRAINT serata_summary_pkey;
 ALTER TABLE public.serata_summary ADD CONSTRAINT serata_summary_pkey PRIMARY KEY (id);
-ALTER TABLE public.storico DROP CONSTRAINT storico_orden_id_fecha_key;
 CREATE UNIQUE INDEX serata_summary_session_uq ON public.serata_summary(service_session_id) WHERE service_session_id IS NOT NULL;
 CREATE UNIQUE INDEX storico_session_order_uq ON public.storico(service_session_id, orden_id) WHERE service_session_id IS NOT NULL;
 CREATE INDEX ordenes_service_session_idx ON public.ordenes(service_session_id);

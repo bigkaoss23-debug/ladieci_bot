@@ -24,7 +24,7 @@ test("session identity propagates to archive, summary and immutable financial ev
   assert.match(sql,/financial_event_assign_service_session/); assert.match(sql,/ORDER_WITHOUT_SERVICE_SESSION/);
   assert.match(sql,/DROP CONSTRAINT ofe_order_id_fk/);
   assert.match(sql,/storico_session_order_uq/); assert.match(sql,/serata_summary_session_uq/);
-  assert.match(sql,/DROP CONSTRAINT storico_orden_id_fecha_key/);
+  assert.doesNotMatch(sql,/storico_orden_id_fecha_key/);
 });
 test("same-day reopen creates UUID and midnight cannot change business date",()=>{
   assert.match(sql,/id uuid PRIMARY KEY DEFAULT gen_random_uuid\(\)/);

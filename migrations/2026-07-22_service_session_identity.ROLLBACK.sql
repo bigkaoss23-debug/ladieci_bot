@@ -27,7 +27,6 @@ DROP INDEX IF EXISTS public.storico_session_order_uq;
 DROP INDEX IF EXISTS public.serata_summary_session_uq;
 ALTER TABLE public.serata_summary DROP CONSTRAINT IF EXISTS serata_summary_pkey;
 ALTER TABLE public.serata_summary ADD CONSTRAINT serata_summary_pkey PRIMARY KEY (fecha);
-ALTER TABLE public.storico ADD CONSTRAINT storico_orden_id_fecha_key UNIQUE (orden_id,fecha);
 ALTER TABLE public.order_financial_events DROP COLUMN IF EXISTS service_session_id;
 ALTER TABLE public.order_financial_events ADD CONSTRAINT ofe_order_id_fk FOREIGN KEY (order_id) REFERENCES public.ordenes(id) ON DELETE RESTRICT;
 ALTER TABLE public.serata_summary DROP COLUMN IF EXISTS service_session_id;
