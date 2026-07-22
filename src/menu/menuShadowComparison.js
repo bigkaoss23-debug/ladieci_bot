@@ -9,7 +9,7 @@ const CLASSIFICATIONS = Object.freeze([
   "DYNAMIC_UNMATCHED",
   "KIND_MISMATCH",
   "TARGET_MISMATCH",
-  "LEGACY_UNMATCHED_DYNAMIC_MATCH",
+  "DYNAMIC_EXPANSION",
   "ERROR",
 ]);
 
@@ -29,7 +29,7 @@ function safeId(value) {
 
 function classify(legacy, dynamic) {
   if (dynamic.ambiguous) return "DYNAMIC_AMBIGUOUS";
-  if (!legacy.matched && dynamic.matched) return "LEGACY_UNMATCHED_DYNAMIC_MATCH";
+  if (!legacy.matched && dynamic.matched) return "DYNAMIC_EXPANSION";
   if (legacy.matched && !dynamic.matched) return "DYNAMIC_UNMATCHED";
   if (!legacy.matched && !dynamic.matched) return "MATCH";
   if (legacy.kind !== dynamic.kind) return "KIND_MISMATCH";

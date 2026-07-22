@@ -20,7 +20,7 @@ const tests = [];
 function test(name, fn) { tests.push([name, fn]); }
 
 test("all required classifications are frozen", () => {
-  assert.deepStrictEqual(CLASSIFICATIONS, ["MATCH", "DYNAMIC_AMBIGUOUS", "DYNAMIC_UNMATCHED", "KIND_MISMATCH", "TARGET_MISMATCH", "LEGACY_UNMATCHED_DYNAMIC_MATCH", "ERROR"]);
+  assert.deepStrictEqual(CLASSIFICATIONS, ["MATCH", "DYNAMIC_AMBIGUOUS", "DYNAMIC_UNMATCHED", "KIND_MISMATCH", "TARGET_MISMATCH", "DYNAMIC_EXPANSION", "ERROR"]);
 });
 test("product match", () => assert.equal(compare("margarita", { matched: true, kind: "product", canonicalId: "p1", canonicalName: "El Pelusa" }).classification, "MATCH"));
 test("extra match", () => assert.equal(compare("Coppa", { matched: true, kind: "extra", canonicalId: "e1", canonicalName: "Coppa" }).classification, "MATCH"));
@@ -29,7 +29,7 @@ test("dynamic ambiguity", () => assert.equal(compare("especial", { matched: true
 test("dynamic unmatched", () => assert.equal(compare("inventata", { matched: true, kind: "product", canonicalName: "Inventata" }).classification, "DYNAMIC_UNMATCHED"));
 test("kind mismatch", () => assert.equal(compare("Coppa", { matched: true, kind: "product", canonicalName: "Coppa" }).classification, "KIND_MISMATCH"));
 test("target mismatch", () => assert.equal(compare("El Maestro", { matched: true, kind: "product", canonicalId: "p1", canonicalName: "El Pelusa" }).classification, "TARGET_MISMATCH"));
-test("legacy unmatched dynamic match", () => assert.equal(compare("El Pelusa", { matched: false }).classification, "LEGACY_UNMATCHED_DYNAMIC_MATCH"));
+test("legacy unmatched dynamic match is an expansion", () => assert.equal(compare("El Pelusa", { matched: false }).classification, "DYNAMIC_EXPANSION"));
 test("invalid menu becomes ERROR", () => assert.equal(compare("El Pelusa", { matched: true }, null).classification, "ERROR"));
 test("diagnostic contains only privacy-safe allow-listed fields", () => {
   const secretInput = "Mario +34600000000 Calle Mayor 12 nota sin cebolla";

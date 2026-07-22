@@ -28,7 +28,12 @@ function add(index, key, value) {
   if (!key) return;
   if (!index.has(key)) index.set(key, []);
   const values = index.get(key);
-  if (!values.some((entry) => entry.kind === value.kind && entry.canonicalId === value.canonicalId)) values.push(value);
+  const existing = values.find((entry) => entry.kind === value.kind && entry.canonicalId === value.canonicalId);
+  if (!existing) {
+    values.push({ ...value, matchedSources: [value.matchedBy] });
+    return;
+  }
+  existing.matchedSources = [...new Set([...(existing.matchedSources || [existing.matchedBy]), value.matchedBy])].sort();
 }
 
 function productName(product) {
@@ -98,7 +103,20 @@ function buildIndex(menu) {
 }
 
 function resultFor(rawInput, normalizedInput, matches) {
-  const sorted = matches.slice().sort(compareCandidates);
+  const deduplicated = new Map();
+  for (const match of matches) {
+    const key = `${match.kind}\u0000${match.canonicalId}`;
+    const existing = deduplicated.get(key);
+    if (!existing) {
+      deduplicated.set(key, { ...match, matchedSources: [...new Set(match.matchedSources || [match.matchedBy])].sort() });
+      continue;
+    }
+    existing.matchedSources = [...new Set([
+      ...(existing.matchedSources || [existing.matchedBy]),
+      ...(match.matchedSources || [match.matchedBy]),
+    ])].sort();
+  }
+  const sorted = [...deduplicated.values()].sort(compareCandidates);
   if (!sorted.length) {
     return { matched: false, kind: null, canonicalId: null, canonicalName: null, matchedBy: null, confidence: "none", ambiguous: false, candidates: [], input: rawInput, normalizedInput };
   }

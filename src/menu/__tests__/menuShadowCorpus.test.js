@@ -64,5 +64,5 @@ assert.equal(numberByName.size, 14);
 assert.equal(matrix.total, 84);
 assert.equal(matrix.MATCH, 83);
 assert.equal(matrix.DYNAMIC_AMBIGUOUS, 1);
-for (const classification of ["DYNAMIC_UNMATCHED", "KIND_MISMATCH", "TARGET_MISMATCH", "LEGACY_UNMATCHED_DYNAMIC_MATCH", "ERROR"]) assert.equal(matrix[classification || "" ] || 0, 0);
+for (const classification of ["DYNAMIC_UNMATCHED", "KIND_MISMATCH", "TARGET_MISMATCH", "DYNAMIC_EXPANSION", "ERROR"]) assert.equal(matrix[classification || "" ] || 0, 0);
 console.log(JSON.stringify({ matrix, buckets, realRegressions: 0 }));
