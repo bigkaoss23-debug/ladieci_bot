@@ -11,6 +11,11 @@
 const express = require('express');
 const { createSupabaseTokenVerifier, createHttpJwksProvider, AccountTokenError } = require('./supabaseToken');
 const { createAccountService } = require('./accountService');
+const {
+  createAccountAuthority,
+  createSupabaseAdminUserProvider,
+  AccountAuthorityError,
+} = require('./supabaseAccountAuthority');
 
 const FLAG = 'ACCOUNT_HTTP_ENABLED';
 const ENABLED = 'true';
@@ -32,6 +37,14 @@ function buildDefaults(env) {
   const jwksProvider = createHttpJwksProvider({ jwksUrl: `${base}/auth/v1/.well-known/jwks.json` });
   const verify = createSupabaseTokenVerifier({ jwksProvider, issuer });
 
+  // Canonical server-side check against Supabase Auth (GoTrue admin API, service-role):
+  // confirms the subject still exists, is not deleted/banned and has a confirmed email.
+  // Fails closed (unavailable) if SUPABASE_URL/KEY are absent so an enabled-but-misconfigured
+  // boundary can never authorize.
+  const authority = createAccountAuthority({
+    adminGetUser: createSupabaseAdminUserProvider({ supabaseUrl: env.SUPABASE_URL, serviceKey: env.SUPABASE_KEY }),
+  });
+
   // Reads via the service-role PostgREST helper, ALWAYS scoped to the verified user id.
   const { sbSelect } = require('../utils/supabase');
   const enc = encodeURIComponent;
@@ -42,7 +55,7 @@ function buildDefaults(env) {
       `user_id=eq.${enc(uid)}&status=eq.active&select=workspace_id,role,status,workspaces(slug,display_name,lifecycle_status,commercial_status)`
     ),
   });
-  return { verify, service };
+  return { verify, authority, service };
 }
 
 function integrateAccountRoutes(app, deps = {}) {
@@ -55,6 +68,7 @@ function integrateAccountRoutes(app, deps = {}) {
   let d = null;
   const get = () => (d || (d = buildDefaults(env)));
   const verify = deps.verify || ((t) => get().verify(t));
+  const assertAccountSession = deps.assertAccountSession || ((c) => get().authority(c));
   const getAccountMe = deps.getAccountMe || ((c) => get().service(c));
   const logger = deps.logger || console;
 
@@ -62,6 +76,8 @@ function integrateAccountRoutes(app, deps = {}) {
   router.get('/account/me', async (req, res) => {
     const token = bearerOf(req);
     if (!token) return res.status(401).json({ error: 'account_auth_required' });
+
+    // 1) local ES256/JWKS pre-filter (signature, issuer, audience, expiry, subject).
     let claims;
     try { claims = await verify(token); }
     catch (e) {
@@ -69,8 +85,23 @@ function integrateAccountRoutes(app, deps = {}) {
       logger.error && logger.error('account verify error');
       return res.status(401).json({ error: 'account_auth_invalid' });
     }
+
+    // 2) canonical server-side check against Supabase Auth (user exists, not deleted/banned,
+    // email confirmed). No permissive fallback: unavailability → 503, never a pass.
+    let canonical;
+    try { canonical = await assertAccountSession(claims); }
+    catch (e) {
+      if (e instanceof AccountAuthorityError) {
+        if (e.isUnavailable) return res.status(503).json({ error: 'account_auth_unavailable' });
+        return res.status(401).json({ error: 'account_auth_invalid' });
+      }
+      logger.error && logger.error('account authority error');
+      return res.status(503).json({ error: 'account_auth_unavailable' });
+    }
+
+    // 3) safe read. Email-verified truth comes from Auth, not the token claim.
     try {
-      const body = await getAccountMe(claims);
+      const body = await getAccountMe(Object.freeze({ ...claims, emailVerified: canonical.emailConfirmed === true }));
       return res.status(200).json(body);
     } catch (e) {
       logger.error && logger.error('account/me read error');

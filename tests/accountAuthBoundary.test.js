@@ -128,6 +128,7 @@ test("GET /api/account/me: 401 without token, 401 invalid, 200 with valid token"
   await withServer(
     {
       verify: (t) => verify(t),
+      assertAccountSession: async (c) => ({ id: c.sub, email: c.email, emailConfirmed: true }),
       getAccountMe: async (c) => ({ userId: c.sub, email: c.email, emailVerified: c.emailVerified, displayName: null, memberships: [], workspaces: [] }),
     },
     async (base) => {
