@@ -13,7 +13,7 @@ const { createSupabaseTokenVerifier, createHttpJwksProvider, AccountTokenError }
 const { createAccountService } = require('./accountService');
 const {
   createAccountAuthority,
-  createSupabaseAdminUserProvider,
+  createSupabaseUserTokenValidator,
   AccountAuthorityError,
 } = require('./supabaseAccountAuthority');
 
@@ -37,12 +37,13 @@ function buildDefaults(env) {
   const jwksProvider = createHttpJwksProvider({ jwksUrl: `${base}/auth/v1/.well-known/jwks.json` });
   const verify = createSupabaseTokenVerifier({ jwksProvider, issuer });
 
-  // Canonical server-side check against Supabase Auth (GoTrue admin API, service-role):
-  // confirms the subject still exists, is not deleted/banned and has a confirmed email.
-  // Fails closed (unavailable) if SUPABASE_URL/KEY are absent so an enabled-but-misconfigured
-  // boundary can never authorize.
+  // Canonical server-side check: send the CLIENT'S presented bearer to Supabase Auth
+  // (/auth/v1/user) using the public ANON key as the gateway apikey — the service-role key is
+  // NOT used for the normal bearer check. GoTrue accepts/rejects the token and returns the
+  // canonical user. Fails closed (unavailable) if SUPABASE_URL/ANON key are absent so an
+  // enabled-but-misconfigured boundary can never authorize.
   const authority = createAccountAuthority({
-    adminGetUser: createSupabaseAdminUserProvider({ supabaseUrl: env.SUPABASE_URL, serviceKey: env.SUPABASE_KEY }),
+    getUserByToken: createSupabaseUserTokenValidator({ supabaseUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY }),
   });
 
   // Reads via the service-role PostgREST helper, ALWAYS scoped to the verified user id.
@@ -68,7 +69,7 @@ function integrateAccountRoutes(app, deps = {}) {
   let d = null;
   const get = () => (d || (d = buildDefaults(env)));
   const verify = deps.verify || ((t) => get().verify(t));
-  const assertAccountSession = deps.assertAccountSession || ((c) => get().authority(c));
+  const assertAccountSession = deps.assertAccountSession || ((c, t) => get().authority(c, t));
   const getAccountMe = deps.getAccountMe || ((c) => get().service(c));
   const logger = deps.logger || console;
 
@@ -86,10 +87,11 @@ function integrateAccountRoutes(app, deps = {}) {
       return res.status(401).json({ error: 'account_auth_invalid' });
     }
 
-    // 2) canonical server-side check against Supabase Auth (user exists, not deleted/banned,
-    // email confirmed). No permissive fallback: unavailability → 503, never a pass.
+    // 2) canonical server-side check: GoTrue validates the PRESENTED token and returns the
+    // canonical user (accepted session, not deleted/banned, email confirmed, sub matches).
+    // No permissive fallback: unavailability → 503, never a pass.
     let canonical;
-    try { canonical = await assertAccountSession(claims); }
+    try { canonical = await assertAccountSession(claims, token); }
     catch (e) {
       if (e instanceof AccountAuthorityError) {
         if (e.isUnavailable) return res.status(503).json({ error: 'account_auth_unavailable' });
