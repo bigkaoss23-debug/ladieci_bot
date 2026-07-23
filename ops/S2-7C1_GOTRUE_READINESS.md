@@ -55,8 +55,11 @@ A Supabase **access token is a stateless JWT**. GoTrue's logout and refresh-toke
 invalidate the **refresh** token, but an already-issued **access** token stays
 signature-valid until its `exp`. Therefore:
 
-- **Delete / ban / email-unconfirm** are caught **immediately** by the S2-7C1 canonical
-  server-side check (`/api/account/me` calls the GoTrue admin API and reads current DB truth).
+- **Delete / ban / email-unconfirm** are caught **immediately** by the canonical server-side
+  check: `/api/account/me` sends the **presented token** to GoTrue `/auth/v1/user` (anon apikey,
+  not service-role) and treats GoTrue's answer as authority — GoTrue refuses a
+  deleted/banned/invalid token (401/403 → 401) and returns `email_confirmed_at` for the
+  confirmed check. (Revised in S2-7C1B; the earlier admin-lookup-by-`sub` method is superseded.)
 - **Logout / refresh revocation** does **not** immediately invalidate an outstanding access
   token. The **maximum residual window equals the access-token TTL** (row 7). Setting
   `jwt_exp=3600` bounds it to ≤ 1 hour. Do **not** claim "immediate revocation" for the
