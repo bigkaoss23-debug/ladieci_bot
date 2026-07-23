@@ -25,6 +25,7 @@ const {
 const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
 const { integrateFinancialRoutes } = require("./src/auth/financialHttpIntegration");
 const { integrateLoginRoute } = require("./src/auth/loginHttpIntegration");
+const { integrateAccountRoutes } = require("./src/account/accountHttpIntegration");
 const authDao = require("./src/auth/dao");
 const adminAccessDao = require("./src/auth/adminAccessDao");
 const { createAdminAccessService } = require("./src/auth/adminAccessService");
@@ -61,6 +62,14 @@ integrateFinancialRoutes(app, { env: process.env, logger: console });
 // the single POST /api/auth/v2/login enters the accepted B3 login handler directly (no JWT,
 // no X-Api-Key), while every other /api path continues to the legacy proxy unchanged.
 integrateLoginRoute(app, { env: process.env, logger: console });
+
+// S2-7C — staging-gated ACCOUNT boundary (Supabase Auth). DISABLED BY DEFAULT (mounts
+// nothing unless ACCOUNT_HTTP_ENABLED === 'true'). Mounted here — after CORS/JSON parsing,
+// BEFORE the legacy /api X-Api-Key proxy — so GET /api/account/me enters its Supabase
+// Bearer (ES256/JWKS) chain first and never requires/accepts the legacy key or the Auth V2
+// PIN JWT. It never touches auth_actors, PIN JWTs, or operational tables. Fully independent
+// of the login/financial/legacy flags.
+integrateAccountRoutes(app, { env: process.env, logger: console });
 
 // Auth middleware — protegge tutti gli endpoint /api
 const DASHBOARD_API_KEY = process.env.DASHBOARD_API_KEY;
