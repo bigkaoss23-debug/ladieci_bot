@@ -7,6 +7,11 @@
 // roles/operational workspace data.
 
 // deps: { selectProfile(userId), selectMemberships(userId) } — each async → array of rows.
+//   The memberships select MUST include the joined workspace's
+//   `owner_pin_onboarding_completed_at` so the payload can carry a SERVER-DERIVED
+//   `adminPinSetupRequired`. This is deliberately independent of the operational actor's
+//   pin_hash: the legacy owner actor already has a PIN, so a freshly claimed workspace
+//   still requires onboarding until the marker is set.
 function createAccountService(deps) {
   const selectProfile = deps.selectProfile;
   const selectMemberships = deps.selectMemberships;
@@ -23,17 +28,34 @@ function createAccountService(deps) {
 
     const rows = (await selectMemberships(userId)) || [];
     // Active memberships only. Each row is a membership joined to its workspace.
+    // S2-7D: adminPinRequired is derived from the workspace onboarding MARKER, not the
+    // actor pin_hash. For an ACTIVE workspace the account OWNS, PIN setup is required while
+    // `owner_pin_onboarding_completed_at` is null. Non-owner / inactive → null (n/a).
+    let anyPinRequired = false;
     const memberships = (Array.isArray(rows) ? rows : [])
       .filter(r => r && r.status === 'active')
-      .map(r => Object.freeze({
-        workspaceId:   r.workspace_id,
-        workspaceSlug: r.workspace_slug ?? (r.workspaces && r.workspaces.slug) ?? null,
-        workspaceName: r.workspace_name ?? (r.workspaces && r.workspaces.display_name) ?? null,
-        lifecycleStatus:  r.workspace_lifecycle ?? (r.workspaces && r.workspaces.lifecycle_status) ?? null,
-        commercialStatus: r.workspace_commercial ?? (r.workspaces && r.workspaces.commercial_status) ?? null,
-        role:   r.role,
-        status: r.status,
-      }));
+      .map(r => {
+        const ws = r.workspaces || {};
+        const lifecycleStatus = r.workspace_lifecycle ?? ws.lifecycle_status ?? null;
+        const onboardingAt = r.owner_pin_onboarding_completed_at
+          ?? ws.owner_pin_onboarding_completed_at ?? null;
+        const isOwner = r.role === 'workspace_owner';
+        let adminPinRequired = null;
+        if (isOwner && lifecycleStatus === 'active') {
+          adminPinRequired = onboardingAt == null;
+          if (adminPinRequired) anyPinRequired = true;
+        }
+        return Object.freeze({
+          workspaceId:   r.workspace_id,
+          workspaceSlug: r.workspace_slug ?? ws.slug ?? null,
+          workspaceName: r.workspace_name ?? ws.display_name ?? null,
+          lifecycleStatus,
+          commercialStatus: r.workspace_commercial ?? ws.commercial_status ?? null,
+          role:   r.role,
+          status: r.status,
+          adminPinRequired,
+        });
+      });
 
     return Object.freeze({
       userId,
@@ -42,6 +64,7 @@ function createAccountService(deps) {
       displayName: profile ? (profile.display_name ?? null) : null,
       memberships,                                   // [] when none
       workspaces: memberships.map(m => m.workspaceId), // accessible workspace ids
+      adminPinSetupRequired: anyPinRequired,         // server-derived; false when none/unknown
     });
   };
 }

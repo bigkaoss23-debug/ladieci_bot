@@ -1,12 +1,17 @@
 'use strict';
-// S2-7C — staging-gated integration of the ACCOUNT boundary (Supabase Auth) into Express.
-// DISABLED BY DEFAULT. Mounts GET /api/account/me only when ACCOUNT_HTTP_ENABLED === 'true'
-// (exact). Absent/empty/any other value → strict no-op, zero middleware side effect.
+// S2-7C / S2-7D — staging-gated ACCOUNT boundary (Supabase Auth) mounted into Express.
+// DISABLED BY DEFAULT. Mounts routes only when ACCOUNT_HTTP_ENABLED === 'true' (exact);
+// absent/empty/any other value → strict no-op, zero middleware side effect.
 //
-// Mounted BEFORE the legacy /api X-Api-Key proxy so the account route enters its Supabase
-// Bearer chain first and never requires/accepts the legacy key or the Auth V2 PIN JWT.
-// This module authorizes ONLY with a verified Supabase access token; it never touches
-// auth_actors, PIN JWTs, or operational tables.
+// Routes (all Supabase-Bearer authenticated; NEVER the legacy X-Api-Key or the Auth V2
+// PIN JWT; NEVER trusting a body-supplied user id / email / role):
+//   GET  /api/account/me                                (S2-7C) profile + memberships
+//   POST /api/account/workspaces/bootstrap              (S2-7D) idempotent owner claim (guarded)
+//   POST /api/account/workspaces/:workspaceId/admin-pin (S2-7D) create/rotate owner PIN
+//
+// Every route authorizes ONLY with a verified Supabase access token (local JWKS pre-filter
+// THEN a canonical GoTrue /auth/v1/user check). It never touches auth_actors/PIN JWTs
+// except through the S2-7D account RPCs, which re-verify ownership under row lock.
 
 const express = require('express');
 const { createSupabaseTokenVerifier, createHttpJwksProvider, AccountTokenError } = require('./supabaseToken');
@@ -16,12 +21,19 @@ const {
   createSupabaseUserTokenValidator,
   AccountAuthorityError,
 } = require('./supabaseAccountAuthority');
+const { createWorkspaceOwnerService } = require('./workspaceOwnerService');
+const workspaceOwnerDao = require('./workspaceOwnerDao');
 
 const FLAG = 'ACCOUNT_HTTP_ENABLED';
 const ENABLED = 'true';
+const BOOTSTRAP_FLAG = 'ACCOUNT_OWNER_BOOTSTRAP_ENABLED';
+const BOOTSTRAP_USER_ENV = 'LA_DIECI_OWNER_BOOTSTRAP_USER_ID';
 const ME_PATH = '/api/account/me';
+const BOOTSTRAP_PATH = '/api/account/workspaces/bootstrap';
+const ADMIN_PIN_PATH = '/api/account/workspaces/:workspaceId/admin-pin';
 
 function isEnabled(env) { return (env || {})[FLAG] === ENABLED; }
+function isBootstrapEnabled(env) { return (env || {})[BOOTSTRAP_FLAG] === ENABLED; }
 
 function bearerOf(req) {
   const h = req && req.headers && (req.headers.authorization || req.headers.Authorization);
@@ -30,33 +42,53 @@ function bearerOf(req) {
   return m ? m[1].trim() : null;
 }
 
-// Build default deps against the real Supabase project (JWKS verification + service_role reads).
+function bodyOf(req) {
+  return req && req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+}
+
+// Build default deps against the real Supabase project (JWKS verify + GoTrue canonical
+// check + service_role reads/RPCs).
 function buildDefaults(env) {
   const base = String(env.SUPABASE_URL || '').replace(/\/+$/, '');
   const issuer = `${base}/auth/v1`;
   const jwksProvider = createHttpJwksProvider({ jwksUrl: `${base}/auth/v1/.well-known/jwks.json` });
   const verify = createSupabaseTokenVerifier({ jwksProvider, issuer });
 
-  // Canonical server-side check: send the CLIENT'S presented bearer to Supabase Auth
-  // (/auth/v1/user) using the public ANON key as the gateway apikey — the service-role key is
-  // NOT used for the normal bearer check. GoTrue accepts/rejects the token and returns the
-  // canonical user. Fails closed (unavailable) if SUPABASE_URL/ANON key are absent so an
-  // enabled-but-misconfigured boundary can never authorize.
   const authority = createAccountAuthority({
     getUserByToken: createSupabaseUserTokenValidator({ supabaseUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY }),
   });
 
-  // Reads via the service-role PostgREST helper, ALWAYS scoped to the verified user id.
   const { sbSelect } = require('../utils/supabase');
   const enc = encodeURIComponent;
   const service = createAccountService({
     selectProfile: (uid) => sbSelect('user_profiles', `id=eq.${enc(uid)}&select=id,display_name`),
     selectMemberships: (uid) => sbSelect(
       'workspace_memberships',
-      `user_id=eq.${enc(uid)}&status=eq.active&select=workspace_id,role,status,workspaces(slug,display_name,lifecycle_status,commercial_status)`
+      `user_id=eq.${enc(uid)}&status=eq.active&select=workspace_id,role,status,workspaces(slug,display_name,lifecycle_status,commercial_status,owner_pin_onboarding_completed_at)`
     ),
   });
-  return { verify, authority, service };
+
+  const { hashPin } = require('../auth/scrypt');
+  const pinPolicy = require('../auth/pinPolicy');
+  const { ipHash } = require('../auth/ipSecurity');
+  const ownerService = createWorkspaceOwnerService({
+    dao: workspaceOwnerDao,
+    hashPin,
+    pinPolicy,
+    ipHash,
+    slug: env.LA_DIECI_WORKSPACE_SLUG || 'la-dieci',
+    displayName: env.LA_DIECI_WORKSPACE_NAME || 'La Dieci',
+  });
+
+  return { verify, authority, service, ownerService };
+}
+
+// Server-owned client IP (never from the body). Reuses the accepted financial boundary.
+function trustedClientIp(req) {
+  try {
+    const { extractClientIp } = require('../auth/financialHttpHandlers');
+    return extractClientIp(req);
+  } catch (_) { return (req && typeof req.ip === 'string' && req.ip) || null; }
 }
 
 function integrateAccountRoutes(app, deps = {}) {
@@ -71,39 +103,47 @@ function integrateAccountRoutes(app, deps = {}) {
   const verify = deps.verify || ((t) => get().verify(t));
   const assertAccountSession = deps.assertAccountSession || ((c, t) => get().authority(c, t));
   const getAccountMe = deps.getAccountMe || ((c) => get().service(c));
+  const claimWorkspace = (deps.ownerService && deps.ownerService.claimWorkspace)
+    || ((a) => get().ownerService.claimWorkspace(a));
+  const setOwnerPin = (deps.ownerService && deps.ownerService.setOwnerPin)
+    || ((a) => get().ownerService.setOwnerPin(a));
   const logger = deps.logger || console;
 
-  const router = express.Router();
-  router.get('/account/me', async (req, res) => {
+  // Shared account-auth middleware: local JWKS pre-filter → canonical GoTrue check.
+  // On success returns { claims, emailConfirmed }; on failure it has already responded
+  // (401/503) and returns null. Never leaks which stage failed beyond 401/503.
+  async function authenticate(req, res) {
     const token = bearerOf(req);
-    if (!token) return res.status(401).json({ error: 'account_auth_required' });
+    if (!token) { res.status(401).json({ error: 'account_auth_required' }); return null; }
 
-    // 1) local ES256/JWKS pre-filter (signature, issuer, audience, expiry, subject).
     let claims;
     try { claims = await verify(token); }
     catch (e) {
-      if (e instanceof AccountTokenError) return res.status(401).json({ error: 'account_auth_invalid' });
-      logger.error && logger.error('account verify error');
-      return res.status(401).json({ error: 'account_auth_invalid' });
+      if (!(e instanceof AccountTokenError)) { logger.error && logger.error('account verify error'); }
+      res.status(401).json({ error: 'account_auth_invalid' }); return null;
     }
 
-    // 2) canonical server-side check: GoTrue validates the PRESENTED token and returns the
-    // canonical user (accepted session, not deleted/banned, email confirmed, sub matches).
-    // No permissive fallback: unavailability → 503, never a pass.
     let canonical;
     try { canonical = await assertAccountSession(claims, token); }
     catch (e) {
       if (e instanceof AccountAuthorityError) {
-        if (e.isUnavailable) return res.status(503).json({ error: 'account_auth_unavailable' });
-        return res.status(401).json({ error: 'account_auth_invalid' });
+        if (e.isUnavailable) { res.status(503).json({ error: 'account_auth_unavailable' }); return null; }
+        res.status(401).json({ error: 'account_auth_invalid' }); return null;
       }
       logger.error && logger.error('account authority error');
-      return res.status(503).json({ error: 'account_auth_unavailable' });
+      res.status(503).json({ error: 'account_auth_unavailable' }); return null;
     }
+    return Object.freeze({ claims, emailConfirmed: canonical.emailConfirmed === true });
+  }
 
-    // 3) safe read. Email-verified truth comes from Auth, not the token claim.
+  const router = express.Router();
+
+  // GET /account/me
+  router.get('/account/me', async (req, res) => {
+    const acc = await authenticate(req, res);
+    if (!acc) return undefined;
     try {
-      const body = await getAccountMe(Object.freeze({ ...claims, emailVerified: canonical.emailConfirmed === true }));
+      const body = await getAccountMe(Object.freeze({ ...acc.claims, emailVerified: acc.emailConfirmed }));
       return res.status(200).json(body);
     } catch (e) {
       logger.error && logger.error('account/me read error');
@@ -111,8 +151,72 @@ function integrateAccountRoutes(app, deps = {}) {
     }
   });
 
+  // POST /account/workspaces/bootstrap — guarded idempotent owner claim.
+  // Fails closed: requires ACCOUNT_OWNER_BOOTSTRAP_ENABLED === 'true' AND the verified
+  // account id to equal LA_DIECI_OWNER_BOOTSTRAP_USER_ID (staging env only; never
+  // hardcoded). Any account may reach the route but only the configured owner can claim;
+  // everyone else gets a neutral 403.
+  router.post('/account/workspaces/bootstrap', async (req, res) => {
+    const acc = await authenticate(req, res);
+    if (!acc) return undefined;
+    if (acc.emailConfirmed !== true) return res.status(403).json({ error: 'email_not_verified' });
+    if (!isBootstrapEnabled(env)) return res.status(404).json({ error: 'not_found' });
+
+    const allow = env[BOOTSTRAP_USER_ENV];
+    const uid = acc.claims && acc.claims.sub;
+    if (typeof allow !== 'string' || allow.length === 0 || uid !== allow) {
+      return res.status(403).json({ error: 'account_not_authorized' });
+    }
+
+    try {
+      const result = await claimWorkspace({ userId: uid });
+      if (!result || result.ok !== true) return res.status(409).json({ error: 'account_action_failed' });
+      return res.status(200).json({
+        ok: true,
+        workspaceId: result.workspaceId,
+        created: result.created === true,
+        adminPinRequired: result.adminPinRequired === true,
+      });
+    } catch (e) {
+      logger.error && logger.error('account bootstrap error');
+      return res.status(500).json({ error: 'account_action_failed' });
+    }
+  });
+
+  // POST /account/workspaces/:workspaceId/admin-pin — create/rotate the owner PIN.
+  // Authorization is ownership of :workspaceId, re-verified in SQL under row lock. No
+  // bootstrap flag, no allowlist, no role/email/user-id from the body.
+  router.post('/account/workspaces/:workspaceId/admin-pin', async (req, res) => {
+    const acc = await authenticate(req, res);
+    if (!acc) return undefined;
+    if (acc.emailConfirmed !== true) return res.status(403).json({ error: 'email_not_verified' });
+
+    const uid = acc.claims && acc.claims.sub;
+    const workspaceId = req.params && req.params.workspaceId;
+    const body = bodyOf(req);
+    const newPin = typeof body.pin === 'string' ? body.pin : null;
+
+    try {
+      const result = await setOwnerPin({
+        userId: uid, workspaceId, newPin, trustedClientIp: trustedClientIp(req),
+      });
+      // Single generic failure — never reveals policy vs ownership vs actor existence.
+      if (!result || result.ok !== true) return res.status(400).json({ error: 'admin_pin_rejected' });
+      return res.status(200).json({ ok: true, event: result.event, sessionVersion: result.sessionVersion });
+    } catch (e) {
+      logger.error && logger.error('account admin-pin error');
+      return res.status(500).json({ error: 'admin_pin_rejected' });
+    }
+  });
+
   app.use('/api', router);
-  return Object.freeze({ enabled: true, path: ME_PATH, routes: Object.freeze([ME_PATH]) });
+  const routes = isBootstrapEnabled(env)
+    ? [ME_PATH, BOOTSTRAP_PATH, ADMIN_PIN_PATH]
+    : [ME_PATH, ADMIN_PIN_PATH];
+  return Object.freeze({ enabled: true, path: ME_PATH, routes: Object.freeze(routes) });
 }
 
-module.exports = { integrateAccountRoutes, isAccountHttpEnabled: isEnabled, ME_PATH };
+module.exports = {
+  integrateAccountRoutes, isAccountHttpEnabled: isEnabled, isBootstrapEnabled,
+  ME_PATH, BOOTSTRAP_PATH, ADMIN_PIN_PATH,
+};
