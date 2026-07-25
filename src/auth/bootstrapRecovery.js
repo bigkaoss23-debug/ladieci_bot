@@ -15,8 +15,15 @@ const rw = require('./recoveryWindow');
 
 const GENERIC_FAIL = Object.freeze({ ok: false, error: 'auth_failed' });
 
+// S2-7D2: this service is INOPERABLE against the real recoveryDao. Its `consumeRecoveryWindow`
+// dependency was removed there because auth_consume_recovery_window is fail-closed by the
+// writer cutover (it wrote pin_hash AND active = true outside the canonical workspace lock).
+// Nothing requires this module, and pinRotationCutover.static.test.js enforces that. Do NOT
+// wire it: with the real DAO step 7 throws and every call collapses to GENERIC_FAIL. Emergency
+// recovery returns in a later block, rebuilt on the canonical lock.
+//
 // deps: { env, now, dao, hashPin, ipHash, pinPolicy, logger }
-//   dao        : { registerRecoveryWindow, consumeRecoveryWindow }
+//   dao        : { registerRecoveryWindow, consumeRecoveryWindow (REMOVED from recoveryDao) }
 //   hashPin    : async (pin) => scryptHash            (B1)
 //   ipHash     : (ip) => hash|null                    (B3 ipSecurity)
 //   pinPolicy  : { validatePinFormat(pin, role) }     (B3 shared policy)

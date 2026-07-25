@@ -21,6 +21,7 @@ global.fetch = async (url, opts = {}) => {
 const reset = (fn) => { calls = []; responder = fn || null; };
 
 const dao = require('../src/auth/dao');
+
 const audit = require('../src/auth/audit');
 
 let pass = 0, fail = 0;
@@ -33,6 +34,12 @@ async function throwsCode(fn, code) {
 }
 
 (async () => {
+  // S2-7D2 writer cutover: the two direct B2 writer wrappers were REMOVED from this DAO.
+  // auth_set_pin_hash and auth_set_active are fail-closed in migration B; PIN mutation lives
+  // in src/auth/pinRotationService.js and activation is out of scope until redesigned.
+  assert('setActorPinHash wrapper removed (S2-7D2)', typeof dao.setActorPinHash === 'undefined');
+  assert('setActorActive wrapper removed (S2-7D2)', typeof dao.setActorActive === 'undefined');
+
   // 1 — safe reads never expose pin_hash
   reset(() => ({ bodyObj: [{ actor: 'owner', role: 'admin', active: true, session_version: 1, failed_count: 0, locked_until: null, updated_at: 't', updated_by: null }] }));
   const a = await dao.getActor('owner');
@@ -116,9 +123,6 @@ async function throwsCode(fn, code) {
 
   // 8 — exact RPC args
   reset(() => ({ bodyObj: { session_version: 2, event: 'pin_set' } }));
-  await dao.setActorPinHash({ actor: 'owner', pinHash: 'scrypt$1$H', byActor: 'owner', meta: { x: 1 } });
-  assert('setActorPinHash → rpc/auth_set_pin_hash', calls[0].url.endsWith('/rpc/auth_set_pin_hash') && calls[0].method === 'POST');
-  assert('setActorPinHash exact args', JSON.stringify(calls[0].body) === JSON.stringify({ p_actor: 'owner', p_hash: 'scrypt$1$H', p_by: 'owner', p_meta: { x: 1 } }));
   reset(() => ({ bodyObj: {} }));
   await dao.recordFailedAttempt('rider');
   assert('recordFailedAttempt exact args', calls[0].url.endsWith('/rpc/auth_record_failed_attempt') && JSON.stringify(calls[0].body) === JSON.stringify({ p_actor: 'rider' }));
@@ -129,12 +133,13 @@ async function throwsCode(fn, code) {
   await dao.incrementSessionVersion({ actor: 'owner', byActor: 'owner', meta: {} });
   assert('incrementSessionVersion exact args', calls[0].url.endsWith('/rpc/auth_bump_session_version') && JSON.stringify(calls[0].body) === JSON.stringify({ p_actor: 'owner', p_by: 'owner', p_meta: {} }));
   reset(() => ({ bodyObj: {} }));
-  await dao.setActorActive({ actor: 'operator_backup', active: false, byActor: 'owner', meta: {} });
-  assert('setActorActive exact args', calls[0].url.endsWith('/rpc/auth_set_active') && JSON.stringify(calls[0].body) === JSON.stringify({ p_actor: 'operator_backup', p_active: false, p_by: 'owner', p_meta: {} }));
 
   // 8b — sanitize BEFORE rpc: sensitive meta throws and never calls fetch
   reset(() => ({ bodyObj: {} }));
-  const preErr = await captureErr(() => dao.setActorPinHash({ actor: 'owner', pinHash: 'H', byActor: 'owner', meta: { secret: 'x' } }));
+  // meta sanitization is still enforced before any RPC — exercised through a surviving writer
+  // now that the two direct B2 wrappers are gone.
+  calls.length = 0;
+  const preErr = await captureErr(() => dao.incrementSessionVersion({ actor: 'owner', byActor: 'owner', meta: { secret: 'x' } }));
   assert('sensitive meta rejected BEFORE rpc (no fetch)', preErr && preErr.code === 'VALIDATION' && calls.length === 0);
 
   // 9 — audit mandatory (throws) vs best-effort (swallow + counter)

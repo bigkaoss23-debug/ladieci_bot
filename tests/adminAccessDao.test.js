@@ -42,11 +42,8 @@ const okBody = (over = {}) => Object.assign({
   assert('revoke: exact param mapping', JSON.stringify(CALLS[0].body) === JSON.stringify({
     p_by_actor: 'owner', p_target_actor: 'rider', p_expected_role: 'rider', p_ip_hash: 'abc', p_meta: {}, p_confirm: 'REVOKE_OWNER_SESSIONS' }));
 
-  reset({ ok: true, status: 200, body: okBody({ event: 'actor_enabled' }) });
-  await dao.adminSetActorActive({ byActor: 'owner', targetActor: 'rider', expectedRole: 'rider', active: true, ipHash: 'abc', meta: {} });
-  assert('active: RPC path auth_admin_set_actor_active', /rpc\/auth_admin_set_actor_active$/.test(CALLS[0].url));
-  assert('active: exact param mapping (p_active boolean)', JSON.stringify(CALLS[0].body) === JSON.stringify({
-    p_by_actor: 'owner', p_target_actor: 'rider', p_expected_role: 'rider', p_active: true, p_ip_hash: 'abc', p_meta: {} }));
+  // S2-7D2: the actor-activation assertions left with the wrapper (auth_admin_set_actor_active
+  // is fail-closed by the writer cutover).
 
   reset({ ok: true, status: 200, body: okBody({ event: 'actor_unlocked' }) });
   await dao.adminUnlockActor({ byActor: 'owner', targetActor: 'rider', expectedRole: 'rider', ipHash: 'abc', meta: {} });

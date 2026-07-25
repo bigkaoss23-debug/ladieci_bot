@@ -57,9 +57,10 @@ for (const rpc of ['auth_set_pin_hash', 'auth_bump_session_version', 'auth_set_a
 // and the legacy auth_admin_set_actor_pin must be absent (it is disabled in migration step B).
 const DAO_CODE = DAO.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
 const rpcRefs = (DAO_CODE.match(/auth_admin_[a-z_]+/g) || []);
-const EXPECTED = ['auth_admin_revoke_actor_sessions', 'auth_admin_set_actor_active', 'auth_admin_unlock_actor'];
-assert('B6B references exactly the three non-PIN B6A RPC names', EXPECTED.every((n) => rpcRefs.includes(n)) && rpcRefs.every((n) => EXPECTED.includes(n)));
+const EXPECTED = ['auth_admin_revoke_actor_sessions', 'auth_admin_unlock_actor'];
+assert('B6B references exactly the two surviving B6A RPC names', EXPECTED.every((n) => rpcRefs.includes(n)) && rpcRefs.every((n) => EXPECTED.includes(n)));
 assert('B6B no longer references the legacy PIN-rotation RPC (S2-7D2 cutover)', !rpcRefs.includes('auth_admin_set_actor_pin'));
+assert('B6B no longer references the actor-activation RPC (S2-7D2 cutover)', !rpcRefs.includes('auth_admin_set_actor_active'));
 
 // ── only index.js imports B6B ────────────────────────────────────────────────
 assert('only index.js imports B6B', (() => {

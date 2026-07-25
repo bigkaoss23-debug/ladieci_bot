@@ -141,33 +141,12 @@ const svc = (deps) => createAdminAccessService({
     assert('revoke: raw IP never reaches DAO', calls.revoke.every((c) => !deepFind(c, '1.2.3.4') && c.ipHash === 'a'.repeat(32)));
   }
 
-  // ══ SET ACTIVE ═══════════════════════════════════════════════════════════════
-  {
-    const { dao, calls } = makeDao({ rider: 'rider', operator_primary: 'operator', owner: 'admin' });
-    const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK });
-    let r = await s.setActorActive({ byActor: 'owner', targetActor: 'rider', active: true, trustedClientIp: '1.2.3.4' });
-    assert('active: boolean true accepted', r.ok === true && calls.active[calls.active.length - 1].active === true);
-    r = await s.setActorActive({ byActor: 'owner', targetActor: 'rider', active: false, trustedClientIp: '1.2.3.4' });
-    assert('active: boolean false accepted (non-self)', r.ok === true);
-    const before = calls.active.length;
-    for (const bad of ['false', 0, 1, null, undefined]) {
-      r = await s.setActorActive({ byActor: 'owner', targetActor: 'rider', active: bad, trustedClientIp: '1.2.3.4' });
-      assert(`active: non-boolean rejected (${JSON.stringify(bad)})`, r === ADMIN_FAIL);
-    }
-    assert('active: no DAO call for non-boolean', calls.active.length === before);
-    // self-disable rejected before DAO; enabling self allowed
-    r = await s.setActorActive({ byActor: 'owner', targetActor: 'owner', active: false, trustedClientIp: '1.2.3.4' });
-    assert('active: self-disable rejected before DAO', r === ADMIN_FAIL && calls.active.length === before);
-    r = await s.setActorActive({ byActor: 'owner', targetActor: 'owner', active: true, trustedClientIp: '1.2.3.4' });
-    assert('active: enabling self is NOT blocked by Node', r.ok === true);
-  }
-  {
-    // changed=false preserved
-    const { dao } = makeDao({ rider: 'rider' }, { active: okResult({ changed: false, event: null }) });
-    const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK });
-    const r = await s.setActorActive({ byActor: 'owner', targetActor: 'rider', active: true, trustedClientIp: '1.2.3.4' });
-    assert('active: changed=false preserved', r.ok === true && r.changed === false && r.event === null);
-  }
+  // ══ SET ACTIVE — REMOVED (S2-7D2 writer cutover) ══════════════════════════
+  // auth_admin_set_actor_active is fail-closed: no runtime route exposed activation, and
+  // reactivating an actor whose stored PIN already belongs to an active actor would create
+  // an ACTIVE duplicate with no rotation. The service method was removed with its DAO.
+  assert('setActorActive service method removed (S2-7D2)',
+    typeof svc({ dao: makeDao({}).dao, hashPin, pinPolicy, ipHash: ipOK }).setActorActive === 'undefined');
 
   // ══ UNLOCK ═══════════════════════════════════════════════════════════════════
   {

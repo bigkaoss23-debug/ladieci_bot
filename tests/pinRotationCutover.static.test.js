@@ -95,27 +95,91 @@ test('A: no plaintext, sensitive audit keys rejected, no operational tables touc
   }
 });
 
-// ── step B: legacy closure ─────────────────────────────────────────────────
-test('B: refuses to run before the canonical replacement exists', () => {
-  assert.match(b, /proname = 'auth_set_actor_pin_v2'/);
-  assert.match(b, /S2-7D2B refused/);
+// ── step B: COMPLETE writer cutover (six functions) ────────────────────────
+const DISABLED = Object.freeze([
+  ['auth_admin_set_actor_pin',     'text, text, text, text, text, jsonb, text',      'AUTH_LEGACY_PIN_ROTATION_DISABLED'],
+  ['auth_account_set_owner_pin',   'uuid, uuid, text, text, jsonb',                  'AUTH_ACCOUNT_OWNER_PIN_V1_DISABLED'],
+  ['auth_set_pin_hash',            'text, text, text, jsonb',                        'AUTH_DIRECT_PIN_HASH_WRITE_DISABLED'],
+  ['auth_set_active',              'text, boolean, text, jsonb',                     'AUTH_DIRECT_ACTOR_ACTIVE_WRITE_DISABLED'],
+  ['auth_admin_set_actor_active',  'text, text, text, boolean, text, jsonb',         'AUTH_ADMIN_ACTOR_ACTIVE_DISABLED'],
+  ['auth_consume_recovery_window', 'text, text, text, text, text, text, jsonb',      'AUTH_OPERATIONAL_RECOVERY_DISABLED'],
+]);
+
+test('B: all six writers are replaced by fail-closed stubs with their own error', () => {
+  for (const [fn, , marker] of DISABLED) {
+    assert.match(b, new RegExp(`CREATE OR REPLACE FUNCTION public\\.${fn}\\(`), `${fn} not replaced`);
+    assert.match(b, new RegExp(`RAISE EXCEPTION '${marker}'`), `${fn} missing its marker`);
+  }
 });
 
-test('B: legacy body replaced by a fail-closed error AND execution revoked', () => {
-  assert.match(b, /CREATE OR REPLACE FUNCTION public\.auth_admin_set_actor_pin/);
-  assert.match(b, /AUTH_LEGACY_PIN_ROTATION_DISABLED/);
-  assert.match(b, /REVOKE ALL ON FUNCTION public\.auth_admin_set_actor_pin[^;]*FROM PUBLIC, anon, authenticated, service_role/);
+test('B: every stub writes nothing and returns nothing successfully', () => {
+  const bodies = b.split('CREATE OR REPLACE FUNCTION public.').slice(1);
+  assert.equal(bodies.length, DISABLED.length, 'exactly six functions replaced');
+  for (const body of bodies) {
+    const fnBody = body.slice(body.indexOf('AS $fn$'), body.indexOf('$fn$;') + 5);
+    assert.doesNotMatch(fnBody, /UPDATE |INSERT |DELETE /, 'stub must not write');
+    assert.doesNotMatch(fnBody, /RETURN /, 'stub must not return successfully');
+    assert.match(fnBody, /RAISE EXCEPTION/);
+  }
 });
 
-test('B: the deprecated body writes nothing', () => {
-  const body = b.slice(b.indexOf('CREATE OR REPLACE FUNCTION public.auth_admin_set_actor_pin'));
-  assert.doesNotMatch(body, /UPDATE |INSERT |DELETE /);
+test('B: every stub keeps SECURITY INVOKER, fixed search_path and the jsonb return type', () => {
+  const bodies = b.split('CREATE OR REPLACE FUNCTION public.').slice(1);
+  for (const body of bodies) {
+    const head = body.slice(0, body.indexOf('AS $fn$'));
+    assert.match(head, /RETURNS jsonb/);
+    assert.match(head, /SECURITY INVOKER/);
+    assert.match(head, /SET search_path = public, pg_temp/);
+  }
 });
 
-test('B: closes ONLY the PIN mutation path — login and the other admin RPCs untouched', () => {
-  for (const fn of ['auth_admin_revoke_actor_sessions', 'auth_admin_set_actor_active',
-                    'auth_admin_unlock_actor', 'auth_login', 'auth_actors_login']) {
-    assert.doesNotMatch(b, new RegExp(`CREATE OR REPLACE FUNCTION public\\.${fn}`));
+test('B: stub errors are bare constants — no value is ever interpolated', () => {
+  for (const [, , marker] of DISABLED) {
+    const line = b.split('\n').find((l) => l.includes(`RAISE EXCEPTION '${marker}'`));
+    assert.ok(line, marker);
+    // the whole message is the approved constant: no % placeholder, no parameter reference,
+    // no concatenation — so no PIN, hash, token or identifier can reach the client.
+    assert.match(line.trim(), new RegExp(`^RAISE EXCEPTION '${marker}' USING ERRCODE = 'P0001';$`),
+      `${marker} must be raised as a bare constant`);
+    assert.doesNotMatch(line, /%|\|\||p_[a-z_]+/, `${marker} interpolates a value`);
+  }
+});
+
+test('B: EXECUTE revoked from PUBLIC, anon, authenticated AND service_role for all six', () => {
+  for (const [fn, args] of DISABLED) {
+    const re = new RegExp(`REVOKE ALL ON FUNCTION public\\.${fn}\\(${args.replace(/[()]/g, '')}\\)\\s*\\n?\\s*FROM PUBLIC, anon, authenticated, service_role`);
+    assert.match(b, re, `${fn} revoke missing or incomplete`);
+  }
+});
+
+test('B: preconditions fail closed — exact overloads, no IF EXISTS skipping', () => {
+  assert.match(b, /pg_get_function_identity_arguments/);
+  assert.match(b, /expected exactly ONE overload/);
+  assert.match(b, /signature mismatch/);
+  // the canonical writer must exist AND be executable before anything is disabled
+  assert.match(b, /auth_set_actor_pin_v2\(%\) not found exactly once/);
+  assert.match(b, /service_role cannot EXECUTE auth_set_actor_pin_v2/);
+  // the six are never disabled behind an IF EXISTS guard
+  assert.doesNotMatch(b, /DROP FUNCTION IF EXISTS/);
+});
+
+test('B: expects every one of the six exact overloads confirmed by the live probe', () => {
+  for (const [fn, args] of DISABLED) {
+    assert.match(b, new RegExp(`'${fn}',\\s*'${args}'`), `${fn} missing from the precondition table`);
+  }
+});
+
+test('B: post-condition proves one writer in, zero disabled writers executable', () => {
+  assert.match(b, /disabled writer\(s\) still executable by service_role/);
+  assert.match(b, /the canonical writer is not executable by service_role/);
+});
+
+test('B: operational login and the non-PIN admin RPCs are NOT touched', () => {
+  for (const fn of ['auth_record_failed_attempt', 'auth_reset_failed_attempts',
+                    'auth_bump_session_version', 'auth_admin_revoke_actor_sessions',
+                    'auth_admin_unlock_actor', 'auth_open_recovery_window']) {
+    assert.doesNotMatch(b, new RegExp(`CREATE OR REPLACE FUNCTION public\\.${fn}\\(`), `${fn} must be untouched`);
+    assert.doesNotMatch(b, new RegExp(`REVOKE[^;]*public\\.${fn}\\(`), `${fn} grant must be untouched`);
   }
   assert.doesNotMatch(b, /DROP FUNCTION/);
 });
@@ -129,10 +193,29 @@ test('rollback A: guarded, and refuses if step B already landed', () => {
   assert.doesNotMatch(A_RB, /DROP TABLE|DELETE FROM|ALTER TABLE/);
 });
 
-test('rollback B: guarded and states that it removes the invariant', () => {
+test('rollback B: guarded, emergency-only, and refuses while any stub remains', () => {
+  assert.match(B_RB, /EMERGENCY ONLY/);
   assert.match(B_RB, /s2_7d2b\.force_rollback/);
-  assert.match(B_RB, /removes the PIN-uniqueness invariant/);
+  assert.match(B_RB, /s2_7d2b\.backend_reverted/);           // backend must be reverted first
+  assert.match(B_RB, /REMOVES the PIN-uniqueness invariant/);
+  assert.match(B_RB, /ACTIVE DUPLICATE PINs WITHOUT ANY ROTATION/);
+  assert.match(B_RB, /fail-closed stub\(s\) still installed/);
   assert.doesNotMatch(B_RB, /DROP TABLE|DELETE FROM/);
+});
+
+test('rollback B: never recreates bodies — it points at the source migrations', () => {
+  assert.doesNotMatch(B_RB, /CREATE OR REPLACE FUNCTION/);
+  for (const m of ['2026-07-15_auth_admin_access_management.sql', '2026-07-24_workspace_owner_pin.sql',
+                   '2026-07-13_auth_rpc.sql', '2026-07-13_auth_active_events.sql',
+                   '2026-07-14_auth_recovery_windows.sql']) {
+    assert.ok(B_RB.includes(m), `rollback must reference ${m}`);
+  }
+});
+
+test('rollback B: restores grants explicitly for each of the six', () => {
+  for (const [fn] of DISABLED) {
+    assert.match(B_RB, new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${fn}\\(`), `${fn} grant missing`);
+  }
 });
 
 test('both migrations are single transactions with the naming convention', () => {
@@ -156,9 +239,38 @@ const codeOf = (f) => read(f).split('\n')
   .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*'))
   .join('\n');
 
-test('cutover: NO backend call site references the legacy RPC', () => {
-  const hits = SRC.filter((f) => codeOf(f).includes('auth_admin_set_actor_pin'));
-  assert.deepEqual(hits, [], `legacy RPC still referenced in: ${hits.join(', ')}`);
+test('cutover: NO executable backend source references ANY of the six disabled writers', () => {
+  for (const [fn] of DISABLED) {
+    const hits = SRC.filter((f) => codeOf(f).includes(fn));
+    assert.deepEqual(hits, [], `${fn} still referenced in: ${hits.join(', ')}`);
+  }
+});
+
+test('cutover: no runtime route promises activation/deactivation or operational recovery', () => {
+  const idx = codeOf('index.js');
+  for (const m of ['setActorActive', 'unlockActor', 'revokeActorSessions',
+                   'consumeRecoveryWindow', 'openRecoveryWindow']) {
+    assert.doesNotMatch(idx, new RegExp(`adminAccessService\\.${m}|recovery[A-Za-z]*\\.${m}`),
+      `index.js must not expose ${m}`);
+  }
+  // and the recovery modules are not wired at all
+  const wired = SRC.filter((f) => /require\([^)]*(recoveryDao|bootstrapRecovery)/.test(codeOf(f)));
+  assert.deepEqual(wired, [], `recovery modules must stay unwired: ${wired.join(', ')}`);
+});
+
+test('cutover: no direct REST write targets auth_actors.pin_hash or active', () => {
+  for (const f of SRC) {
+    const code = codeOf(f);
+    // any non-GET sbRest/sbFetch against auth_actors would bypass the canonical RPC
+    const bad = /(sbRest|sbFetch)\(\s*['"](POST|PATCH|PUT|DELETE)['"]\s*,\s*['"]auth_actors/.test(code)
+      || /sbUpdate\(\s*['"]auth_actors/.test(code) || /sbUpsert\(\s*['"]auth_actors/.test(code);
+    assert.equal(bad, false, `${f} writes auth_actors directly over REST`);
+  }
+});
+
+test('cutover: workspace claim remains the only runtime writer of workspace_id', () => {
+  const callers = SRC.filter((f) => codeOf(f).includes('auth_account_claim_workspace'));
+  assert.deepEqual(callers, ['src/account/workspaceOwnerDao.js']);
 });
 
 test('cutover: the only PIN-rotation RPC invoked is auth_set_actor_pin_v2', () => {

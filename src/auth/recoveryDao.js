@@ -29,16 +29,7 @@ function registerRecoveryWindow({ windowId, purpose, actor, secretDigest, expire
 
 // Atomic one-shot consumption: window consume + admin PIN replacement + audit in
 // ONE transaction (see the SQL function). p_new_hash is the B1 scrypt hash.
-function consumeRecoveryWindow({ windowId, purpose, actor, secretDigest, newHash, ipHash = null, meta = {} }) {
-  return callRpc('auth_consume_recovery_window', {
-    p_window_id: windowId,
-    p_purpose: purpose,
-    p_actor: actor,
-    p_secret_digest: secretDigest,
-    p_new_hash: newHash,
-    p_ip_hash: ipHash,
-    p_meta: meta,
-  });
-}
-
-module.exports = { registerRecoveryWindow, consumeRecoveryWindow };
+// S2-7D2: consumeRecoveryWindow was REMOVED — auth_consume_recovery_window is fail-closed by
+// the writer cutover (it wrote pin_hash AND active=true outside the canonical workspace lock).
+// Emergency operational recovery returns in a later block, rebuilt on that lock.
+module.exports = { registerRecoveryWindow };

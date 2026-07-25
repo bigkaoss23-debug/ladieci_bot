@@ -149,34 +149,11 @@ function createAdminAccessService(deps = {}) {
     } catch (_) { return ADMIN_FAIL; }
   }
 
-  // ── set target actor active state ──────────────────────────────────────────
-  async function setActorActive({ byActor, targetActor, active, trustedClientIp, metadata } = {}) {
-    try {
-      if (!isCanonicalActor(byActor) || !isCanonicalActor(targetActor)) return ADMIN_FAIL;
-      if (active !== true && active !== false) return ADMIN_FAIL; // strict boolean; no coercion
-
-      let meta;
-      try { meta = sanitizeAdminMeta(metadata); } catch (_) { return ADMIN_FAIL; }
-
-      // reject self-disable early (SQL enforces it too)
-      if (byActor === targetActor && active === false) return ADMIN_FAIL;
-
-      const role = await resolveTargetRole(targetActor);
-      if (!role) return ADMIN_FAIL;
-
-      const ipH = resolveIpHash(trustedClientIp);
-      if (!ipH) return ADMIN_FAIL;
-
-      let result;
-      try {
-        result = await dao.adminSetActorActive({
-          byActor, targetActor, expectedRole: role, active, ipHash: ipH, meta,
-        });
-      } catch (_) { return ADMIN_FAIL; }
-
-      return sanitizeSuccess(result); // preserves SQL `changed`
-    } catch (_) { return ADMIN_FAIL; }
-  }
+  // ── set target actor active state — REMOVED (S2-7D2) ──────────────────────
+  // auth_admin_set_actor_active is fail-closed by the writer cutover: no runtime route
+  // exposed it, and reactivating an actor whose stored PIN already belongs to an active
+  // actor would create a duplicate without any rotation. Activation returns in a later block,
+  // rebuilt on the canonical workspace lock with duplicate validation.
 
   // ── unlock target actor ────────────────────────────────────────────────────
   async function unlockActor({ byActor, targetActor, trustedClientIp, metadata } = {}) {
@@ -203,7 +180,7 @@ function createAdminAccessService(deps = {}) {
     } catch (_) { return ADMIN_FAIL; }
   }
 
-  return { setActorPin, revokeActorSessions, setActorActive, unlockActor };
+  return { setActorPin, revokeActorSessions, unlockActor };
 }
 
 // Wrap a sanitized DAO result as a frozen success payload. The DAO already

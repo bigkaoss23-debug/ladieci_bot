@@ -77,24 +77,20 @@ async function getLockState(actor) {
 function recordFailedAttempt(actor) { return callRpc('auth_record_failed_attempt', { p_actor: actor }); }
 function resetFailedAttempts(actor) { return callRpc('auth_reset_failed_attempts', { p_actor: actor }); }
 
-function setActorPinHash({ actor, pinHash, byActor, meta = {} }) {
-  const clean = sanitizeMeta(meta); // deep JS sanitize before the DB
-  return callRpc('auth_set_pin_hash', { p_actor: actor, p_hash: pinHash, p_by: byActor, p_meta: clean });
-}
+// S2-7D2: setActorPinHash was REMOVED — auth_set_pin_hash is fail-closed by the writer
+// cutover. PIN mutation goes exclusively through src/auth/pinRotationService.js.
 
 function incrementSessionVersion({ actor, byActor, meta = {} }) {
   const clean = sanitizeMeta(meta);
   return callRpc('auth_bump_session_version', { p_actor: actor, p_by: byActor, p_meta: clean });
 }
 
-function setActorActive({ actor, active, byActor, meta = {} }) {
-  const clean = sanitizeMeta(meta);
-  return callRpc('auth_set_active', { p_actor: actor, p_active: active, p_by: byActor, p_meta: clean });
-}
+// S2-7D2: setActorActive was REMOVED — auth_set_active is fail-closed by the writer cutover.
+// Actor activation will be redesigned around the canonical workspace lock in a later block.
 
 module.exports = {
   AuthDaoError, ACTORS,
   getActor, getActorsByRole, listActorsSafe, getActorForVerify_SENSITIVE, listActorsForVerify_SENSITIVE, getLockState,
   recordFailedAttempt, resetFailedAttempts,
-  setActorPinHash, incrementSessionVersion, setActorActive,
+  incrementSessionVersion,
 };

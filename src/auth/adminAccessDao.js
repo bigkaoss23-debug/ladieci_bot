@@ -72,14 +72,8 @@ async function adminRevokeActorSessions({ byActor, targetActor, expectedRole, ip
   return sanitizeResult(body);
 }
 
-async function adminSetActorActive({ byActor, targetActor, expectedRole, active, ipHash, meta = {} }) {
-  const body = await callRpc('auth_admin_set_actor_active', {
-    p_by_actor: byActor, p_target_actor: targetActor, p_expected_role: expectedRole,
-    p_active: active, p_ip_hash: ipHash, p_meta: meta,
-  });
-  return sanitizeResult(body);
-}
-
+// S2-7D2: adminSetActorActive was REMOVED — auth_admin_set_actor_active is fail-closed by the
+// writer cutover (reactivating an actor could create an ACTIVE duplicate PIN with no rotation).
 async function adminUnlockActor({ byActor, targetActor, expectedRole, ipHash, meta = {} }) {
   const body = await callRpc('auth_admin_unlock_actor', {
     p_by_actor: byActor, p_target_actor: targetActor, p_expected_role: expectedRole,
@@ -90,5 +84,5 @@ async function adminUnlockActor({ byActor, targetActor, expectedRole, ipHash, me
 
 module.exports = {
   SAFE_RESULT_FIELDS, sanitizeResult, getActorSafe,
-  adminRevokeActorSessions, adminSetActorActive, adminUnlockActor,
+  adminRevokeActorSessions, adminUnlockActor,
 };
