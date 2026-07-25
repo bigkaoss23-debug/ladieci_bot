@@ -4,6 +4,26 @@
 
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
+const { normalizeOrderItem, OrderItemValidationError } = require("../menu/menuSnapshot");
+
+// S2-7D4C (Phase A, ported from the dynamic-menu adapter lineage eabea33/4a1dbd1/6fd8899).
+// Canonical immutable order-item snapshot at the WRITE boundary. Filters the delivery-fee
+// pseudo-item, then normalizes every real item into the versioned snapshot (canonical +
+// backward-compatible legacy fields). It NEVER re-prices or re-names from the live
+// catalogue — an item already carrying a value keeps the value accepted at order time, so
+// a later catalogue edit cannot mutate historical orders. A single critically malformed
+// item throws a controlled error so the order is not partially saved.
+function normalizeItemsForPersist(rawItems) {
+  const arr = Array.isArray(rawItems) ? rawItems : [];
+  const real = arr.filter(i => i && i.n !== "Entrega a domicilio");
+  return real.map((it, idx) => {
+    try {
+      return normalizeOrderItem(it);
+    } catch (e) {
+      throw new OrderItemValidationError(`item #${idx + 1}${it && it.n ? " ('" + it.n + "')" : ""}: ${e.message}`);
+    }
+  });
+}
 const { calcolaFornoOut, simulateDriverSchedule, computeDriverFields, proposeForNewOrder } = require("../utils/zones");
 const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
@@ -219,7 +239,8 @@ async function creaOrdine(params) {
   // Items contiene solo prodotti veri (pizze, bevande, dolci).
   // Se qualcuno (vecchi flussi) lo manda dentro items, lo filtriamo via.
   const itemsRaw = params.items || [];
-  const itemsFinali = itemsRaw.filter(i => i.n !== "Entrega a domicilio");
+  // Phase A: normalize to the immutable canonical snapshot (throws -> order not saved).
+  const itemsFinali = normalizeItemsForPersist(itemsRaw);
   const tipoConsegna = params.tipo_consegna || "RITIRO";
   const deliveryFee = deliveryFeeFor(tipoConsegna);
   const totaleBase = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
@@ -518,7 +539,9 @@ async function modificaOrdine(ordenId, updates) {
 
   const upd = {};
   // Items: filtra sempre il fake item (sicurezza retrocompatibile con chiamate vecchie)
-  if (updates.items) upd.items = updates.items.filter(i => i.n !== "Entrega a domicilio");
+  // Phase A: existing items keep their accepted values (normalize is idempotent);
+  // newly added items get the immutable snapshot too.
+  if (updates.items) upd.items = normalizeItemsForPersist(updates.items);
   if (updates.nota !== undefined) upd.nota = updates.nota;
   if (updates.hora) upd.hora = updates.hora;
   if (updates.nota_cucina !== undefined) upd.nota_cucina = updates.nota_cucina;
@@ -838,7 +861,9 @@ async function aggiungiItems(ordenId, newItems) {
   const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
   if (!rows || rows.length === 0) return { error: "not found" };
   // Filtriamo via il fake item anche dagli newItems per sicurezza
-  const cleanedNew = (newItems || []).filter(i => i.n !== "Entrega a domicilio");
+  // Phase A: normalize only the NEW items. Already-persisted items keep their original
+  // accepted snapshot and are never re-priced.
+  const cleanedNew = normalizeItemsForPersist(newItems);
   const merged = mergeItemsBevande((rows[0].items || []).filter(i => i.n !== "Entrega a domicilio"), cleanedNew);
   const tipoConsegna = rows[0].tipo_consegna || "RITIRO";
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, {
@@ -854,4 +879,4 @@ async function getById(id) {
   return (rows && rows.length > 0) ? rows[0] : null;
 }
 
-module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, planDriverScheduleSync, calcolaFornoOutFallback };
+module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, planDriverScheduleSync, calcolaFornoOutFallback, normalizeItemsForPersist };
