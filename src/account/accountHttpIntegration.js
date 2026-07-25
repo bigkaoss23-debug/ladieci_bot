@@ -58,11 +58,20 @@ function buildDefaults(env) {
     getUserByToken: createSupabaseUserTokenValidator({ supabaseUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY }),
   });
 
-  const { sbSelect } = require('../utils/supabase');
+  // NB: use sbRest (NOT sbSelect). sbSelect hard-codes `select=*&` in front of the caller's
+  // query, so an explicit `select=` becomes a SECOND select parameter and PostgREST keeps
+  // only the first — silently dropping the embedded `workspaces(...)` resource. That made
+  // every workspace field (and therefore adminPinSetupRequired) null. sbRest sets the query
+  // verbatim, exactly once.
+  const { sbRest } = require('../auth/audit');
   const enc = encodeURIComponent;
+  const rows = async (resource, query) => {
+    const r = await sbRest('GET', resource, { query });
+    return r.ok && Array.isArray(r.body) ? r.body : [];
+  };
   const service = createAccountService({
-    selectProfile: (uid) => sbSelect('user_profiles', `id=eq.${enc(uid)}&select=id,display_name`),
-    selectMemberships: (uid) => sbSelect(
+    selectProfile: (uid) => rows('user_profiles', `id=eq.${enc(uid)}&select=id,display_name`),
+    selectMemberships: (uid) => rows(
       'workspace_memberships',
       `user_id=eq.${enc(uid)}&status=eq.active&select=workspace_id,role,status,workspaces(slug,display_name,lifecycle_status,commercial_status,owner_pin_onboarding_completed_at)`
     ),
