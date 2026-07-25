@@ -40,131 +40,88 @@ const svc = (deps) => createAdminAccessService({
 });
 
 (async () => {
-  // ══ SET PIN ════════════════════════════════════════════════════════════════
+  // ══ SET PIN — delegation to THE canonical rotation (S2-7D2) ═══════════════
+  // The six-digit policy, the workspace-scoped uniqueness check, the snapshot and the
+  // atomic RPC now live in src/auth/pinRotationService.js and are covered end to end by
+  // tests/canonicalPinRotation.test.js. What must hold HERE is the delegation contract and
+  // the B6 surface rules this service still owns: canonical actors, metadata safety, the
+  // exact owner self-confirmation phrase, and one opaque failure shape.
   {
-    const { dao, calls } = makeDao({ operator_primary: 'operator' });
-    const checked = [];
-    const s = svc({
-      dao, hashPin, pinPolicy, ipHash: ipOK,
-      listActorsForVerify: async () => [
-        { actor: 'owner', active: true, pin_hash: 'OWNER_HASH' },
-        { actor: 'operator_backup', active: false, pin_hash: 'INACTIVE_HASH' },
-        { actor: 'rider', active: true, pin_hash: 'RIDER_HASH' },
-      ],
-      verifyPin: async (_pin, hash) => { checked.push(hash); return hash === 'RIDER_HASH'; },
-    });
-    hashCalls = [];
-    const r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: duplicate PIN among active actors fails closed', r === ADMIN_FAIL && calls.setPin.length === 0);
-    assert('set_pin: duplicate check ignores inactive actors and runs all active comparisons',
-      checked.join(',') === 'OWNER_HASH,RIDER_HASH');
-    assert('set_pin: duplicate PIN is never hashed or sent to mutation RPC', hashCalls.length === 0);
-  }
-  {
-    const { dao, calls } = makeDao({ operator_primary: 'operator', owner: 'admin', rider: 'rider' });
-    const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK });
+    const mkRot = (result) => { const calls = []; return { calls, rotation: { async rotate(a) { calls.push(a); return result; } } }; };
+    const okRot = () => ({ ok: true, actor: 'operator_primary', role: 'operator', active: true,
+      sessionVersion: 7, failedCount: 0, lockedUntil: null, updatedAt: 't', updatedBy: 'owner',
+      changed: true, event: 'pin_change' });
 
-    // admin target 8 digits rejected; 9 & 12 accepted
-    hashCalls = [];
-    let r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '12345678', confirmation: 'CHANGE_OWNER_PIN', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: admin 8 digits rejected', r === ADMIN_FAIL && calls.setPin.length === 0);
-    assert('set_pin: rejected PIN not hashed (policy before hash)', hashCalls.length === 0);
-    r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '918273645', confirmation: 'CHANGE_OWNER_PIN', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: admin 9 digits accepted', r.ok === true && calls.setPin.length === 1);
-    r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '817263540918', confirmation: 'CHANGE_OWNER_PIN', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: admin 12 digits accepted', r.ok === true && calls.setPin.length === 2);
-  }
-  {
-    const { dao, calls } = makeDao({ operator_primary: 'operator', rider: 'rider' });
-    const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK });
-    hashCalls = [];
-    let r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: operator 6 digits accepted', r.ok === true);
-    r = await s.setActorPin({ byActor: 'owner', targetActor: 'rider', newPin: '82640517', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: rider 8 digits accepted', r.ok === true);
-    // role policy from DAO not caller: DAO says operator (max 8); a 9-digit admin-length pin must FAIL for operator
-    r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '918273645', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: policy comes from DAO role (9-digit rejected for operator)', r === ADMIN_FAIL);
-    // hash exactly once on a valid input
-    hashCalls = [];
-    await s.setActorPin({ byActor: 'owner', targetActor: 'rider', newPin: '82640517', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: hashPin called exactly once on valid input', hashCalls.length === 1);
-    // only scrypt hash reaches DAO; plaintext PIN never reaches DAO
-    const lastArgs = calls.setPin[calls.setPin.length - 1];
-    assert('set_pin: DAO received scrypt hash (expectedRole from DB)', lastArgs.pinHash.slice(0, 7) === 'scrypt$' && lastArgs.expectedRole === 'rider');
-    assert('set_pin: plaintext PIN never reaches DAO', !deepFind(lastArgs, '82640517'));
-    assert('set_pin: raw IP never reaches DAO', !deepFind(lastArgs, '1.2.3.4') && lastArgs.ipHash === 'a'.repeat(32));
-  }
-  {
-    // unsupported target role denied (DAO returns a role not in the supported set)
-    const { dao, calls } = makeDao({ machine: 'service' });
-    const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK });
-    const r = await s.setActorPin({ byActor: 'owner', targetActor: 'rider', newPin: '835274', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: unresolved/unsupported role denied', r === ADMIN_FAIL && calls.setPin.length === 0);
-  }
-  {
-    // weak / sequential / repeated rejected (operator target)
-    const { dao } = makeDao({ operator_primary: 'operator' });
-    const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK });
-    for (const weak of ['123456', '000000', '121212']) {
-      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: weak, trustedClientIp: '1.2.3.4' });
-      assert(`set_pin: weak PIN rejected (${weak})`, r === ADMIN_FAIL);
+    {
+      const { dao } = makeDao({ operator_primary: 'operator' });
+      const { calls, rotation } = mkRot(okRot());
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation });
+      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      assert('set_pin: delegates to the canonical rotation with the operational caller kind',
+        r.ok === true && calls.length === 1 && calls[0].callerKind === 'operational_admin');
+      assert('set_pin: target and initiator forwarded verbatim',
+        calls[0].targetActor === 'operator_primary' && calls[0].byActor === 'owner');
+      assert('set_pin: raw IP is forwarded for server-side hashing, never the PIN hash',
+        calls[0].trustedClientIp === '1.2.3.4' && !('pinHash' in calls[0]));
+      assert('set_pin: sanitized success shape preserved', r.session_version === 7 && r.event === 'pin_change' && !('pin_hash' in r));
+    }
+
+    {
+      const { dao } = makeDao({ rider: 'rider' });
+      const { calls, rotation } = mkRot({ ok: false, error: 'pin_duplicate' });
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation });
+      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'rider', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      assert('set_pin: a duplicate stays opaque on this surface (single generic failure)', r === ADMIN_FAIL);
+      assert('set_pin: the duplicate attempt still reached the canonical rotation', calls.length === 1);
+    }
+
+    {
+      const { dao } = makeDao({ rider: 'rider' });
+      const { rotation } = mkRot({ ok: false, error: 'rotation_failed' });
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation });
+      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'rider', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      assert('set_pin: any rotation failure collapses to the generic shape', r === ADMIN_FAIL);
+    }
+
+    {
+      const { dao } = makeDao({ owner: 'admin' });
+      const { calls, rotation } = mkRot(okRot());
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation });
+      let r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      assert('set_pin: owner self missing phrase rejected', r === ADMIN_FAIL && calls.length === 0);
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', confirmation: 'change_owner_pin', trustedClientIp: '1.2.3.4' });
+      assert('set_pin: owner self lowercase phrase rejected', r === ADMIN_FAIL && calls.length === 0);
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', confirmation: ' CHANGE_OWNER_PIN ', trustedClientIp: '1.2.3.4' });
+      assert('set_pin: owner self whitespace phrase rejected', r === ADMIN_FAIL && calls.length === 0);
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', confirmation: 'CHANGE_OWNER_PIN', trustedClientIp: '1.2.3.4' });
+      assert('set_pin: owner self exact phrase accepted and forwarded to the rotation',
+        r.ok === true && calls.length === 1 && calls[0].confirm === 'CHANGE_OWNER_PIN');
+    }
+
+    {
+      const { dao } = makeDao({ operator_primary: 'operator' });
+      const { calls, rotation } = mkRot(okRot());
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation });
+      let r = await s.setActorPin({ byActor: 'ghost', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      assert('set_pin: non-canonical initiator rejected before delegating', r === ADMIN_FAIL && calls.length === 0);
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'ghost', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      assert('set_pin: non-canonical target rejected before delegating', r === ADMIN_FAIL && calls.length === 0);
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', metadata: { pin: 'x' }, trustedClientIp: '1.2.3.4' });
+      assert('set_pin: sensitive metadata rejected before delegating', r === ADMIN_FAIL && calls.length === 0);
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', metadata: { note: 'ok' }, trustedClientIp: '1.2.3.4' });
+      assert('set_pin: clean metadata accepted', r.ok === true);
+    }
+
+    {
+      const { dao } = makeDao({ operator_primary: 'operator' });
+      const logger = makeLogger();
+      const { rotation } = mkRot(okRot());
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, logger });
+      await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      assert('set_pin: nothing sensitive is logged', !deepFind(logger.rec, '835274') && !deepFind(logger.rec, '1.2.3.4'));
     }
   }
-  {
-    // owner self-change confirmation exactness
-    const { dao, calls } = makeDao({ owner: 'admin', operator_primary: 'operator' });
-    const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK });
-    hashCalls = [];
-    let r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '918273645', confirmation: 'change_owner_pin', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: owner self lowercase phrase rejected', r === ADMIN_FAIL && calls.setPin.length === 0 && hashCalls.length === 0);
-    r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '918273645', confirmation: ' CHANGE_OWNER_PIN ', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: owner self whitespace phrase rejected', r === ADMIN_FAIL && calls.setPin.length === 0);
-    r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '918273645', confirmation: undefined, trustedClientIp: '1.2.3.4' });
-    assert('set_pin: owner self missing phrase rejected', r === ADMIN_FAIL);
-    r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '918273645', confirmation: 'CHANGE_OWNER_PIN', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: owner self exact phrase accepted, passed to DAO', r.ok === true && calls.setPin[calls.setPin.length - 1].confirm === 'CHANGE_OWNER_PIN');
-    // another actor does not require the phrase (confirm null)
-    r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: other target needs no phrase (confirm=null)', r.ok === true && calls.setPin[calls.setPin.length - 1].confirm === null);
-  }
-  {
-    // missing/failed IP hash prevents DAO call + no hashing
-    const { dao, calls } = makeDao({ operator_primary: 'operator' });
-    const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK });
-    hashCalls = [];
-    const r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: undefined });
-    assert('set_pin: missing IP hash → generic, no DAO, no hash', r === ADMIN_FAIL && calls.setPin.length === 0 && hashCalls.length === 0);
-  }
-  {
-    // metadata safety
-    const { dao, calls } = makeDao({ operator_primary: 'operator' });
-    const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK });
-    for (const bad of [{ pin: '1' }, { pin_hash: 'x' }, { raw_ip: '1.2.3.4' }, { confirmation: 'X' }, { a: { token: 'x' } }, ['array']]) {
-      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4', metadata: bad });
-      assert('set_pin: sensitive/invalid metadata rejected', r === ADMIN_FAIL);
-    }
-    assert('set_pin: no DAO call on bad metadata', calls.setPin.length === 0);
-    // safe metadata cloned (caller not mutated) and passed
-    const meta = { note: 'ok' };
-    const r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4', metadata: meta });
-    assert('set_pin: safe metadata passed as a clone', r.ok === true && calls.setPin[0].meta.note === 'ok' && calls.setPin[0].meta !== meta);
-  }
-  {
-    // generic DAO failure + sanitized success (no PIN/hash/confirmation/raw IP) + no logging
-    const logger = makeLogger();
-    const { dao } = makeDao({ operator_primary: 'operator' }, { setPin: () => { throw new Error('boom AUTH_NOT_ADMIN'); } });
-    const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, logger });
-    let r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: DAO throw → generic failure shape', r === ADMIN_FAIL);
-    const { dao: dao2, calls } = makeDao({ operator_primary: 'operator' });
-    const s2 = svc({ dao: dao2, hashPin, pinPolicy, ipHash: ipOK, logger });
-    r = await s2.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
-    assert('set_pin: success result has no PIN/hash/confirmation/raw IP',
-      r.ok === true && !deepFind(r, '835274') && !deepFind(r, 'scrypt$') && !deepFind(r, '1.2.3.4') && !('pin_hash' in r));
-    assert('set_pin: logger emitted nothing sensitive (nothing at all)', logger.rec.length === 0);
-    void calls;
-  }
+
 
   // ══ REVOKE ═══════════════════════════════════════════════════════════════════
   {

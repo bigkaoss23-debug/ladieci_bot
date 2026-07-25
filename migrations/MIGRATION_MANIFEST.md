@@ -117,6 +117,9 @@ with its commit date (rows 8, 11, 29, 30) the commit date governs.
 | 28 | 2026-07-23 | 2026-07-23_storico_session_order_uq_nonpartial.sql | 4ecf3e1 | 2026-07-23 | a074088c269073e0 |
 | 29 | 2026-07-24 → **B (S2-7B)** | 2026-07-24_workspace_foundation.sql | 140c8cd | 2026-07-23 | 42c949a39ce7d34d |
 | 30 | 2026-07-24 → **C (S2-7C)** | 2026-07-24_account_auth_boundary.sql | 0222f04 | 2026-07-23 | c46be5b362fa6541 |
+| 31 | 2026-07-24 → **S2-7D** | 2026-07-24_workspace_owner_pin.sql | bd6f363 | 2026-07-24 | e5c02d93520ee665 |  <!-- APPLIED on staging -->
+| 32 | 2026-07-25 → **S2-7D2 A** | 2026-07-25_canonical_pin_rotation.sql | pending | 2026-07-25 | bfa0711f14dde6be |  <!-- DRAFT — apply BEFORE the backend cutover -->
+| 33 | 2026-07-26 → **S2-7D2 B** | 2026-07-26_disable_legacy_pin_rotation.sql | pending | 2026-07-26 | 9556d9a0adef281f |  <!-- DRAFT — apply ONLY AFTER the cutover is deployed+verified -->
 
 > Rows 29–30: filename prefix `2026-07-24` is one day ahead of the `2026-07-23` commit date.
 > `apply_order` places **workspace_foundation (S2-7B) before account_auth_boundary (S2-7C)**,
@@ -130,3 +133,21 @@ is present, verify for rows 29–30 that the applied name equals the source file
 (`2026-07-24_*`); if it matches, source and history are already consistent and no further
 action is needed. Do **not** rename to "correct" the date after the fact — that would create
 the very divergence this manifest prevents.
+
+
+## S2-7D2 cutover ordering (rows 32–33)
+
+The two S2-7D2 migrations are **not interchangeable** and must bracket the backend deploy:
+
+1. **row 32** `2026-07-25_canonical_pin_rotation.sql` — adds `auth_set_actor_pin_v2`. Purely
+   additive: the legacy writer still works, so an older backend keeps functioning.
+2. **deploy the backend** that routes EVERY owner/operator/rider rotation through v2.
+3. **verify** no call site references `auth_admin_set_actor_pin`
+   (`tests/pinRotationCutover.static.test.js`).
+4. **row 33** `2026-07-26_disable_legacy_pin_rotation.sql` — fail-closes and revokes the legacy
+   writer. Its own guard refuses to run if row 32 is absent.
+
+> **Transition boundary.** Between steps 1 and 4 the PIN-uniqueness invariant does **not**
+> hold: any still-running old backend instance can call the legacy RPC, which locks only
+> (initiator, target) and performs no cross-actor duplicate check. Keep the window short and
+> do not rotate operator/rider PINs inside it.

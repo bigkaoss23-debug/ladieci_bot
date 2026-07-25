@@ -20,6 +20,10 @@ global.fetch = async (url, opts = {}) => {
 const reset = (next) => { CALLS = []; NEXT = next; };
 
 const dao = require('../src/auth/adminAccessDao');
+
+// S2-7D2 cutover: the legacy PIN wrapper was REMOVED from this DAO — PIN rotation now goes
+// exclusively through src/auth/pinRotationDao.js → auth_set_actor_pin_v2.
+assert('adminSetActorPin wrapper removed (S2-7D2)', typeof dao.adminSetActorPin === 'undefined');
 const okBody = (over = {}) => Object.assign({
   actor: 'operator_primary', role: 'operator', active: true, session_version: 5,
   failed_count: 0, locked_until: null, updated_at: '2026-07-15T00:00:00Z', updated_by: 'owner',
@@ -28,14 +32,9 @@ const okBody = (over = {}) => Object.assign({
 
 (async () => {
   // ── exact RPC name + param mapping ─────────────────────────────────────────
-  reset({ ok: true, status: 200, body: okBody() });
-  let r = await dao.adminSetActorPin({ byActor: 'owner', targetActor: 'operator_primary', expectedRole: 'operator', pinHash: 'scrypt$1$x', ipHash: 'abc', meta: { a: 1 }, confirm: null });
-  assert('set_pin: calls exactly one fetch (no retry)', CALLS.length === 1);
-  assert('set_pin: RPC path auth_admin_set_actor_pin (POST)', /rpc\/auth_admin_set_actor_pin$/.test(CALLS[0].url) && CALLS[0].method === 'POST');
-  assert('set_pin: exact param mapping', JSON.stringify(CALLS[0].body) === JSON.stringify({
-    p_by_actor: 'owner', p_target_actor: 'operator_primary', p_expected_role: 'operator',
-    p_hash: 'scrypt$1$x', p_ip_hash: 'abc', p_meta: { a: 1 }, p_confirm: null }), JSON.stringify(CALLS[0].body));
-  assert('set_pin: sanitized result whitelisted', r.actor === 'operator_primary' && r.changed === true && !('pin_hash' in r));
+  // S2-7D2: the set_pin assertions moved out with the wrapper. PIN-rotation RPC naming,
+  // param mapping and result sanitization are covered by pinRotationDao via
+  // tests/canonicalPinRotation.test.js and tests/pinRotationCutover.static.test.js.
 
   reset({ ok: true, status: 200, body: okBody({ event: 'revoke' }) });
   await dao.adminRevokeActorSessions({ byActor: 'owner', targetActor: 'rider', expectedRole: 'rider', ipHash: 'abc', meta: {}, confirm: 'REVOKE_OWNER_SESSIONS' });
@@ -71,10 +70,11 @@ const okBody = (over = {}) => Object.assign({
   err = null; try { await dao.adminUnlockActor({ byActor: 'owner', targetActor: 'rider', expectedRole: 'rider', ipHash: 'abc' }); } catch (e) { err = e; }
   assert('array RPC body rejected fail-closed', err && err.code === 'ADMIN_ACTION_FAILED');
 
-  // pin_hash in body is stripped, never returned
+  // pin_hash in body is stripped, never returned (exercised through a surviving RPC now that
+  // the set_pin wrapper is gone — the sanitizer is shared by all of them)
   reset({ ok: true, status: 200, body: okBody({ pin_hash: 'scrypt$LEAK', extra: 'x' }) });
-  r = await dao.adminSetActorPin({ byActor: 'owner', targetActor: 'operator_primary', expectedRole: 'operator', pinHash: 'scrypt$1$x', ipHash: 'abc' });
-  assert('pin_hash stripped from result', !('pin_hash' in r) && !('extra' in r) && JSON.stringify(r).indexOf('LEAK') === -1);
+  const sanitized = await dao.adminUnlockActor({ byActor: 'owner', targetActor: 'rider', expectedRole: 'rider', ipHash: 'abc' });
+  assert('pin_hash stripped from result', !('pin_hash' in sanitized) && !('extra' in sanitized) && JSON.stringify(sanitized).indexOf('LEAK') === -1);
 
   // ── PostgREST error → generic, no body/oracle leak ─────────────────────────
   reset({ ok: false, status: 400, body: { code: 'P0001', message: 'AUTH_NOT_ADMIN', details: 'owner disabled secret detail', hint: 'x' } });

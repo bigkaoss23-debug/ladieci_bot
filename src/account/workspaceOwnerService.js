@@ -13,13 +13,12 @@
 // logged/returned/stored. SQL is the final authority on ownership, uniqueness-freshness and
 // atomicity.
 //
-// deps: { dao, hashPin, verifyPin, pinPolicy, ipHash, slug, displayName, logger? }
+// deps: { dao, rotation, slug, displayName, logger? }
 
 const FAIL = Object.freeze({ ok: false, error: 'account_action_failed' });
 // Neutral duplicate outcome — never says WHICH actor already uses the PIN.
 const DUPLICATE = Object.freeze({ ok: false, error: 'pin_duplicate' });
 const OWNER_ACTOR = 'owner';
-const IP_HASH_MAX = 64;
 
 function isUuid(x) {
   return typeof x === 'string'
@@ -27,19 +26,9 @@ function isUuid(x) {
 }
 
 function createWorkspaceOwnerService(deps = {}) {
-  const { dao, hashPin, verifyPin, pinPolicy, ipHash } = deps;
+  const { dao, rotation } = deps;   // rotation = canonical pinRotationService
   const SLUG = deps.slug || 'la-dieci';
   const DISPLAY_NAME = deps.displayName || 'La Dieci';
-
-  function resolveIpHash(trustedClientIp) {
-    if (typeof ipHash !== 'function') return null;
-    let h;
-    try { h = ipHash(trustedClientIp); } catch (_) { return null; }
-    if (typeof h !== 'string') return null;
-    const t = h.trim();
-    if (t.length === 0 || t.length > IP_HASH_MAX) return null;
-    return h;
-  }
 
   // ── idempotent owner bootstrap ─────────────────────────────────────────────
   async function claimWorkspace({ userId } = {}) {
@@ -60,62 +49,30 @@ function createWorkspaceOwnerService(deps = {}) {
     } catch (_) { return FAIL; }
   }
 
-  // ── create / rotate the owner PIN (S2-7D2: exactly 6 digits + uniqueness) ──
-  // Order matters: cheap policy gate → IP hash → uniqueness check against every OTHER active
-  // actor of the workspace → hash once → single atomic RPC carrying the verified snapshot.
-  // The candidate is compared against ALL other actors (never early-exit) so response timing
-  // cannot reveal which actor matched.
+  // ── create / rotate the owner PIN — via THE canonical rotation protocol ────
+  // Delegates to pinRotationService so the account path and the operational-admin path share
+  // one protocol, one lock order and one uniqueness check. Anything else would leave a second
+  // writer able to break the invariant.
   async function setOwnerPin({ userId, workspaceId, newPin, trustedClientIp } = {}) {
     try {
       if (!isUuid(userId) || !isUuid(workspaceId)) return FAIL;
+      if (!rotation || typeof rotation.rotate !== 'function') return FAIL;
 
-      // exactly six digits, no separators, no letters, no admin bypass
-      if (!pinPolicy || typeof pinPolicy.validateNewPinFormat !== 'function') return FAIL;
-      if (!pinPolicy.validateNewPinFormat(newPin).ok) return FAIL;
-
-      const ipH = resolveIpHash(trustedClientIp);
-      if (!ipH) return FAIL; // fail closed if IP hashing unavailable
-
-      if (typeof dao.listWorkspaceActorsForVerify_SENSITIVE !== 'function'
-          || typeof verifyPin !== 'function') return FAIL;
-
-      let actors;
-      try { actors = await dao.listWorkspaceActorsForVerify_SENSITIVE(workspaceId); }
-      catch (_) { return FAIL; }
-      if (!Array.isArray(actors)) return FAIL;
-
-      // Snapshot of every OTHER actor exactly as read; SQL re-validates it under lock.
-      const others = actors.filter((a) => a && a.actor !== OWNER_ACTOR);
-      const seen = others.map((a) => Object.freeze({
-        actor: a.actor, active: a.active === true, pin_hash: a.pin_hash ?? null,
-      }));
-
-      // Uniqueness: reject if the candidate already belongs to another ACTIVE actor.
-      let duplicate = false;
-      for (const a of others) {
-        if (!a || a.active !== true || !a.pin_hash) continue;
-        let matched = false;
-        try { matched = await verifyPin(newPin, a.pin_hash); } catch (_) { matched = false; }
-        if (matched) duplicate = true;          // no break — constant work
-      }
-      if (duplicate) return DUPLICATE;
-
-      let pinHash;
-      try { pinHash = await hashPin(newPin); } catch (_) { return FAIL; }
-      if (typeof pinHash !== 'string' || pinHash.slice(0, 7) !== 'scrypt$') return FAIL;
-
-      let result;
-      try {
-        result = await dao.setOwnerPinV2({ userId, workspaceId, pinHash, ipHash: ipH, seen, meta: {} });
-      } catch (_) { return FAIL; }   // includes AUTH_ROTATION_STALE → nothing was written
-      pinHash = null;
-
-      if (!result || result.actor !== 'owner' || !Number.isInteger(result.sessionVersion)) return FAIL;
+      const r = await rotation.rotate({
+        targetActor: OWNER_ACTOR,
+        newPin,
+        trustedClientIp,
+        callerKind: 'account_owner',
+        userId,
+        workspaceId,
+      });
+      if (r && r.error === 'pin_duplicate') return DUPLICATE;
+      if (!r || r.ok !== true) return FAIL;
       return Object.freeze({
         ok: true,
-        actor: result.actor,
-        sessionVersion: result.sessionVersion,
-        event: result.event, // 'pin_set' | 'pin_change'
+        actor: r.actor,
+        sessionVersion: r.sessionVersion,
+        event: r.event, // 'pin_set' | 'pin_change'
       });
     } catch (_) { return FAIL; }
   }

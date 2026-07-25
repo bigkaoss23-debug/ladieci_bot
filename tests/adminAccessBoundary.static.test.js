@@ -53,10 +53,13 @@ assert('B6B only auth_actors access is a GET read', (() => {
 for (const rpc of ['auth_set_pin_hash', 'auth_bump_session_version', 'auth_set_active', 'auth_reset_failed_attempts']) {
   assert(`B6B does not call frozen B2 RPC ${rpc}`, !new RegExp(rpc).test(B6B));
 }
-// only the four B6A RPCs are referenced
-const rpcRefs = (DAO.match(/auth_admin_[a-z_]+/g) || []);
-const EXPECTED = ['auth_admin_set_actor_pin', 'auth_admin_revoke_actor_sessions', 'auth_admin_set_actor_active', 'auth_admin_unlock_actor'];
-assert('B6B references exactly the four B6A RPC names', EXPECTED.every((n) => rpcRefs.includes(n)) && rpcRefs.every((n) => EXPECTED.includes(n)));
+// S2-7D2 cutover: PIN rotation left this DAO. Only the three NON-PIN B6A RPCs may remain,
+// and the legacy auth_admin_set_actor_pin must be absent (it is disabled in migration step B).
+const DAO_CODE = DAO.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+const rpcRefs = (DAO_CODE.match(/auth_admin_[a-z_]+/g) || []);
+const EXPECTED = ['auth_admin_revoke_actor_sessions', 'auth_admin_set_actor_active', 'auth_admin_unlock_actor'];
+assert('B6B references exactly the three non-PIN B6A RPC names', EXPECTED.every((n) => rpcRefs.includes(n)) && rpcRefs.every((n) => EXPECTED.includes(n)));
+assert('B6B no longer references the legacy PIN-rotation RPC (S2-7D2 cutover)', !rpcRefs.includes('auth_admin_set_actor_pin'));
 
 // ── only index.js imports B6B ────────────────────────────────────────────────
 assert('only index.js imports B6B', (() => {

@@ -7,8 +7,6 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createWorkspaceOwnerService } = require('../src/account/workspaceOwnerService');
-const pinPolicy = require('../src/auth/pinPolicy');
-const { hashPin, verifyPin } = require('../src/auth/scrypt');
 
 const UID = '11111111-1111-4111-8111-111111111111';
 const WID = '22222222-2222-4222-8222-222222222222';
@@ -18,13 +16,10 @@ function makeDao(overrides = {}) {
   const calls = { claim: [], setPin: [] };
   const dao = {
     async claimWorkspace(a) { calls.claim.push(a); return overrides.claim || { workspaceId: WID, membershipId: 'm', created: true, onboardingCompleted: false }; },
-    async setOwnerPinV2(a) { calls.setPin.push(a); return overrides.setPin || { actor: 'owner', role: 'admin', active: true, sessionVersion: 2, event: 'pin_set', changed: true }; },
-    async listWorkspaceActorsForVerify_SENSITIVE() { return overrides.actors || []; },
   };
   return { dao, calls };
 }
-const ipHash = () => 'a'.repeat(32);
-const svc = (dao) => createWorkspaceOwnerService({ dao, hashPin, verifyPin, pinPolicy, ipHash });
+const svc = (dao) => createWorkspaceOwnerService({ dao });
 
 test('claim: fresh workspace (onboarding NOT completed) → adminPinRequired true even though legacy actor already has a PIN', async () => {
   const { dao } = makeDao();
@@ -51,51 +46,56 @@ test('claim: dao throw → generic fail', async () => {
   assert.equal(r.ok, false);
 });
 
-test('setOwnerPin: valid admin PIN → hashed, dao receives scrypt hash (never plaintext)', async () => {
-  const { dao, calls } = makeDao();
-  const r = await svc(dao).setOwnerPin({ userId: UID, workspaceId: WID, newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
-  assert.equal(r.ok, true); assert.equal(r.event, 'pin_set'); assert.equal(r.sessionVersion, 2);
-  assert.equal(calls.setPin.length, 1);
-  const passed = calls.setPin[0];
-  assert.equal(passed.pinHash.slice(0, 7), 'scrypt$');
-  assert.ok(!JSON.stringify(passed).includes(GOOD_ADMIN_PIN), 'plaintext PIN must not reach the DAO');
-});
+// setOwnerPin now DELEGATES to the canonical rotation service (see canonicalPinRotation.test.js
+// for policy, uniqueness and concurrency). Here we only prove the delegation contract.
+function makeRotation(result) {
+  const calls = [];
+  return { calls, rotation: { async rotate(a) { calls.push(a); return result; } } };
+}
+const ownerSvc = (dao, rotation) => createWorkspaceOwnerService({ dao, rotation });
 
-test('setOwnerPin: 5-digit PIN rejected before hashing', async () => {
-  const { dao, calls } = makeDao();
-  const r = await svc(dao).setOwnerPin({ userId: UID, workspaceId: WID, newPin: '48291', trustedClientIp: '1.2.3.4' });
-  assert.equal(r.ok, false); assert.equal(calls.setPin.length, 0);
-});
-
-test('setOwnerPin: sequential/weak PIN rejected', async () => {
+test('setOwnerPin: delegates with callerKind account_owner and the owner target', async () => {
   const { dao } = makeDao();
-  const r = await svc(dao).setOwnerPin({ userId: UID, workspaceId: WID, newPin: '123456', trustedClientIp: '1.2.3.4' });
-  assert.equal(r.ok, false);
+  const { calls, rotation } = makeRotation({ ok: true, actor: 'owner', sessionVersion: 15, event: 'pin_change' });
+  const r = await ownerSvc(dao, rotation).setOwnerPin({ userId: UID, workspaceId: WID, newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
+  assert.equal(r.ok, true);
+  assert.equal(r.sessionVersion, 15);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].callerKind, 'account_owner');
+  assert.equal(calls[0].targetActor, 'owner');
+  assert.equal(calls[0].userId, UID);
+  assert.equal(calls[0].workspaceId, WID);
 });
 
-test('setOwnerPin: non-uuid workspace rejected', async () => {
-  const { dao, calls } = makeDao();
-  const r = await svc(dao).setOwnerPin({ userId: UID, workspaceId: 'x', newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
-  assert.equal(r.ok, false); assert.equal(calls.setPin.length, 0);
-});
-
-test('setOwnerPin: ipHash unavailable → fail closed (no dao call)', async () => {
-  const { dao, calls } = makeDao();
-  const s = createWorkspaceOwnerService({ dao, hashPin, verifyPin, pinPolicy, ipHash: () => null });
-  const r = await s.setOwnerPin({ userId: UID, workspaceId: WID, newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
-  assert.equal(r.ok, false); assert.equal(calls.setPin.length, 0);
-});
-
-test('setOwnerPin: dao malformed result → fail closed', async () => {
-  const dao = { async setOwnerPinV2() { return { actor: 'operator_primary', sessionVersion: 2 }; },
-                async listWorkspaceActorsForVerify_SENSITIVE() { return []; } };
-  const s = createWorkspaceOwnerService({ dao, hashPin, verifyPin, pinPolicy, ipHash });
-  const r = await s.setOwnerPin({ userId: UID, workspaceId: WID, newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
-  assert.equal(r.ok, false);
-});
-
-test('setOwnerPin: result never contains a pin hash field surfaced to caller', async () => {
+test('setOwnerPin: a duplicate surfaces as the neutral pin_duplicate error', async () => {
   const { dao } = makeDao();
-  const r = await svc(dao).setOwnerPin({ userId: UID, workspaceId: WID, newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
+  const { rotation } = makeRotation({ ok: false, error: 'pin_duplicate' });
+  const r = await ownerSvc(dao, rotation).setOwnerPin({ userId: UID, workspaceId: WID, newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'pin_duplicate');
+  assert.ok(!JSON.stringify(r).match(/operator|rider/));
+});
+
+test('setOwnerPin: any other rotation failure collapses to the generic error', async () => {
+  const { dao } = makeDao();
+  const { rotation } = makeRotation({ ok: false, error: 'rotation_failed' });
+  const r = await ownerSvc(dao, rotation).setOwnerPin({ userId: UID, workspaceId: WID, newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'account_action_failed');
+});
+
+test('setOwnerPin: non-uuid inputs rejected before any rotation call', async () => {
+  const { dao } = makeDao();
+  const { calls, rotation } = makeRotation({ ok: true, actor: 'owner', sessionVersion: 2, event: 'pin_set' });
+  const svcX = ownerSvc(dao, rotation);
+  assert.equal((await svcX.setOwnerPin({ userId: 'nope', workspaceId: WID, newPin: GOOD_ADMIN_PIN })).ok, false);
+  assert.equal((await svcX.setOwnerPin({ userId: UID, workspaceId: 'x', newPin: GOOD_ADMIN_PIN })).ok, false);
+  assert.equal(calls.length, 0);
+});
+
+test('setOwnerPin: result never carries a hash', async () => {
+  const { dao } = makeDao();
+  const { rotation } = makeRotation({ ok: true, actor: 'owner', sessionVersion: 15, event: 'pin_change' });
+  const r = await ownerSvc(dao, rotation).setOwnerPin({ userId: UID, workspaceId: WID, newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
   assert.ok(!('pinHash' in r) && !('pin_hash' in r));
 });

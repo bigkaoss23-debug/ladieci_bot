@@ -1,8 +1,8 @@
 'use strict';
 // Access Control V2 — Block B6B: routine admin-access DAO (service_role only).
-// Thin wrappers over the four B6A atomic RPCs (auth_admin_set_actor_pin,
-// auth_admin_revoke_actor_sessions, auth_admin_set_actor_active,
-// auth_admin_unlock_actor). Used only behind the Auth V2 admin boundary.
+// Thin wrappers over the B6A atomic RPCs (auth_admin_revoke_actor_sessions,
+// auth_admin_set_actor_active, auth_admin_unlock_actor). Used only behind the Auth V2 admin
+// boundary. PIN ROTATION IS NOT HERE — see src/auth/pinRotationService.js (S2-7D2).
 //
 // Contract:
 //  * passes the EXACT B6A parameter names; never a frozen B2 RPC substitute;
@@ -60,14 +60,10 @@ async function getActorSafe(actor) {
 }
 
 // ── four B6A mutation wrappers (exact param names) ───────────────────────────
-async function adminSetActorPin({ byActor, targetActor, expectedRole, pinHash, ipHash, meta = {}, confirm = null }) {
-  const body = await callRpc('auth_admin_set_actor_pin', {
-    p_by_actor: byActor, p_target_actor: targetActor, p_expected_role: expectedRole,
-    p_hash: pinHash, p_ip_hash: ipHash, p_meta: meta, p_confirm: confirm,
-  });
-  return sanitizeResult(body);
-}
-
+// NOTE (S2-7D2): the legacy adminSetActorPin wrapper was REMOVED. PIN rotation now goes
+// exclusively through src/auth/pinRotationService.js → auth_set_actor_pin_v2, so no call site
+// can reach auth_admin_set_actor_pin (disabled in migration step B). The three non-PIN admin
+// RPCs below are unchanged.
 async function adminRevokeActorSessions({ byActor, targetActor, expectedRole, ipHash, meta = {}, confirm = null }) {
   const body = await callRpc('auth_admin_revoke_actor_sessions', {
     p_by_actor: byActor, p_target_actor: targetActor, p_expected_role: expectedRole,
@@ -94,5 +90,5 @@ async function adminUnlockActor({ byActor, targetActor, expectedRole, ipHash, me
 
 module.exports = {
   SAFE_RESULT_FIELDS, sanitizeResult, getActorSafe,
-  adminSetActorPin, adminRevokeActorSessions, adminSetActorActive, adminUnlockActor,
+  adminRevokeActorSessions, adminSetActorActive, adminUnlockActor,
 };

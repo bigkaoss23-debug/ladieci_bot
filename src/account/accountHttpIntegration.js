@@ -77,15 +77,17 @@ function buildDefaults(env) {
     ),
   });
 
+  // S2-7D2 — the owner rotation uses THE canonical protocol, identical to the operational
+  // admin path (see src/auth/pinRotationService.js).
   const { hashPin, verifyPin } = require('../auth/scrypt');
   const pinPolicy = require('../auth/pinPolicy');
   const { ipHash } = require('../auth/ipSecurity');
+  const pinRotationDao = require('../auth/pinRotationDao');
+  const { createPinRotation } = require('../auth/pinRotationService');
+  const rotation = createPinRotation({ dao: pinRotationDao, hashPin, verifyPin, pinPolicy, ipHash });
   const ownerService = createWorkspaceOwnerService({
     dao: workspaceOwnerDao,
-    hashPin,
-    verifyPin,
-    pinPolicy,
-    ipHash,
+    rotation,
     slug: env.LA_DIECI_WORKSPACE_SLUG || 'la-dieci',
     displayName: env.LA_DIECI_WORKSPACE_NAME || 'La Dieci',
   });

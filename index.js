@@ -122,12 +122,26 @@ function trustedClientIp(req) {
     ? req.socket.remoteAddress : null;
 }
 
+// S2-7D2 — THE canonical PIN-rotation protocol. Every owner/operator/rider rotation goes
+// through it (account-owner path and operational-admin path alike), so no second writer can
+// break the workspace PIN-uniqueness invariant.
+const pinRotationDao = require("./src/auth/pinRotationDao");
+const { createPinRotation } = require("./src/auth/pinRotationService");
+const pinRotation = createPinRotation({
+  dao: pinRotationDao,
+  hashPin,
+  verifyPin,
+  pinPolicy,
+  ipHash,
+});
+
 const adminAccessService = createAdminAccessService({
   dao: adminAccessDao,
   hashPin,
   verifyPin,
   pinPolicy,
   ipHash,
+  rotation: pinRotation,
   listActorsForVerify: authDao.listActorsForVerify_SENSITIVE,
 });
 
