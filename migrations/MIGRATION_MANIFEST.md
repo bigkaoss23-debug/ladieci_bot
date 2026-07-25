@@ -119,7 +119,7 @@ with its commit date (rows 8, 11, 29, 30) the commit date governs.
 | 30 | 2026-07-24 → **C (S2-7C)** | 2026-07-24_account_auth_boundary.sql | 0222f04 | 2026-07-23 | c46be5b362fa6541 |
 | 31 | 2026-07-24 → **S2-7D** | 2026-07-24_workspace_owner_pin.sql | bd6f363 | 2026-07-24 | e5c02d93520ee665 |  <!-- APPLIED on staging -->
 | 32 | 2026-07-25 → **S2-7D2 A** | 2026-07-25_canonical_pin_rotation.sql | pending | 2026-07-25 | bfa0711f14dde6be |  <!-- DRAFT — apply BEFORE the backend cutover -->
-| 33 | 2026-07-26 → **S2-7D2 B** | 2026-07-26_disable_legacy_pin_rotation.sql | pending | 2026-07-26 | 1f13da70e4d7427f |  <!-- DRAFT — apply ONLY AFTER the cutover is deployed+verified -->
+| 33 | 2026-07-26 → **S2-7D2 B** | 2026-07-26_disable_legacy_pin_rotation.sql | pending | 2026-07-26 | 510ab39362dd4ff7 |  <!-- DRAFT — apply ONLY AFTER the cutover is deployed+verified -->
 
 > Rows 29–30: filename prefix `2026-07-24` is one day ahead of the `2026-07-23` commit date.
 > `apply_order` places **workspace_foundation (S2-7B) before account_auth_boundary (S2-7C)**,

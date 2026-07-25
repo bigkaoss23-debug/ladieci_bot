@@ -55,11 +55,15 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20260710075612')
   THEN RAISE EXCEPTION 'S2-7D2B refused: staging sentinel migration absent — wrong database?'; END IF;
 
-  -- (2) the canonical replacement exists with its EXACT signature
+  -- (2) the canonical replacement exists with its EXACT signature.
+  -- oidvectortypes(), NOT pg_get_function_identity_arguments(): the latter renders parameter
+  -- NAMES too ('p_target_actor text, …'), which would never equal the type-only signatures
+  -- below and would fail this migration closed on a perfectly correct database. The invariant
+  -- being asserted is the call signature — argument TYPES in order — not the parameter names.
   SELECT count(*) INTO v_found
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = 'auth_set_actor_pin_v2'
-     AND pg_get_function_identity_arguments(p.oid) = v_v2_args;
+     AND oidvectortypes(p.proargtypes) = v_v2_args;
   IF v_found <> 1 THEN
     RAISE EXCEPTION 'S2-7D2B refused: auth_set_actor_pin_v2(%) not found exactly once — apply migration A and deploy the backend cutover first', v_v2_args
       USING ERRCODE = 'P0001';
@@ -69,7 +73,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname='public' AND p.proname='auth_set_actor_pin_v2'
-       AND pg_get_function_identity_arguments(p.oid) = v_v2_args
+       AND oidvectortypes(p.proargtypes) = v_v2_args
        AND has_function_privilege('service_role', p.oid, 'EXECUTE')
   ) THEN
     RAISE EXCEPTION 'S2-7D2B refused: service_role cannot EXECUTE auth_set_actor_pin_v2 — the cutover would leave no PIN-rotation path'
@@ -89,7 +93,7 @@ BEGIN
         USING ERRCODE = 'P0001';
     END IF;
 
-    SELECT pg_get_function_identity_arguments(p.oid) INTO v_actual
+    SELECT oidvectortypes(p.proargtypes) INTO v_actual
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'public' AND p.proname = v_name;
     IF v_actual IS DISTINCT FROM v_args THEN

@@ -153,7 +153,11 @@ test('B: EXECUTE revoked from PUBLIC, anon, authenticated AND service_role for a
 });
 
 test('B: preconditions fail closed — exact overloads, no IF EXISTS skipping', () => {
-  assert.match(b, /pg_get_function_identity_arguments/);
+  // Signatures are compared as an argument TYPE vector. pg_get_function_identity_arguments()
+  // also renders parameter NAMES ('p_hash text, …'), which never equals the type-only
+  // expectation table and would fail this migration closed on a correct database.
+  assert.match(b, /oidvectortypes\(p\.proargtypes\)/);
+  assert.doesNotMatch(b, /pg_get_function_identity_arguments\(p\.oid\)/);
   assert.match(b, /expected exactly ONE overload/);
   assert.match(b, /signature mismatch/);
   // the canonical writer must exist AND be executable before anything is disabled
