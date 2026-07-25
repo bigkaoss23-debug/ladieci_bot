@@ -77,12 +77,13 @@ function buildDefaults(env) {
     ),
   });
 
-  const { hashPin } = require('../auth/scrypt');
+  const { hashPin, verifyPin } = require('../auth/scrypt');
   const pinPolicy = require('../auth/pinPolicy');
   const { ipHash } = require('../auth/ipSecurity');
   const ownerService = createWorkspaceOwnerService({
     dao: workspaceOwnerDao,
     hashPin,
+    verifyPin,
     pinPolicy,
     ipHash,
     slug: env.LA_DIECI_WORKSPACE_SLUG || 'la-dieci',
@@ -209,7 +210,12 @@ function integrateAccountRoutes(app, deps = {}) {
       const result = await setOwnerPin({
         userId: uid, workspaceId, newPin, trustedClientIp: trustedClientIp(req),
       });
-      // Single generic failure — never reveals policy vs ownership vs actor existence.
+      // A duplicate gets its own NEUTRAL code so the UI can say "choose another PIN"; it
+      // still never reveals WHICH actor already uses it. Everything else collapses into one
+      // generic failure (policy vs ownership vs actor existence stay indistinguishable).
+      if (result && result.error === 'pin_duplicate') {
+        return res.status(409).json({ error: 'admin_pin_duplicate' });
+      }
       if (!result || result.ok !== true) return res.status(400).json({ error: 'admin_pin_rejected' });
       return res.status(200).json({ ok: true, event: result.event, sessionVersion: result.sessionVersion });
     } catch (e) {

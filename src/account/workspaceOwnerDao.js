@@ -66,7 +66,29 @@ async function setOwnerPin({ userId, workspaceId, pinHash, ipHash, meta = {} }) 
   return sanitizePinResult(body);
 }
 
+// S2-7D2 — rotation WITH race-safe uniqueness. `seen` is the snapshot of every OTHER actor
+// of the workspace that the service verified the candidate PIN against; SQL re-checks it
+// under row locks and refuses if anything drifted (see the migration header).
+async function setOwnerPinV2({ userId, workspaceId, pinHash, ipHash, seen, meta = {} }) {
+  const body = await callRpc('auth_account_set_owner_pin_v2', {
+    p_user_id: userId, p_workspace_id: workspaceId, p_hash: pinHash,
+    p_ip_hash: ipHash, p_seen: seen, p_meta: meta,
+  });
+  return sanitizePinResult(body);
+}
+
+// SENSITIVE read: includes pin_hash, for the uniqueness check ONLY. Scoped to the workspace
+// and never returned beyond the service boundary. Mirrors the accepted login-only pattern.
+async function listWorkspaceActorsForVerify_SENSITIVE(workspaceId) {
+  const r = await sbRest('GET', 'auth_actors', {
+    query: `select=actor,role,active,pin_hash&workspace_id=eq.${encodeURIComponent(workspaceId)}&order=actor.asc`,
+  });
+  if (!r.ok || !Array.isArray(r.body)) throw new AuthDaoError('ACCOUNT_ACTION_FAILED', 'read failed');
+  return r.body;
+}
+
 module.exports = {
-  claimWorkspace, setOwnerPin,
+  claimWorkspace, setOwnerPin, setOwnerPinV2,
+  listWorkspaceActorsForVerify_SENSITIVE,
   sanitizeClaim, sanitizePinResult,
 };

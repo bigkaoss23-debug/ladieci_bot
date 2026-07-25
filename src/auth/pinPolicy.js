@@ -55,10 +55,32 @@ function validatePinFormat(pin, role) {
   return { ok: true };
 }
 
+// ── S2-7D2: policy for NEW / rotated operational PINs — exactly 6 digits ─────
+// Applies to EVERY role (owner/admin included — no bypass). Deliberately SEPARATE from the
+// two login validators below/above: those must keep accepting the legacy lengths until all
+// four actors have actually been rotated, because login checks the format BEFORE verifying
+// the hash — tightening it there would reject a legacy 7-12 digit PIN outright and lock its
+// actor out. Weak-PIN rules still apply: a 6-digit PIN must not be trivial.
+const NEW_PIN_LENGTH = 6;
+
+function validateNewPinFormat(pin) {
+  if (typeof pin !== 'string' || !/^\d+$/.test(pin)) return { ok: false, reason: 'not_digits' };
+  if (pin.length !== NEW_PIN_LENGTH) return { ok: false, reason: 'bad_length' };
+  if (isAllSame(pin)) return { ok: false, reason: 'all_same' };
+  if (isSequential(pin)) return { ok: false, reason: 'sequential' };
+  if (isRepeatedBlock(pin)) return { ok: false, reason: 'repeated_block' };
+  if (WEAK_PINS.has(pin)) return { ok: false, reason: 'known_weak' };
+  return { ok: true };
+}
+
 function validateUniversalPinFormat(pin) {
   if (typeof pin !== 'string' || !/^\d{6,12}$/.test(pin)) return { ok: false, reason: 'invalid_format' };
   if (isAllSame(pin) || isSequential(pin) || isRepeatedBlock(pin) || WEAK_PINS.has(pin)) return { ok: false, reason: 'weak' };
   return { ok: true };
 }
 
-module.exports = { ROLE_PIN_RULES, validatePinFormat, validateUniversalPinFormat, isAllSame, isSequential, isRepeatedBlock };
+module.exports = {
+  ROLE_PIN_RULES, NEW_PIN_LENGTH,
+  validatePinFormat, validateNewPinFormat, validateUniversalPinFormat,
+  isAllSame, isSequential, isRepeatedBlock,
+};

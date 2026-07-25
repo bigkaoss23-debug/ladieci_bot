@@ -8,22 +8,23 @@ const test = require('node:test');
 
 const { createWorkspaceOwnerService } = require('../src/account/workspaceOwnerService');
 const pinPolicy = require('../src/auth/pinPolicy');
-const { hashPin } = require('../src/auth/scrypt');
+const { hashPin, verifyPin } = require('../src/auth/scrypt');
 
 const UID = '11111111-1111-4111-8111-111111111111';
 const WID = '22222222-2222-4222-8222-222222222222';
-const GOOD_ADMIN_PIN = '90342175'.padEnd(9, '6').slice(0, 9); // 9 digits, non-trivial
+const GOOD_ADMIN_PIN = '482915'; // S2-7D2: exactly 6 digits, non-trivial
 
 function makeDao(overrides = {}) {
   const calls = { claim: [], setPin: [] };
   const dao = {
     async claimWorkspace(a) { calls.claim.push(a); return overrides.claim || { workspaceId: WID, membershipId: 'm', created: true, onboardingCompleted: false }; },
-    async setOwnerPin(a) { calls.setPin.push(a); return overrides.setPin || { actor: 'owner', role: 'admin', active: true, sessionVersion: 2, event: 'pin_set', changed: true }; },
+    async setOwnerPinV2(a) { calls.setPin.push(a); return overrides.setPin || { actor: 'owner', role: 'admin', active: true, sessionVersion: 2, event: 'pin_set', changed: true }; },
+    async listWorkspaceActorsForVerify_SENSITIVE() { return overrides.actors || []; },
   };
   return { dao, calls };
 }
 const ipHash = () => 'a'.repeat(32);
-const svc = (dao) => createWorkspaceOwnerService({ dao, hashPin, pinPolicy, ipHash });
+const svc = (dao) => createWorkspaceOwnerService({ dao, hashPin, verifyPin, pinPolicy, ipHash });
 
 test('claim: fresh workspace (onboarding NOT completed) → adminPinRequired true even though legacy actor already has a PIN', async () => {
   const { dao } = makeDao();
@@ -60,15 +61,15 @@ test('setOwnerPin: valid admin PIN → hashed, dao receives scrypt hash (never p
   assert.ok(!JSON.stringify(passed).includes(GOOD_ADMIN_PIN), 'plaintext PIN must not reach the DAO');
 });
 
-test('setOwnerPin: too-short (operator-length) PIN rejected before hashing', async () => {
+test('setOwnerPin: 5-digit PIN rejected before hashing', async () => {
   const { dao, calls } = makeDao();
-  const r = await svc(dao).setOwnerPin({ userId: UID, workspaceId: WID, newPin: '123456', trustedClientIp: '1.2.3.4' });
+  const r = await svc(dao).setOwnerPin({ userId: UID, workspaceId: WID, newPin: '48291', trustedClientIp: '1.2.3.4' });
   assert.equal(r.ok, false); assert.equal(calls.setPin.length, 0);
 });
 
 test('setOwnerPin: sequential/weak PIN rejected', async () => {
   const { dao } = makeDao();
-  const r = await svc(dao).setOwnerPin({ userId: UID, workspaceId: WID, newPin: '123456789', trustedClientIp: '1.2.3.4' });
+  const r = await svc(dao).setOwnerPin({ userId: UID, workspaceId: WID, newPin: '123456', trustedClientIp: '1.2.3.4' });
   assert.equal(r.ok, false);
 });
 
@@ -80,14 +81,15 @@ test('setOwnerPin: non-uuid workspace rejected', async () => {
 
 test('setOwnerPin: ipHash unavailable → fail closed (no dao call)', async () => {
   const { dao, calls } = makeDao();
-  const s = createWorkspaceOwnerService({ dao, hashPin, pinPolicy, ipHash: () => null });
+  const s = createWorkspaceOwnerService({ dao, hashPin, verifyPin, pinPolicy, ipHash: () => null });
   const r = await s.setOwnerPin({ userId: UID, workspaceId: WID, newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
   assert.equal(r.ok, false); assert.equal(calls.setPin.length, 0);
 });
 
 test('setOwnerPin: dao malformed result → fail closed', async () => {
-  const dao = { async setOwnerPin() { return { actor: 'operator_primary', sessionVersion: 2 }; } };
-  const s = createWorkspaceOwnerService({ dao, hashPin, pinPolicy, ipHash });
+  const dao = { async setOwnerPinV2() { return { actor: 'operator_primary', sessionVersion: 2 }; },
+                async listWorkspaceActorsForVerify_SENSITIVE() { return []; } };
+  const s = createWorkspaceOwnerService({ dao, hashPin, verifyPin, pinPolicy, ipHash });
   const r = await s.setOwnerPin({ userId: UID, workspaceId: WID, newPin: GOOD_ADMIN_PIN, trustedClientIp: '1.2.3.4' });
   assert.equal(r.ok, false);
 });

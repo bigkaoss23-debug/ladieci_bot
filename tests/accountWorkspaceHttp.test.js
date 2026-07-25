@@ -40,7 +40,8 @@ function makeDeps(envOverrides = {}) {
       calls.setPin.push(a);
       // model SQL ownership: only OWNER_UID owns WID
       if (a.userId !== OWNER_UID || a.workspaceId !== WID) return { ok: false, error: 'account_action_failed' };
-      if (!a.newPin || a.newPin.length < 9) return { ok: false, error: 'account_action_failed' };
+      if (a.newPin === 'DUPLICATE') return { ok: false, error: 'pin_duplicate' };
+      if (!a.newPin || !/^\d{6}$/.test(a.newPin)) return { ok: false, error: 'account_action_failed' };
       return { ok: true, actor: 'owner', event: 'pin_set', sessionVersion: 2 };
     },
   };
@@ -136,7 +137,7 @@ test('bootstrap: allowlisted owner → 200, claim called with token sub (not bod
 
 test('admin-pin: no bearer → 401', async () => {
   await withServer(makeDeps(), async (p) => {
-    const r = await req(p, 'POST', `/api/account/workspaces/${WID}/admin-pin`, { body: { pin: '903421756' } });
+    const r = await req(p, 'POST', `/api/account/workspaces/${WID}/admin-pin`, { body: { pin: '482915' } });
     assert.equal(r.status, 401);
   });
 });
@@ -144,9 +145,9 @@ test('admin-pin: no bearer → 401', async () => {
 test('admin-pin: owner sets PIN → 200 pin_set; plaintext not echoed', async () => {
   const d = makeDeps();
   await withServer(d, async (p) => {
-    const r = await req(p, 'POST', `/api/account/workspaces/${WID}/admin-pin`, { token: 'ACCOUNT', body: { pin: '903421756' } });
+    const r = await req(p, 'POST', `/api/account/workspaces/${WID}/admin-pin`, { token: 'ACCOUNT', body: { pin: '482915' } });
     assert.equal(r.status, 200); assert.equal(r.body.event, 'pin_set');
-    assert.ok(!JSON.stringify(r.body).includes('903421756'));
+    assert.ok(!JSON.stringify(r.body).includes('482915'));
     assert.equal(d.calls.setPin[0].userId, OWNER_UID);
     assert.equal(d.calls.setPin[0].workspaceId, WID);
   });
@@ -155,14 +156,14 @@ test('admin-pin: owner sets PIN → 200 pin_set; plaintext not echoed', async ()
 test('admin-pin: non-owner account for that workspace → 400 generic', async () => {
   const d = makeDeps();
   await withServer(d, async (p) => {
-    const r = await req(p, 'POST', `/api/account/workspaces/${WID}/admin-pin`, { token: 'OTHER', body: { pin: '903421756' } });
+    const r = await req(p, 'POST', `/api/account/workspaces/${WID}/admin-pin`, { token: 'OTHER', body: { pin: '482915' } });
     assert.equal(r.status, 400); assert.equal(r.body.error, 'admin_pin_rejected');
   });
 });
 
 test('admin-pin: authority unavailable → 503', async () => {
   await withServer(makeDeps(), async (p) => {
-    const r = await req(p, 'POST', `/api/account/workspaces/${WID}/admin-pin`, { token: 'DOWN', body: { pin: '903421756' } });
+    const r = await req(p, 'POST', `/api/account/workspaces/${WID}/admin-pin`, { token: 'DOWN', body: { pin: '482915' } });
     assert.equal(r.status, 503);
   });
 });
@@ -171,5 +172,15 @@ test('me: still returns server-derived adminPinSetupRequired', async () => {
   await withServer(makeDeps(), async (p) => {
     const r = await req(p, 'GET', '/api/account/me', { token: 'ACCOUNT' });
     assert.equal(r.status, 200); assert.equal(r.body.adminPinSetupRequired, true);
+  });
+});
+
+test('admin-pin: a duplicate PIN maps to 409 admin_pin_duplicate (neutral)', async () => {
+  const d = makeDeps();
+  await withServer(d, async (p) => {
+    const r = await req(p, 'POST', `/api/account/workspaces/${WID}/admin-pin`, { token: 'ACCOUNT', body: { pin: 'DUPLICATE' } });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.error, 'admin_pin_duplicate');
+    assert.ok(!JSON.stringify(r.body).match(/operator|rider|owner/), 'must not name any actor');
   });
 });
