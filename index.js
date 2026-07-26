@@ -634,7 +634,12 @@ const BOOT_TIME = Date.now();
 // Endpoint diagnostica: espone commit/branch/deploy live di Railway senza segreti.
 // Whitelist esplicita dei campi — MAI process.env completo, MAI token/key.
 app.get("/version", (_, res) => {
-  const sha = process.env.RAILWAY_GIT_COMMIT_SHA || "unknown";
+  // RAILWAY_GIT_COMMIT_SHA is only populated for git-linked deploys. Staging is
+  // deployed with `railway up` from a local tree, so it was always "unknown" —
+  // which is precisely why the S2-7D6A audit could not prove what was running.
+  // DEPLOY_COMMIT_SHA is set as a service variable at deploy time so the live
+  // build can always be identified. It is evidence, never a code path.
+  const sha = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.DEPLOY_COMMIT_SHA || "unknown";
   res.json({
     ok: true,
     service: process.env.RAILWAY_SERVICE_NAME || "ladieci-bot",
