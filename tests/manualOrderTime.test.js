@@ -31,6 +31,14 @@ supa.sbInsert = async (table, row) => { if (table === "ordenes") inserted = row;
 supa.sbUpdate = async () => ({});
 supa.sbUpsert = async () => ({});
 
+// S2-7D6B2 — this test is about manual-order time determinism, not the midnight
+// order-intake cutoff. Stub the whole intake gate open so it never interferes.
+const intakePath = require.resolve("../src/serviceSessions/orderIntakePolicy");
+require(intakePath);
+require.cache[intakePath].exports.gateNewOrderIntake = async () => ({
+  allowed: true, code: "ALLOWED", detail: null, scheduleState: null, serviceKind: null, businessDate: null, sourceChannel: null,
+});
+
 const { creaOrdine } = require("../src/agents/agentOrdini");
 
 let passed = 0, failed = 0;

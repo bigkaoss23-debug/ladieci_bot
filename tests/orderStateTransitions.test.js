@@ -57,6 +57,14 @@ require(mgPath);
 require.cache[mgPath].exports.getManualGiros = async () => [];
 require.cache[mgPath].exports.autoDissolveIfBelowThreshold = async () => ({ ok: true });
 
+// S2-7D6B2 — this test is about order state transitions, not the midnight
+// order-intake cutoff. Stub the whole intake gate open so it never interferes.
+const intakePath = require.resolve("../src/serviceSessions/orderIntakePolicy");
+require(intakePath);
+require.cache[intakePath].exports.gateNewOrderIntake = async () => ({
+  allowed: true, code: "ALLOWED", detail: null, scheduleState: null, serviceKind: null, businessDate: null, sourceChannel: null,
+});
+
 const {
   buildStateTimestampPatch,
   sanitizeMetadata,

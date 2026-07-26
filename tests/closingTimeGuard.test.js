@@ -61,6 +61,14 @@ require.cache[supabasePath] = {
   },
 };
 
+// S2-7D6B2 — this test is about the hora-based closing guard, not the midnight
+// order-intake cutoff. Stub the whole intake gate open so it never interferes.
+const intakePath = require.resolve("../src/serviceSessions/orderIntakePolicy");
+require(intakePath);
+require.cache[intakePath].exports.gateNewOrderIntake = async () => ({
+  allowed: true, code: "ALLOWED", detail: null, scheduleState: null, serviceKind: null, businessDate: null, sourceChannel: null,
+});
+
 const { creaOrdine, modificaOrdine } = require("../src/agents/agentOrdini");
 const lastOrdenesWrite = () => [...writes].reverse().find(w => w.table === "ordenes");
 

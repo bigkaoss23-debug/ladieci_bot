@@ -28,6 +28,17 @@ const { calcolaFornoOut, simulateDriverSchedule, computeDriverFields, proposeFor
 const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
+// S2-7D6B2 — the ONE authoritative midnight order-intake cutoff. A service session
+// being open (SERA at 23:50, or even still open at 00:30) does not by itself mean
+// new-order intake is open: this gate is checked once here, after the client_req_id
+// idempotency lookup (so a pre-midnight order's retry stays idempotent) and before
+// any new insert side effect. It never applies to modificaOrdine/aggiungiItems/
+// cambiaStato — those mutate an order that already exists.
+// Required as a namespace (not destructured) and called via property access at
+// invocation time, so a test double installed on the module's exports after this
+// file's first require still takes effect — the same reason risolviIndirizzo and
+// getManualGiros are stubbed the same way in the existing test suite.
+const orderIntakePolicy = require("../serviceSessions/orderIntakePolicy");
 // DRIVER_STATO = telemetria visiva OPZIONALE (best-effort, mai blocca la
 // transizione). Vedi src/utils/driverTelemetry.js per il contratto.
 // S2-1F — only the snapshot-authoritative reconciliation hook is used now; the old
@@ -364,6 +375,26 @@ async function creaOrdine(params) {
     if (Array.isArray(existing) && existing[0]?.id) {
       return { success: true, id: existing[0].id, idempotent: true };
     }
+  }
+
+  // ═══ Midnight order-intake cutoff ═══
+  // Applies to EVERY brand-new order regardless of channel (operator dashboard or
+  // WhatsApp bot): a service session being open does not by itself mean intake is
+  // open. Checked here — after the idempotency replay above, before any insert
+  // side effect below — so a retry of an order already created before the cutoff
+  // remains a safe idempotent replay, while a genuinely new order is refused.
+  const intake = await orderIntakePolicy.gateNewOrderIntake({
+    sourceChannel: params.operatorManual === true ? "operator" : "whatsapp",
+  });
+  if (!intake.allowed) {
+    return {
+      success: false,
+      error: intake.code,
+      code: intake.code,
+      message: intake.detail,
+      scheduleState: intake.scheduleState,
+      serviceKind: intake.serviceKind,
+    };
   }
 
   // ═══ Auto-upsert cliente (se ho un tel e cliente_id non già fornito) ═══
