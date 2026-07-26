@@ -38,6 +38,8 @@ const riderTrip = require("./src/agents/riderTrip");
 const riderReads = require("./src/agents/riderReads");
 const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceCloseout");
 const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/serviceSessionLifecycle");
+const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
+const { resolveSchedule, closeEligibility, SCHEDULE_STATE, SERVICE_KIND } = require("./src/schedule/serviceSchedule");
 
 const app = express();
 app.use(express.json());
@@ -215,11 +217,18 @@ app.get("/api", async (req, res) => {
     } else if (action === "getConfig") {
       result = cfg;
     } else if (action === "chiudiServizio") {
-      // Blocco temporale: chiusura permessa solo dopo le 22:00 Madrid (override con ?force=true)
-      const madridHourStr = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", hour12: false }).format(new Date());
-      const h = parseInt(madridHourStr, 10);
-      if (h < 22 && req.query.force !== "true") {
-        result = { success: false, error: `Chiusura permessa solo dopo le 22:00 Madrid (ora attuale: ${h}:00). Per forzare aggiungere &force=true.` };
+      // S2-7D6B — the close window is PER SERVICE KIND, resolved from the
+      // schedule module. The old flat "after 22:00" rule made a lunch close
+      // literally impossible, which is why lunch could not exist at all.
+      //   PRANZO closes from 17:30 onward · SERA from 00:00 onward.
+      // A legacy session without a kind keeps the historical 22:00 rule so it
+      // never becomes unclosable. `?force=true` still overrides, unchanged.
+      const identity = await serviceSessionLifecycle.currentCloseout();
+      const kind = identity?.ok ? (identity.session?.service_kind || null) : null;
+      const gate = closeEligibility(kind, new Date());
+      if (!gate.eligible && req.query.force !== "true") {
+        const label = kind || "servicio";
+        result = { success: false, error: `Cierre de ${label} permitido solo a partir de las ${gate.boundary} Madrid. Para forzar añadir &force=true.` };
       } else {
         // Sempre via Guarded: idempotente, non si ripete nello stesso giorno
         result = await chiudiServizio(req.query.deleteAttivi === "true", "operator", req.authCtx?.actor || "operator");
@@ -373,9 +382,34 @@ app.post("/api", async (req, res) => {
     // for EVERY authorized role. When the guard authenticated any caller on a trip-primitive
     // action (marcarEnEntrega/registrarSalidaDriver/marcarEntregado/chiudiGiro), route to the
     // RPC-backed wrapper and return, bypassing the old direct DRIVER_STATO writers below.
+    // S2-7D6B — THE silent path. Called on every Servicio entry; idempotent, so
+    // the second operator of a shift reuses the first one's UUID. The service
+    // kind is resolved server-side from the schedule and is NEVER read from the
+    // request body: a caller that could name its own service could misfile a
+    // whole shift's takings.
+    if (action === "ensureCurrentServiceSession") {
+      const actorId = req.authCtx?.actor;
+      if (!actorId) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
+      const ensured = await ensureCurrentServiceSession({ actor: actorId, source: "auto_entry" });
+      // A non-success here is almost never a crash: "we are in the 17:30-18:00
+      // buffer" and "lunch is still open" are legitimate answers the UI renders
+      // differently. 200 carries them; only a genuine failure is a 5xx.
+      if (ensured.success) return res.json(ensured);
+      const conflict = ensured.code === "LUNCH_SESSION_STILL_ACTIVE"
+        || ensured.code === "OTHER_SERVICE_STILL_ACTIVE"
+        || ensured.code === "SERVICE_SESSION_CLOSING";
+      return res.status(conflict ? 409 : 200).json(ensured);
+    }
+
     if (action === "openServiceSession") {
-      result = await serviceSessionLifecycle.open({ actor: req.authCtx?.actor || "operator", source: "operator" });
-      if (!result.ok) return res.status(409).json({ error: result.code || "SERVICE_SESSION_OPEN_FAILED" });
+      // Manual RECOVERY only. It no longer opens a kind-less session (the SQL
+      // opener fail-closes): it goes through the same ensure contract so a
+      // recovery can never create a service the accounting cannot attribute.
+      const actorId = req.authCtx?.actor;
+      if (!actorId) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
+      const ensured = await ensureCurrentServiceSession({ actor: actorId, source: "manual_recovery" });
+      if (!ensured.success) return res.status(409).json({ error: ensured.code || "SERVICE_SESSION_OPEN_FAILED", detail: ensured });
+      result = { ok: true, ...ensured };
     } else if (req.authCtx && req.authCtx.rule && req.authCtx.rule.tripPrimitive) {
       const mapped = await routeRiderTripAction(action, req.body);
       return res.status(mapped.status).json(mapped.payload);
@@ -840,29 +874,71 @@ function scheduleDeferredCloseRetry(source, attempt) {
   if (_closeRetryTimer && _closeRetryTimer.unref) _closeRetryTimer.unref();
 }
 
-// 23:50 — chiudi serata (backupSerata viene chiamato anche dentro chiudiServizio)
-function schedula2350() {
-  const delay = msUntilMadridHM(23, 50);
-  console.log(`[cron 23:50] prossima chiusura tra ${Math.round(delay / 60000)} minuti`);
-  setTimeout(async () => {
+// ── S2-7D6B — the service close tick ────────────────────────────────────────
+// The old cron fired ONCE at 23:50 and force-closed "the evening". That is wrong
+// on both ends now: a 23:50 order is a perfectly normal order (intake runs to
+// 00:00), and lunch needs its own close from 17:30 with no evening cron in
+// sight. So instead of two hardcoded alarms there is one periodic tick that asks
+// the schedule and the live session what is due.
+//
+// It never forces anything. chiudiServizio remains the ONE close implementation:
+// the active-rider-trip gate, the archive/verify contract and the idempotent
+// lifecycle are all unchanged and are the reason this can safely run on a timer.
+const CLOSE_TICK_INTERVAL_MS = 10 * 60 * 1000;
+
+function serviceCloseDecision(when, session) {
+  if (!session || !session.id) return { due: false, reason: "no_active_session" };
+  if (!["open", "closing"].includes(session.status)) return { due: false, reason: "not_active" };
+  const kind = session.service_kind || null;
+  const gate = closeEligibility(kind, new Date());
+  if (!gate.eligible) return { due: false, reason: gate.reason, kind };
+  // 04:00 is an ESCALATION boundary, never a blind destructive close: we still
+  // only run the normal protected close, but we flag it loudly.
+  return { due: true, kind, escalate: !!when.escalate, source: kind === SERVICE_KIND.PRANZO ? "cron_lunch" : "cron_dinner" };
+}
+
+async function serviceCloseTick() {
+  let identity;
+  try { identity = await serviceSessionLifecycle.currentCloseout(); }
+  catch (e) { console.error("[close-tick] identity read failed:", e?.message || e); return; }
+  if (!identity?.ok || identity.code === "NO_SERVICE_SESSION") return;
+  const session = identity.session;
+  if (!session || session.status === "closed") return;
+
+  const when = resolveSchedule(new Date());
+  const decision = serviceCloseDecision(when, session);
+  if (!decision.due) return;
+
+  if (decision.escalate) {
+    // Past 04:00 with a live service: the operator must know. We do NOT skip the
+    // close attempt, but we never let it silently destroy in-flight work either
+    // — the rider gate inside chiudiServizio still defers if a trip is open.
+    console.error(`[close-tick] ESCALATION — ${decision.kind} session ${session.id} still active past 04:00 Madrid`);
+  }
+
+  console.log(`[close-tick] closing ${decision.kind} session ${session.id} (${decision.source})`);
+  let res;
+  try { res = await chiudiServizio(true, decision.source); }
+  catch (e) { console.error(`[close-tick ${decision.source}] errore:`, e); return; }
+  console.log(`[close-tick ${decision.source}] risultato:`, JSON.stringify(res));
+
+  const plan = deferredCloseRetryPlan(res, 0);
+  if (plan.retry) scheduleDeferredCloseRetry(`${decision.source}-retry`, plan.attempt);
+
+  if (res && res.success) {
     try {
-      console.log("[cron 23:50] Avvio chiusura automatica serata...");
-      // chiudiServizio è idempotente: lock via INSERT serata_summary (PK su fecha).
-      // Se Railway riavvia dopo le 23:50, il catch-up all'avvio recupera la chiusura mancata.
-      const res = await chiudiServizio(true, "cron2350");
-      console.log("[cron 23:50] risultato:", JSON.stringify(res));
-      // S2-1G — if deferred by an active rider trip, start a bounded retry chain.
-      const plan = deferredCloseRetryPlan(res, 0);
-      if (plan.retry) scheduleDeferredCloseRetry("cron2350-retry", plan.attempt);
       const cfg = await getConfig();
-      const OPERATOR_WA_IDS = ["41767011848", "34614267535"];
-      const msg = buildCloseSummaryMsg(res, "23:50 automatica");
-      if (msg) for (const waId of OPERATOR_WA_IDS) await invia(waId, msg, cfg).catch(() => {});
-    } catch (e) {
-      console.error("[cron 23:50] errore:", e);
-    }
-    schedula2350();
-  }, delay);
+      const msg = buildCloseSummaryMsg(res, `${decision.kind} automática`);
+      if (msg) for (const waId of ["41767011848", "34614267535"]) await invia(waId, msg, cfg).catch(() => {});
+    } catch (_) { /* notification is best-effort, never blocks the close */ }
+  }
+}
+
+function schedulaCloseTick() {
+  const t = setInterval(() => { serviceCloseTick().catch((e) => console.error("[close-tick]", e)); }, CLOSE_TICK_INTERVAL_MS);
+  if (t.unref) t.unref();
+  console.log(`[close-tick] attivo — verifica ogni ${CLOSE_TICK_INTERVAL_MS / 60000} minuti (PRANZO da 17:30, SERA da 00:00)`);
+  return t;
 }
 
 // Catch-up all'avvio del server: se è dopo le 23:55 Madrid (o prima delle 06:00 del giorno
@@ -904,8 +980,9 @@ async function catchUpChiusura() {
 }
 
 if (require.main === module) {
-  schedula2340();
-  schedula2350();
+  schedula2340();          // 23:40 preventive backup — kept: useful, and it never
+                           // touches session identity or closes the cash session.
+  schedulaCloseTick();     // S2-7D6B — replaces the single 23:50 forced close.
   catchUpChiusura();
 }
 

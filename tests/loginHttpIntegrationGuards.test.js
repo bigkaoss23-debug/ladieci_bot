@@ -88,7 +88,7 @@ assert('in-memory enabled: exactly 1 POST + 1 error handler, enabled=true', a.po
 // ── RUNTIME ENTRYPOINT PROOF (NC17) ──────────────────────────────────────────
 const PKG = require('../package.json');
 assert('start script is `node index.js` (index.js is the runtime entrypoint)', PKG.scripts && PKG.scripts.start === 'node index.js' && PKG.main === 'index.js');
-assert('index.js starts server + schedulers under require.main === module', /if \(require\.main === module\) \{[\s\S]*?app\.listen\(PORT/.test(IDX) && /if \(require\.main === module\) \{[\s\S]*?schedula2340\(\);\s*schedula2350\(\);\s*catchUpChiusura\(\)/.test(IDX));
+assert('index.js starts server + schedulers under require.main === module', /if \(require\.main === module\) \{[\s\S]*?app\.listen\(PORT/.test(IDX) && /if \(require\.main === module\) \{[\s\S]*?schedula2340\(\);[\s\S]*?schedulaCloseTick\(\);[\s\S]*?catchUpChiusura\(\)/.test(IDX));
 assert('index.js exports app (importable, side-effect-free when required)', /module\.exports = \{ app \}/.test(IDX));
 assert('no deployment artifact overrides the start command', ['Procfile', 'railway.json', 'railway.toml', 'nixpacks.toml', 'Dockerfile'].every((f) => !fs.existsSync(path.join(__dirname, '..', f))));
 // entrypoint side-effect-free import: the module was already required above for other tests

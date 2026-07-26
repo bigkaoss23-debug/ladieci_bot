@@ -249,7 +249,7 @@ function buildStoricoPayload(o, oggi, diaSemana, estadoOverride = null, serviceS
 
 
 // ─── Calcolo summary aggregata (pure, no side effects) ───────────
-async function computeSummary(ordiniDaArch, oggi, diaSemana, source) {
+async function computeSummary(ordiniDaArch, oggi, diaSemana, source, sessionOpenedAt = null) {
   const summary = {
     fecha: oggi,
     dia_semana: diaSemana,
@@ -332,23 +332,42 @@ async function computeSummary(ordiniDaArch, oggi, diaSemana, source) {
 
   summary.n_clienti_unici = telSet.size;
 
-  // Clienti nuovi: presenti in clientes con created_at di oggi
-  // (semplice: count clientes con created_at >= midnight Madrid di oggi)
+  // S2-7D6B — these two counts used to start from "midnight of the business
+  // date", computed with a LITERAL +02:00 offset. Two bugs in one line: it was
+  // wrong every winter (Madrid is UTC+1 in CET), and with two services a day the
+  // dinner summary re-counted the whole of lunch's WhatsApp traffic.
+  //
+  // The window now starts at the moment THIS session opened, so lunch and dinner
+  // count only their own, and the offset is derived from the real timezone.
+  const windowStartIso = sessionOpenedAt
+    ? new Date(sessionOpenedAt).toISOString()
+    : madridStartOfDayIso(oggi);
+  const windowStartMs = new Date(windowStartIso).getTime();
+
   try {
-    const startOfDayMadrid = new Date(oggi + "T00:00:00+02:00"); // Madrid è UTC+2 in CEST
-    const clientiNuovi = await sbSelect("clientes", `created_at=gte.${startOfDayMadrid.toISOString()}&tel=in.(${[...telSet].map(t => `"${t}"`).join(",") || '""'})`);
+    const clientiNuovi = await sbSelect("clientes", `created_at=gte.${windowStartIso}&tel=in.(${[...telSet].map(t => `"${t}"`).join(",") || '""'})`);
     summary.n_clienti_nuovi = Array.isArray(clientiNuovi) ? clientiNuovi.length : 0;
   } catch (_) { summary.n_clienti_nuovi = 0; }
 
-  // Domande gestite: wa_msgs di oggi con stato IN_TRATTAMENTO o COMPLETATO
-  // (NUEVO = mai gestito, COCINA = già ordine — escludiamo)
+  // Domande gestite: wa_msgs di questa sessione con stato IN_TRATTAMENTO o
+  // COMPLETATO (NUEVO = mai gestito, COCINA = già ordine — escludiamo)
   try {
-    const startMs = new Date(oggi + "T00:00:00+02:00").getTime();
-    const waOggi = await sbSelect("wa_msgs", `ts=gte.${startMs}&stato=in.(IN_TRATTAMENTO,COMPLETATO)`);
-    summary.n_domande_gestite = Array.isArray(waOggi) ? waOggi.length : 0;
+    const waSessione = await sbSelect("wa_msgs", `ts=gte.${windowStartMs}&stato=in.(IN_TRATTAMENTO,COMPLETATO)`);
+    summary.n_domande_gestite = Array.isArray(waSessione) ? waSessione.length : 0;
   } catch (_) { summary.n_domande_gestite = 0; }
 
   return summary;
+}
+
+// Midnight of a business date in Europe/Madrid, as a real instant. Derives the
+// offset from the zone itself rather than assuming CEST, so it is correct on
+// both sides of the DST switch.
+function madridStartOfDayIso(businessDate) {
+  const naiveUtc = new Date(`${businessDate}T00:00:00Z`);
+  const asMadrid = new Date(naiveUtc.toLocaleString("en-US", { timeZone: "Europe/Madrid" }));
+  const asUtc = new Date(naiveUtc.toLocaleString("en-US", { timeZone: "UTC" }));
+  const offsetMs = asMadrid.getTime() - asUtc.getTime();
+  return new Date(naiveUtc.getTime() - offsetMs).toISOString();
 }
 
 
@@ -445,8 +464,13 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   ];
 
   // ─── PASSO 4: compute summary ─────────────────────────────────
-  const summary = await computeSummary(ordiniDaArch, oggi, diaSemana, source);
+  // S2-7D6B — scoped to THIS session's opening instant and stamped with its
+  // kind, so lunch and dinner produce two genuinely independent summaries on one
+  // business date instead of the dinner one absorbing lunch's numbers.
+  const serviceKind = serviceSession.service_kind || null;
+  const summary = await computeSummary(ordiniDaArch, oggi, diaSemana, source, serviceSession.opened_at);
   summary.service_session_id = serviceSessionId;
+  summary.service_kind = serviceKind;
 
   // ─── PASSO 5: lock via INSERT serata_summary (PK su fecha) ────
   // Se due processi tentano contemporaneamente, solo uno passa.
@@ -499,6 +523,10 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
     const totale = calcolaTotale(c.items || []);
     const res = await sbUpsert("archivio_conv", {
       data_servizio: oggi,
+      // S2-7D6B — the archive is now keyed (service_session_id, wa_id). Without
+      // it, a customer who orders at lunch AND at dinner had their lunch
+      // conversation silently overwritten by the dinner one.
+      service_session_id: serviceSessionId,
       wa_id:         c.wa_id || "",
       nombre:        c.nombre || "",
       chat:          c.chat || [],
@@ -508,7 +536,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
       stato_finale:  c._forzata ? "CHIUSO_FORZATO" : (c.stato_ordine || ""),
       n_messaggi:    (c.chat || []).length,
       ts:            c.ts || Date.now()
-    }, "wa_id,data_servizio");
+    }, "service_session_id,wa_id");
     if (!Array.isArray(res) || res.length === 0) erroriConv.push(c.wa_id || "?");
     else convOk++;
   }
@@ -578,16 +606,28 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   // ─── PASSO 10: cleanup ordenes/conv/wa_msgs ───────────────────
   // Financial events are never deleted here — they are immutable evidence and outlive
   // the live order by design. Only conv/wa_msgs/ordenes rows of THIS session are removed.
-  await sbDelete("conv",    "stato_ordine=in.(ritirata,confermata,chiusa)");
-  await sbDelete("wa_msgs", "stato=in.(COMPLETATO,COCINA)");
+  // S2-7D6B — a LUNCH close must not wipe runtime state the dinner still needs.
+  // These two deletes are global by stato (conv/wa_msgs carry no session id), so
+  // for PRANZO we keep them: the same customer may already be mid-conversation
+  // for tonight, and archiving lunch is no reason to erase that. The evening
+  // close still performs the full sweep, which is where it belongs.
+  const isLunchClose = serviceKind === "PRANZO";
+  if (!isLunchClose) {
+    await sbDelete("conv",    "stato_ordine=in.(ritirata,confermata,chiusa)");
+    await sbDelete("wa_msgs", "stato=in.(COMPLETATO,COCINA)");
+  } else {
+    console.log(`[chiudiServizio ${source}] PRANZO — conv/wa_msgs preservati per il servizio serale`);
+  }
 
   const deleteFailures = [];
   const delTerminali = await sbDeleteVerified("ordenes", `${sessionFilter}&estado=in.(RETIRADO,COMPLETADO,COMPLETATO)`);
   if (!delTerminali.ok) deleteFailures.push({ scope: "terminali", ...delTerminali });
 
   if (deleteAttivi) {
-    await sbDelete("conv",    "stato_ordine=not.in.(ritirata,confermata,chiusa)");
-    await sbDelete("wa_msgs", "stato=neq.COMPLETATO");
+    if (!isLunchClose) {
+      await sbDelete("conv",    "stato_ordine=not.in.(ritirata,confermata,chiusa)");
+      await sbDelete("wa_msgs", "stato=neq.COMPLETATO");
+    }
     const delAttivi = await sbDeleteVerified("ordenes", `${sessionFilter}&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)`);
     if (!delAttivi.ok) deleteFailures.push({ scope: "attivi", ...delAttivi });
   }
@@ -612,7 +652,19 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   // transactional reset_rider_state_if_idle() — reaching here proves no active trip existed.
   // No direct DRIVER_STATO write occurs anywhere in this flow.
   await sbUpsert("config", { chiave: "ORDER_RESET_TS",  valore: String(Date.now()) }, "chiave");
-  await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
+  // S2-7D6B — the close marker is PER SERVICE KIND. With a single
+  // LAST_CLOSE_DATE, closing lunch made the whole business date look finished,
+  // so the catch-up would decide the evening had already been closed and skip a
+  // dinner that was never archived.
+  const closeMarkerKey = serviceKind === "PRANZO" ? "LAST_CLOSE_PRANZO"
+    : serviceKind === "SERA" ? "LAST_CLOSE_SERA"
+    : "LAST_CLOSE_DATE";
+  await sbUpsert("config", { chiave: closeMarkerKey, valore: oggi }, "chiave");
+  // LAST_CLOSE_DATE keeps tracking the EVENING close only, which is what the
+  // legacy catch-up window (23:00-06:00) has always meant.
+  if (serviceKind !== "PRANZO") {
+    await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
+  }
   const completedSession = await serviceSessionLifecycle.completeClose({ sessionId: serviceSessionId, actor, source });
   if (!completedSession?.ok) {
     return { success: false, error: completedSession?.code || "service_session_complete_failed", service_session_id: serviceSessionId };
