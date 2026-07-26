@@ -75,6 +75,15 @@ function aggregate(session, orders, events) {
     available: status !== "none",
     code: status === "none" ? "NO_CURRENT_SERVICE" : "OK",
     serviceSessionId: session?.id || null,
+    // S2-7D6C2 — the closeout must be able to say WHICH service it is reporting.
+    // Projected straight from the session row (service_kind, CHECK'd to
+    // PRANZO|SERA by 2026-07-26_two_service_identity.sql) and never derived from
+    // the clock, business_date or status: a closeout can report a CLOSED session
+    // whose kind no longer matches whatever service is current. camelCase to
+    // match the ensureCurrentServiceSession contract.
+    // Stays null for legacy sessions closed before the column existed — the
+    // frontend renders a neutral fallback rather than guessing.
+    serviceKind: session?.service_kind || null,
     businessDate: session?.business_date || null,
     openedAt: session?.opened_at || null,
     closedAt: session?.closed_at || null,

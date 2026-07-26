@@ -45,6 +45,41 @@ test("lunch and dinner on one business date never mix",async()=>{
   assert.deepEqual(out.tickets.map(t=>t.id),["d1"]);
 });
 
+// S2-7D6C2 — the closeout must say WHICH service it reports, from the session
+// row only. Covers every return path that produces a contract object.
+test("closeout projects service kind from the session row, never derives it",async()=>{
+  const mk=async(s)=>createCurrentServiceCloseout({select:async()=>[],sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+
+  const lunch=await mk(session({service_kind:"PRANZO"}));
+  assert.equal(lunch.serviceKind,"PRANZO");
+
+  const dinner=await mk(session({service_kind:"SERA",opened_at:"2026-07-22T20:00:00Z"}));
+  assert.equal(dinner.serviceKind,"SERA");
+
+  // A CLOSED lunch stays PRANZO even while the evening is the current service:
+  // the kind belongs to the reported session, not to "now".
+  const closedLunch=await mk(session({service_kind:"PRANZO",status:"closed",closed_at:"2026-07-22T13:30:00Z"}));
+  assert.equal(closedLunch.serviceKind,"PRANZO");
+
+  // Legacy rows closed before the column existed: null, never guessed.
+  const legacy=await mk(session({status:"closed",closed_at:"2026-07-22T22:00:00Z"}));
+  assert.equal(legacy.serviceKind,null);
+
+  // Same business_date and same opening hour for both kinds — proof the value
+  // cannot have been inferred from the date or the clock.
+  const a=await mk(session({service_kind:"PRANZO",opened_at:"2026-07-22T17:00:00Z"}));
+  const b=await mk(session({service_kind:"SERA",opened_at:"2026-07-22T17:00:00Z"}));
+  assert.equal(a.businessDate,b.businessDate);
+  assert.equal(a.openedAt,b.openedAt);
+  assert.notEqual(a.serviceKind,b.serviceKind);
+});
+
+test("no-session closeout still carries the key, as an explicit null",async()=>{
+  const out=await createCurrentServiceCloseout({select:async()=>[],sessionLifecycle:identity({ok:true,code:"NO_SERVICE_SESSION"})})();
+  assert.equal(Object.hasOwn(out,"serviceKind"),true);
+  assert.equal(out.serviceKind,null);
+});
+
 test("service crossing midnight keeps opening business date and one identity",async()=>{
   const s=session({opened_at:"2026-07-22T17:00:00Z",closed_at:"2026-07-22T22:30:00Z",status:"closed"});
   const out=await createCurrentServiceCloseout({select:async()=>[],sessionLifecycle:identity({ok:true,code:"OK",session:s})})();

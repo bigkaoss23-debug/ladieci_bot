@@ -111,6 +111,12 @@ assert("I: close marker is per kind", /LAST_CLOSE_PRANZO/.test(SERVIZIO) && /LAS
 assert("I: a lunch close does not move LAST_CLOSE_DATE", /if \(serviceKind !== "PRANZO"\)[\s\S]{0,140}LAST_CLOSE_DATE/.test(SERVIZIO));
 assert("I: financial events are still never deleted", /Financial events are never deleted here/.test(SERVIZIO));
 
+console.log("\n══ J. closeout reports which service it is (S2-7D6C2) ══");
+const CLOSEOUT = read("src/closeout/currentServiceCloseout.js");
+assert("J: the closeout contract exposes the kind in camelCase", /serviceKind: session\?\.service_kind \|\| null/.test(CLOSEOUT));
+assert("J: the kind is read from the session row only, never from the clock", !/getHours\(|new Date\(\)|Date\.now\(/.test(CLOSEOUT));
+assert("J: one aggregate builds every contract return path", (CLOSEOUT.match(/ok: true,/g) || []).length === 1);
+
 console.log("");
 console.log("=== RESULT: " + pass + " passed, " + fail + " failed ===");
 process.exit(fail === 0 ? 0 : 1);
