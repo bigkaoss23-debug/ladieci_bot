@@ -10,9 +10,8 @@ const { getStatoCliente, getCaricoForno, getCaricoDelivery } = require("./agentC
 const { interpreta, generaRisposta, generaConfermaOrdine, generaChiediOra, invia, getCliente, upsertCliente, preDetectaDireccion } = require("./agentWhatsapp");
 const { creaOrdine, modificaOrdine, aggiungiItems } = require("./agentOrdini");
 const { NUMEROS_WHITELIST, COSTO_CONSEGNA } = require("../config");
-const { ZONE_DELIVERY, calcolaTempoGiro } = require("../utils/zones");
+const { ZONE_DELIVERY, calcolaTempoGiro, toServiceDayMin } = require("../utils/zones");
 const { risolviIndirizzo } = require("../utils/geoResolver");
-const { isHoraDentroHorario } = require("../utils/closingTime");
 const { isDireccionConcretaParaDelivery } = require("../utils/addressGuard");
 
 const MSG_DIRECCION_VAGA = "Para domicilio necesitamos la dirección completa: calle, número y piso si lo hay. Pásanos esos datos y lo revisamos enseguida. 🛵";
@@ -35,12 +34,24 @@ function tempoAndataDa(res, zonaObj) {
 
 const SOGLIA_CONF = 85;
 
+// S2-7D6B3 — this used to ALSO reject any requested hora past a hardcoded
+// 23:00 (via isHoraDentroHorario), which silently contradicted the approved
+// policy: a 23:50 SERA_WINDOW order is normal. That ceiling is gone; the ONE
+// authoritative "may a brand-new order be created right now" verdict is
+// creaOrdine's intake gate (checked after this function, see the 3 call
+// sites below). What genuinely remains channel-specific here is the LOWER
+// bound: an automated parse of "a las 10 de la mañana" is nonsense before the
+// restaurant opens, a check an operator typing a hora directly never needs.
+// `toServiceDayMin` (already used by the driver-schedule math in zones.js)
+// keeps a cross-midnight request — e.g. "00:15" for a pre-midnight order —
+// correctly ordered after the evening's opening minute instead of wrapping to
+// before it.
 function isOraValida(hora, tipoConsegna) {
   if (!hora) return true;
-  const [h, m] = String(hora).split(":").map(Number);
-  const min = h * 60 + (m || 0);
+  const min = toServiceDayMin(hora);
+  if (min == null) return false;
   const minMin = tipoConsegna === "DOMICILIO" ? (20 * 60) : (19 * 60 + 30);
-  return min >= minMin && isHoraDentroHorario(hora);
+  return min >= minMin;
 }
 
 function updateConvStato(waId, nuovoStato) {
@@ -64,11 +75,20 @@ function msgFueraHorario(primo, items, tipoConsegna) {
   const horaMin = tipoConsegna === "DOMICILIO" ? "20:00" : "19:30";
   const modo = tipoConsegna === "DOMICILIO" ? "Los repartos a domicilio" : "El horno";
   const verbo = tipoConsegna === "DOMICILIO" ? "arrancan" : "arranca";
-  return `Ey ${primo}!\n\n${buildResumen(items)}\n\n¡Casi! ${modo} ${verbo} a las *${horaMin}* (miércoles a domingo). ¿Para qué hora lo apunto? (entre *${horaMin}* y *23:00*)\n*El Bot La Dieci* 🇮🇹🍕`;
+  // S2-7D6B3 — dropped the "(entre X y 23:00)" hint: that upper bound no
+  // longer exists (see isOraValida) and this message only ever fires for a
+  // requested hora that is too EARLY, not too late.
+  return `Ey ${primo}!\n\n${buildResumen(items)}\n\n¡Casi! ${modo} ${verbo} a las *${horaMin}* (miércoles a domingo). ¿Para qué hora lo apunto?\n*El Bot La Dieci* 🇮🇹🍕`;
 }
 
-function msgCierreServicio(primo) {
-  return `Lo siento, ${primo}. No podemos aceptar pedidos después de las 23:00.\n\n¿Te lo preparo para otro horario dentro del servicio?\n*La Dieci* 🇮🇹🍕`;
+// S2-7D6B3 — replaces msgCierreServicio, which hardcoded "después de las
+// 23:00" — a claim the approved policy no longer makes (dinner intake runs to
+// 00:00, not 23:00). This renders creaOrdine's ACTUAL rejection reason
+// (orderIntakePolicy's human-safe `message`) instead of a second, independently
+// maintained explanation, so WhatsApp never disagrees with the operator
+// dashboard about why an order was refused.
+function msgPedidoRechazado(primo, detail) {
+  return `Lo siento, ${primo}. ${detail || "No podemos aceptar el pedido en este momento."}\n\n¿Te lo preparo para otro horario dentro del servicio?\n*La Dieci* 🇮🇹🍕`;
 }
 
 // Genera messaggio slot-spostato per il caso delivery (zona piena o driver in giro)
@@ -175,7 +195,10 @@ async function gestisci(ctx) {
     const { tipo_consegna: tc2C } = getDeliveryFromChat(conv.chat || []);
     if (!isOraValida(hora2C, tc2C)) {
       const horaMin2C = tc2C === "DOMICILIO" ? "20:00" : "19:30";
-      const msgOraInvalida = `Ey ${primo}! ${tc2C === "DOMICILIO" ? "Los repartos a domicilio empiezan" : "El horno arranca"} a las *${horaMin2C}* y cierra a las *23:00*. ¿A qué hora lo apunto?\n*La Dieci* 🇮🇹🍕`;
+      // S2-7D6B3 — dropped the stale "y cierra a las 23:00" claim: isOraValida
+      // only rejects a time BEFORE opening now (see its own comment), so this
+      // branch never fires for "too late" — the claim was always wrong here.
+      const msgOraInvalida = `Ey ${primo}! ${tc2C === "DOMICILIO" ? "Los repartos a domicilio empiezan" : "El horno arranca"} a las *${horaMin2C}*. ¿A qué hora lo apunto?\n*La Dieci* 🇮🇹🍕`;
       await appendChat(waId, "bot", msgOraInvalida);
       if (autoOn) await invia(waId, msgOraInvalida, config);
       await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, conv.items || [], hora2C, msgOraInvalida, false, waMsgId);
@@ -398,15 +421,10 @@ async function gestisci(ctx) {
       }
     }
 
-    if (!isHoraDentroHorario(horaFinale)) {
-      if (!conv) await createConv(waId, nombre, allItems, horaFinale, "aperta");
-      else await updateConvDati(waId, allItems, horaFinale);
-      const msgCierre = msgCierreServicio(primo);
-      await appendChat(waId, "bot", msgCierre);
-      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, horaFinale, msgCierre, false, waMsgId);
-      if (autoOn) await invia(waId, msgCierre, config);
-      return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "fuera_horario_cierre" };
-    }
+    // S2-7D6B3 — the standalone "is horaFinale still before closing" gate that
+    // used to live here is retired: creaOrdine's intake gate below is the ONE
+    // authoritative verdict, and its rejection is now handled after the call
+    // (search "ordResult1.success === false") instead of being duplicated here.
 
     // ── Generazione messaggio ────────────────────────────────────
     const tempoGiro1  = tempoAndataDa(zonaRes1, zonaObj1);
@@ -441,6 +459,20 @@ async function gestisci(ctx) {
       geo_source: zonaRes1.source || null
     });
     const numPedido1 = ordResult1?.id || "";
+
+    // S2-7D6B3 — creaOrdine's intake gate is the ONE authoritative verdict; a
+    // rejection here must never be reported to the customer as "pedido
+    // recibido". Render the SAME message the operator dashboard would see
+    // (ordResult1.message), so WhatsApp and the UI never disagree.
+    if (ordResult1?.success === false) {
+      if (!conv) await createConv(waId, nombre, allItems, horaFinale, "aperta");
+      else await updateConvDati(waId, allItems, horaFinale);
+      const msgRechazado = msgPedidoRechazado(primo, ordResult1.message);
+      await appendChat(waId, "bot", msgRechazado);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", conf, allItems, horaFinale, msgRechazado, false, waMsgId);
+      if (autoOn) await invia(waId, msgRechazado, config);
+      return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: ordResult1.code || "order_intake_closed" };
+    }
 
     if (numPedido1) {
       msgRicevuto += `\n\n*Tu pedido: ${numPedido1}*`;
@@ -529,7 +561,7 @@ async function gestisci(ctx) {
     const fueraDeZonaOra = tipoConsegnaOra === "DOMICILIO" && direccionOra && !zonaResOra.zona;
 
     if (fueraDeZonaOra) {
-      await creaOrdine({
+      const ordResultZonaOra = await creaOrdine({
         nombre, tel: waId, waId, canal: "WA",
         items: oraItems, hora: oraHoraFinale, estado: "POR_CONFIRMAR",
         tipo_consegna: tipoConsegnaOra, direccion: direccionOra || null,
@@ -538,6 +570,16 @@ async function gestisci(ctx) {
         forno_out: tipoConsegnaOra === "RITIRO" ? oraHoraFinale : null
       });
       await updateConvDati(waId, oraItems, oraHoraFinale);
+      // S2-7D6B3 — this call never checked its own result; if intake was closed
+      // the customer was told "we'll check your zone" for an order that was
+      // never created. Same fix as the other two creaOrdine call sites.
+      if (ordResultZonaOra?.success === false) {
+        const msgRechazadoZona = msgPedidoRechazado(primo, ordResultZonaOra.message);
+        await appendChat(waId, "bot", msgRechazadoZona);
+        await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, msgRechazadoZona, false, waMsgId);
+        if (autoOn) await invia(waId, msgRechazadoZona, config);
+        return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: ordResultZonaOra.code || "order_intake_closed" };
+      }
       await updateConvStato(waId, "in_attesa");
       const msgAckOutZoneOra = "Gracias. Vamos a comprobar la zona de entrega con el equipo y te respondemos enseguida. 🛵";
       await appendChat(waId, "bot", msgAckOutZoneOra);
@@ -567,14 +609,9 @@ async function gestisci(ctx) {
       }
     }
 
-    if (!isHoraDentroHorario(oraHoraFinale)) {
-      await updateConvDati(waId, oraItems, oraHoraFinale);
-      const msgCierreOra = msgCierreServicio(primo);
-      await appendChat(waId, "bot", msgCierreOra);
-      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, msgCierreOra, false, waMsgId);
-      if (autoOn) await invia(waId, msgCierreOra, config);
-      return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: "fuera_horario_cierre" };
-    }
+    // S2-7D6B3 — same retirement as FLUSSO 1's main branch: creaOrdine's
+    // intake gate below is the ONE authoritative verdict (handled after the
+    // call, search "ordResultOra.success === false").
 
     // ── Generazione messaggio ────────────────────────────────────
     const tempoGiroOra   = tempoAndataDa(zonaResOra, zonaObjOra);
@@ -604,6 +641,15 @@ async function gestisci(ctx) {
       geo_source: zonaResOra.source || null
     });
     const numPedidoOra = ordResultOra?.id || "";
+
+    if (ordResultOra?.success === false) {
+      await updateConvDati(waId, oraItems, oraHoraFinale);
+      const msgRechazadoOra = msgPedidoRechazado(primo, ordResultOra.message);
+      await appendChat(waId, "bot", msgRechazadoOra);
+      await upsertWaMsg(waId, nombre, testo, "IN_TRATTAMENTO", 95, oraItems, oraHoraFinale, msgRechazadoOra, false, waMsgId);
+      if (autoOn) await invia(waId, msgRechazadoOra, config);
+      return { flusso: 1, stato: "IN_TRATTAMENTO", motivo: ordResultOra.code || "order_intake_closed" };
+    }
 
     if (numPedidoOra) {
       msgOraConf += `\n\n*Tu pedido: ${numPedidoOra}*`;

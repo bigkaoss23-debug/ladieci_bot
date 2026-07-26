@@ -1,10 +1,20 @@
-// Guardia unica di chiusura servizio: dopo le 23:00 serve override manuale tracciato.
+"use strict";
+// S2-7D6B3 — this module used to ALSO be a second, competing intake cutoff: it
+// capped every requested hora at a hardcoded 23:00 and required a tracked manual
+// override past it (bot-only in creaOrdine, but unconditionally in
+// modificaOrdine — an asymmetry in its own right). That cap had no corresponding
+// concept in the approved service-window policy and silently contradicted it: a
+// 23:50 order is a normal SERA_WINDOW order per serviceSchedule.js /
+// orderIntakePolicy.js, yet this module rejected its own requested hora and
+// orchestrator.js told the customer "no aceptamos pedidos después de las 23:00".
+//
+// The ONE authoritative "may a brand-new order be created right now" decision
+// lives in orderIntakePolicy.js, fed by serviceSchedule.js. This module keeps
+// only what neither of those own and what still applies regardless of channel
+// or clock: is the requested hora string even a well-formed HH:MM? That is a
+// format check, not a business-hours cutoff.
 
-const CLOSING_TIME_MIN = 23 * 60;
 const FUERA_HORARIO_INVALIDA = "HORA_INVALIDA";
-const FUERA_HORARIO_REQUIERE_OVERRIDE = "FUERA_HORARIO_REQUIERE_OVERRIDE";
-const FUERA_HORARIO_OVERRIDE_MARKER = "FUERA_HORARIO_FORZADO";
-const FUERA_HORARIO_REQUIERE_OVERRIDE_MSG = "Pedido fuera de horario. Requiere forzar manualmente.";
 const HORA_INVALIDA_MSG = "Hora inválida";
 
 function horaToMinStrict(hora) {
@@ -14,26 +24,6 @@ function horaToMinStrict(hora) {
   const min = Number(m[2]);
   if (!Number.isInteger(h) || h < 0 || h > 23) return null;
   return h * 60 + min;
-}
-
-function isHoraDentroHorario(hora) {
-  const min = horaToMinStrict(hora);
-  return min != null && min <= CLOSING_TIME_MIN;
-}
-
-function isAfterClosing(hora) {
-  const min = horaToMinStrict(hora);
-  return min != null && min > CLOSING_TIME_MIN;
-}
-
-function hasFueraHorarioMarker(params = {}) {
-  const nota = String(params.nota || "");
-  const notaCucina = String(params.nota_cucina || "");
-  return nota.includes(FUERA_HORARIO_OVERRIDE_MARKER) || notaCucina.includes(FUERA_HORARIO_OVERRIDE_MARKER);
-}
-
-function hasValidClosingOverride(params = {}) {
-  return params.forzado === true && hasFueraHorarioMarker(params);
 }
 
 function horaInvalidaError(hora) {
@@ -46,37 +36,18 @@ function horaInvalidaError(hora) {
   };
 }
 
-function requiereOverrideError(hora) {
-  return {
-    success: false,
-    error: FUERA_HORARIO_REQUIERE_OVERRIDE,
-    code: FUERA_HORARIO_REQUIERE_OVERRIDE,
-    hora: hora || "",
-    message: FUERA_HORARIO_REQUIERE_OVERRIDE_MSG,
-  };
-}
-
-function validateClosingTime(params = {}, hora = params.hora) {
+// Format-only. Whether a brand-new order may be created right now is
+// orderIntakePolicy.js's job, not this function's — there is no ceiling here.
+function validateHoraFormat(hora) {
   const min = horaToMinStrict(hora);
   if (min == null) return horaInvalidaError(hora);
-  if (min <= CLOSING_TIME_MIN) return { success: true };
-  if (hasValidClosingOverride(params)) return { success: true, override: true };
-  return requiereOverrideError(hora);
+  return { success: true };
 }
 
 module.exports = {
-  CLOSING_TIME_MIN,
   FUERA_HORARIO_INVALIDA,
-  FUERA_HORARIO_REQUIERE_OVERRIDE,
-  FUERA_HORARIO_OVERRIDE_MARKER,
-  FUERA_HORARIO_REQUIERE_OVERRIDE_MSG,
   HORA_INVALIDA_MSG,
   horaToMinStrict,
-  isHoraDentroHorario,
-  isAfterClosing,
-  hasFueraHorarioMarker,
-  hasValidClosingOverride,
   horaInvalidaError,
-  requiereOverrideError,
-  validateClosingTime,
+  validateHoraFormat,
 };

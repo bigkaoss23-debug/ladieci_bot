@@ -63,7 +63,7 @@ function createEnsureCurrentServiceSession({
     // Outside a creation window we must NOT invent a service. Returning a typed
     // state (rather than silently picking a kind) is what keeps a 03:00 or a
     // 17:45 arrival from minting a phantom session.
-    if (!when.canEnsure) {
+    if (!when.canEnsureSession) {
       const code =
         when.state === SCHEDULE_STATE.BETWEEN_SERVICES ? ENSURE_CODE.BETWEEN_SERVICES
         : when.state === SCHEDULE_STATE.AFTER_ORDER_CUTOFF ? ENSURE_CODE.AFTER_ORDER_CUTOFF

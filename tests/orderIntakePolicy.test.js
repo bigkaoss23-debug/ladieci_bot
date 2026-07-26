@@ -96,6 +96,25 @@ console.log("\n── purity ══");
 assert("frozen result", Object.isFrozen(evaluateNewOrderIntake({ now: summer(12), activeSession: PRANZO_OPEN })));
 assert("scheduleState surfaced", evaluateNewOrderIntake({ now: summer(12), activeSession: PRANZO_OPEN }).scheduleState === SCHEDULE_STATE.PRANZO_WINDOW);
 
+console.log("\n── S2-7D6B3: no independent allow/deny list — moving a boundary in the ══");
+console.log("── canonical schedule config alone changes the intake verdict here ══");
+{
+  const { DEFAULT_SCHEDULE, HM } = require("../src/schedule/serviceSchedule");
+  // Widen SERA_WINDOW's ensure-start to 17:00 in a CUSTOM schedule config only —
+  // orderIntakePolicy.js is never told about this, it only ever reads
+  // resolveSchedule(now, schedule).canCreateNewOrder for whatever schedule it is
+  // handed. If this policy still hardcoded PRANZO_WINDOW/SERA_WINDOW itself, this
+  // would fail: 17:15 would still resolve to BETWEEN_SERVICES under the custom
+  // config's OWN dinnerEnsureStartMin... so instead we narrow lunch's own close so
+  // 12:00 stops being allowed, purely via config, proving the same point from the
+  // other direction.
+  const NARROWED = { ...DEFAULT_SCHEDULE, lunchBoundaryMin: HM(11, 0) }; // lunch ends at 11:00 in this config
+  const withDefault = evaluateNewOrderIntake({ now: summer(12), activeSession: PRANZO_OPEN });
+  const withNarrowed = evaluateNewOrderIntake({ now: summer(12), activeSession: PRANZO_OPEN, schedule: NARROWED });
+  assert("12:00 allowed under the default schedule", withDefault.allowed === true);
+  assert("12:00 rejected under a config that ends lunch at 11:00 — zero code changes in orderIntakePolicy.js", withNarrowed.allowed === false && withNarrowed.code === INTAKE_CODE.ORDER_INTAKE_CLOSED, JSON.stringify(withNarrowed));
+}
+
 console.log("\n══ PART 2 — creaOrdine wiring (integration, stubbed Supabase) ══");
 
 const supaPath = require.resolve("../src/utils/supabase");

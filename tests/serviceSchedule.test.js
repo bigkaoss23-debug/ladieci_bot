@@ -29,25 +29,43 @@ assert("03:59 → AFTER_ORDER_CUTOFF", state(summer(3, 59, 16)) === S.SCHEDULE_S
 assert("04:00 → OUTSIDE_WINDOWS (rollover)", state(summer(4, 0, 16)) === S.SCHEDULE_STATE.OUTSIDE_WINDOWS);
 
 console.log("\n══ B. ensure permission ══");
-assert("lunch may ensure", S.resolveSchedule(summer(12)).canEnsure === true);
-assert("dinner may ensure", S.resolveSchedule(summer(20)).canEnsure === true);
-assert("BUFFER may NOT ensure", S.resolveSchedule(summer(17, 45)).canEnsure === false);
-assert("after cutoff may NOT ensure", S.resolveSchedule(summer(1, 0, 16)).canEnsure === false);
-assert("outside windows may NOT ensure", S.resolveSchedule(summer(6)).canEnsure === false);
+assert("lunch may ensure", S.resolveSchedule(summer(12)).canEnsureSession === true);
+assert("dinner may ensure", S.resolveSchedule(summer(20)).canEnsureSession === true);
+assert("BUFFER may NOT ensure", S.resolveSchedule(summer(17, 45)).canEnsureSession === false);
+assert("after cutoff may NOT ensure", S.resolveSchedule(summer(1, 0, 16)).canEnsureSession === false);
+assert("outside windows may NOT ensure", S.resolveSchedule(summer(6)).canEnsureSession === false);
 assert("lunch kind is PRANZO", kind(summer(12)) === "PRANZO");
 assert("dinner kind is SERA", kind(summer(20)) === "SERA");
 assert("BUFFER has NO kind (never guess)", kind(summer(17, 45)) === null);
 assert("expectedServiceKind null in buffer", S.expectedServiceKind(summer(17, 45)) === null);
+assert("canonical result carries expectedServiceKind inline too", S.resolveSchedule(summer(12)).expectedServiceKind === "PRANZO");
+assert("expectedServiceKind inline is null outside an ensure window", S.resolveSchedule(summer(17, 45)).expectedServiceKind === null);
 
-console.log("\n══ C. order intake ══");
-assert("23:50 accepts new orders", S.resolveSchedule(summer(23, 50)).acceptsNewOrders === true);
-assert("00:00 stops new orders", S.resolveSchedule(summer(0, 0, 16)).acceptsNewOrders === false);
-assert("buffer still accepts (lunch stragglers)", S.resolveSchedule(summer(17, 45)).acceptsNewOrders === true);
+console.log("\n══ C. order intake — canCreateNewOrder is the ONE decision every consumer reads ══");
+assert("23:50 accepts new orders", S.resolveSchedule(summer(23, 50)).canCreateNewOrder === true);
+assert("00:00 stops new orders", S.resolveSchedule(summer(0, 0, 16)).canCreateNewOrder === false);
+// S2-7D6B3 — CORRECTED: the buffer accepts NO brand-new order of either kind,
+// even if a lunch session is still technically open. An order already created
+// before 17:30 is not new intake and keeps moving under canContinueExistingOrders
+// — see section E below. The previous "lunch stragglers" exception documented
+// here (and asserted true) silently contradicted the approved product policy
+// and has been removed, not layered over.
+assert("buffer accepts NO brand-new order (no stragglers exception)", S.resolveSchedule(summer(17, 45)).canCreateNewOrder === false);
+assert("PRANZO_WINDOW accepts new orders", S.resolveSchedule(summer(12)).canCreateNewOrder === true);
+assert("AFTER_ORDER_CUTOFF accepts no new orders", S.resolveSchedule(summer(1, 0, 16)).canCreateNewOrder === false);
+assert("OUTSIDE_WINDOWS accepts no new orders", S.resolveSchedule(summer(6)).canCreateNewOrder === false);
 
 console.log("\n══ D. escalation ══");
-assert("00:30 close attempt due, no escalation", S.resolveSchedule(summer(0, 30, 16)).closeAttemptDue === true && S.resolveSchedule(summer(0, 30, 16)).escalate === false);
-assert("04:30 escalates", S.resolveSchedule(summer(4, 30, 16)).escalate === true);
-assert("20:00 does not escalate", S.resolveSchedule(summer(20)).escalate === false);
+assert("00:30 close attempt due, no escalation", S.resolveSchedule(summer(0, 30, 16)).canAttemptClose === true && S.resolveSchedule(summer(0, 30, 16)).isEscalationBoundary === false);
+assert("04:30 escalates", S.resolveSchedule(summer(4, 30, 16)).isEscalationBoundary === true);
+assert("20:00 does not escalate", S.resolveSchedule(summer(20)).isEscalationBoundary === false);
+
+console.log("\n══ D2. canContinueExistingOrders — never gated by the clock ══");
+assert("true during PRANZO_WINDOW", S.resolveSchedule(summer(12)).canContinueExistingOrders === true);
+assert("true during BETWEEN_SERVICES", S.resolveSchedule(summer(17, 45)).canContinueExistingOrders === true);
+assert("true during SERA_WINDOW", S.resolveSchedule(summer(20)).canContinueExistingOrders === true);
+assert("true during AFTER_ORDER_CUTOFF (a delivery at 00:30 is still valid)", S.resolveSchedule(summer(0, 30, 16)).canContinueExistingOrders === true);
+assert("true during OUTSIDE_WINDOWS (never blindly destroy active work)", S.resolveSchedule(summer(6)).canContinueExistingOrders === true);
 
 console.log("\n══ E. business date / 04:00 rollover ══");
 assert("20:00 on the 15th → 2026-07-15", S.businessDateFor(summer(20)) === "2026-07-15");

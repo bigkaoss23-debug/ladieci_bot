@@ -26,7 +26,7 @@ function normalizeItemsForPersist(rawItems) {
 }
 const { calcolaFornoOut, simulateDriverSchedule, computeDriverFields, proposeForNewOrder } = require("../utils/zones");
 const { resolveDeliveryFields } = require("./previewTiming");
-const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
+const { horaToMinStrict, validateHoraFormat } = require("../utils/closingTime");
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
 // S2-7D6B2 — the ONE authoritative midnight order-intake cutoff. A service session
 // being open (SERA at 23:50, or even still open at 00:30) does not by itself mean
@@ -301,17 +301,20 @@ async function creaOrdine(params) {
     }
   }
 
-  // Blocco hard orario chiusura: SOLO per il flusso bot WhatsApp automatico.
-  // Decisione prodotto: gli ordini manuali dell'operatore (dashboard) NON vengono
-  // mai bloccati per orario/chiusura. L'operatore può legittimamente fare e
-  // consegnare una pizza dopo le 23:00. I warning/flag restano (forzado, badge UI
-  // lato frontend, log) — qui togliamo solo il blocco hard che impediva il salvataggio.
-  // `operatorManual` viene impostato dai soli endpoint dashboard in index.js; le
-  // chiamate in-process dell'orchestrator (bot) lo lasciano falsy → restano prudenti.
+  // S2-7D6B3 — this used to ALSO enforce a hard 23:00 ceiling on the requested
+  // hora here (bot-only; operators were exempt: "an operator may legitimately
+  // deliver a pizza after 23:00"). That ceiling had no corresponding concept in
+  // the approved service-window policy and silently contradicted it — a 23:50
+  // SERA_WINDOW order is normal, yet the bot's own requested hora rejected it.
+  // The ONE authoritative "may a brand-new order be created right now" decision
+  // is the intake gate below (fed by the canonical schedule); what remains here
+  // is only a format check (well-formed HH:MM), never a business-hours rule.
+  // Kept bot-only, unchanged from before: operator-manual orders may still omit
+  // or freely set hora exactly as they always could.
   const hardClosingGuard = params.operatorManual !== true;
 
   if (hardClosingGuard) {
-    const requestedHoraGuard = validateClosingTime(params, params.hora);
+    const requestedHoraGuard = validateHoraFormat(params.hora);
     if (!requestedHoraGuard.success) {
       return requestedHoraGuard;
     }
@@ -357,7 +360,7 @@ async function creaOrdine(params) {
     }
   }
   if (hardClosingGuard) {
-    const finalHoraGuard = validateClosingTime(params, horaFinale || params.hora);
+    const finalHoraGuard = validateHoraFormat(horaFinale || params.hora);
     if (!finalHoraGuard.success) {
       return finalHoraGuard;
     }
@@ -540,7 +543,7 @@ const MODIFICA_TERMINAL_STATES = new Set(["EN_ENTREGA", "RETIRADO", "COMPLETADO"
 
 async function modificaOrdine(ordenId, updates) {
   if (updates.hora !== undefined && horaToMinStrict(updates.hora) == null) {
-    return validateClosingTime(updates, updates.hora);
+    return validateHoraFormat(updates.hora);
   }
 
   // Guardia server-side: se l'ordine è in uno stato terminale, rifiuta
@@ -600,7 +603,6 @@ async function modificaOrdine(ordenId, updates) {
   // Server-side autoritativo: ignoriamo descuento_importe del client.
   const descPassed = (updates.descuento_tipo !== undefined) || (updates.descuento_valor !== undefined);
   let horaFinalGuard = upd.hora || null;
-  let closingGuardParams = updates;
 
   // Se items, tipo_consegna o descuento cambiano, ricalcola delivery_fee + totale.
   // Se hora, tipo_consegna o durata_andata_min cambiano, ricalcola forno_out.
@@ -612,13 +614,6 @@ async function modificaOrdine(ordenId, updates) {
       const itemsFinali = upd.items || (ord.items || []).filter(i => i.n !== "Entrega a domicilio");
       const tipoConsegna = upd.tipo_consegna !== undefined ? upd.tipo_consegna : (ord.tipo_consegna || "RITIRO");
       horaFinalGuard = upd.hora || ord.hora || null;
-      closingGuardParams = {
-        ...ord,
-        ...updates,
-        nota: updates.nota !== undefined ? updates.nota : ord.nota,
-        nota_cucina: updates.nota_cucina !== undefined ? updates.nota_cucina : ord.nota_cucina,
-        forzado: updates.forzado !== undefined ? updates.forzado === true : ord.forzado === true,
-      };
       upd.delivery_fee = deliveryFeeFor(tipoConsegna);
       const totaleBase = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
       // Descuento corrente (post-modifica): merge tra passati e DB. `null` esplicito → rimuove.
@@ -687,8 +682,14 @@ async function modificaOrdine(ordenId, updates) {
       }
     }
   }
+  // S2-7D6B3 — this used to ALSO enforce the same 23:00 ceiling as creaOrdine,
+  // but WITHOUT the operator exemption creaOrdine has always had: an operator
+  // updating an order's hora past 23:00 needed a tracked override here, while
+  // creating that same order in the first place never did. That asymmetry is
+  // retired along with the ceiling; only the format check remains, for both
+  // channels, matching creaOrdine's format-only behavior.
   if (horaFinalGuard !== null) {
-    const finalHoraGuard = validateClosingTime(closingGuardParams, horaFinalGuard);
+    const finalHoraGuard = validateHoraFormat(horaFinalGuard);
     if (!finalHoraGuard.success) return finalHoraGuard;
   }
 

@@ -899,7 +899,7 @@ function serviceCloseDecision(when, session) {
   if (!gate.eligible) return { due: false, reason: gate.reason, kind };
   // 04:00 is an ESCALATION boundary, never a blind destructive close: we still
   // only run the normal protected close, but we flag it loudly.
-  return { due: true, kind, escalate: !!when.escalate, source: kind === SERVICE_KIND.PRANZO ? "cron_lunch" : "cron_dinner" };
+  return { due: true, kind, escalate: !!when.isEscalationBoundary, source: kind === SERVICE_KIND.PRANZO ? "cron_lunch" : "cron_dinner" };
 }
 
 async function serviceCloseTick() {

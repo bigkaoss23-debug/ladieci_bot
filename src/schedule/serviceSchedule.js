@@ -110,6 +110,23 @@ function businessDateFor(now = new Date(), schedule = DEFAULT_SCHEDULE) {
 // ── The resolver ────────────────────────────────────────────────────────────
 // Returns a frozen, fully typed description of "now". Pure: same input, same
 // output, no clock read beyond the `now` handed in.
+//
+// S2-7D6B3 — THE canonical result. Every consumer that needs to know "may X
+// happen right now" reads one of the six named booleans below rather than
+// re-deriving its own interpretation of `state`. They are six DISTINCT
+// decisions (a future schedule change could decouple values that happen to
+// coincide today) and are never collapsed into one flag:
+//   canEnsureSession          — may ensureCurrentServiceSession open/reuse one?
+//   canCreateNewOrder         — may a brand-new commercial order be created?
+//   canAttemptClose           — is a close attempt for the matching kind due?
+//   canContinueExistingOrders — may an ALREADY-EXISTING order keep moving
+//                                (Cocina/rider/payment/refund/close)? This is
+//                                never gated by the clock — the schedule module
+//                                never blocks work already in flight — so it is
+//                                `true` in every state, on record as such.
+//   isEscalationBoundary      — has a still-open session crossed 04:00?
+//   expectedServiceKind       — the kind an ensure would create right now, or
+//                                null when none (mirrors expectedServiceKind()).
 function resolveSchedule(now = new Date(), schedule = DEFAULT_SCHEDULE) {
   const p = madridParts(now, schedule.timezone);
   const min = p.minutesOfDay;
@@ -117,15 +134,16 @@ function resolveSchedule(now = new Date(), schedule = DEFAULT_SCHEDULE) {
 
   // 00:00-04:00 belongs to the dinner that opened YESTERDAY. No new session may
   // be created here: an operator arriving at 01:00 to a closed restaurant must
-  // not silently mint a service.
+  // not silently mint a service. Existing dinner orders remain fully operational.
   if (min < schedule.rolloverMin) {
     return frozen({
       state: SCHEDULE_STATE.AFTER_ORDER_CUTOFF,
       serviceKind: SERVICE_KIND.SERA,
-      canEnsure: false,
-      acceptsNewOrders: false,
-      closeAttemptDue: true,
-      escalate: false,
+      canEnsureSession: false,
+      canCreateNewOrder: false,
+      canAttemptClose: true,
+      canContinueExistingOrders: true,
+      isEscalationBoundary: false,
       businessDate, madrid: p, schedule,
     });
   }
@@ -134,10 +152,11 @@ function resolveSchedule(now = new Date(), schedule = DEFAULT_SCHEDULE) {
     return frozen({
       state: SCHEDULE_STATE.OUTSIDE_WINDOWS,
       serviceKind: null,
-      canEnsure: false,
-      acceptsNewOrders: false,
-      closeAttemptDue: true,
-      escalate: true,
+      canEnsureSession: false,
+      canCreateNewOrder: false,
+      canAttemptClose: true,
+      canContinueExistingOrders: true,
+      isEscalationBoundary: true,
       businessDate, madrid: p, schedule,
     });
   }
@@ -145,42 +164,55 @@ function resolveSchedule(now = new Date(), schedule = DEFAULT_SCHEDULE) {
     return frozen({
       state: SCHEDULE_STATE.PRANZO_WINDOW,
       serviceKind: SERVICE_KIND.PRANZO,
-      canEnsure: true,
-      acceptsNewOrders: true,
-      closeAttemptDue: false,
-      escalate: false,
+      canEnsureSession: true,
+      canCreateNewOrder: true,
+      canAttemptClose: false,
+      canContinueExistingOrders: true,
+      isEscalationBoundary: false,
       businessDate, madrid: p, schedule,
     });
   }
   if (min < schedule.dinnerEnsureStartMin) {
-    // The buffer. Lunch may still be finishing; dinner must NOT open over it.
+    // The buffer. Lunch may finish and close safely; dinner must NOT open over
+    // it. No brand-new order of EITHER kind is accepted here — an order already
+    // created before 17:30 is not new intake and keeps moving normally under
+    // canContinueExistingOrders, but nothing new may start in this gap.
     return frozen({
       state: SCHEDULE_STATE.BETWEEN_SERVICES,
       serviceKind: null,
-      canEnsure: false,
-      acceptsNewOrders: true,          // an open lunch keeps taking its stragglers
-      closeAttemptDue: true,           // lunch is now close-eligible
-      escalate: false,
+      canEnsureSession: false,
+      canCreateNewOrder: false,
+      canAttemptClose: true,           // lunch is now close-eligible
+      canContinueExistingOrders: true,
+      isEscalationBoundary: false,
       businessDate, madrid: p, schedule,
     });
   }
   return frozen({
     state: SCHEDULE_STATE.SERA_WINDOW,
     serviceKind: SERVICE_KIND.SERA,
-    canEnsure: true,
-    acceptsNewOrders: true,            // 23:50 is still a normal order
-    closeAttemptDue: false,
-    escalate: false,
+    canEnsureSession: true,
+    canCreateNewOrder: true,            // 23:50 is still a normal order
+    canAttemptClose: false,
+    canContinueExistingOrders: true,
+    isEscalationBoundary: false,
     businessDate, madrid: p, schedule,
   });
 }
 
-function frozen(o) { return Object.freeze({ ...o, madrid: Object.freeze(o.madrid) }); }
+function frozen(o) {
+  return Object.freeze({
+    ...o,
+    expectedServiceKind: o.canEnsureSession ? o.serviceKind : null,
+    madrid: Object.freeze(o.madrid),
+  });
+}
 
 // Convenience for callers that only need the kind an ensure would create.
+// Kept as a standalone export (mirrors the canonical result's own
+// `expectedServiceKind` field) for callers that don't need the full result.
 function expectedServiceKind(now = new Date(), schedule = DEFAULT_SCHEDULE) {
-  const r = resolveSchedule(now, schedule);
-  return r.canEnsure ? r.serviceKind : null;
+  return resolveSchedule(now, schedule).expectedServiceKind;
 }
 
 // Is a manual/automatic close allowed to run for this kind right now? Replaces

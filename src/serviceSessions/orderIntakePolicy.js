@@ -1,6 +1,6 @@
 "use strict";
 // ===============================================================
-// orderIntakePolicy.js — S2-7D6B2
+// orderIntakePolicy.js — S2-7D6B2 / S2-7D6B3
 //
 // THE authoritative decision for "may a brand-new commercial order be created
 // right now?". A service session being open does NOT by itself mean intake is
@@ -8,6 +8,15 @@
 // closing well past midnight, but no brand-new order may be created from
 // 00:00 Europe/Madrid onward. This module owns exactly that boundary and
 // nothing else — it never touches an already-existing order.
+//
+// S2-7D6B3 — this module holds NO independent allow/deny list for
+// PRANZO_WINDOW / BETWEEN_SERVICES / SERA_WINDOW / AFTER_ORDER_CUTOFF /
+// OUTSIDE_WINDOWS. It reads the canonical `canCreateNewOrder` (and
+// `serviceKind`) straight off serviceSchedule.js's resolveSchedule() result.
+// Moving a boundary — e.g. widening SERA_WINDOW — is a one-file change to
+// serviceSchedule.js; this file never needs to be touched for that. Its own
+// responsibility is layered strictly ON TOP of that verdict: active-session
+// existence, status and kind.
 //
 // It never trusts a client-supplied clock, service kind or session id: `now`
 // comes from the server clock and `activeSession` from a server-side read of
@@ -19,7 +28,7 @@
 // ===============================================================
 
 const { sbSelect } = require("../utils/supabase");
-const { DEFAULT_SCHEDULE, SCHEDULE_STATE, resolveSchedule } = require("../schedule/serviceSchedule");
+const { DEFAULT_SCHEDULE, resolveSchedule } = require("../schedule/serviceSchedule");
 
 const INTAKE_CODE = Object.freeze({
   ORDER_INTAKE_CLOSED: "ORDER_INTAKE_CLOSED",
@@ -28,13 +37,6 @@ const INTAKE_CODE = Object.freeze({
   SERVICE_KIND_MISMATCH: "SERVICE_KIND_MISMATCH",
   LEGACY_SESSION_KIND_UNKNOWN: "LEGACY_SESSION_KIND_UNKNOWN",
 });
-
-// Only these two schedule states ever accept a brand-new order. BETWEEN_SERVICES
-// deliberately does NOT: the schedule module's own resolveSchedule().acceptsNewOrders
-// documents an informational "lunch stragglers" intent for that buffer (see its own
-// test), but this policy's contract is stricter and unconditional there — see the
-// S2-7D6B2 final report for the discrepancy this leaves on record.
-const INTAKE_OPEN_STATES = new Set([SCHEDULE_STATE.PRANZO_WINDOW, SCHEDULE_STATE.SERA_WINDOW]);
 
 const MESSAGES = Object.freeze({
   [INTAKE_CODE.ORDER_INTAKE_CLOSED]: "La recepción de nuevos pedidos está cerrada para este servicio.",
@@ -61,10 +63,11 @@ function rejection(code, when, sourceChannel) {
 function evaluateNewOrderIntake({ now = new Date(), activeSession = null, sourceChannel = null, schedule = DEFAULT_SCHEDULE } = {}) {
   const when = resolveSchedule(now, schedule);
 
-  if (!INTAKE_OPEN_STATES.has(when.state)) {
+  if (!when.canCreateNewOrder) {
     return rejection(INTAKE_CODE.ORDER_INTAKE_CLOSED, when, sourceChannel);
   }
-  // when.state is PRANZO_WINDOW or SERA_WINDOW here, so when.serviceKind is set.
+  // canCreateNewOrder is only ever true where the canonical resolver also sets
+  // a concrete serviceKind (PRANZO_WINDOW / SERA_WINDOW today).
   if (!activeSession) {
     return rejection(INTAKE_CODE.NO_OPEN_SERVICE_SESSION, when, sourceChannel);
   }
