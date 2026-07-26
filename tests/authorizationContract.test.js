@@ -11,7 +11,7 @@ const assert = (n, c, d = '') => { if (c) { pass++; console.log('  PASS  ' + n);
 const setEq = (a, b) => { const A2 = new Set(a), B2 = new Set(b); return A2.size === B2.size && [...A2].every((x) => B2.has(x)); };
 
 // ── Independent spec transcription (from owner message §7,§9,§6,§11,§12) ─────
-const SPEC_ALL_56 = [
+const SPEC_ALL_57 = [
   'getOrdenes', 'getWaMsgs', 'getConfig', 'chiudiServizio', 'triggerCloseIfNeeded',
   'scanServizio', 'backupSerata', 'rigeneraSuggerimenti', 'approvaSuggerimento',
   'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'debugMenuShadow', 'getManualGiros', 'getMenu', 'getCurrentServiceCloseout',
@@ -24,7 +24,7 @@ const SPEC_ALL_56 = [
   'resolveAddress', 'previewOrderTiming', 'createOrden', 'updateNotaCucina', 'eliminaOrdine',
   'eliminaConversazione', 'upsertCliente', 'parseOrdineDaRisposta', 'createManualGiro',
   'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro',
-  'getAuthActors', 'setActorPin', 'openServiceSession',
+  'getAuthActors', 'setActorPin', 'openServiceSession', 'ensureCurrentServiceSession',
 ];
 const SPEC_SERVICE_ONLY = ['triggerCloseIfNeeded'];
 const SPEC_ADMIN_ONLY = [
@@ -69,8 +69,8 @@ for (const p of ['owner', 'Admin', 'ADMIN', '', ' admin', 'operator ', null, und
 }
 
 // ── B. Canonical set integrity + module↔spec transcription ──────────────────
-assert('B: module CANONICAL_ACTIONS length 61', A.CANONICAL_ACTIONS.length === 61);
-assert('B: module canonical set == spec 56 (independent transcription)', setEq(A.CANONICAL_ACTIONS, SPEC_ALL_56));
+assert('B: module CANONICAL_ACTIONS length 62', A.CANONICAL_ACTIONS.length === 62);
+assert('B: module canonical set == spec 57 (independent transcription)', setEq(A.CANONICAL_ACTIONS, SPEC_ALL_57));
 assert('B: no duplicate canonical action', new Set(A.CANONICAL_ACTIONS).size === A.CANONICAL_ACTIONS.length);
 assert('B: module ADMIN_ONLY == spec (15)', setEq(A.ADMIN_ONLY_ACTIONS, SPEC_ADMIN_ONLY) && A.ADMIN_ONLY_ACTIONS.length === 15);
 assert('B: module RIDER_ENABLED == spec (7)', setEq(A.RIDER_ENABLED_ACTIONS, SPEC_RIDER) && A.RIDER_ENABLED_ACTIONS.length === 7);
@@ -78,13 +78,13 @@ assert('B: module SERVICE_ONLY == spec (1)', setEq(A.SERVICE_ONLY_ACTIONS, SPEC_
 
 // ── C. Dynamic router equality + negative controls ──────────────────────────
 const routerActions = extractRouterActions();
-assert('C: extractor found 61 router actions (anti-no-op)', routerActions.length === 61, `found ${routerActions.length}`);
+assert('C: extractor found 62 router actions (anti-no-op)', routerActions.length === 62, `found ${routerActions.length}`);
 for (const anchor of ['getOrdenes', 'triggerCloseIfNeeded', 'dissolveManualGiro', 'cambiaStato']) {
   assert(`C: extractor anti-no-op anchor present: ${anchor}`, routerActions.includes(anchor));
 }
 const cov = A.assertContractCoversRouter(routerActions);
 assert('C: router == matrix (no router-only, no matrix-only, no dup)', cov.ok, JSON.stringify(cov));
-assert('C: no duplicate router action', extractRouterActionsWithDuplicates().length === 61);
+assert('C: no duplicate router action', extractRouterActionsWithDuplicates().length === 62);
 // negative controls (synthetic sources / mutated sets)
 assert('C-neg: fake router-only action fails equality',
   A.assertContractCoversRouter([...routerActions, 'totallyNewAction']).ok === false);
@@ -101,9 +101,9 @@ assert('C-neg: extractor detects a MISSPELLED action (not silently normalized)',
 assert('C-neg: future alias collision — alias key equal to a canonical name would be caught',
   A.CANONICAL_ACTIONS.every((a) => !Object.prototype.hasOwnProperty.call(A.ALIAS_MAP, a)));
 
-// ── D. Exhaustive 56 × 4 decision surface ───────────────────────────────────
+// ── D. Exhaustive 57 × 4 decision surface ───────────────────────────────────
 let surfaceOk = true;
-for (const action of SPEC_ALL_56) {
+for (const action of SPEC_ALL_57) {
   const exp = expectedAllowed(action);
   for (const p of ['admin', 'operator', 'rider', 'service']) {
     const got = A.isAllowed(p, action);
@@ -115,9 +115,9 @@ assert('D: full 56x4 decision surface matches independent spec oracle', surfaceO
 
 // ── E. Totals (secondary sanity, not primary proof) ─────────────────────────
 const totals = { admin: 0, operator: 0, rider: 0, service: 0 };
-for (const action of SPEC_ALL_56) for (const p of ['admin', 'operator', 'rider', 'service']) if (A.isAllowed(p, action)) totals[p]++;
-assert('E: admin total 60', totals.admin === 60, `got ${totals.admin}`);
-assert('E: operator total 45', totals.operator === 45, `got ${totals.operator}`);
+for (const action of SPEC_ALL_57) for (const p of ['admin', 'operator', 'rider', 'service']) if (A.isAllowed(p, action)) totals[p]++;
+assert('E: admin total 61', totals.admin === 61, `got ${totals.admin}`);
+assert('E: operator total 46', totals.operator === 46, `got ${totals.operator}`);
 assert('E: rider total 7', totals.rider === 7, `got ${totals.rider}`);
 assert('E: service total 1', totals.service === 1, `got ${totals.service}`);
 
@@ -127,7 +127,7 @@ for (const p of ['admin', 'operator', 'rider']) assert(`F: ${p} DENIED triggerCl
 assert('F: triggerCloseIfNeeded isMachineOnly', A.isMachineOnly('triggerCloseIfNeeded'));
 // service denied every human action (all 54 non-service-only)
 let serviceHumanDenied = true;
-for (const action of SPEC_ALL_56) if (action !== 'triggerCloseIfNeeded' && A.isAllowed('service', action)) serviceHumanDenied = false;
+for (const action of SPEC_ALL_57) if (action !== 'triggerCloseIfNeeded' && A.isAllowed('service', action)) serviceHumanDenied = false;
 assert('F: service DENIED all 55 human actions', serviceHumanDenied);
 // humans denied every machine-only action
 let humansMachineDenied = true;
@@ -135,16 +135,16 @@ for (const p of ['admin', 'operator', 'rider']) for (const action of SPEC_SERVIC
 assert('F: humans DENIED all machine-only actions', humansMachineDenied);
 // admin denied ONLY triggerCloseIfNeeded
 assert('F: admin denied set == {triggerCloseIfNeeded}',
-  setEq(SPEC_ALL_56.filter((a) => !A.isAllowed('admin', a)), ['triggerCloseIfNeeded']));
+  setEq(SPEC_ALL_57.filter((a) => !A.isAllowed('admin', a)), ['triggerCloseIfNeeded']));
 // operator denied set == service-only + admin-only
 assert('F: operator denied set == triggerCloseIfNeeded + 13 admin-only',
-  setEq(SPEC_ALL_56.filter((a) => !A.isAllowed('operator', a)), ['triggerCloseIfNeeded', ...SPEC_ADMIN_ONLY]));
+  setEq(SPEC_ALL_57.filter((a) => !A.isAllowed('operator', a)), ['triggerCloseIfNeeded', ...SPEC_ADMIN_ONLY]));
 // rider allowed set == exactly the 7
 assert('F: rider allowed set == the 7 rider actions',
-  setEq(SPEC_ALL_56.filter((a) => A.isAllowed('rider', a)), SPEC_RIDER));
+  setEq(SPEC_ALL_57.filter((a) => A.isAllowed('rider', a)), SPEC_RIDER));
 
 // ── G. Fresh-auth exact set + not-inferred ──────────────────────────────────
-assert('G: requiresFreshAuth set == spec 11', setEq(SPEC_ALL_56.filter((a) => A.requiresFreshAuth(a)), SPEC_FRESH));
+assert('G: requiresFreshAuth set == spec 11', setEq(SPEC_ALL_57.filter((a) => A.requiresFreshAuth(a)), SPEC_FRESH));
 assert('G: FRESH is subset of canonical', SPEC_FRESH.every((a) => A.isCanonicalAction(a)));
 // explicit non-fresh examples (owner §11): not inferred from admin-only / names / mutation
 for (const a of ['debugInterpreta', 'chiudiServizio']) {
@@ -166,7 +166,7 @@ for (const [act, id] of Object.entries(SPEC_PREDICATES)) {
 }
 // predicate-bearing action set == exactly the 7 rider actions
 assert('H: predicate-bearing set == 7 rider actions',
-  setEq(SPEC_ALL_56.filter((a) => A.getRequiredPredicate('rider', a) !== null), SPEC_RIDER));
+  setEq(SPEC_ALL_57.filter((a) => A.getRequiredPredicate('rider', a) !== null), SPEC_RIDER));
 // non-rider-enabled actions carry no predicate for rider (and rider is denied them anyway)
 assert('H: rider getRequiredPredicate(getConfig) null (denied, no predicate)', A.getRequiredPredicate('rider', 'getConfig') === null);
 // B4 never evaluates predicates to a truthy pass — API returns only an id or null
@@ -176,7 +176,7 @@ assert('H: getRequiredPredicate never returns boolean true',
 // ── I. Alias map empty proof ─────────────────────────────────────────────────
 assert('I: ALIAS_MAP has zero keys', Object.keys(A.ALIAS_MAP).length === 0);
 assert('I: resolveCanonicalAction is identity for canonical (empty alias map)',
-  SPEC_ALL_56.every((a) => A.resolveCanonicalAction(a) === a));
+  SPEC_ALL_57.every((a) => A.resolveCanonicalAction(a) === a));
 assert('I: no alias key collides with a canonical action', Object.keys(A.ALIAS_MAP).every((k) => !A.isCanonicalAction(k)));
 
 // ── J. The four look-alike pairs are SEPARATE canonical actions ─────────────

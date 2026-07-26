@@ -22,7 +22,7 @@
 const PRINCIPALS = Object.freeze(['admin', 'operator', 'rider', 'service']);
 const HUMAN_PRINCIPALS = Object.freeze(['admin', 'operator', 'rider']);
 
-// ── Canonical routed-action set (56) ─────────────────────────────────────────
+// ── Canonical routed-action set (57) ─────────────────────────────────────────
 // Authoritative classification input. The live router (index.js) is extracted
 // dynamically and proven set-equal to this list (no matrix-only / router-only).
 const CANONICAL_ACTIONS = Object.freeze([
@@ -38,7 +38,7 @@ const CANONICAL_ACTIONS = Object.freeze([
   'resolveAddress', 'previewOrderTiming', 'createOrden', 'updateNotaCucina', 'eliminaOrdine',
   'eliminaConversazione', 'upsertCliente', 'parseOrdineDaRisposta', 'createManualGiro',
   'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro',
-  'getAuthActors', 'setActorPin', 'openServiceSession',
+  'getAuthActors', 'setActorPin', 'openServiceSession', 'ensureCurrentServiceSession',
 ]);
 const CANONICAL_SET = Object.freeze(new Set(CANONICAL_ACTIONS));
 
@@ -78,6 +78,8 @@ const FRESH_AUTH_ACTIONS = Object.freeze([
   'getOrdenesArchivio', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine',
   'eliminaConversazione', 'getSuggerimenti',
   'getAuthActors', 'setActorPin', 'getCurrentServiceCloseout', 'openServiceSession',
+  // S2-7D6B — the automatic ensure runs on every Servicio entry, so it must NOT be
+  // fresh-auth: it is the silent path, not a privileged one-off.
 ]);
 const FRESH_AUTH_SET = Object.freeze(new Set(FRESH_AUTH_ACTIONS));
 

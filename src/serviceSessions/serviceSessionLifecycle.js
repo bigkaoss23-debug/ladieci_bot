@@ -10,6 +10,19 @@ function normalize(rpcResult) {
 
 function createServiceSessionLifecycle({ rpc = sbRpc } = {}) {
   return Object.freeze({
+    // S2-7D6B — THE creator. Idempotent: an existing active session of the same
+    // kind is returned as `created:false`, never re-opened. The kind is resolved
+    // by the caller from the authoritative schedule module and is never taken
+    // from a client request.
+    async ensure({ actor, serviceKind, source = "auto_entry" }) {
+      return normalize(await rpc("ensure_service_session", {
+        p_opened_by: actor, p_service_kind: serviceKind, p_source: source,
+      }));
+    },
+    // Retired: the kind-less opener now fail-closes in SQL with
+    // SERVICE_KIND_REQUIRED, because it could only create a session that
+    // violates service_sessions_active_kind_chk. Kept so a stale caller fails
+    // loudly rather than silently writing a session with no service identity.
     async open({ actor, source = "backend" }) {
       return normalize(await rpc("open_service_session", { p_opened_by: actor, p_source: source }));
     },
