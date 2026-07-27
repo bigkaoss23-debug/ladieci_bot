@@ -1,9 +1,37 @@
--- migrations/2026-07-27_s2_7d6e2_rider_delivery_collection.sql
--- S2-7D6E2 — the rider stop stops being an accounting authority.
+-- migrations/2026-07-27_s2_7d6e3a_rider_ledger_writer_additive.sql
+-- S2-7D6E3 FASE A — the rider stop stops being an accounting authority (additive half).
 -- TARGET PROJECT REF: tdikhfeinufaahagmpjz   ***STAGING ONLY***
 -- DRAFT — NOT APPLIED.
 --
--- WHY. `complete_rider_stop(text, boolean, text)` wrote
+-- THIS IS FASE A OF A TWO-PHASE, SQL-FIRST-SAFE ROLLOUT (split from the original single-file
+-- S2-7D6E2 draft after an audit found it coupled DB and backend deploys — see the ROLLOUT
+-- note below). Apply THIS file any time, independently of the backend deploy:
+--   FASE A (this file)  — purely additive: new functions only, nothing dropped, nothing that
+--                         the CURRENTLY DEPLOYED backend calls changes its calling contract.
+--                         The legacy `complete_rider_stop(text, boolean, text)` is left in
+--                         place untouched, so the old backend keeps working unmodified.
+--   FASE B              — deploy the backend commit that repoints
+--                         riderTrip.completeStop -> rider_collect_and_complete_stop.
+--   FASE C              — smoke-test the rider door-collection flow live.
+--   FASE D (separate file, 2026-07-27_s2_7d6e3d_retire_complete_rider_stop.sql) — apply ONLY
+--                         after FASE C passes: drops the now-unused legacy RPC.
+-- No phase requires simultaneity between Railway (backend) and Supabase (DB).
+--
+-- ONE STATEMENT IN THIS FILE IS NOT ZERO-RISK: `CREATE OR REPLACE FUNCTION order_mark_paid`
+-- (section 2 below) live-swaps the body of a function the CURRENTLY DEPLOYED operator
+-- payment path already calls on every request. This is deliberate and should NOT be
+-- deferred to a later phase: order_mark_paid's body has been unchanged since
+-- 2026-07-19_b7_payment_basis_historical_replay_fix.sql, which predates
+-- 2026-07-26_two_service_identity.sql's session-scoped unique indexes (APPLIED on
+-- staging) — so the function's own pre-INSERT lookup queries never got updated to match
+-- and carry the SAME session-scoping bug fixed in this file's writer (see section 1's
+-- comment). Applying FASE A therefore also fixes an already-live idempotency gap in the
+-- operator payment path, not just prepares the rider feature. The replacement is
+-- authorization-preserving (admin/operator gate, session_version check and error
+-- precedence are reproduced exactly — see tests/riderDeliveryCollectionMigration.test.js).
+--
+-- WHY (the rider defect this migration exists for).
+-- `complete_rider_stop(text, boolean, text)` wrote
 --     cobrado = COALESCE(p_cobrado, true), metodo_pago = COALESCE(p_metodo_pago, '')
 -- with no actor, no session_version, no amount and NO row in order_financial_events.
 -- Every euro a rider collected at the door was invisible to the ledger and reached the
@@ -43,7 +71,7 @@ BEGIN;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20260710075612')
-  THEN RAISE EXCEPTION 'S2-7D6E2 refused: staging sentinel migration absent — wrong database?'; END IF;
+  THEN RAISE EXCEPTION 'S2-7D6E3A refused: staging sentinel migration absent — wrong database?'; END IF;
 END $$;
 
 -- Required predecessor: the guarded B7A2D/B7A2E payment authority must already exist.
@@ -54,18 +82,25 @@ BEGIN
     WHERE ns.nspname = 'public' AND p.proname = 'order_mark_paid'
       AND pg_get_function_identity_arguments(p.oid) =
         'p_order_id text, p_payment_method text, p_reason text, p_by_actor text, p_session_version integer, p_ip_hash text, p_meta jsonb, p_idem_scope_key text')
-  THEN RAISE EXCEPTION 'S2-7D6E2 refused: guarded order_mark_paid absent — apply B7A2D/B7A2E first.'; END IF;
+  THEN RAISE EXCEPTION 'S2-7D6E3A refused: guarded order_mark_paid absent — apply B7A2D/B7A2E first.'; END IF;
   IF NOT EXISTS (SELECT 1 FROM information_schema.tables
                   WHERE table_schema='public' AND table_name='order_financial_events')
-  THEN RAISE EXCEPTION 'S2-7D6E2 refused: order_financial_events absent.'; END IF;
+  THEN RAISE EXCEPTION 'S2-7D6E3A refused: order_financial_events absent.'; END IF;
 END $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 1. THE single ledger writer.
 --
--- Extracted VERBATIM from order_mark_paid (2026-07-19_b7_payment_basis_historical_replay_fix.sql
+-- Extracted from order_mark_paid (2026-07-19_b7_payment_basis_historical_replay_fix.sql
 -- lines 88-160) so the canonical payload and digest are byte-identical to every event
--- already recorded on staging — existing replays keep matching.
+-- already recorded on staging — existing replays keep matching. The two pre-INSERT lookup
+-- queries are NOT verbatim: the 2026-07-19 source predates
+-- 2026-07-26_two_service_identity.sql's session-scoped unique indexes, and copying its
+-- order_id-only WHERE clauses here would let an order id/number recycled into a later
+-- service session collide with an earlier session's event (false replay of a different
+-- day's payment, or a spurious AUTH_IDEMPOTENCY_CONFLICT). Both lookups add
+-- `service_session_id IS NOT DISTINCT FROM v_ord.service_session_id` to match the
+-- partitioned indexes exactly.
 --
 -- The caller is responsible for AUTHORIZATION (who may pay). This function is responsible
 -- for ACCOUNTING (what gets recorded). It re-validates its own inputs so a second caller
@@ -114,8 +149,13 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'AUTH_ORDER_NOT_FOUND' USING ERRCODE='P0002'; END IF;
 
   -- Same-scope replay is based on immutable event snapshots, not mutable order fields.
+  -- Scoped by service_session_id (IS NOT DISTINCT FROM handles the legacy NULL-session
+  -- case) to match the partitioned unique indexes from 2026-07-26_two_service_identity.sql
+  -- (order_financial_events_one_payment_session_uq / _legacy_uq): an order id/number
+  -- recycled into a LATER service session must never match an EARLIER session's event.
   SELECT * INTO v_existing FROM public.order_financial_events
-    WHERE order_id = p_order_id AND type = 'payment' AND idem_scope_key = p_idem_scope_key;
+    WHERE order_id = p_order_id AND type = 'payment' AND idem_scope_key = p_idem_scope_key
+      AND service_session_id IS NOT DISTINCT FROM v_ord.service_session_id;
   IF FOUND THEN
     IF v_existing.type <> 'payment'
        OR v_existing.amount IS NULL OR v_existing.amount <= 0
@@ -159,8 +199,12 @@ BEGIN
     'amount', v_amount, 'payment_method', v_method, 'legacy', false);
   v_digest := lower(encode(sha256(convert_to(v_canon::text, 'UTF8')), 'hex'));
 
+  -- Same session-scoping as the replay check above: one basis per order PER SESSION, so a
+  -- recycled order id/number starts a fresh basis in a later session instead of colliding
+  -- with a since-archived one.
   SELECT * INTO v_existing_basis FROM public.order_financial_events
     WHERE order_id = p_order_id AND type IN ('payment','payment_imported')
+      AND service_session_id IS NOT DISTINCT FROM v_ord.service_session_id
     ORDER BY created_at ASC LIMIT 1;
   IF FOUND THEN
     RAISE EXCEPTION 'AUTH_BASIS_EXISTS' USING ERRCODE='22023';
@@ -380,11 +424,15 @@ END;
 $fn$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 4. Retire the ledger-less signature. DROP (not CREATE OR REPLACE) so no caller can
---    reach the old `cobrado = COALESCE(p_cobrado, true)` write ever again.
---    riderTrip.js is repointed in the same change.
+-- 4. The old ledger-less `complete_rider_stop(text, boolean, text)` is DELIBERATELY LEFT
+--    IN PLACE here — it is NOT dropped by FASE A. Dropping it is a separate, later
+--    migration (2026-07-27_s2_7d6e3d_retire_complete_rider_stop.sql) applied ONLY after
+--    FASE B (backend repointed to rider_collect_and_complete_stop) has deployed and FASE C
+--    (live smoke test) has passed. Until then the old function is simply unused dead code
+--    from the DB's point of view — nothing in this file's DDL removes a caller's ability to
+--    reach it, so a currently-deployed OLD backend keeps working unmodified if FASE A is
+--    applied before FASE B ships.
 -- ─────────────────────────────────────────────────────────────────────────────
-DROP FUNCTION IF EXISTS public.complete_rider_stop(text, boolean, text);
 
 REVOKE EXECUTE ON FUNCTION public._ledger_write_payment(text, text, text, text, text, text, jsonb, text)
   FROM PUBLIC, anon, authenticated;

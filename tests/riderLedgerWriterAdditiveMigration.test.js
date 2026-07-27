@@ -1,5 +1,6 @@
 'use strict';
-// S2-7D6E2 — static contract of migrations/2026-07-27_s2_7d6e2_rider_delivery_collection.sql.
+// S2-7D6E3 FASE A — static contract of
+// migrations/2026-07-27_s2_7d6e3a_rider_ledger_writer_additive.sql.
 //
 // The migration is a DRAFT (not applied), so this test is the only thing standing between a
 // typo and a production accounting change. It asserts the properties that make the rider
@@ -7,11 +8,14 @@
 //   * ONE ledger writer; the rider RPC writes no event of its own and derives no amount
 //   * order_mark_paid's generic authority is still admin/operator ONLY (no role widening)
 //   * the rider contract demands role === 'rider' exactly, and trip membership
-//   * the ledger-less complete_rider_stop is DROPPED, not merely replaced
+//   * both pre-INSERT lookups are scoped by service_session_id (the bug this split fixed)
 //   * completion never writes cobrado/metodo_pago — payment stays separate from state
 //   * a lost race after taking the money ABORTS rather than returning
+//   * the ledger-less complete_rider_stop is LEFT IN PLACE here (additive-only) — its
+//     retirement is a separate FASE D migration, covered by
+//     tests/riderRetireCompleteRiderStopMigration.test.js
 //
-// Run: node tests/riderDeliveryCollectionMigration.test.js
+// Run: node tests/riderLedgerWriterAdditiveMigration.test.js
 
 const fs = require('fs');
 const path = require('path');
@@ -23,7 +27,7 @@ const check = (name, cond, detail) => {
 };
 
 const MIG = path.join(__dirname, '..', 'migrations');
-const FILE = '2026-07-27_s2_7d6e2_rider_delivery_collection.sql';
+const FILE = '2026-07-27_s2_7d6e3a_rider_ledger_writer_additive.sql';
 const sql = fs.readFileSync(path.join(MIG, FILE), 'utf8');
 const rollback = fs.readFileSync(path.join(MIG, FILE.replace('.sql', '.ROLLBACK.sql')), 'utf8');
 
@@ -43,7 +47,7 @@ const rider = fnBody(sql, 'rider_collect_and_complete_stop');
 console.log('\n[transaction + guards]');
 check('wrapped in a single transaction', /^BEGIN;/m.test(sql) && /COMMIT;\s*$/.test(sql.trim()));
 check('staging sentinel guard present', sql.includes("version='20260710075612'"));
-check('refuses to run without the guarded order_mark_paid', /S2-7D6E2 refused: guarded order_mark_paid absent/.test(sql));
+check('refuses to run without the guarded order_mark_paid', /S2-7D6E3A refused: guarded order_mark_paid absent/.test(sql));
 
 console.log('\n[one ledger writer]');
 check('the shared writer exists', writer.length > 0);
@@ -55,6 +59,10 @@ check('writer amount variable is numeric(10,2) — guards the digest-replay bug 
   /v_amount numeric\(10,2\)/.test(writer));
 check('writer refuses a non-positive amount', /AUTH_AMOUNT_INVALID/.test(writer));
 check('writer enforces one payment basis per order', /AUTH_BASIS_EXISTS/.test(writer));
+check('replay-check lookup scopes by service_session_id (matches the 2026-07-26 session-scoped unique indexes, so a recycled order id/number in a later session cannot match an earlier session\'s event)',
+  /idem_scope_key = p_idem_scope_key\s*\n\s*AND service_session_id IS NOT DISTINCT FROM v_ord\.service_session_id/.test(writer));
+check('basis-check lookup scopes by service_session_id (one basis per order PER SESSION, not globally)',
+  /type IN \('payment','payment_imported'\)\s*\n\s*AND service_session_id IS NOT DISTINCT FROM v_ord\.service_session_id/.test(writer));
 check('writer refuses to double-count pre-ledger money', /AUTH_LEGACY_IMPORT_REQUIRED/.test(writer));
 check('writer builds exactly one canonical payload', (writer.match(/v_canon := jsonb_build_object/g) || []).length === 1);
 
@@ -100,15 +108,15 @@ check('a lost race ABORTS so a recorded payment cannot outlive an uncompleted st
   /RAISE EXCEPTION 'RIDER_STOP_LOST_RACE'/.test(rider));
 check('a refused payment stops the flow before completion', /PAYMENT_REFUSED/.test(rider));
 
-console.log('\n[the ledger-less path is gone]');
-check('old complete_rider_stop is DROPPED',
-  /DROP FUNCTION IF EXISTS public\.complete_rider_stop\(text, boolean, text\);/.test(sql));
+console.log('\n[FASE A is additive-only: the ledger-less path is left in place, not dropped]');
+check('complete_rider_stop is NOT dropped by this file (that is FASE D, a separate migration)',
+  !/DROP FUNCTION IF EXISTS public\.complete_rider_stop/.test(sql));
 // Strip `--` comments first: the migration header QUOTES the old defect verbatim to
 // explain it, and a prose mention must not read as surviving executable SQL.
 const executable = sql.replace(/^\s*--.*$/gm, '');
-check('no surviving cobrado = COALESCE(p_cobrado, true) in executable SQL',
+check('no surviving cobrado = COALESCE(p_cobrado, true) in executable SQL (the old defect is quoted only in the header prose)',
   !/COALESCE\(p_cobrado/.test(executable));
-check('the migration never takes a p_cobrado parameter', !/p_cobrado\s+boolean/.test(executable));
+check('this migration never takes a p_cobrado parameter itself', !/p_cobrado\s+boolean/.test(executable));
 check('the defect IS still documented in the header for the next reader',
   /COALESCE\(p_cobrado, true\)/.test(sql));
 
@@ -122,8 +130,8 @@ for (const fn of ['_ledger_write_payment', 'rider_collect_and_complete_stop']) {
 
 console.log('\n[rollback]');
 check('rollback exists and is transactional', /^BEGIN;/m.test(rollback) && /COMMIT;\s*$/.test(rollback.trim()));
-check('rollback restores the ledger-less complete_rider_stop',
-  /CREATE OR REPLACE FUNCTION public\.complete_rider_stop\(/.test(rollback));
+check('rollback does NOT need to restore complete_rider_stop (FASE A never touched it)',
+  !/CREATE OR REPLACE FUNCTION public\.complete_rider_stop\(/.test(rollback));
 check('rollback drops the rider contract',
   /DROP FUNCTION IF EXISTS public\.rider_collect_and_complete_stop/.test(rollback));
 check('rollback drops the shared writer',

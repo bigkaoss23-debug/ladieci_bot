@@ -1,14 +1,22 @@
--- ROLLBACK for 2026-07-27_s2_7d6e2_rider_delivery_collection.sql
+-- ROLLBACK for 2026-07-27_s2_7d6e3a_rider_ledger_writer_additive.sql (S2-7D6E3 FASE A)
 -- TARGET PROJECT REF: tdikhfeinufaahagmpjz   ***STAGING ONLY***
 --
--- Restores the pre-S2-7D6E2 shape: order_mark_paid inlines its own accounting again, the
--- ledger-less complete_rider_stop(text, boolean, text) comes back, and the rider contract
--- plus the shared writer are dropped.
+-- FASE A only ADDED functions and replaced order_mark_paid's body — it never touched
+-- complete_rider_stop(text, boolean, text), so there is nothing to restore there; this
+-- rollback simply undoes exactly what FASE A did:
+--   * drops rider_collect_and_complete_stop (added by FASE A);
+--   * restores order_mark_paid to its pre-FASE-A body, VERBATIM from
+--     2026-07-19_b7_payment_basis_historical_replay_fix.sql (this reintroduces that
+--     version's known session-scoping gap in its own pre-INSERT lookups — expected for a
+--     true rollback, not a partial one);
+--   * drops the shared writer _ledger_write_payment (added by FASE A).
 --
 -- REFUSES if any rider-recorded payment already exists. Those events were written by a
 -- 'rider' by_role, which the restored order_mark_paid can neither produce nor replay:
 -- rolling back over them would strand rows whose digest no live function can reproduce.
--- Reconcile or reverse them deliberately first.
+-- Reconcile or reverse them deliberately first. (If FASE B/C already shipped and rider
+-- payments are flowing, this rollback is no longer the right tool — reconcile forward,
+-- don't revert backward.)
 BEGIN;
 
 DO $$
@@ -139,69 +147,5 @@ END;
 $fn$;
 
 DROP FUNCTION IF EXISTS public._ledger_write_payment(text, text, text, text, text, text, jsonb, text);
-
--- complete_rider_stop restored VERBATIM from
--- 2026-07-21_fix_rider_trip_json_null_idempotency.sql (ledger-less, cobrado-writing).
-CREATE OR REPLACE FUNCTION public.complete_rider_stop(
-  p_order_id    text,
-  p_cobrado     boolean,
-  p_metodo_pago text
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY INVOKER
-SET search_path = public, pg_temp
-AS $fn$
-DECLARE
-  v_ds      jsonb;
-  v_active  jsonb;
-  v_estado  text;
-  v_updated int;
-BEGIN
-  PERFORM pg_advisory_xact_lock(hashtext('LA_DIECI_DRIVER_STATO'));
-
-  SELECT COALESCE(NULLIF(valore,'')::jsonb, '{}'::jsonb) INTO v_ds
-  FROM public.config WHERE chiave = 'DRIVER_STATO' FOR UPDATE;
-  v_active := NULLIF(v_ds->'active_trip', 'null'::jsonb);
-
-  IF v_active IS NULL OR jsonb_typeof(v_active) <> 'object' OR (v_active->>'status') <> 'ACTIVE' THEN
-    RETURN jsonb_build_object('ok', false, 'code', 'NO_ACTIVE_TRIP');
-  END IF;
-
-  IF NOT (v_active->'order_ids' ? p_order_id) THEN
-    RETURN jsonb_build_object('ok', false, 'code', 'NON_MEMBER');
-  END IF;
-
-  SELECT estado INTO v_estado FROM public.ordenes WHERE id = p_order_id;
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('ok', false, 'code', 'NOT_FOUND');
-  END IF;
-
-  IF v_estado = 'RETIRADO' THEN
-    RETURN jsonb_build_object('ok', true, 'code', 'IDEMPOTENT', 'order_id', p_order_id);
-  END IF;
-
-  IF v_estado <> 'EN_ENTREGA' THEN
-    RETURN jsonb_build_object('ok', false, 'code', 'INVALID_STATE');
-  END IF;
-
-  UPDATE public.ordenes
-    SET estado       = 'RETIRADO',
-        hora_entrega = (extract(epoch FROM now()) * 1000)::bigint,
-        cobrado      = COALESCE(p_cobrado, true),
-        metodo_pago  = COALESCE(p_metodo_pago, '')
-  WHERE id = p_order_id AND estado = 'EN_ENTREGA';
-  GET DIAGNOSTICS v_updated = ROW_COUNT;
-
-  IF v_updated = 0 THEN
-    RETURN jsonb_build_object('ok', false, 'code', 'INVALID_STATE');
-  END IF;
-
-  RETURN jsonb_build_object('ok', true, 'code', 'OK', 'order_id', p_order_id);
-END;
-$fn$;
-
-REVOKE EXECUTE ON FUNCTION public.complete_rider_stop(text, boolean, text) FROM PUBLIC, anon, authenticated;
-GRANT  EXECUTE ON FUNCTION public.complete_rider_stop(text, boolean, text) TO service_role;
 
 COMMIT;
