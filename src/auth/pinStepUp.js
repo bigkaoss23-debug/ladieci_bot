@@ -16,9 +16,14 @@
 // On success this does NOT mint a new session (never calls jwt.signToken, never touches
 // req.authCtx's session): it returns a SEPARATE, narrowly-scoped, short-lived signed proof
 // (jwt.signStepUpProof) that setActorPin must present and verify. That proof is
-// cryptographically bound to the CURRENT session via jwt.hashBearerToken/verifyStepUpProof,
-// so a proof minted in one session can never be replayed from a different session, even for
-// the same actor at the same session_version.
+// cryptographically bound to the CURRENT session's `sid` (jwt.verifyStepUpProof), so a
+// proof minted in one session can never be replayed from a different session, even for the
+// same actor at the same session_version.
+//
+// A token with no sid — one signed before the sid fix landed — CANNOT get a step-up proof
+// at all: there is no weaker fallback for PIN management. That caller gets a distinct,
+// explicit `reauth_required` code so the UI can say plainly "log in again", rather than an
+// opaque PIN failure.
 //
 // deps: { dao, jwt, pinPolicy, verifyPin, decoyHashPromise, ipHash }
 //   dao: { getLockState, getActorForVerify_SENSITIVE, recordFailedAttempt, resetFailedAttempts }
@@ -26,25 +31,28 @@
 const FAIL_CRED = Object.freeze({ ok: false, code: 'cred' });
 const FAIL_BAD = Object.freeze({ ok: false, code: 'bad' });
 const FAIL_UNAVAIL = Object.freeze({ ok: false, code: 'unavail' });
+const FAIL_REAUTH = Object.freeze({ ok: false, code: 'reauth_required' });
 const failBlocked = (retryAfterSec) => Object.freeze({ ok: false, code: 'blocked', retryAfterSec });
 
 function createPinStepUpVerifier(deps = {}) {
   const { dao, jwt, pinPolicy, verifyPin, decoyHashPromise } = deps;
 
-  // verifyOwnPin({actor, role, sv, pin, bearerToken})
-  //   actor/role/sv — from the ALREADY-VERIFIED req.authCtx. NEVER accept these from the
+  // verifyOwnPin({actor, role, sv, pin, sid})
+  //   actor/role/sv/sid — from the ALREADY-VERIFIED req.authCtx. NEVER accept these from the
   //                   request body: the whole point is that the proof describes who the
   //                   server already knows the caller to be, not who the caller claims.
-  //   bearerToken   — the raw current Bearer, used only to derive the session binding.
-  //                   Never logged, never returned, never persisted.
+  //   sid           — the current session's per-login id (jwt.js). Absent for a session
+  //                   signed before this change; PIN management refuses those outright.
   // Returns { ok:true, stepUpProof, expiresInSec } or { ok:false, code, retryAfterSec? }.
-  async function verifyOwnPin({ actor, role, sv, pin, bearerToken } = {}) {
+  async function verifyOwnPin({ actor, role, sv, pin, sid } = {}) {
     try {
       if (role !== 'admin') return FAIL_BAD;                    // only admin/owner manages PINs
       if (typeof actor !== 'string' || actor.length === 0) return FAIL_BAD;
       if (!Number.isInteger(sv) || sv < 1) return FAIL_BAD;
       if (typeof pin !== 'string' || pin.length === 0) return FAIL_BAD;
-      if (typeof bearerToken !== 'string' || bearerToken.length === 0) return FAIL_BAD;
+      // A session with no sid cannot ever complete this flow — refuse before touching the
+      // PIN check at all, with a code the caller can distinguish from a wrong PIN.
+      if (typeof sid !== 'string' || sid.length === 0) return FAIL_REAUTH;
       if (!dao || !jwt || !pinPolicy || typeof verifyPin !== 'function') return FAIL_UNAVAIL;
       // Generic format rejection — indistinguishable from a wrong PIN, no length/shape oracle.
       if (!pinPolicy.validatePinFormat(pin, role).ok) return FAIL_CRED;
@@ -74,9 +82,7 @@ function createPinStepUpVerifier(deps = {}) {
         // DB-fresh read (req.authCtx.sv) and this call, not a race with that read itself.
         if (!Number.isInteger(reset.session_version) || reset.session_version !== sv) return FAIL_CRED;
 
-        const sessionHash = jwt.hashBearerToken(bearerToken);
-        if (!sessionHash) return FAIL_UNAVAIL;
-        const stepUpProof = jwt.signStepUpProof({ actor, role, sv, sessionHash });
+        const stepUpProof = jwt.signStepUpProof({ actor, role, sv, sid });
         if (!stepUpProof) return FAIL_UNAVAIL;
         return Object.freeze({ ok: true, stepUpProof, expiresInSec: jwt.STEP_UP_TTL_SECONDS });
       }

@@ -181,9 +181,12 @@ const adminAccessService = createAdminAccessService({
   ipHash,
   rotation: pinRotation,
   listActorsForVerify: authDao.listActorsForVerify_SENSITIVE,
-  // S2-7D6E4 — setActorPin now REQUIRES a valid, session-bound step-up proof.
+  // S2-7D6E4 — setActorPin now REQUIRES a valid, session-bound step-up proof. Binding is via
+  // the per-login sid carried in req.authCtx (see jwt.js / legacyAuthGuard.js), not a hash of
+  // the raw Bearer: two logins for the same actor within the same clock second produce a
+  // byte-identical token (verified empirically), so a Bearer-hash alone cannot distinguish
+  // them — sid is generated fresh, from real entropy, on every signToken call.
   verifyStepUpProof: jwt.verifyStepUpProof,
-  hashSessionToken: jwt.hashBearerToken,
 });
 
 // S2-7D6E4 — step-up PIN confirmation. Reuses login.js's exact lockout-safe verify
@@ -198,15 +201,6 @@ const pinStepUpVerifier = createPinStepUpVerifier({
   verifyPin,
   decoyHashPromise: _pinStepUpDecoyHashPromise,
 });
-
-// Bearer extraction for step-up binding — the raw token is used ONLY to derive a one-way
-// hash (jwt.hashBearerToken); it is never stored, logged, or echoed back.
-function bearerFromHeader(req) {
-  const h = req && req.headers && req.headers.authorization;
-  if (typeof h !== "string") return null;
-  const m = /^Bearer\s+(.+)$/.exec(h.trim());
-  return m ? m[1] : null;
-}
 
 // S2-7D6E — the operator payment registrar. Reuses the accepted B7A2 DAO/service as-is:
 // no new SQL, no new transport. Unconditionally constructed (like adminAccessService) —
@@ -533,12 +527,16 @@ app.post("/api", async (req, res) => {
         role: req.authCtx.role,
         sv: req.authCtx.sv,
         pin: req.body && req.body.pin,
-        bearerToken: bearerFromHeader(req),
+        sid: req.authCtx.sid,
       });
       if (!out.ok) {
         if (out.code === "blocked") return res.status(429).json({ ok: false, error: "LOCKED", retryAfterSec: out.retryAfterSec || 0 });
         if (out.code === "bad") return res.status(400).json({ ok: false, error: "BAD_REQUEST" });
         if (out.code === "unavail") return res.status(503).json({ ok: false, error: "UNAVAILABLE" });
+        // S2-7D6E4 — a session signed before the sid fix has no per-login id and cannot ever
+        // get a step-up proof: no weaker fallback exists. Distinct code so the UI can say
+        // plainly "log in again" instead of a misleading "PIN incorrecto".
+        if (out.code === "reauth_required") return res.status(401).json({ ok: false, error: "REAUTH_REQUIRED" });
         return res.status(401).json({ ok: false, error: "PIN_INCORRECTO" });
       }
       result = { ok: true, stepUpProof: out.stepUpProof, expiresInSec: out.expiresInSec };
@@ -548,6 +546,7 @@ app.post("/api", async (req, res) => {
         byActor: req.authCtx.actor,
         byRole: req.authCtx.role,
         bySv: req.authCtx.sv,
+        bySid: req.authCtx.sid,
         targetActor,
         newPin: req.body && req.body.newPin,
         // S2-7D6E4 — FIX: this used to be auto-supplied as `targetActor === "owner" ?
@@ -559,7 +558,6 @@ app.post("/api", async (req, res) => {
         trustedClientIp: trustedClientIp(req),
         metadata: { source: "admin_pin_management" },
         stepUpProof: req.body && req.body.stepUpProof,
-        sessionToken: bearerFromHeader(req),
       });
       if (!out.ok) return res.status(400).json({ ok: false, error: "admin_action_failed" });
       result = { ok: true, actor: out.actor, selfChanged: out.actor === req.authCtx.actor };
