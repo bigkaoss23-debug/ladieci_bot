@@ -12,7 +12,7 @@ const readActions = require("./src/utils/readActions");
 const { previewOrderTiming } = require("./src/agents/previewTiming");
 const { invia, emitDynamicMenuShadowDiagnostic } = require("./src/agents/agentWhatsapp");
 const { runWhatsappMenuShadow } = require("./src/menu/whatsappMenuShadow");
-const { chiudiServizio, scanServizio, backupSerata, madridDateStr } = require("./src/utils/servizio");
+const { chiudiServizio, scanServizio, backupSerata } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
 const { getCanonicalMenu } = require("./src/menu/menuFacade");
 const {
@@ -51,6 +51,8 @@ const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceClos
 const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/serviceSessionLifecycle");
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
 const { resolveSchedule, closeEligibility, SCHEDULE_STATE, SERVICE_KIND } = require("./src/schedule/serviceSchedule");
+const { computeAutoCloseDecision } = require("./src/serviceSessions/autoCloseDecision");
+const { hasPendingOperationalActivity } = require("./src/serviceSessions/pendingActivityGuard");
 
 const app = express();
 app.use(express.json());
@@ -305,8 +307,22 @@ app.get("/api", async (req, res) => {
       }
     } else if (action === "triggerCloseIfNeeded") {
       // Endpoint per cron esterno (es. cron-job.org) — backup del cron interno.
-      // Idempotente: se già chiuso oggi, no-op.
-      result = await chiudiServizio(true, "external");
+      // S2-7D6D — passa dallo STESSO motore di decisione del tick/boot: mai un
+      // force-close implicito se pingato fuori finestra (es. a metà pranzo).
+      const identity = await serviceSessionLifecycle.currentCloseout();
+      if (!identity?.ok || identity.code === "NO_SERVICE_SESSION" || !identity.session || identity.session.status === "closed") {
+        result = { success: true, skipped: true, reason: "no_active_session" };
+      } else {
+        const decision = computeAutoCloseDecision({ now: new Date(), session: identity.session });
+        if (!decision.due) {
+          result = { success: true, skipped: true, reason: decision.reason || "not_due" };
+        } else {
+          const activity = await hasPendingOperationalActivity({ sessionId: identity.session.id });
+          result = activity.pending
+            ? { success: true, skipped: true, reason: "pending_orders" }
+            : await chiudiServizio(true, "external");
+        }
+      }
     } else if (action === "scanServizio") {
       result = await scanServizio();
     } else if (action === "backupSerata") {
@@ -1060,17 +1076,6 @@ function scheduleDeferredCloseRetry(source, attempt) {
 // lifecycle are all unchanged and are the reason this can safely run on a timer.
 const CLOSE_TICK_INTERVAL_MS = 10 * 60 * 1000;
 
-function serviceCloseDecision(when, session) {
-  if (!session || !session.id) return { due: false, reason: "no_active_session" };
-  if (!["open", "closing"].includes(session.status)) return { due: false, reason: "not_active" };
-  const kind = session.service_kind || null;
-  const gate = closeEligibility(kind, new Date());
-  if (!gate.eligible) return { due: false, reason: gate.reason, kind };
-  // 04:00 is an ESCALATION boundary, never a blind destructive close: we still
-  // only run the normal protected close, but we flag it loudly.
-  return { due: true, kind, escalate: !!when.isEscalationBoundary, source: kind === SERVICE_KIND.PRANZO ? "cron_lunch" : "cron_dinner" };
-}
-
 async function serviceCloseTick() {
   let identity;
   try { identity = await serviceSessionLifecycle.currentCloseout(); }
@@ -1079,9 +1084,18 @@ async function serviceCloseTick() {
   const session = identity.session;
   if (!session || session.status === "closed") return;
 
-  const when = resolveSchedule(new Date());
-  const decision = serviceCloseDecision(when, session);
+  const decision = computeAutoCloseDecision({ now: new Date(), session });
   if (!decision.due) return;
+
+  // S2-7D6D — a pending non-terminal order blocks an AUTOMATIC close exactly like an
+  // active rider trip does; chiudiServizio's own trip gate is unchanged and still runs,
+  // this just stops the timer from ever reaching a force-archive of live kitchen/delivery
+  // work in the first place.
+  const activity = await hasPendingOperationalActivity({ sessionId: session.id });
+  if (activity.pending) {
+    console.log(`[close-tick] ${decision.kind} session ${session.id} has pending orders — skip (no force-close)`);
+    return;
+  }
 
   if (decision.escalate) {
     // Past 04:00 with a live service: the operator must know. We do NOT skip the
@@ -1115,35 +1129,53 @@ function schedulaCloseTick() {
   return t;
 }
 
-// Catch-up all'avvio del server: se è dopo le 23:55 Madrid (o prima delle 06:00 del giorno
-// dopo) e LAST_CLOSE_DATE in config non è "ieri", il setTimeout della sera è morto durante
-// un riavvio Railway — recuperiamo subito.
+// Catch-up all'avvio del server — S2-7D6D. Il vecchio catch-up ragionava solo su una
+// finestra oraria fissa (23:00-05:59) e sul marker LAST_CLOSE_DATE, che è scritto SOLO
+// dalle chiusure SERA (servizio.js chiudiServizio) — un PRANZO rimasto aperto a riavvio
+// non veniva mai recuperato al boot, solo dal tick periodico (fino a ~10 min di ritardo).
+// Ora usa lo STESSO motore di decisione del tick (computeAutoCloseDecision), letto sulla
+// sessione realmente attiva: kind-agnostic, nessuna finestra oraria ad hoc, nessun
+// force-close implicito (chiudiServizio resta l'unica implementazione, con lo stesso
+// gate rider-trip e la stessa idempotenza).
 async function catchUpChiusura() {
   try {
-    const now = new Date();
-    const madridHourStr = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", hour12: false }).format(now);
-    const h = parseInt(madridHourStr, 10);
-    // Finestra di recupero: 23:55-23:59 (cron interno morto) oppure 00:00-06:00 (recupero post-restart notturno)
-    const inWindow = (h === 23) || (h >= 0 && h < 6);
-    if (!inWindow) {
-      console.log(`[catchUp] fuori finestra (h=${h} Madrid) — skip`);
+    let identity;
+    try { identity = await serviceSessionLifecycle.currentCloseout(); }
+    catch (e) { console.error("[catchUp] identity read failed:", e?.message || e); return; }
+    if (!identity?.ok || identity.code === "NO_SERVICE_SESSION") {
+      console.log("[catchUp] nessuna sessione attiva — skip");
       return;
     }
-    const cfg = await sbSelect("config", "chiave=eq.LAST_CLOSE_DATE");
-    const last = cfg?.[0]?.valore || "";
-    // Determina la data di chiusura attesa: se ora Madrid è 0-5, è "ieri Madrid";
-    // se è 23, è "oggi Madrid".
-    const refDate = new Date(now);
-    if (h < 6) refDate.setUTCDate(refDate.getUTCDate() - 1);
-    const expectedDate = madridDateStr(refDate);
-    if (last === expectedDate) {
-      console.log(`[catchUp] LAST_CLOSE_DATE=${last} OK — skip`);
+    const session = identity.session;
+    if (!session || session.status === "closed") {
+      console.log("[catchUp] sessione già chiusa — skip");
       return;
     }
-    console.log(`[catchUp] chiusura mancante (last=${last}, expected=${expectedDate}) — eseguo`);
+
+    const decision = computeAutoCloseDecision({ now: new Date(), session });
+    if (!decision.due) {
+      console.log(`[catchUp] non ancora dovuta (${decision.reason || "n/a"}) — skip`);
+      return;
+    }
+
+    const activity = await hasPendingOperationalActivity({ sessionId: session.id });
+    if (activity.pending) {
+      console.log(`[catchUp] ${decision.kind} session ${session.id} ha ordini pendenti — skip (no force-close)`);
+      return;
+    }
+
+    if (decision.escalate) {
+      console.error(`[catchUp] ESCALATION — ${decision.kind} session ${session.id} ancora attiva oltre le 04:00 Madrid al riavvio`);
+    }
+
+    console.log(`[catchUp] chiusura mancante — chiudo ${decision.kind} session ${session.id} (boot recovery)`);
     const res = await chiudiServizio(true, "catchUp");
     console.log("[catchUp] risultato:", JSON.stringify(res));
-    if (res.success && !res.skipped) {
+
+    const plan = deferredCloseRetryPlan(res, 0);
+    if (plan.retry) scheduleDeferredCloseRetry("catchUp-retry", plan.attempt);
+
+    if (res && res.success && !res.skipped) {
       const cfgAll = await getConfig();
       const msg = buildCloseSummaryMsg(res, "Recupero post-restart");
       if (msg) for (const waId of ["41767011848", "34614267535"]) await invia(waId, msg, cfgAll).catch(() => {});
@@ -1166,3 +1198,10 @@ module.exports = { app };
 module.exports.deferredCloseRetryPlan = deferredCloseRetryPlan;
 module.exports.CLOSE_RETRY_MAX_ATTEMPTS = CLOSE_RETRY_MAX_ATTEMPTS;
 module.exports.CLOSE_RETRY_INTERVAL_MS = CLOSE_RETRY_INTERVAL_MS;
+// S2-7D6D — exported so cron/boot/external parity is provable without a live server:
+// serviceCloseTick/catchUpChiusura both delegate their "is it due" decision to the
+// same computeAutoCloseDecision (see src/serviceSessions/autoCloseDecision.js); these
+// exports let a test drive each trigger end-to-end against a stubbed lifecycle/chiudiServizio.
+module.exports.serviceCloseTick = serviceCloseTick;
+module.exports.catchUpChiusura = catchUpChiusura;
+module.exports.CLOSE_TICK_INTERVAL_MS = CLOSE_TICK_INTERVAL_MS;
