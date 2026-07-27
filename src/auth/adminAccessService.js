@@ -14,7 +14,7 @@
 // derives the approved IP hash (B3), sanitizes metadata, and issues ONE atomic RPC.
 //
 // deps: { dao, hashPin, verifyPin, pinPolicy, ipHash, getTargetActor?,
-//         listActorsForVerify?, logger? }
+//         listActorsForVerify?, logger?, verifyStepUpProof?, hashSessionToken? }
 //   dao          : { adminSetActorPin, adminRevokeActorSessions, adminSetActorActive,
 //                    adminUnlockActor, getActorSafe }
 //   hashPin      : async (pin) => scryptHash                 (B1 scrypt.hashPin)
@@ -22,6 +22,8 @@
 //   ipHash       : (ip) => hash|null                         (B3 ipSecurity.ipHash)
 //   getTargetActor: async (actor) => { actor, role, active }|null (default dao.getActorSafe)
 //   logger       : optional; by default NOTHING is logged (no sensitive redaction needed)
+//   verifyStepUpProof(token, {sessionHash}) -> payload|null  (S2-7D6E4 step-up proof verifier)
+//   hashSessionToken(token) -> digest|null                    (S2-7D6E4 session-binding hasher)
 
 const { ACTORS } = require('./dao');           // canonical actor list (reuse, no 2nd validator)
 const { sanitizeMeta } = require('./audit');   // canonical structural meta guard (reuse)
@@ -59,7 +61,7 @@ function sanitizeAdminMeta(meta) {
 }
 
 function createAdminAccessService(deps = {}) {
-  const { dao, hashPin, verifyPin, pinPolicy, ipHash, rotation } = deps;
+  const { dao, hashPin, verifyPin, pinPolicy, ipHash, rotation, verifyStepUpProof, hashSessionToken } = deps;
   const getTargetActor = deps.getTargetActor || (dao && dao.getActorSafe);
   const listActorsForVerify = deps.listActorsForVerify;
 
@@ -91,11 +93,38 @@ function createAdminAccessService(deps = {}) {
   // account-owner path: exactly six digits, workspace-scoped uniqueness, one lock order.
   // The external failure shape stays a SINGLE generic error (accepted B6 contract): a
   // duplicate is not distinguishable from any other rejection on this surface.
-  async function setActorPin({ byActor, targetActor, newPin, confirmation, trustedClientIp, metadata } = {}) {
+  async function setActorPin({
+    byActor, byRole, bySv, targetActor, newPin, confirmation, trustedClientIp, metadata,
+    stepUpProof, sessionToken,
+  } = {}) {
     try {
       if (!isCanonicalActor(byActor) || !isCanonicalActor(targetActor)) return ADMIN_FAIL;
+      // S2-7D6E4 — defense in depth. The legacy dispatcher already gates this action to
+      // admin via legacyActionRoles/req.authCtx, but a normal admin session, BY ITSELF,
+      // must never be enough to change a PIN — that authorization boundary is re-asserted
+      // here, right before the one place that actually mutates a PIN.
+      if (byRole !== 'admin') return ADMIN_FAIL;
+      if (!Number.isInteger(bySv) || bySv < 1) return ADMIN_FAIL;
       try { sanitizeAdminMeta(metadata); } catch (_) { return ADMIN_FAIL; }
       if (!rotation || typeof rotation.rotate !== 'function') return ADMIN_FAIL;
+      if (typeof verifyStepUpProof !== 'function' || typeof hashSessionToken !== 'function') return ADMIN_FAIL;
+
+      // ── step-up enforcement ────────────────────────────────────────────────
+      // Must exist, be unexpired, signed by us, minted for THIS actor/role/session_version/
+      // purpose, and bound to the SAME session token making THIS request — a proof from a
+      // different session of the same actor at the same session_version is rejected too,
+      // because its embedded session hash will not match this request's session token.
+      if (typeof stepUpProof !== 'string' || stepUpProof.length === 0) return ADMIN_FAIL;
+      if (typeof sessionToken !== 'string' || sessionToken.length === 0) return ADMIN_FAIL;
+      let sessionHash;
+      try { sessionHash = hashSessionToken(sessionToken); } catch (_) { return ADMIN_FAIL; }
+      if (typeof sessionHash !== 'string' || sessionHash.length === 0) return ADMIN_FAIL;
+      let proof;
+      try { proof = verifyStepUpProof(stepUpProof, { sessionHash }); } catch (_) { proof = null; }
+      if (!proof) return ADMIN_FAIL;
+      if (proof.purpose !== 'manage_pins') return ADMIN_FAIL;
+      if (proof.sub !== byActor || proof.role !== byRole || proof.sv !== bySv) return ADMIN_FAIL;
+      // ── end step-up enforcement ────────────────────────────────────────────
 
       // owner self-change still requires the exact phrase; SQL re-checks it under lock.
       let confirm = null;

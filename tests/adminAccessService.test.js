@@ -40,12 +40,36 @@ const svc = (deps) => createAdminAccessService({
 });
 
 (async () => {
-  // ══ SET PIN — delegation to THE canonical rotation (S2-7D2) ═══════════════
+  // ══ SET PIN — delegation to THE canonical rotation (S2-7D2) + step-up (S2-7D6E4) ═══
   // The six-digit policy, the workspace-scoped uniqueness check, the snapshot and the
   // atomic RPC now live in src/auth/pinRotationService.js and are covered end to end by
-  // tests/canonicalPinRotation.test.js. What must hold HERE is the delegation contract and
-  // the B6 surface rules this service still owns: canonical actors, metadata safety, the
-  // exact owner self-confirmation phrase, and one opaque failure shape.
+  // tests/canonicalPinRotation.test.js. What must hold HERE is the delegation contract, the
+  // B6 surface rules this service still owns (canonical actors, metadata safety, the exact
+  // owner self-confirmation phrase, one opaque failure shape), and — new — that a normal
+  // admin session is NEVER by itself enough to change a PIN: absent a valid, session-bound
+  // step-up proof, nothing reaches the rotation at all.
+  //
+  // Fake step-up primitives here are deterministic JSON, not real HMAC — they exist only to
+  // test the WIRING (is the proof checked, is it bound to byActor/byRole/bySv/session).
+  // The real signed contract is covered end to end against the actual src/auth/jwt.js in
+  // tests/pinStepUp.test.js.
+  const hashSessionToken = (tok) => (typeof tok === 'string' && tok.length ? 'H:' + tok : null);
+  const signProof = ({ actor, role, sv, bearer }) =>
+    JSON.stringify({ sub: actor, role, sv, purpose: 'manage_pins', sh: hashSessionToken(bearer) });
+  const verifyStepUpProof = (tok, { sessionHash } = {}) => {
+    if (typeof tok !== 'string') return null;
+    try {
+      const o = JSON.parse(tok);
+      if (!o || o.sh !== sessionHash) return null;
+      return { sub: o.sub, role: o.role, sv: o.sv, purpose: o.purpose };
+    } catch (_) { return null; }
+  };
+  const BEARER = 'tok-session-A';
+  const ownerStepUp = (sv = 7) => ({
+    byRole: 'admin', bySv: sv, sessionToken: BEARER,
+    stepUpProof: signProof({ actor: 'owner', role: 'admin', sv, bearer: BEARER }),
+  });
+
   {
     const mkRot = (result) => { const calls = []; return { calls, rotation: { async rotate(a) { calls.push(a); return result; } } }; };
     const okRot = () => ({ ok: true, actor: 'operator_primary', role: 'operator', active: true,
@@ -55,8 +79,8 @@ const svc = (deps) => createAdminAccessService({
     {
       const { dao } = makeDao({ operator_primary: 'operator' });
       const { calls, rotation } = mkRot(okRot());
-      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation });
-      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4', ...ownerStepUp() });
       assert('set_pin: delegates to the canonical rotation with the operational caller kind',
         r.ok === true && calls.length === 1 && calls[0].callerKind === 'operational_admin');
       assert('set_pin: target and initiator forwarded verbatim',
@@ -69,8 +93,8 @@ const svc = (deps) => createAdminAccessService({
     {
       const { dao } = makeDao({ rider: 'rider' });
       const { calls, rotation } = mkRot({ ok: false, error: 'pin_duplicate' });
-      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation });
-      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'rider', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'rider', newPin: '835274', trustedClientIp: '1.2.3.4', ...ownerStepUp() });
       assert('set_pin: a duplicate stays opaque on this surface (single generic failure)', r === ADMIN_FAIL);
       assert('set_pin: the duplicate attempt still reached the canonical rotation', calls.length === 1);
     }
@@ -78,22 +102,22 @@ const svc = (deps) => createAdminAccessService({
     {
       const { dao } = makeDao({ rider: 'rider' });
       const { rotation } = mkRot({ ok: false, error: 'rotation_failed' });
-      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation });
-      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'rider', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+      const r = await s.setActorPin({ byActor: 'owner', targetActor: 'rider', newPin: '835274', trustedClientIp: '1.2.3.4', ...ownerStepUp() });
       assert('set_pin: any rotation failure collapses to the generic shape', r === ADMIN_FAIL);
     }
 
     {
       const { dao } = makeDao({ owner: 'admin' });
       const { calls, rotation } = mkRot(okRot());
-      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation });
-      let r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', trustedClientIp: '1.2.3.4' });
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+      let r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', trustedClientIp: '1.2.3.4', ...ownerStepUp() });
       assert('set_pin: owner self missing phrase rejected', r === ADMIN_FAIL && calls.length === 0);
-      r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', confirmation: 'change_owner_pin', trustedClientIp: '1.2.3.4' });
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', confirmation: 'change_owner_pin', trustedClientIp: '1.2.3.4', ...ownerStepUp() });
       assert('set_pin: owner self lowercase phrase rejected', r === ADMIN_FAIL && calls.length === 0);
-      r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', confirmation: ' CHANGE_OWNER_PIN ', trustedClientIp: '1.2.3.4' });
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', confirmation: ' CHANGE_OWNER_PIN ', trustedClientIp: '1.2.3.4', ...ownerStepUp() });
       assert('set_pin: owner self whitespace phrase rejected', r === ADMIN_FAIL && calls.length === 0);
-      r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', confirmation: 'CHANGE_OWNER_PIN', trustedClientIp: '1.2.3.4' });
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'owner', newPin: '835274', confirmation: 'CHANGE_OWNER_PIN', trustedClientIp: '1.2.3.4', ...ownerStepUp() });
       assert('set_pin: owner self exact phrase accepted and forwarded to the rotation',
         r.ok === true && calls.length === 1 && calls[0].confirm === 'CHANGE_OWNER_PIN');
     }
@@ -101,14 +125,14 @@ const svc = (deps) => createAdminAccessService({
     {
       const { dao } = makeDao({ operator_primary: 'operator' });
       const { calls, rotation } = mkRot(okRot());
-      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation });
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
       let r = await s.setActorPin({ byActor: 'ghost', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
       assert('set_pin: non-canonical initiator rejected before delegating', r === ADMIN_FAIL && calls.length === 0);
       r = await s.setActorPin({ byActor: 'owner', targetActor: 'ghost', newPin: '835274', trustedClientIp: '1.2.3.4' });
       assert('set_pin: non-canonical target rejected before delegating', r === ADMIN_FAIL && calls.length === 0);
-      r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', metadata: { pin: 'x' }, trustedClientIp: '1.2.3.4' });
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', metadata: { pin: 'x' }, trustedClientIp: '1.2.3.4', ...ownerStepUp() });
       assert('set_pin: sensitive metadata rejected before delegating', r === ADMIN_FAIL && calls.length === 0);
-      r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', metadata: { note: 'ok' }, trustedClientIp: '1.2.3.4' });
+      r = await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', metadata: { note: 'ok' }, trustedClientIp: '1.2.3.4', ...ownerStepUp() });
       assert('set_pin: clean metadata accepted', r.ok === true);
     }
 
@@ -116,9 +140,75 @@ const svc = (deps) => createAdminAccessService({
       const { dao } = makeDao({ operator_primary: 'operator' });
       const logger = makeLogger();
       const { rotation } = mkRot(okRot());
-      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, logger });
-      await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' });
-      assert('set_pin: nothing sensitive is logged', !deepFind(logger.rec, '835274') && !deepFind(logger.rec, '1.2.3.4'));
+      const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, logger, verifyStepUpProof, hashSessionToken });
+      await s.setActorPin({ byActor: 'owner', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4', ...ownerStepUp() });
+      assert('set_pin: nothing sensitive is logged', !deepFind(logger.rec, '835274') && !deepFind(logger.rec, '1.2.3.4') && !deepFind(logger.rec, BEARER));
+    }
+
+    // ── S2-7D6E4 — step-up enforcement: a normal admin session is NEVER enough alone ──
+    {
+      const { dao } = makeDao({ operator_primary: 'operator' });
+      const base = { byActor: 'owner', byRole: 'admin', bySv: 7, targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' };
+
+      {
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+        const r = await s.setActorPin({ ...base, sessionToken: BEARER }); // no stepUpProof at all
+        assert('step-up: absent proof rejected, nothing reaches rotation', r === ADMIN_FAIL && calls.length === 0);
+      }
+      {
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+        const r = await s.setActorPin({ ...base, stepUpProof: 'not-a-real-proof', sessionToken: BEARER });
+        assert('step-up: forged/malformed proof rejected', r === ADMIN_FAIL && calls.length === 0);
+      }
+      {
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+        const wrongActorProof = signProof({ actor: 'rider', role: 'admin', sv: 7, bearer: BEARER });
+        const r = await s.setActorPin({ ...base, stepUpProof: wrongActorProof, sessionToken: BEARER });
+        assert('step-up: proof minted for a different actor rejected', r === ADMIN_FAIL && calls.length === 0);
+      }
+      {
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+        const wrongPurposeProof = JSON.stringify({ sub: 'owner', role: 'admin', sv: 7, purpose: 'something_else', sh: hashSessionToken(BEARER) });
+        const r = await s.setActorPin({ ...base, stepUpProof: wrongPurposeProof, sessionToken: BEARER });
+        assert('step-up: wrong purpose rejected', r === ADMIN_FAIL && calls.length === 0);
+      }
+      {
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+        const staleProof = signProof({ actor: 'owner', role: 'admin', sv: 6, bearer: BEARER }); // sv != current bySv (7)
+        const r = await s.setActorPin({ ...base, stepUpProof: staleProof, sessionToken: BEARER });
+        assert('step-up: stale session_version rejected', r === ADMIN_FAIL && calls.length === 0);
+      }
+      {
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+        const r = await s.setActorPin({ ...base, byRole: 'operator', stepUpProof: signProof({ actor: 'owner', role: 'admin', sv: 7, bearer: BEARER }), sessionToken: BEARER });
+        assert('step-up: non-admin caller role rejected', r === ADMIN_FAIL && calls.length === 0);
+      }
+      {
+        // THE core guardrail: two DIFFERENT valid sessions of the SAME owner at the SAME
+        // session_version. A proof minted in session A must be REJECTED when presented with
+        // session B's bearer — never accepted just because actor/role/sv all match.
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+        const proofFromSessionA = signProof({ actor: 'owner', role: 'admin', sv: 7, bearer: 'tok-session-A' });
+        const r = await s.setActorPin({ ...base, stepUpProof: proofFromSessionA, sessionToken: 'tok-session-B' });
+        assert('step-up: proof minted in session A is rejected from session B (same owner, same sv)',
+          r === ADMIN_FAIL && calls.length === 0);
+        // Prove the mechanism is not just always-failing: the SAME proof from its OWN session succeeds.
+        const r2 = await s.setActorPin({ ...base, stepUpProof: proofFromSessionA, sessionToken: 'tok-session-A' });
+        assert('step-up: the same proof from its OWN session succeeds', r2.ok === true && calls.length === 1);
+      }
+      {
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof, hashSessionToken });
+        const r = await s.setActorPin({ ...base, stepUpProof: signProof({ actor: 'owner', role: 'admin', sv: 7, bearer: BEARER }), sessionToken: undefined });
+        assert('step-up: missing sessionToken rejected (identity provenance)', r === ADMIN_FAIL && calls.length === 0);
+      }
     }
   }
 
