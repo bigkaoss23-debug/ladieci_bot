@@ -32,6 +32,8 @@ const { createAdminAccessService } = require("./src/auth/adminAccessService");
 const pinPolicy = require("./src/auth/pinPolicy");
 const { hashPin, verifyPin } = require("./src/auth/scrypt");
 const { ipHash } = require("./src/auth/ipSecurity");
+const jwt = require("./src/auth/jwt");
+const { createPinStepUpVerifier } = require("./src/auth/pinStepUp");
 // S2-7D6E — canonical operator payment registration (wires the existing B7A2 ledger into
 // the operator flow; payment becomes an event, never a boolean side-effect of RETIRADO).
 const { createFinancialDao } = require("./src/auth/financialDao");
@@ -179,7 +181,32 @@ const adminAccessService = createAdminAccessService({
   ipHash,
   rotation: pinRotation,
   listActorsForVerify: authDao.listActorsForVerify_SENSITIVE,
+  // S2-7D6E4 — setActorPin now REQUIRES a valid, session-bound step-up proof.
+  verifyStepUpProof: jwt.verifyStepUpProof,
+  hashSessionToken: jwt.hashBearerToken,
 });
+
+// S2-7D6E4 — step-up PIN confirmation. Reuses login.js's exact lockout-safe verify
+// sequence (dao.getLockState / getActorForVerify_SENSITIVE / verifyPin real-or-decoy /
+// resetFailedAttempts / recordFailedAttempt) against the CALLER'S OWN actor, never a
+// body-supplied one. One process-lifetime decoy hash, same pattern as loginHttpIntegration.
+const _pinStepUpDecoyHashPromise = hashPin("decoy-not-a-real-pin-000000");
+const pinStepUpVerifier = createPinStepUpVerifier({
+  dao: authDao,
+  jwt,
+  pinPolicy,
+  verifyPin,
+  decoyHashPromise: _pinStepUpDecoyHashPromise,
+});
+
+// Bearer extraction for step-up binding — the raw token is used ONLY to derive a one-way
+// hash (jwt.hashBearerToken); it is never stored, logged, or echoed back.
+function bearerFromHeader(req) {
+  const h = req && req.headers && req.headers.authorization;
+  if (typeof h !== "string") return null;
+  const m = /^Bearer\s+(.+)$/.exec(h.trim());
+  return m ? m[1] : null;
+}
 
 // S2-7D6E — the operator payment registrar. Reuses the accepted B7A2 DAO/service as-is:
 // no new SQL, no new transport. Unconditionally constructed (like adminAccessService) —
@@ -420,7 +447,7 @@ app.get("/api", async (req, res) => {
 app.post("/api", async (req, res) => {
   const action = req.query.action || req.body.action;
   try {
-    if (["setActorPin"].includes(action) && (!req.authCtx || req.authCtx.role !== "admin")) {
+    if (["setActorPin", "verifyOwnPin"].includes(action) && (!req.authCtx || req.authCtx.role !== "admin")) {
       return res.status(403).json({ error: "ROLE_FORBIDDEN" });
     }
     let result;
@@ -498,15 +525,41 @@ app.post("/api", async (req, res) => {
       }
       await sbUpsert("config", { chiave: req.body.chiave, valore: req.body.valore });
       result = { success: true };
+    } else if (action === "verifyOwnPin") {
+      // S2-7D6E4 — step-up confirmation. actor/role/sv come ONLY from the verified
+      // req.authCtx; the client supplies nothing but the PIN it claims to know.
+      const out = await pinStepUpVerifier.verifyOwnPin({
+        actor: req.authCtx.actor,
+        role: req.authCtx.role,
+        sv: req.authCtx.sv,
+        pin: req.body && req.body.pin,
+        bearerToken: bearerFromHeader(req),
+      });
+      if (!out.ok) {
+        if (out.code === "blocked") return res.status(429).json({ ok: false, error: "LOCKED", retryAfterSec: out.retryAfterSec || 0 });
+        if (out.code === "bad") return res.status(400).json({ ok: false, error: "BAD_REQUEST" });
+        if (out.code === "unavail") return res.status(503).json({ ok: false, error: "UNAVAILABLE" });
+        return res.status(401).json({ ok: false, error: "PIN_INCORRECTO" });
+      }
+      result = { ok: true, stepUpProof: out.stepUpProof, expiresInSec: out.expiresInSec };
     } else if (action === "setActorPin") {
       const targetActor = req.body && req.body.targetActor;
       const out = await adminAccessService.setActorPin({
         byActor: req.authCtx.actor,
+        byRole: req.authCtx.role,
+        bySv: req.authCtx.sv,
         targetActor,
         newPin: req.body && req.body.newPin,
-        confirmation: targetActor === "owner" ? "CHANGE_OWNER_PIN" : null,
+        // S2-7D6E4 — FIX: this used to be auto-supplied as `targetActor === "owner" ?
+        // "CHANGE_OWNER_PIN" : null`, meaning any admin session could change the owner's
+        // own PIN with zero explicit confirmation. The literal phrase is a deliberate
+        // friction step and must come from the caller, exactly like the SQL contract
+        // (auth_set_actor_pin_v2) always intended.
+        confirmation: targetActor === "owner" ? (req.body && req.body.confirmation) : null,
         trustedClientIp: trustedClientIp(req),
         metadata: { source: "admin_pin_management" },
+        stepUpProof: req.body && req.body.stepUpProof,
+        sessionToken: bearerFromHeader(req),
       });
       if (!out.ok) return res.status(400).json({ ok: false, error: "admin_action_failed" });
       result = { ok: true, actor: out.actor, selfChanged: out.actor === req.authCtx.actor };

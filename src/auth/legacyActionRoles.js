@@ -47,6 +47,7 @@ const ADMIN_ONLY = Object.freeze([
   "parseOrdineDaRisposta",
   "getAuthActors",
   "setActorPin",
+  "verifyOwnPin",
 ]);
 
 // The complete set of legacy actions handled by the index.js dispatcher (GET + POST),
@@ -71,7 +72,7 @@ const ALL_ACTIONS = Object.freeze([
   "createOrden", "updateNotaCucina", "eliminaOrdine", "eliminaConversazione",
   "upsertCliente", "parseOrdineDaRisposta", "createManualGiro", "addOrderToManualGiro",
   "removeOrderFromManualGiro", "dissolveManualGiro",
-  "setActorPin", "openServiceSession", "ensureCurrentServiceSession",
+  "setActorPin", "verifyOwnPin", "openServiceSession", "ensureCurrentServiceSession",
   // ── special REST path ──
   "shadowPreview",
 ]);

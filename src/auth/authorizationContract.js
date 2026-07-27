@@ -39,7 +39,7 @@ const CANONICAL_ACTIONS = Object.freeze([
   'resolveAddress', 'previewOrderTiming', 'createOrden', 'updateNotaCucina', 'eliminaOrdine',
   'eliminaConversazione', 'upsertCliente', 'parseOrdineDaRisposta', 'createManualGiro',
   'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro',
-  'getAuthActors', 'setActorPin', 'openServiceSession', 'ensureCurrentServiceSession',
+  'getAuthActors', 'setActorPin', 'verifyOwnPin', 'openServiceSession', 'ensureCurrentServiceSession',
 ]);
 const CANONICAL_SET = Object.freeze(new Set(CANONICAL_ACTIONS));
 
@@ -61,7 +61,7 @@ const ADMIN_ONLY_ACTIONS = Object.freeze([
   'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getEconomiaLedger',
   'getDeliveryLogs', 'getSuggerimenti',
   'setConfig', 'eliminaOrdine', 'eliminaConversazione',
-  'getAuthActors', 'setActorPin',
+  'getAuthActors', 'setActorPin', 'verifyOwnPin',
 ]);
 const ADMIN_ONLY_SET = Object.freeze(new Set(ADMIN_ONLY_ACTIONS));
 
@@ -79,7 +79,7 @@ const FRESH_AUTH_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes', 'getStorico',
   'getOrdenesArchivio', 'getEconomiaLedger', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine',
   'eliminaConversazione', 'getSuggerimenti',
-  'getAuthActors', 'setActorPin', 'getCurrentServiceCloseout', 'openServiceSession',
+  'getAuthActors', 'setActorPin', 'verifyOwnPin', 'getCurrentServiceCloseout', 'openServiceSession',
   // S2-7D6B — the automatic ensure runs on every Servicio entry, so it must NOT be
   // fresh-auth: it is the silent path, not a privileged one-off.
 ]);
