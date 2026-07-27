@@ -122,6 +122,7 @@ with its commit date (rows 8, 11, 29, 30) the commit date governs.
 | 33 | 2026-07-26 → **S2-7D2 B** | 2026-07-26_disable_legacy_pin_rotation.sql | pending | 2026-07-26 | 510ab39362dd4ff7 |  <!-- DRAFT — apply ONLY AFTER the cutover is deployed+verified -->
 | 34 | 2026-07-26 → **S2-7D6B** | 2026-07-26_two_service_identity.sql | 9a86fb1 | 2026-07-26 | 3027d7291d3c6c6d |  <!-- APPLIED on staging -->
 | 35 | 2026-07-27 → **S2-7D6E** | 2026-07-27_order_state_logs_session_identity.sql | pending | 2026-07-27 | f1448c0f33ef8bad |  <!-- DRAFT — NOT APPLIED; purely additive (nullable column + partial indexes + soft trigger), independent of the payment wiring -->
+| 36 | 2026-07-27 → **S2-7D6E2** | 2026-07-27_s2_7d6e2_rider_delivery_collection.sql | pending | 2026-07-27 | — |  <!-- DRAFT — NOT APPLIED. Extracts the single ledger writer (_ledger_write_payment) that order_mark_paid now delegates to (its admin/operator authority byte-unchanged), adds the dedicated rider contract rider_collect_and_complete_stop (role must be exactly 'rider', order must belong to the ACTIVE trip, amount server-derived, payment+stop atomic), and DROPS the ledger-less complete_rider_stop(text,boolean,text). Apply TOGETHER with the backend commit that repoints riderTrip.completeStop: SQL-first leaves the rider path 404 on the old signature, code-first breaks it too. -->
 
 > Rows 29–30: filename prefix `2026-07-24` is one day ahead of the `2026-07-23` commit date.
 > `apply_order` places **workspace_foundation (S2-7B) before account_auth_boundary (S2-7C)**,

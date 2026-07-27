@@ -36,7 +36,7 @@ const { ipHash } = require("./src/auth/ipSecurity");
 // the operator flow; payment becomes an event, never a boolean side-effect of RETIRADO).
 const { createFinancialDao } = require("./src/auth/financialDao");
 const { createFinancialService } = require("./src/auth/financialService");
-const { createOperatorPaymentRegistrar, PAYMENT_METHODS } = require("./src/financial/registerOperatorPayment");
+const { createOperatorPaymentRegistrar, PAYMENT_METHODS, buildIdemScopeKey } = require("./src/financial/registerOperatorPayment");
 // A real collection is one of the three canonical methods. Markers like "manual" (the
 // "Driver volvió" operator override) are NOT payments and must not enter the ledger nor
 // be blocked by it — they keep the pre-existing legacy behaviour untouched.
@@ -111,8 +111,33 @@ async function routeRiderTripAction(action, body) {
   switch (action) {
     case "marcarEnEntrega":
       return riderTrip.startTrip(body && body.id);
-    case "marcarEntregado":
-      return riderTrip.completeStop(body && body.id, body && body.cobrado, body && body.metodo_pago);
+    case "marcarEntregado": {
+      // S2-7D6E2 — a rider stop may collect money, so it needs the VERIFIED session.
+      // Fail closed: without a real actor + session_version we cannot write the ledger,
+      // and completing the stop anyway is exactly how `cobrado` used to get invented.
+      const ctx = body && body.__authCtx;
+      if (!ctx || typeof ctx.actor !== "string" || !ctx.actor || !Number.isInteger(ctx.sv) || ctx.sv < 1) {
+        return { status: 401, payload: { error: "PAYMENT_CONTEXT_UNAVAILABLE" } };
+      }
+      const raw = typeof (body && body.metodo_pago) === "string" ? body.metodo_pago.trim().toLowerCase() : "";
+      // A method the ledger does not know (notably TabEntregas' operator override
+      // "manual") is NOT a collection: the stop completes and no money is claimed.
+      const payMethod = PAYMENT_METHODS.has(raw) ? raw : "";
+      const key = buildIdemScopeKey(body && body.id);
+      if (payMethod && !key) return { status: 400, payload: { error: "PAYMENT_ORDER_INVALID" } };
+      const ipH = ipHash(ctx.clientIp);
+      if (payMethod && (typeof ipH !== "string" || !ipH.trim())) {
+        return { status: 400, payload: { error: "PAYMENT_CONTEXT_UNAVAILABLE" } };
+      }
+      // `cobrado` from the body is deliberately NOT read: the client never asserts payment.
+      return riderTrip.completeStop(body && body.id, payMethod, {
+        byActor: ctx.actor,
+        sessionVersion: ctx.sv,
+        ipHash: ipH,
+        meta: { source: "rider_delivery" },
+        idemScopeKey: key,
+      });
+    }
     case "chiudiGiro":
       return riderTrip.closeTrip();
     case "registrarSalidaDriver":
@@ -429,7 +454,13 @@ app.post("/api", async (req, res) => {
       if (!ensured.success) return res.status(409).json({ error: ensured.code || "SERVICE_SESSION_OPEN_FAILED", detail: ensured });
       result = { ok: true, ...ensured };
     } else if (req.authCtx && req.authCtx.rule && req.authCtx.rule.tripPrimitive) {
-      const mapped = await routeRiderTripAction(action, req.body);
+      // The verified identity travels under a reserved key the client cannot forge:
+      // req.authCtx is built by legacyAuthGuard from the Bearer token and is spread LAST,
+      // so any `__authCtx` present in the request body is overwritten, never trusted.
+      const mapped = await routeRiderTripAction(action, {
+        ...req.body,
+        __authCtx: { ...req.authCtx, clientIp: trustedClientIp(req) },
+      });
       return res.status(mapped.status).json(mapped.payload);
     }
 
@@ -485,9 +516,14 @@ app.post("/api", async (req, res) => {
       // Dashboard operatore: geo/durata ri-risolti server-side, hora preservata.
       result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });
     } else if (action === "updateEstado") {
-      // Accetta campi pagamento/timing/repartidor/descuento in unica scrittura atomica
+      // Accetta campi timing/repartidor/descuento in unica scrittura atomica.
+      // S2-7D6E2 — `cobrado` e `ya_pagado` NON sono più accettati dal client: erano
+      // l'ultima via per cui il frontend poteva dichiarare un incasso senza alcun evento
+      // in order_financial_events. Le due colonne le scrive solo il ledger, sotto lock.
+      // `metodo_pago` resta accettato perché descrive un INTENTO (e per un metodo di
+      // incasso reale viene comunque scritto da order_mark_paid, vedi sotto).
       const extras = {};
-      for (const k of ["metodo_pago","cobrado","ya_pagado","hora_entrega","hora_salida","repartidor","llegado","cucina_check","descuento_tipo","descuento_valor"]) {
+      for (const k of ["metodo_pago","hora_entrega","hora_salida","repartidor","llegado","cucina_check","descuento_tipo","descuento_valor"]) {
         if (req.body[k] !== undefined) extras[k] = req.body[k];
       }
       extras.actor_type = req.body.actor_type || "operator";
@@ -515,8 +551,9 @@ app.post("/api", async (req, res) => {
         }
         // order_mark_paid already set ya_pagado/cobrado/metodo_pago under lock. Re-writing
         // them here would be a redundant second authority over the same accounting fact.
+        // (cobrado/ya_pagado non entrano piu in `extras`: li scrive solo il ledger.)
         if (!pay.alreadyPaidLegacy) {
-          delete extras.metodo_pago; delete extras.cobrado; delete extras.ya_pagado;
+          delete extras.metodo_pago;
         }
       }
       result = await cambiaStato(req.body.id, req.body.estado, extras);
@@ -530,9 +567,12 @@ app.post("/api", async (req, res) => {
     } else if (action === "marcarEntregado") {
       // EN_ENTREGA/LISTO → RETIRADO — registra hora_entrega + cobrado + metodo_pago atomicamente.
       // Eventuale descuento applicato al momento del incasso.
+      // S2-7D6E2 — `cobrado` NON viene più preso dal body (era `req.body.cobrado !== false`,
+      // cioè true di default e dichiarato dal client). Con un metodo non-incasso tipo
+      // "manual" quel ramo scriveva cobrado=true SENZA alcun evento nel ledger: è l'ultimo
+      // percorso che inventava un incasso. Ora la colonna la scrive solo il ledger.
       const extras = {
         hora_entrega: Date.now(),
-        cobrado: req.body.cobrado !== false,
         metodo_pago: req.body.metodo_pago || "",
         actor_type: "rider",
         origin: "entregas",
@@ -544,7 +584,7 @@ app.post("/api", async (req, res) => {
       // `cobrado` to TRUE while updateEstado left it untouched: the same operator concept
       // produced two different accounting outcomes depending on which action fired. The
       // ledger is now the single authority whenever a real method is supplied.
-      if (extras.cobrado && isCollectionMethod(extras.metodo_pago)) {
+      if (isCollectionMethod(extras.metodo_pago)) {
         const pay = await operatorPayments.registerPayment({
           orderId: req.body.id,
           paymentMethod: extras.metodo_pago,
@@ -556,8 +596,9 @@ app.post("/api", async (req, res) => {
           return res.status(409).json({ success: false, error: pay.code, code: pay.code,
             message: "No se pudo registrar el cobro. El pedido no ha cambiado de estado." });
         }
+        // (cobrado/ya_pagado non entrano piu in `extras`: li scrive solo il ledger.)
         if (!pay.alreadyPaidLegacy) {
-          delete extras.metodo_pago; delete extras.cobrado; delete extras.ya_pagado;
+          delete extras.metodo_pago;
         }
       }
       result = await cambiaStato(req.body.id, "RETIRADO", extras);

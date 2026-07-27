@@ -44,14 +44,32 @@ function check(label, cond) { if (cond) { pass++; console.log("  ✓ " + label);
   await riderTrip.startTrip("ORD1");
   check("startTrip -> start_rider_trip(p_anchor_order_id)", lastRpc.fn === "start_rider_trip" && lastRpc.args.p_anchor_order_id === "ORD1" && Object.keys(lastRpc.args).length === 1);
 
-  // completeStop forwards ONLY id/cobrado/metodo_pago — financial whitelist
-  await riderTrip.completeStop("ORD2", true, "efectivo");
+  // S2-7D6E2 — completeStop now targets the DEDICATED rider collection contract. The old
+  // `p_cobrado` boolean is GONE: it came from the client and the RPC wrote it straight onto
+  // `ordenes` with no ledger event. The wrapper forwards the VERIFIED session identity and
+  // the method; the amount is derived server-side and never crosses this boundary.
+  await riderTrip.completeStop("ORD2", "efectivo", {
+    byActor: "rider", sessionVersion: 4, ipHash: "iphash",
+    meta: { source: "rider_delivery" }, idemScopeKey: "pay-order-ORD2",
+  });
   const a = lastRpc.args;
-  check("completeStop -> complete_rider_stop", lastRpc.fn === "complete_rider_stop");
-  check("completeStop whitelist keys exact", JSON.stringify(Object.keys(a).sort()) === JSON.stringify(["p_cobrado","p_metodo_pago","p_order_id"]));
+  check("completeStop -> rider_collect_and_complete_stop", lastRpc.fn === "rider_collect_and_complete_stop");
+  check("completeStop whitelist keys exact", JSON.stringify(Object.keys(a).sort()) === JSON.stringify(
+    ["p_by_actor","p_idem_scope_key","p_ip_hash","p_meta","p_metodo_pago","p_order_id","p_session_version"]));
   check("completeStop forbids financial fields",
     !("descuento_tipo" in a) && !("descuento_valor" in a) && !("total" in a) && !("totale" in a) && !("pagado" in a) && !("ya_pagado" in a) && !("estado" in a));
-  check("completeStop coerces cobrado to boolean", a.p_cobrado === true);
+  check("completeStop no longer carries a client-asserted cobrado", !("p_cobrado" in a) && !("cobrado" in a));
+  check("completeStop never forwards an amount — SQL derives it", !("p_amount" in a) && !("amount" in a));
+  check("completeStop forwards the verified actor + session_version",
+    a.p_by_actor === "rider" && a.p_session_version === 4);
+  check("completeStop forwards the deterministic idempotency key", a.p_idem_scope_key === "pay-order-ORD2");
+
+  // A stop with no collection (prepaid order, or the operator "driver volvió" override)
+  // must still complete — with an EMPTY method, so the RPC writes no financial event.
+  await riderTrip.completeStop("ORD3", "", { byActor: "rider", sessionVersion: 4, ipHash: "iphash", idemScopeKey: "pay-order-ORD3" });
+  check("completeStop supports a no-collection stop", lastRpc.args.p_metodo_pago === "");
+  await riderTrip.completeStop("ORD4", null, { byActor: "rider", sessionVersion: 4, ipHash: "iphash", idemScopeKey: "pay-order-ORD4" });
+  check("completeStop null method becomes empty string, never a default", lastRpc.args.p_metodo_pago === "");
 
   // closeTrip forwards no args
   await riderTrip.closeTrip();

@@ -33,6 +33,16 @@ const CODE_TO_HTTP = Object.freeze({
   NO_ACTIVE_TRIP: 409,
   BAD_REQUEST: 400,
   INTERNAL: 500,
+  // S2-7D6E2 — the ledger refused the collection, so the stop did NOT complete.
+  // The rider retries; the deterministic key makes an honest retry a replay.
+  PAYMENT_REFUSED: 409,
+  RIDER_STOP_LOST_RACE: 409,
+  // Identity refusals surfaced by the rider payment contract. Deliberately opaque codes.
+  AUTH_METHOD_INVALID: 400,
+  AUTH_SESSION_STALE: 401,
+  AUTH_ACTOR_NOT_FOUND: 401,
+  AUTH_INITIATOR_INACTIVE: 401,
+  AUTH_FORBIDDEN_ROLE: 403,
 });
 
 function mapResult(rpcResult) {
@@ -55,11 +65,25 @@ async function startTrip(anchorOrderId) {
   return mapResult(r);
 }
 
-async function completeStop(orderId, cobrado, metodoPago) {
-  const r = await sbRpc("complete_rider_stop", {
+// S2-7D6E2 — the rider stop is no longer an accounting authority.
+//
+// The old signature took `cobrado` from the CLIENT and the RPC wrote it straight onto
+// `ordenes` with no ledger event, no actor and no session_version. It is gone: this now
+// calls the dedicated rider contract, which records the collection in
+// order_financial_events (as the rider, source `rider_delivery`) and completes the stop in
+// ONE transaction, rolling both back if the ledger refuses.
+//
+// This module still derives no amount and builds no digest — SQL owns all of that.
+// `ctx` carries the VERIFIED session identity only; nothing here comes from the body.
+async function completeStop(orderId, metodoPago, ctx = {}) {
+  const r = await sbRpc("rider_collect_and_complete_stop", {
     p_order_id: String(orderId),
-    p_cobrado: cobrado === true,
     p_metodo_pago: metodoPago == null ? "" : String(metodoPago),
+    p_by_actor: ctx.byActor == null ? "" : String(ctx.byActor),
+    p_session_version: ctx.sessionVersion,
+    p_ip_hash: ctx.ipHash == null ? "" : String(ctx.ipHash),
+    p_meta: ctx.meta || {},
+    p_idem_scope_key: ctx.idemScopeKey == null ? "" : String(ctx.idemScopeKey),
   });
   return mapResult(r);
 }
