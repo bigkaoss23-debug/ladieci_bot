@@ -467,12 +467,19 @@ app.post("/api", async (req, res) => {
     if (action === "cambiaStato") {
       result = await cambiaStato(req.body.id, req.body.estado, {
         actor_type: req.body.actor_type || "operator",
-        actor_id: req.body.actor_id || null,
+        // S2-7D6E3 — actor_id is an audit-trail identity claim: it must come from the
+        // VERIFIED req.authCtx (set by legacyAuthGuard from the Bearer token), never from
+        // the request body, or any dashboard-key holder could forge who performed the
+        // transition. Falls back to null (unattributed) when the guard is not enabled,
+        // exactly as before — this only stops trusting a client-asserted identity.
+        actor_id: req.authCtx?.actor || null,
         origin: req.body.origin || "dashboard",
       });
     } else if (action === "creaOrdine") {
       // Dashboard operatore: niente blocco hard orario chiusura (vedi creaOrdine).
-      result = await creaOrdine({ ...req.body, operatorManual: true });
+      // S2-7D6E3 — actor_id override AFTER the spread: whatever the client put in the
+      // body is discarded, the verified actor always wins.
+      result = await creaOrdine({ ...req.body, actor_id: req.authCtx?.actor || null, operatorManual: true });
     } else if (action === "modificaOrdine") {
       // Dashboard operatore: geo/durata ri-risolti server-side, hora preservata.
       result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });
@@ -527,7 +534,8 @@ app.post("/api", async (req, res) => {
         if (req.body[k] !== undefined) extras[k] = req.body[k];
       }
       extras.actor_type = req.body.actor_type || "operator";
-      extras.actor_id = req.body.actor_id || null;
+      // S2-7D6E3 — same rule as cambiaStato/creaOrdine: verified req.authCtx only.
+      extras.actor_id = req.authCtx?.actor || null;
       extras.origin = req.body.origin || "dashboard";
 
       // S2-7D6E — money first, state second. A RETIRADO carrying a payment method is a
