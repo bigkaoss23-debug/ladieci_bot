@@ -29,11 +29,18 @@ function safeTicket(order, events) {
   const refundedAmount = round(refunds.reduce((sum, event) => sum + eventAmount(event), 0));
   const paidAmount = round(payments.reduce((sum, event) => sum + eventAmount(event), 0));
   const legacyPaid = payments.length === 0 && (order.cobrado === true || order.ya_pagado === true);
-  const collectedAmount = voided ? 0 : round(paidAmount || (legacyPaid ? amount : 0));
+  const grossCollected = round(paidAmount || (legacyPaid ? amount : 0));
+  // A refund hands money back, so it must LEAVE the collected total — in the live
+  // closeout and in the archived summary alike, which now share this function.
+  const collectedAmount = voided ? 0 : Math.max(0, round(grossCollected - refundedAmount));
   const method = payments.at(-1)?.payment_method || order.metodo_pago || "";
 
   return Object.freeze({
-    id: String(order.id || order.orden_id || ""),
+    // storico rows carry BOTH their own identity PK `id` and the real order key
+    // `orden_id`; order_financial_events.order_id is the latter. Preferring `id`
+    // made every CLOSED-session closeout look up integer PKs, match no event and
+    // fall back to the legacy booleans.
+    id: String(order.orden_id || order.id || ""),
     number: order.numero ?? order.numero_ordine ?? null,
     time: order.hora || "",
     state,
@@ -56,7 +63,7 @@ function aggregate(session, orders, events) {
     byOrder.get(id).push(event);
   }
   const tickets = (orders || []).map((order) => {
-    const id = String(order.id || order.orden_id || "");
+    const id = String(order.orden_id || order.id || "");
     return safeTicket(order, byOrder.get(id) || []);
   });
   const paymentTotals = { efectivo: 0, tarjeta: 0, bizum: 0, other: 0 };
@@ -116,7 +123,7 @@ function createCurrentServiceCloseout({ select = sbSelect, sessionLifecycle = li
     if (list.some((row) => String(row.service_session_id || "") !== String(session.id))) {
       throw Object.assign(new Error("mixed service session rows"), { code: "MIXED_SERVICE_SESSION_ROWS" });
     }
-    const ids = list.map((o) => o.id || o.orden_id).filter(Boolean);
+    const ids = list.map((o) => o.orden_id || o.id).filter(Boolean);
     const events = ids.length
       ? await select("order_financial_events", `${sessionFilter}&order_id=in.(${ids.map((id) => encodeURIComponent(String(id))).join(",")})&order=created_at.asc`)
       : [];

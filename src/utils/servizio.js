@@ -19,6 +19,9 @@
 const { sbSelect, sbInsert, sbUpsert, sbUpdate, sbDelete } = require("./supabase");
 const { calcolaTotale, calcolaTotaleOrdine, deliveryFeeFor, isBevanda, isDesert, direccionToCacheKey } = require("./helpers");
 const { lifecycle: serviceSessionLifecycle } = require("../serviceSessions/serviceSessionLifecycle");
+// S2-7D6E2 — UNA sola fonte contabile. Il summary archiviato non ricalcola il denaro
+// con una seconda regola più debole: chiama lo stesso aggregatore del closeout live.
+const { aggregate: aggregateCloseout } = require("../closeout/currentServiceCloseout");
 
 // Incrementa n_ordini_consegnati sulla riga di geo_cache associata all'indirizzo dell'ordine.
 // Chiamata da chiudiServizio per ogni ordine archiviato → la "conferma indirizzo" non dipende dal bottone driver.
@@ -189,14 +192,9 @@ function classificaItem(it) {
 }
 
 
-// ─── Mappa pagamento → key cassa_* ───────────────────────────────
-function metodoPagoKey(m) {
-  const k = String(m || "").toLowerCase().trim();
-  if (k === "efectivo")        return "cassa_efectivo";
-  if (k === "tarjeta")         return "cassa_tarjeta";
-  if (k === "bizum")           return "cassa_bizum";
-  return "cassa_non_specificato";
-}
+// S2-7D6E2 — `metodoPagoKey` è stato rimosso di proposito. Mappava metodo_pago →
+// bucket cassa_*, cioè trattava un INTENTO di pagamento come prova di incasso.
+// Il breakdown ora deriva da order_financial_events via aggregateCloseout.
 
 
 // ─── Costruisci payload storico COMPLETO da un ordine ────────────
@@ -249,7 +247,7 @@ function buildStoricoPayload(o, oggi, diaSemana, estadoOverride = null, serviceS
 
 
 // ─── Calcolo summary aggregata (pure, no side effects) ───────────
-async function computeSummary(ordiniDaArch, oggi, diaSemana, source, sessionOpenedAt = null) {
+async function computeSummary(ordiniDaArch, oggi, diaSemana, source, sessionOpenedAt = null, financialEvents = []) {
   const summary = {
     fecha: oggi,
     dia_semana: diaSemana,
@@ -280,10 +278,6 @@ async function computeSummary(ordiniDaArch, oggi, diaSemana, source, sessionOpen
 
     summary.cassa_totale += totale;
     summary.delivery_fee_totale += deliveryFee;
-
-    // Breakdown pagamento — totale (non item) finisce nella cassa giusta
-    const cassaKey = metodoPagoKey(o.metodo_pago);
-    summary[cassaKey] += totale;
 
     // Delivery vs Ritiro
     if (tipoConsegna === "DOMICILIO") summary.n_delivery++; else summary.n_ritiro++;
@@ -319,6 +313,20 @@ async function computeSummary(ordiniDaArch, oggi, diaSemana, source, sessionOpen
     const canal = (o.canal || "MANUAL").toUpperCase();
     summary.per_canal[canal] = (summary.per_canal[canal] || 0) + 1;
   }
+
+  // S2-7D6E2 — il breakdown cassa è LEDGER-DERIVED, attraverso la stessa funzione
+  // usata dal closeout live. `metodo_pago` dichiara un INTENTO; non ha mai provato
+  // un incasso. Sommare `totale` per metodo riportava 12.00 incassati su un ordine
+  // senza alcun payment event, mentre il closeout live riportava correttamente 0.00
+  // (staging #723). cassa_totale resta LORDO (fatturato); i bucket cassa_* sono
+  // quanto è stato realmente incassato, quindi
+  // pendiente = cassa_totale - (efectivo + tarjeta + bizum + non_specificato).
+  // Nessuna colonna nuova, e il numero archiviato ora è uguale al live per costruzione.
+  const ledger = aggregateCloseout({ id: null, status: "closing" }, ordiniDaArch, financialEvents || []);
+  summary.cassa_efectivo        = ledger.paymentTotals.efectivo;
+  summary.cassa_tarjeta         = ledger.paymentTotals.tarjeta;
+  summary.cassa_bizum           = ledger.paymentTotals.bizum;
+  summary.cassa_non_specificato = ledger.paymentTotals.other;
 
   // Arrotonda i monetari a 2 cifre
   summary.cassa_totale          = Math.round(summary.cassa_totale * 100) / 100;
@@ -468,7 +476,11 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   // kind, so lunch and dinner produce two genuinely independent summaries on one
   // business date instead of the dinner one absorbing lunch's numbers.
   const serviceKind = serviceSession.service_kind || null;
-  const summary = await computeSummary(ordiniDaArch, oggi, diaSemana, source, serviceSession.opened_at);
+  const financialEvents = await sbSelect("order_financial_events", `${sessionFilter}&order=created_at.asc`);
+  const summary = await computeSummary(
+    ordiniDaArch, oggi, diaSemana, source, serviceSession.opened_at,
+    Array.isArray(financialEvents) ? financialEvents : []
+  );
   summary.service_session_id = serviceSessionId;
   summary.service_kind = serviceKind;
 
@@ -689,6 +701,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
 
 
 module.exports = {
+  computeSummary,
   scanServizio,
   backupSerata,
   chiudiServizio,
