@@ -86,7 +86,10 @@ async function authorizeLegacyRequest(req, deps = {}) {
 
   return {
     ok: true,
-    ctx: { actor: payload.sub, role: payload.role, sv: payload.sv, action, rule },
+    // S2-7D6E4 — sid is the per-login id from a fresh token, or null for a session signed
+    // before this change (jwt.verifyToken tolerates its absence for ordinary actions).
+    // Never logged; PIN-management step-up refuses to work without it (see pinStepUp.js).
+    ctx: { actor: payload.sub, role: payload.role, sv: payload.sv, sid: payload.sid || null, action, rule },
   };
 }
 

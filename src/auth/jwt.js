@@ -53,43 +53,49 @@ function hmac(data) {
 // marker (STEP_UP_VERSION, not 2) so verifyToken() rejects it outright as a Bearer
 // session, and verifyStepUpProof() below rejects any normal session token in turn:
 // the two token kinds can never be substituted for each other.
+//
+// Binding: earlier drafts bound the proof to a hash of the raw Bearer. That degenerates
+// exactly when the underlying session token itself is not unique — which, before the sid
+// fix above, was provably true for two logins of the same actor within the same clock
+// second. The proof now binds to the per-login `sid` instead: cryptographically random,
+// minted once by signToken, never accepted from any caller. A token with no sid (a
+// pre-existing session signed before this change) cannot mint or use a step-up proof at
+// all — there is deliberately no weaker fallback for PIN management.
 const STEP_UP_TTL_SECONDS = 600; // hard cap, 10 minutes — never derived from caller input
 const STEP_UP_PURPOSE = 'manage_pins';
 const STEP_UP_VERSION = 'su1';
 
-// hashBearerToken(token) -> sha256 hex digest, or null. Binds a step-up proof to the exact
-// session (the literal current Bearer) that requested it. The raw token is never returned,
-// logged, or persisted — only this one-way digest travels inside the signed proof.
-function hashBearerToken(token) {
-  if (typeof token !== 'string' || token.length === 0) return null;
-  return crypto.createHash('sha256').update(token, 'utf8').digest('hex');
+function validSid(sid) {
+  return typeof sid === 'string' && sid.length > 0 && sid.length <= 64;
 }
 
-// signStepUpProof({actor, role, sv, sessionHash}) -> proof string, or null.
-function signStepUpProof({ actor, role, sv, sessionHash } = {}) {
+// signStepUpProof({actor, role, sv, sid}) -> proof string, or null.
+// `sid` MUST be the CURRENT session's own sid (from req.authCtx.sid) — missing/invalid
+// refuses to mint a proof at all, by design.
+function signStepUpProof({ actor, role, sv, sid } = {}) {
   if (!isReady()) return null;
   if (!roleSubValid(role, actor)) return null;
   if (!Number.isInteger(sv) || sv < 1) return null;
-  if (typeof sessionHash !== 'string' || sessionHash.length === 0) return null;
+  if (!validSid(sid)) return null;
   const iat = Math.floor(Date.now() / 1000);
   const exp = iat + STEP_UP_TTL_SECONDS;
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = b64url(JSON.stringify({
     v: STEP_UP_VERSION, purpose: STEP_UP_PURPOSE,
-    sub: actor, role, sv, sh: sessionHash, iat, exp,
+    sub: actor, role, sv, sid, iat, exp,
   }));
   const sig = hmac(header + '.' + payload);
   return header + '.' + payload + '.' + sig;
 }
 
-// verifyStepUpProof(token, {sessionHash}) -> payload object or null. NEVER throws.
-// `sessionHash` MUST be derived by the caller from the CURRENT request's own Bearer — this
-// is what makes a proof minted in one session unusable from a different session, even for
-// the same actor at the same session_version.
-function verifyStepUpProof(token, { sessionHash } = {}) {
+// verifyStepUpProof(token, {sid}) -> payload object or null. NEVER throws.
+// `sid` MUST be the CURRENT request's own session id — this is what makes a proof minted in
+// one session unusable from a different session, even for the same actor at the same
+// session_version, and what makes a sid-less (legacy) session unable to use a proof at all.
+function verifyStepUpProof(token, { sid } = {}) {
   try {
     if (!isReady() || typeof token !== 'string') return null;
-    if (typeof sessionHash !== 'string' || sessionHash.length === 0) return null;
+    if (!validSid(sid)) return null;
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     const [h, p, s] = parts;
@@ -107,7 +113,7 @@ function verifyStepUpProof(token, { sessionHash } = {}) {
     if (pl.purpose !== STEP_UP_PURPOSE) return null;
     if (!roleSubValid(pl.role, pl.sub)) return null;
     if (!Number.isInteger(pl.sv) || pl.sv < 1) return null;
-    if (typeof pl.sh !== 'string' || pl.sh.length === 0) return null;
+    if (!validSid(pl.sid)) return null;
     if (!Number.isInteger(pl.iat) || !Number.isInteger(pl.exp)) return null;
     if (pl.exp <= pl.iat) return null;
     if ((pl.exp - pl.iat) > STEP_UP_TTL_SECONDS + SKEW_SEC) return null;
@@ -116,14 +122,24 @@ function verifyStepUpProof(token, { sessionHash } = {}) {
     if (now >= pl.exp + SKEW_SEC) return null;
 
     // session binding — timing-safe compare, same discipline as the signature check above.
-    const shA = Buffer.from(String(pl.sh));
-    const shB = Buffer.from(sessionHash);
-    if (shA.length !== shB.length || !crypto.timingSafeEqual(shA, shB)) return null;
+    const sidA = Buffer.from(pl.sid), sidB = Buffer.from(sid);
+    if (sidA.length !== sidB.length || !crypto.timingSafeEqual(sidA, sidB)) return null;
 
     return pl;
   } catch (_) {
     return null;
   }
+}
+
+// S2-7D6E4 — per-login session id. {role,sub,iat,exp,sv} alone is NOT unique: two logins
+// for the same actor at the same session_version within the same clock second produce a
+// BYTE-IDENTICAL payload (iat/exp are both deterministic), and HMAC is deterministic, so the
+// two tokens were literally the same string — verified empirically with frozen time. `sid` is
+// generated HERE, by the backend, from a real entropy source, every time a token is minted; a
+// caller cannot supply or influence it. It is the only thing that actually distinguishes two
+// otherwise-identical logins.
+function newSid() {
+  return crypto.randomBytes(16).toString('base64url');
 }
 
 // signToken({role, sub, sv}) → token string, or null on invalid input / not ready.
@@ -134,8 +150,9 @@ function signToken({ role, sub, sv } = {}) {
   const ttl = TTL_SECONDS[role];
   const iat = Math.floor(Date.now() / 1000);
   const exp = iat + ttl;
+  const sid = newSid();
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = b64url(JSON.stringify({ role, sub, iat, exp, sv, v: 2 }));
+  const payload = b64url(JSON.stringify({ role, sub, iat, exp, sv, sid, v: 2 }));
   const sig = hmac(header + '.' + payload);
   return header + '.' + payload + '.' + sig;
 }
@@ -168,6 +185,13 @@ function verifyToken(token) {
     const now = Math.floor(Date.now() / 1000);
     if (pl.iat > now + SKEW_SEC) return null;                     // iat not in the future
     if (now >= pl.exp + SKEW_SEC) return null;                    // expired (with skew)
+    // S2-7D6E4 — sid is OPTIONAL here for backward compatibility: a token signed before this
+    // change carries no sid and must keep authorizing ordinary (non-PIN-management) actions.
+    // If present it must be a plausible opaque id; a present-but-malformed sid is treated as
+    // tampering, not as "absent" — the whole token is rejected, not silently downgraded.
+    if (pl.sid !== undefined) {
+      if (typeof pl.sid !== 'string' || pl.sid.length === 0 || pl.sid.length > 64) return null;
+    }
     return pl;
   } catch (_) {
     return null;
@@ -176,5 +200,5 @@ function verifyToken(token) {
 
 module.exports = {
   signToken, verifyToken, expiresInFor, isReady, TTL_SECONDS, ROLE_SUB, SKEW_SEC,
-  hashBearerToken, signStepUpProof, verifyStepUpProof, STEP_UP_TTL_SECONDS, STEP_UP_PURPOSE,
+  signStepUpProof, verifyStepUpProof, STEP_UP_TTL_SECONDS, STEP_UP_PURPOSE,
 };
