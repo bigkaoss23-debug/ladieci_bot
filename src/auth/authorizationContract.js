@@ -30,6 +30,7 @@ const CANONICAL_ACTIONS = Object.freeze([
   'scanServizio', 'backupSerata', 'rigeneraSuggerimenti', 'approvaSuggerimento',
   'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'debugMenuShadow', 'getManualGiros', 'getMenu', 'getCurrentServiceCloseout',
   'getDriverStatus', 'getOrdenesRecent', 'getWaMessages', 'getStorico', 'getOrdenesArchivio',
+  'getEconomiaLedger',
   'getDeliveryLogs', 'getSuggerimenti', 'getConversacionesActivas', 'getClienteByTelefono',
   'getWaMessageById', 'getOrdenById', 'getConvByWaId', 'getConvChats', 'cambiaStato',
   'creaOrdine', 'modificaOrdine', 'aggiornaRispostaBot', 'setConfig', 'rispondiWA',
@@ -57,7 +58,8 @@ const SERVICE_ONLY_SET = Object.freeze(new Set(SERVICE_ONLY_ACTIONS));
 // admin-only: admin allowed; operator/rider/service denied.
 const ADMIN_ONLY_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes',
-  'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getDeliveryLogs', 'getSuggerimenti',
+  'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getEconomiaLedger',
+  'getDeliveryLogs', 'getSuggerimenti',
   'setConfig', 'eliminaOrdine', 'eliminaConversazione',
   'getAuthActors', 'setActorPin',
 ]);
@@ -75,7 +77,7 @@ const RIDER_ENABLED_SET = Object.freeze(new Set(RIDER_ENABLED_ACTIONS));
 // action name, mutation/read class, or substrings.
 const FRESH_AUTH_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes', 'getStorico',
-  'getOrdenesArchivio', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine',
+  'getOrdenesArchivio', 'getEconomiaLedger', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine',
   'eliminaConversazione', 'getSuggerimenti',
   'getAuthActors', 'setActorPin', 'getCurrentServiceCloseout', 'openServiceSession',
   // S2-7D6B — the automatic ensure runs on every Servicio entry, so it must NOT be

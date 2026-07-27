@@ -16,6 +16,10 @@ const SPEC_ALL_57 = [
   'scanServizio', 'backupSerata', 'rigeneraSuggerimenti', 'approvaSuggerimento',
   'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'debugMenuShadow', 'getManualGiros', 'getMenu', 'getCurrentServiceCloseout',
   'getDriverStatus', 'getOrdenesRecent', 'getWaMessages', 'getStorico', 'getOrdenesArchivio',
+  // S2-7D6E3 — getEconomiaLedger added: the ledger-based (not metodo_pago-bucketed) cash
+  // summary Economía consumes. Same class as getStorico/getOrdenesArchivio: admin-only,
+  // fresh-auth, sensitive financial read.
+  'getEconomiaLedger',
   'getDeliveryLogs', 'getSuggerimenti', 'getConversacionesActivas', 'getClienteByTelefono',
   'getWaMessageById', 'getOrdenById', 'getConvByWaId', 'getConvChats', 'cambiaStato',
   'creaOrdine', 'modificaOrdine', 'aggiornaRispostaBot', 'setConfig', 'rispondiWA',
@@ -29,7 +33,7 @@ const SPEC_ALL_57 = [
 const SPEC_SERVICE_ONLY = ['triggerCloseIfNeeded'];
 const SPEC_ADMIN_ONLY = [
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes',
-  'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getDeliveryLogs',
+  'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getEconomiaLedger', 'getDeliveryLogs',
   'getSuggerimenti', 'setConfig', 'eliminaOrdine', 'eliminaConversazione',
   'getAuthActors', 'setActorPin',
 ];
@@ -39,7 +43,7 @@ const SPEC_RIDER = [
 ];
 const SPEC_FRESH = [
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes', 'getStorico',
-  'getOrdenesArchivio', 'getDeliveryLogs', 'getSuggerimenti', 'setConfig', 'eliminaOrdine', 'eliminaConversazione',
+  'getOrdenesArchivio', 'getEconomiaLedger', 'getDeliveryLogs', 'getSuggerimenti', 'setConfig', 'eliminaOrdine', 'eliminaConversazione',
   'getAuthActors', 'setActorPin', 'getCurrentServiceCloseout', 'openServiceSession',
 ];
 const SPEC_PREDICATES = {
@@ -69,22 +73,22 @@ for (const p of ['owner', 'Admin', 'ADMIN', '', ' admin', 'operator ', null, und
 }
 
 // ── B. Canonical set integrity + module↔spec transcription ──────────────────
-assert('B: module CANONICAL_ACTIONS length 62', A.CANONICAL_ACTIONS.length === 62);
+assert('B: module CANONICAL_ACTIONS length 63', A.CANONICAL_ACTIONS.length === 63);
 assert('B: module canonical set == spec 57 (independent transcription)', setEq(A.CANONICAL_ACTIONS, SPEC_ALL_57));
 assert('B: no duplicate canonical action', new Set(A.CANONICAL_ACTIONS).size === A.CANONICAL_ACTIONS.length);
-assert('B: module ADMIN_ONLY == spec (15)', setEq(A.ADMIN_ONLY_ACTIONS, SPEC_ADMIN_ONLY) && A.ADMIN_ONLY_ACTIONS.length === 15);
+assert('B: module ADMIN_ONLY == spec (16)', setEq(A.ADMIN_ONLY_ACTIONS, SPEC_ADMIN_ONLY) && A.ADMIN_ONLY_ACTIONS.length === 16);
 assert('B: module RIDER_ENABLED == spec (7)', setEq(A.RIDER_ENABLED_ACTIONS, SPEC_RIDER) && A.RIDER_ENABLED_ACTIONS.length === 7);
 assert('B: module SERVICE_ONLY == spec (1)', setEq(A.SERVICE_ONLY_ACTIONS, SPEC_SERVICE_ONLY) && A.SERVICE_ONLY_ACTIONS.length === 1);
 
 // ── C. Dynamic router equality + negative controls ──────────────────────────
 const routerActions = extractRouterActions();
-assert('C: extractor found 62 router actions (anti-no-op)', routerActions.length === 62, `found ${routerActions.length}`);
+assert('C: extractor found 63 router actions (anti-no-op)', routerActions.length === 63, `found ${routerActions.length}`);
 for (const anchor of ['getOrdenes', 'triggerCloseIfNeeded', 'dissolveManualGiro', 'cambiaStato']) {
   assert(`C: extractor anti-no-op anchor present: ${anchor}`, routerActions.includes(anchor));
 }
 const cov = A.assertContractCoversRouter(routerActions);
 assert('C: router == matrix (no router-only, no matrix-only, no dup)', cov.ok, JSON.stringify(cov));
-assert('C: no duplicate router action', extractRouterActionsWithDuplicates().length === 62);
+assert('C: no duplicate router action', extractRouterActionsWithDuplicates().length === 63);
 // negative controls (synthetic sources / mutated sets)
 assert('C-neg: fake router-only action fails equality',
   A.assertContractCoversRouter([...routerActions, 'totallyNewAction']).ok === false);
@@ -116,7 +120,7 @@ assert('D: full 56x4 decision surface matches independent spec oracle', surfaceO
 // ── E. Totals (secondary sanity, not primary proof) ─────────────────────────
 const totals = { admin: 0, operator: 0, rider: 0, service: 0 };
 for (const action of SPEC_ALL_57) for (const p of ['admin', 'operator', 'rider', 'service']) if (A.isAllowed(p, action)) totals[p]++;
-assert('E: admin total 61', totals.admin === 61, `got ${totals.admin}`);
+assert('E: admin total 62', totals.admin === 62, `got ${totals.admin}`);
 assert('E: operator total 46', totals.operator === 46, `got ${totals.operator}`);
 assert('E: rider total 7', totals.rider === 7, `got ${totals.rider}`);
 assert('E: service total 1', totals.service === 1, `got ${totals.service}`);

@@ -377,6 +377,10 @@ app.get("/api", async (req, res) => {
       result = await readActions.getWaMessages();
     } else if (action === "getStorico") {
       result = await readActions.getStorico({ fecha: req.query.fecha, limit: req.query.limit });
+    } else if (action === "getEconomiaLedger") {
+      // S2-7D6E3 — Economía's cash-by-payment-method figures. Ledger-derived (same
+      // aggregate() as the live closeout/serata_summary), never metodo_pago-bucketed.
+      result = await readActions.getEconomiaLedger({ desde: req.query.desde, hasta: req.query.hasta });
     } else if (action === "getOrdenesArchivio") {
       result = await readActions.getOrdenesArchivio({ limit: req.query.limit });
     } else if (action === "getDeliveryLogs") {

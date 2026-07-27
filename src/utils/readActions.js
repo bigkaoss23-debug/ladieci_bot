@@ -23,6 +23,7 @@
 // existing frontend response shapes stay byte-identical after the transport swap.
 
 const { sbSelect } = require("./supabase");
+const { getEconomiaLedgerAggregate } = require("../closeout/economiaLedgerAggregate");
 
 class ReadParamError extends Error {
   constructor(msg) { super(msg); this.name = "ReadParamError"; this.httpStatus = 400; }
@@ -117,6 +118,21 @@ async function getOrdenesArchivio({ limit } = {}) {
   return safeSelect("ordenes", `estado=in.(COMPLETADO,COMPLETATO,RETIRADO)&order=ts.desc&limit=${lim}`);
 }
 
+// S2-7D6E3 — Economía's ONE money source: per-service-session-day ledger totals, built
+// by calling the SAME aggregate() the live closeout and the archived serata_summary use
+// (see src/closeout/economiaLedgerAggregate.js). Opt. desde/hasta=YYYY-MM-DD (inclusive).
+async function getEconomiaLedger({ desde, hasta } = {}) {
+  const d = validFecha(desde);
+  const h = validFecha(hasta);
+  try {
+    return await getEconomiaLedgerAggregate({ desde: d, hasta: h, select: safeSelect });
+  } catch (e) {
+    if (e instanceof ReadBackendError || e instanceof ReadParamError) throw e;
+    console.warn("[readActions] getEconomiaLedger failed:", e?.message || e);
+    throw new ReadBackendError("read failed");
+  }
+}
+
 // Log dei giri di consegna (Economía). order partito_alle.desc, limit cap 500.
 async function getDeliveryLogs({ limit } = {}) {
   const lim = clampLimit(limit, 500);
@@ -176,6 +192,7 @@ module.exports = {
   getWaMessages,
   getStorico,
   getOrdenesArchivio,
+  getEconomiaLedger,
   getDeliveryLogs,
   getSuggerimenti,
   getConversacionesActivas,
