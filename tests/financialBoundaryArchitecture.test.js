@@ -53,7 +53,23 @@ assert('does not modify SQL migrations', !modifiesMigrations(BOTH));
 assert('actor sourced from context.sub (not request-body actor)', /authContext\.sub|const sub = authContext\.sub/.test(SVC) && !/req\.body\.actor|body\.actor|args\.actor/.test(SVC));
 assert('service never reads a body-supplied role into a payload', !/p_by_role|expectedRole|byRole/.test(SVC));
 assert('logging limited to safe operational fields', !logsSensitive(BOTH) && /order_id: orderId, by_actor: byActor, outcome, code/.test(SVC));
-assert('DAO not wired into index.js', (() => { const idx = read('index.js'); return !/financialDao|financialService/.test(idx); })());
+// S2-7D6E SUPERSEDES the B7A2C "UNWIRED" clause. Keeping the ledger disconnected was the
+// direct cause of the live staging defect (order #723: cash collected, order RETIRADO, but
+// cobrado=false and zero ledger rows, so the closeout reported Cobrado 0.00 on a real 12.00
+// sale). The DAO/service are now reachable from index.js, but through exactly ONE operator
+// entry point. The invariant that still matters — and that this assertion now guards — is
+// that index.js never bypasses that entry point to touch the DAO or the RPCs directly.
+assert('DAO reached only via the operator payment registrar', (() => {
+  const idx = read('index.js');
+  const usesRegistrar = /createOperatorPaymentRegistrar/.test(idx);
+  const constructsOnce = (idx.match(/createFinancialDao\(/g) || []).length === 1
+    && (idx.match(/createFinancialService\(/g) || []).length === 1;
+  // Quoted form only: an RPC name is only *invoked* as a string literal. Naming one in a
+  // comment is documentation, not a bypass, and must not fail the boundary check.
+  const noDirectRpc = !/['"`]order_(mark_paid|refund|void|import_legacy_payment)['"`]/.test(idx);
+  const noDirectDaoCall = !/\.markOrderPaid\(|\.refundOrder\(|\.voidOrder\(|\.importLegacyPayment\(/.test(idx);
+  return usesRegistrar && constructsOnce && noDirectRpc && noDirectDaoCall;
+})());
 
 // ── NEGATIVE CONTROLS: each detector must fire on an injected violation ──────
 assert('NC1: direct ledger insert detected', insertsLedger(DAO + "\nawait sbRest('POST','order_financial_events',{body:{}});"));

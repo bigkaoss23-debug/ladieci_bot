@@ -32,6 +32,15 @@ const { createAdminAccessService } = require("./src/auth/adminAccessService");
 const pinPolicy = require("./src/auth/pinPolicy");
 const { hashPin, verifyPin } = require("./src/auth/scrypt");
 const { ipHash } = require("./src/auth/ipSecurity");
+// S2-7D6E — canonical operator payment registration (wires the existing B7A2 ledger into
+// the operator flow; payment becomes an event, never a boolean side-effect of RETIRADO).
+const { createFinancialDao } = require("./src/auth/financialDao");
+const { createFinancialService } = require("./src/auth/financialService");
+const { createOperatorPaymentRegistrar, PAYMENT_METHODS } = require("./src/financial/registerOperatorPayment");
+// A real collection is one of the three canonical methods. Markers like "manual" (the
+// "Driver volvió" operator override) are NOT payments and must not enter the ledger nor
+// be blocked by it — they keep the pre-existing legacy behaviour untouched.
+const isCollectionMethod = (m) => typeof m === "string" && PAYMENT_METHODS.has(m.trim().toLowerCase());
 // S2-1B — backend-authoritative legacy authorization + transactional rider trip primitives.
 const { legacyAuthGuardMiddleware } = require("./src/auth/legacyAuthGuard");
 const riderTrip = require("./src/agents/riderTrip");
@@ -145,6 +154,15 @@ const adminAccessService = createAdminAccessService({
   ipHash,
   rotation: pinRotation,
   listActorsForVerify: authDao.listActorsForVerify_SENSITIVE,
+});
+
+// S2-7D6E — the operator payment registrar. Reuses the accepted B7A2 DAO/service as-is:
+// no new SQL, no new transport. Unconditionally constructed (like adminAccessService) —
+// the AUTH_V2_FINANCIAL_HTTP_ENABLED flag gates only the /api/financial HTTP surface, not
+// the ledger itself, so the operator path does not depend on it.
+const operatorPayments = createOperatorPaymentRegistrar({
+  financialService: createFinancialService({ dao: createFinancialDao(), ipHash }),
+  logger: console,
 });
 
 // --- WEBHOOK WHATSAPP ---
@@ -475,6 +493,32 @@ app.post("/api", async (req, res) => {
       extras.actor_type = req.body.actor_type || "operator";
       extras.actor_id = req.body.actor_id || null;
       extras.origin = req.body.origin || "dashboard";
+
+      // S2-7D6E — money first, state second. A RETIRADO carrying a payment method is a
+      // COLLECTION: it must produce a ledger event before the order is allowed to move.
+      // If the ledger refuses, we do NOT transition — a false "retired & paid" is exactly
+      // the defect this replaces. The operator sees the code and retries; the key is
+      // deterministic, so the retry replays instead of double-charging.
+      const collecting = String(req.body.estado || "") === "RETIRADO"
+        && isCollectionMethod(extras.metodo_pago);
+      if (collecting) {
+        const pay = await operatorPayments.registerPayment({
+          orderId: req.body.id,
+          paymentMethod: extras.metodo_pago,
+          authCtx: req.authCtx,
+          trustedClientIp: trustedClientIp(req),
+          origin: extras.origin,
+        });
+        if (!pay.ok) {
+          return res.status(409).json({ success: false, error: pay.code, code: pay.code,
+            message: "No se pudo registrar el cobro. El pedido no ha cambiado de estado." });
+        }
+        // order_mark_paid already set ya_pagado/cobrado/metodo_pago under lock. Re-writing
+        // them here would be a redundant second authority over the same accounting fact.
+        if (!pay.alreadyPaidLegacy) {
+          delete extras.metodo_pago; delete extras.cobrado; delete extras.ya_pagado;
+        }
+      }
       result = await cambiaStato(req.body.id, req.body.estado, extras);
     } else if (action === "marcarEnEntrega") {
       // LISTO → EN_ENTREGA — registra hora_salida atomicamente
@@ -495,6 +539,27 @@ app.post("/api", async (req, res) => {
       };
       if (req.body.descuento_tipo  !== undefined) extras.descuento_tipo  = req.body.descuento_tipo;
       if (req.body.descuento_valor !== undefined) extras.descuento_valor = req.body.descuento_valor;
+
+      // S2-7D6E — same contract as updateEstado. This path historically defaulted
+      // `cobrado` to TRUE while updateEstado left it untouched: the same operator concept
+      // produced two different accounting outcomes depending on which action fired. The
+      // ledger is now the single authority whenever a real method is supplied.
+      if (extras.cobrado && isCollectionMethod(extras.metodo_pago)) {
+        const pay = await operatorPayments.registerPayment({
+          orderId: req.body.id,
+          paymentMethod: extras.metodo_pago,
+          authCtx: req.authCtx,
+          trustedClientIp: trustedClientIp(req),
+          origin: "entregas",
+        });
+        if (!pay.ok) {
+          return res.status(409).json({ success: false, error: pay.code, code: pay.code,
+            message: "No se pudo registrar el cobro. El pedido no ha cambiado de estado." });
+        }
+        if (!pay.alreadyPaidLegacy) {
+          delete extras.metodo_pago; delete extras.cobrado; delete extras.ya_pagado;
+        }
+      }
       result = await cambiaStato(req.body.id, "RETIRADO", extras);
     } else if (action === "asignarRepartidor") {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { repartidor: req.body.repartidor || null });
