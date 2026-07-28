@@ -26,6 +26,7 @@ const PRANZO_OPEN = { id: "s-pranzo", status: "open", serviceKind: "PRANZO", bus
 const SERA_OPEN = { id: "s-sera", status: "open", serviceKind: "SERA", businessDate: "2026-07-15" };
 const SERA_CLOSING = { ...SERA_OPEN, status: "closing" };
 const SERA_LEGACY = { ...SERA_OPEN, serviceKind: null };
+const PRANZO_STALE = { ...PRANZO_OPEN, businessDate: "2026-07-14" };
 
 console.log("\n══ PART 1 — evaluateNewOrderIntake (pure) ══");
 
@@ -70,6 +71,9 @@ assert("14b: active SERA during PRANZO_WINDOW rejected",
 const rLegacy = evaluateNewOrderIntake({ now: summer(20, 0), activeSession: SERA_LEGACY });
 assert("15: legacy NULL-kind active session rejected",
   rLegacy.allowed === false && rLegacy.code === INTAKE_CODE.LEGACY_SESSION_KIND_UNKNOWN, rLegacy.code);
+const rStale = evaluateNewOrderIntake({ now: summer(12, 0), activeSession: PRANZO_STALE });
+assert("15b: same-kind session from a stale business date rejected",
+  rStale.allowed === false && rStale.code === INTAKE_CODE.STALE_SERVICE_SESSION, rStale.code);
 
 console.log("\n── Client input is never trusted ──");
 // evaluateNewOrderIntake has no parameter for a client-supplied clock, kind or
@@ -89,8 +93,14 @@ assert("31: summer DST — 23:59:59 CEST allowed, 00:00 CEST rejected",
   evaluateNewOrderIntake({ now: summer(23, 59, 15), activeSession: SERA_OPEN }).allowed === true
   && evaluateNewOrderIntake({ now: summer(0, 0, 16), activeSession: SERA_OPEN }).allowed === false);
 assert("32: winter DST — 23:59:59 CET allowed, 00:00 CET rejected",
-  evaluateNewOrderIntake({ now: winter(23, 59, 15), activeSession: SERA_OPEN }).allowed === true
-  && evaluateNewOrderIntake({ now: winter(0, 0, 16), activeSession: SERA_OPEN }).allowed === false);
+  evaluateNewOrderIntake({
+    now: winter(23, 59, 15),
+    activeSession: { ...SERA_OPEN, businessDate: "2026-01-15" },
+  }).allowed === true
+  && evaluateNewOrderIntake({
+    now: winter(0, 0, 16),
+    activeSession: { ...SERA_OPEN, businessDate: "2026-01-15" },
+  }).allowed === false);
 
 console.log("\n── purity ══");
 assert("frozen result", Object.isFrozen(evaluateNewOrderIntake({ now: summer(12), activeSession: PRANZO_OPEN })));
@@ -133,7 +143,11 @@ supa.sbSelect = async (table, query = "") => {
     if (mReq) {
       const key = decodeURIComponent(mReq[1]);
       const hit = Object.values(STORE).find((o) => o.client_req_id === key);
-      return hit ? [{ id: hit.id }] : [];
+      return hit ? [{
+        id: hit.id,
+        service_session_id: hit.service_session_id,
+        service_order_number: hit.service_order_number,
+      }] : [];
     }
     const mId = query.match(/id=eq\.([^&]+)/);
     if (mId) {
@@ -145,7 +159,10 @@ supa.sbSelect = async (table, query = "") => {
   return [];
 };
 supa.sbInsert = async (table, row) => {
-  if (table === "ordenes") { INSERTED.push(row); STORE[row.id] = { ...row }; return [row]; }
+  if (table === "ordenes") {
+    const persisted = { ...row, service_session_id: "s-test", service_order_number: INSERTED.length + 1 };
+    INSERTED.push(persisted); STORE[row.id] = persisted; return [persisted];
+  }
   return [row];
 };
 supa.sbUpdate = async (table, filter, patch) => {
@@ -204,7 +221,20 @@ function installGate({ now, session }) {
       operatorManual: true, tipo_consegna: "RITIRO", hora: "20:05",
       items: [{ n: "Margherita", q: 1, p: 7 }],
     });
-    assert("20: operator creation allowed inside SERA_WINDOW with matching active session", res.success === true && INSERTED.length === 1, JSON.stringify(res));
+    assert("20: operator creation allowed inside SERA_WINDOW with matching active session",
+      res.success === true && res.serviceSessionId === "s-test" && res.serviceOrderNumber === 1 && INSERTED.length === 1,
+      JSON.stringify(res));
+  }
+  {
+    STORE = {}; INSERTED = [];
+    installGate({ now: summer(12, 0), session: PRANZO_STALE });
+    const res = await creaOrdine({
+      operatorManual: true, tipo_consegna: "RITIRO", hora: "12:05",
+      items: [{ n: "Margherita", q: 1, p: 7 }],
+    });
+    assert("20b: stale same-kind session is blocked before insert",
+      res.success === false && res.code === INTAKE_CODE.STALE_SERVICE_SESSION
+      && INSERTED.length === 0, JSON.stringify(res));
   }
 
   console.log("\n── 22-23: WhatsApp bot creation uses the SAME policy (operatorManual falsy) ──");
@@ -252,7 +282,9 @@ function installGate({ now, session }) {
       items: [{ n: "Margherita", q: 1, p: 7 }],
     });
     assert("24c: retry of the already-created order stays idempotent post-cutoff",
-      replay.success === true && replay.idempotent === true && replay.id === first.id, JSON.stringify(replay));
+      replay.success === true && replay.idempotent === true && replay.id === first.id
+      && replay.serviceSessionId === first.serviceSessionId
+      && replay.serviceOrderNumber === first.serviceOrderNumber, JSON.stringify(replay));
     assert("24d: idempotent replay did not insert a second row", INSERTED.length === 1);
   }
 

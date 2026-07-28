@@ -34,6 +34,7 @@ const INTAKE_CODE = Object.freeze({
   ORDER_INTAKE_CLOSED: "ORDER_INTAKE_CLOSED",
   NO_OPEN_SERVICE_SESSION: "NO_OPEN_SERVICE_SESSION",
   SERVICE_SESSION_NOT_ORDERABLE: "SERVICE_SESSION_NOT_ORDERABLE",
+  STALE_SERVICE_SESSION: "STALE_SERVICE_SESSION",
   SERVICE_KIND_MISMATCH: "SERVICE_KIND_MISMATCH",
   LEGACY_SESSION_KIND_UNKNOWN: "LEGACY_SESSION_KIND_UNKNOWN",
 });
@@ -42,6 +43,7 @@ const MESSAGES = Object.freeze({
   [INTAKE_CODE.ORDER_INTAKE_CLOSED]: "La recepción de nuevos pedidos está cerrada para este servicio.",
   [INTAKE_CODE.NO_OPEN_SERVICE_SESSION]: "No hay un servicio abierto para recibir nuevos pedidos.",
   [INTAKE_CODE.SERVICE_SESSION_NOT_ORDERABLE]: "El servicio activo ya no admite nuevos pedidos (en cierre).",
+  [INTAKE_CODE.STALE_SERVICE_SESSION]: "El servicio activo pertenece a otra fecha operativa. Ciérralo antes de recibir nuevos pedidos.",
   [INTAKE_CODE.SERVICE_KIND_MISMATCH]: "El servicio activo no corresponde a la franja horaria actual.",
   [INTAKE_CODE.LEGACY_SESSION_KIND_UNKNOWN]: "El servicio activo no tiene un tipo de servicio reconocido.",
 });
@@ -76,6 +78,9 @@ function evaluateNewOrderIntake({ now = new Date(), activeSession = null, source
   }
   if (!activeSession.serviceKind) {
     return rejection(INTAKE_CODE.LEGACY_SESSION_KIND_UNKNOWN, when, sourceChannel);
+  }
+  if (!activeSession.businessDate || activeSession.businessDate !== when.businessDate) {
+    return rejection(INTAKE_CODE.STALE_SERVICE_SESSION, when, sourceChannel);
   }
   if (activeSession.serviceKind !== when.serviceKind) {
     return rejection(INTAKE_CODE.SERVICE_KIND_MISMATCH, when, sourceChannel);

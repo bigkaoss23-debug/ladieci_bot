@@ -374,9 +374,15 @@ async function creaOrdine(params) {
   const clientReqId = params.client_req_id || null;
   if (clientReqId) {
     const existing = await sbSelect("ordenes",
-      `client_req_id=eq.${encodeURIComponent(clientReqId)}&select=id&limit=1`);
+      `client_req_id=eq.${encodeURIComponent(clientReqId)}&select=id,service_session_id,service_order_number&limit=1`);
     if (Array.isArray(existing) && existing[0]?.id) {
-      return { success: true, id: existing[0].id, idempotent: true };
+      return {
+        success: true,
+        id: existing[0].id,
+        serviceSessionId: existing[0].service_session_id || null,
+        serviceOrderNumber: existing[0].service_order_number ?? null,
+        idempotent: true,
+      };
     }
   }
 
@@ -493,6 +499,7 @@ async function creaOrdine(params) {
 
     // Successo: sbInsert ritorna array con il record inserito
     if (Array.isArray(result) && result.length > 0) {
+      const inserted = result[0];
       // Best-effort: incrementa n_ordini_creati su geo_cache (segnale "operatore ha creduto all'indirizzo")
       bumpGeoCacheCreated(params.direccion, geoFields.geo_source);
       // Best-effort: aggiorna contatori cliente (total_pedidos, ultimo_pedido, auto-promote preferito).
@@ -511,7 +518,12 @@ async function creaOrdine(params) {
         },
       });
       if (tipoConsegna === "DOMICILIO") await risincronizzaGiro(geoFields.zona, horaFinale || params.hora);
-      return { success: true, id: newId };
+      return {
+        success: true,
+        id: newId,
+        serviceSessionId: inserted.service_session_id || null,
+        serviceOrderNumber: inserted.service_order_number ?? null,
+      };
     }
 
     // Errore PostgREST: distinguere PK duplicate (retry) da client_req_id duplicate (idempotent).
@@ -522,9 +534,15 @@ async function creaOrdine(params) {
     if (errCode === "23505") {
       if (clientReqId && errDetails.includes("client_req_id")) {
         const existing = await sbSelect("ordenes",
-          `client_req_id=eq.${encodeURIComponent(clientReqId)}&select=id&limit=1`);
+          `client_req_id=eq.${encodeURIComponent(clientReqId)}&select=id,service_session_id,service_order_number&limit=1`);
         if (Array.isArray(existing) && existing[0]?.id) {
-          return { success: true, id: existing[0].id, idempotent: true };
+          return {
+            success: true,
+            id: existing[0].id,
+            serviceSessionId: existing[0].service_session_id || null,
+            serviceOrderNumber: existing[0].service_order_number ?? null,
+            idempotent: true,
+          };
         }
       }
       continue; // PK collision (id sequenziale) → riprova con un nuovo lastNum
