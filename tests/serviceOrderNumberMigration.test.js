@@ -29,6 +29,13 @@ test("allocation locks session and increments in the insert transaction", () => 
   assert.doesNotMatch(fn, /max\s*\(/i);
 });
 
+test("forward migration explicitly wires both numbering triggers", () => {
+  assert.match(sql, /DROP TRIGGER IF EXISTS ordenes_assign_service_session ON public\.ordenes/);
+  assert.match(sql, /CREATE TRIGGER ordenes_assign_service_session[\s\S]*BEFORE INSERT ON public\.ordenes[\s\S]*service_session_assign_order\(\)/);
+  assert.match(sql, /DROP TRIGGER IF EXISTS ordenes_service_session_immutable ON public\.ordenes/);
+  assert.match(sql, /CREATE TRIGGER ordenes_service_session_immutable[\s\S]*BEFORE UPDATE ON public\.ordenes[\s\S]*service_session_immutable_order\(\)/);
+});
+
 test("trigger and ensure fail closed on stale operational date", () => {
   assert.ok((sql.match(/STALE_SERVICE_SESSION/g) || []).length >= 2);
   assert.ok((sql.match(/Europe\/Madrid/g) || []).length >= 2);

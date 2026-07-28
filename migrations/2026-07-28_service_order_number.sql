@@ -84,6 +84,14 @@ BEGIN
   RETURN NEW;
 END $$;
 
+-- Recreate explicitly instead of relying on a trigger left behind by the
+-- identity migration. This keeps a replay/self-contained apply safe even when
+-- the function exists but the trigger was removed or renamed out of band.
+DROP TRIGGER IF EXISTS ordenes_assign_service_session ON public.ordenes;
+CREATE TRIGGER ordenes_assign_service_session
+BEFORE INSERT ON public.ordenes
+FOR EACH ROW EXECUTE FUNCTION public.service_session_assign_order();
+
 CREATE OR REPLACE FUNCTION public.service_session_immutable_order()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -99,6 +107,11 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
+
+DROP TRIGGER IF EXISTS ordenes_service_session_immutable ON public.ordenes;
+CREATE TRIGGER ordenes_service_session_immutable
+BEFORE UPDATE ON public.ordenes
+FOR EACH ROW EXECUTE FUNCTION public.service_session_immutable_order();
 
 CREATE OR REPLACE FUNCTION public.ensure_service_session(
   p_opened_by text,
