@@ -189,6 +189,9 @@ const adminAccessService = createAdminAccessService({
   // byte-identical token (verified empirically), so a Bearer-hash alone cannot distinguish
   // them — sid is generated fresh, from real entropy, on every signToken call.
   verifyStepUpProof: jwt.verifyStepUpProof,
+  // S2-7D4C — closed-enum check for auth_method, injected so adminAccessService never
+  // requires ./jwt directly (see adminAccessBoundary.static.test.js).
+  isValidAuthMethod: jwt.isValidAuthMethod,
 });
 
 // S2-7D6E4 — step-up PIN confirmation. Reuses login.js's exact lockout-safe verify
@@ -544,6 +547,8 @@ app.post("/api", async (req, res) => {
         sv: req.authCtx.sv,
         pin: req.body && req.body.pin,
         sid: req.authCtx.sid,
+        // S2-7D4C — server-derived, from the verified token only; never accepted from the body.
+        authMethod: req.authCtx.authMethod,
       });
       if (!out.ok) {
         if (out.code === "blocked") return res.status(429).json({ ok: false, error: "LOCKED", retryAfterSec: out.retryAfterSec || 0 });
@@ -563,6 +568,8 @@ app.post("/api", async (req, res) => {
         byRole: req.authCtx.role,
         bySv: req.authCtx.sv,
         bySid: req.authCtx.sid,
+        // S2-7D4C — server-derived, from the verified token only; never accepted from the body.
+        byAuthMethod: req.authCtx.authMethod,
         targetActor,
         newPin: req.body && req.body.newPin,
         // S2-7D6E4 — FIX: this used to be auto-supplied as `targetActor === "owner" ?

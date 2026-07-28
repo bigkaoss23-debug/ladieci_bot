@@ -95,7 +95,8 @@ function createLoginHandler(deps) {
       try { reset = await dao.resetFailedAttempts(actor); }
       catch (_) { return ERR.unavail; }
       if (!reset || reset.active === false) return ERR.cred; // disabled mid-flow → no token
-      const token = jwt.signToken({ role, sub: actor, sv: reset.session_version });
+      // S2-7D4C — this is the explicit role/actor path: record it as `actor_pin`.
+      const token = jwt.signToken({ role, sub: actor, sv: reset.session_version, authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
       if (!token) return ERR.unavail;
       if (ipLimiter) ipLimiter.reset(ipH);
       await bestEffortAudit({ event: 'login_ok', targetActor: actor, ipHash: ipH, meta: { role } });
@@ -159,7 +160,8 @@ function createUniversalLoginHandler(deps) {
     let reset;
     try { reset = await dao.resetFailedAttempts(actor); } catch (_) { return ERR.unavail; }
     if (!reset || reset.active === false) return ERR.cred;
-    const token = jwt.signToken({ role, sub: actor, sv: reset.session_version });
+    // S2-7D4C — this is the {pin}-only universal path: record it as `legacy_universal`.
+    const token = jwt.signToken({ role, sub: actor, sv: reset.session_version, authMethod: jwt.AUTH_METHOD_LEGACY_UNIVERSAL });
     if (!token) return ERR.unavail;
     if (ipLimiter) ipLimiter.reset(ipH);
     await bestEffortAudit({ event: 'login_ok', targetActor: actor, ipHash: ipH, meta: { role, universal: true } });

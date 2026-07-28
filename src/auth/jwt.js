@@ -15,6 +15,18 @@ const ROLE_SUB = Object.freeze({
   rider: new Set(['rider']),
 });
 
+// S2-7D4C — auth_method: HOW a session authenticated. A CLOSED enum, SERVER-DERIVED only
+// (never read from the request body), carried as the `am` claim. It exists so a step-up can
+// reconfirm the SAME credential the session logged in with — the compatibility login (explicit
+// role/actor) is `actor_pin`; the universal {pin}-only login is `legacy_universal`. The two
+// differ in the PIN FORMAT gate applied before the hash check (see pinPolicy.js), which is
+// exactly why a 6–8 digit owner PIN can log in universally yet be rejected by an admin-format
+// step-up. verifyOwnPin selects its validator from this claim; the step-up proof is bound to it.
+const AUTH_METHOD_ACTOR_PIN = 'actor_pin';
+const AUTH_METHOD_LEGACY_UNIVERSAL = 'legacy_universal';
+const AUTH_METHODS = Object.freeze(new Set([AUTH_METHOD_ACTOR_PIN, AUTH_METHOD_LEGACY_UNIVERSAL]));
+function isValidAuthMethod(m) { return typeof m === 'string' && AUTH_METHODS.has(m); }
+
 // Strict base64url: alphabet-only, canonical round-trip. Returns Buffer or null.
 function b64urlDecodeStrict(s) {
   if (typeof s !== 'string' || s.length === 0) return null;
@@ -69,33 +81,41 @@ function validSid(sid) {
   return typeof sid === 'string' && sid.length > 0 && sid.length <= 64;
 }
 
-// signStepUpProof({actor, role, sv, sid}) -> proof string, or null.
+// signStepUpProof({actor, role, sv, sid, authMethod}) -> proof string, or null.
 // `sid` MUST be the CURRENT session's own sid (from req.authCtx.sid) — missing/invalid
-// refuses to mint a proof at all, by design.
-function signStepUpProof({ actor, role, sv, sid } = {}) {
+// refuses to mint a proof at all, by design. `authMethod` MUST be the CURRENT session's
+// server-derived auth method (req.authCtx.authMethod): the proof is bound to it so a proof
+// minted from a legacy_universal session can never be replayed by an actor_pin session (or
+// vice-versa), even for the same actor/sid/session_version.
+function signStepUpProof({ actor, role, sv, sid, authMethod } = {}) {
   if (!isReady()) return null;
   if (!roleSubValid(role, actor)) return null;
   if (!Number.isInteger(sv) || sv < 1) return null;
   if (!validSid(sid)) return null;
+  if (!isValidAuthMethod(authMethod)) return null;
   const iat = Math.floor(Date.now() / 1000);
   const exp = iat + STEP_UP_TTL_SECONDS;
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = b64url(JSON.stringify({
     v: STEP_UP_VERSION, purpose: STEP_UP_PURPOSE,
-    sub: actor, role, sv, sid, iat, exp,
+    sub: actor, role, sv, sid, am: authMethod, iat, exp,
   }));
   const sig = hmac(header + '.' + payload);
   return header + '.' + payload + '.' + sig;
 }
 
-// verifyStepUpProof(token, {sid}) -> payload object or null. NEVER throws.
+// verifyStepUpProof(token, {sid, authMethod}) -> payload object or null. NEVER throws.
 // `sid` MUST be the CURRENT request's own session id — this is what makes a proof minted in
 // one session unusable from a different session, even for the same actor at the same
 // session_version, and what makes a sid-less (legacy) session unable to use a proof at all.
-function verifyStepUpProof(token, { sid } = {}) {
+// `authMethod` MUST be the CURRENT session's server-derived auth method — a proof whose `am`
+// does not match it is rejected, so an actor_pin session can never consume a legacy_universal
+// proof (or vice-versa). A missing/invalid expected authMethod refuses outright.
+function verifyStepUpProof(token, { sid, authMethod } = {}) {
   try {
     if (!isReady() || typeof token !== 'string') return null;
     if (!validSid(sid)) return null;
+    if (!isValidAuthMethod(authMethod)) return null;
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     const [h, p, s] = parts;
@@ -114,6 +134,7 @@ function verifyStepUpProof(token, { sid } = {}) {
     if (!roleSubValid(pl.role, pl.sub)) return null;
     if (!Number.isInteger(pl.sv) || pl.sv < 1) return null;
     if (!validSid(pl.sid)) return null;
+    if (!isValidAuthMethod(pl.am)) return null;
     if (!Number.isInteger(pl.iat) || !Number.isInteger(pl.exp)) return null;
     if (pl.exp <= pl.iat) return null;
     if ((pl.exp - pl.iat) > STEP_UP_TTL_SECONDS + SKEW_SEC) return null;
@@ -124,6 +145,10 @@ function verifyStepUpProof(token, { sid } = {}) {
     // session binding — timing-safe compare, same discipline as the signature check above.
     const sidA = Buffer.from(pl.sid), sidB = Buffer.from(sid);
     if (sidA.length !== sidB.length || !crypto.timingSafeEqual(sidA, sidB)) return null;
+
+    // auth-method binding — the proof must have been minted under the SAME method the current
+    // session authenticated with. A plain enum compare (not a secret): no timing concern.
+    if (pl.am !== authMethod) return null;
 
     return pl;
   } catch (_) {
@@ -142,17 +167,20 @@ function newSid() {
   return crypto.randomBytes(16).toString('base64url');
 }
 
-// signToken({role, sub, sv}) → token string, or null on invalid input / not ready.
-function signToken({ role, sub, sv } = {}) {
+// signToken({role, sub, sv, authMethod}) → token string, or null on invalid input / not ready.
+// `authMethod` is REQUIRED and must be a valid closed-enum value (server-derived, never from a
+// caller): every token minted after S2-7D4C records how the session authenticated.
+function signToken({ role, sub, sv, authMethod } = {}) {
   if (!isReady()) return null;
   if (!roleSubValid(role, sub)) return null;
   if (!Number.isInteger(sv) || sv < 1) return null;
+  if (!isValidAuthMethod(authMethod)) return null;
   const ttl = TTL_SECONDS[role];
   const iat = Math.floor(Date.now() / 1000);
   const exp = iat + ttl;
   const sid = newSid();
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const payload = b64url(JSON.stringify({ role, sub, iat, exp, sv, sid, v: 2 }));
+  const payload = b64url(JSON.stringify({ role, sub, iat, exp, sv, sid, am: authMethod, v: 2 }));
   const sig = hmac(header + '.' + payload);
   return header + '.' + payload + '.' + sig;
 }
@@ -192,6 +220,11 @@ function verifyToken(token) {
     if (pl.sid !== undefined) {
       if (typeof pl.sid !== 'string' || pl.sid.length === 0 || pl.sid.length > 64) return null;
     }
+    // S2-7D4C — auth_method (`am`). A token minted after this change always carries a valid
+    // enum value; a token signed before it carries none. Present-but-invalid = tampering →
+    // reject the whole token (no silent downgrade). Absent = legacy: still authorizes ordinary
+    // actions, but the step-up path refuses it (pinStepUp.js) with REAUTH_REQUIRED.
+    if (pl.am !== undefined && !isValidAuthMethod(pl.am)) return null;
     return pl;
   } catch (_) {
     return null;
@@ -201,4 +234,5 @@ function verifyToken(token) {
 module.exports = {
   signToken, verifyToken, expiresInFor, isReady, TTL_SECONDS, ROLE_SUB, SKEW_SEC,
   signStepUpProof, verifyStepUpProof, STEP_UP_TTL_SECONDS, STEP_UP_PURPOSE,
+  AUTH_METHOD_ACTOR_PIN, AUTH_METHOD_LEGACY_UNIVERSAL, AUTH_METHODS, isValidAuthMethod,
 };

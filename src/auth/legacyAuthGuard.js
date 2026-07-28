@@ -89,7 +89,13 @@ async function authorizeLegacyRequest(req, deps = {}) {
     // S2-7D6E4 — sid is the per-login id from a fresh token, or null for a session signed
     // before this change (jwt.verifyToken tolerates its absence for ordinary actions).
     // Never logged; PIN-management step-up refuses to work without it (see pinStepUp.js).
-    ctx: { actor: payload.sub, role: payload.role, sv: payload.sv, sid: payload.sid || null, action, rule },
+    // S2-7D4C — authMethod is the server-derived login method (`am` claim), or null for a
+    // pre-change token with none; step-up selects its PIN-format validator from it and refuses
+    // a null one with REAUTH_REQUIRED (see pinStepUp.js). Never accepted from the body.
+    ctx: {
+      actor: payload.sub, role: payload.role, sv: payload.sv,
+      sid: payload.sid || null, authMethod: payload.am || null, action, rule,
+    },
   };
 }
 
