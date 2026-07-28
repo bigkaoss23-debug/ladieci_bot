@@ -37,25 +37,44 @@ const failBlocked = (retryAfterSec) => Object.freeze({ ok: false, code: 'blocked
 function createPinStepUpVerifier(deps = {}) {
   const { dao, jwt, pinPolicy, verifyPin, decoyHashPromise } = deps;
 
-  // verifyOwnPin({actor, role, sv, pin, sid})
-  //   actor/role/sv/sid — from the ALREADY-VERIFIED req.authCtx. NEVER accept these from the
-  //                   request body: the whole point is that the proof describes who the
+  // verifyOwnPin({actor, role, sv, pin, sid, authMethod})
+  //   actor/role/sv/sid/authMethod — from the ALREADY-VERIFIED req.authCtx. NEVER accept these
+  //                   from the request body: the whole point is that the proof describes who the
   //                   server already knows the caller to be, not who the caller claims.
   //   sid           — the current session's per-login id (jwt.js). Absent for a session
   //                   signed before this change; PIN management refuses those outright.
+  //   authMethod    — S2-7D4C: which credential the CURRENT session actually authenticated with
+  //                   (`actor_pin` = explicit role/actor login, `legacy_universal` = {pin}-only
+  //                   universal login). ROOT CAUSE this closes: universal login accepts a PIN
+  //                   via validateUniversalPinFormat (6–12 digits) and resolves it against the
+  //                   SAME owner pin_hash this function reads — but this function used to always
+  //                   apply the stricter admin-only validatePinFormat (9–12 digits), so an
+  //                   owner's real 6–8 digit PIN could log in yet fail step-up on format alone,
+  //                   before the hash was ever compared. Selecting the validator by authMethod
+  //                   makes step-up reconfirm the EXACT credential the login actually used.
+  //                   Absent/invalid authMethod (session signed before this change) refuses
+  //                   outright, same as a missing sid — no weaker fallback.
   // Returns { ok:true, stepUpProof, expiresInSec } or { ok:false, code, retryAfterSec? }.
-  async function verifyOwnPin({ actor, role, sv, pin, sid } = {}) {
+  async function verifyOwnPin({ actor, role, sv, pin, sid, authMethod } = {}) {
     try {
       if (role !== 'admin') return FAIL_BAD;                    // only admin/owner manages PINs
       if (typeof actor !== 'string' || actor.length === 0) return FAIL_BAD;
       if (!Number.isInteger(sv) || sv < 1) return FAIL_BAD;
       if (typeof pin !== 'string' || pin.length === 0) return FAIL_BAD;
-      // A session with no sid cannot ever complete this flow — refuse before touching the
-      // PIN check at all, with a code the caller can distinguish from a wrong PIN.
+      // A session with no sid, or no recognized auth_method, cannot ever complete this flow —
+      // refuse before touching the PIN check at all, with a code the caller can distinguish
+      // from a wrong PIN.
       if (typeof sid !== 'string' || sid.length === 0) return FAIL_REAUTH;
+      if (!jwt.isValidAuthMethod(authMethod)) return FAIL_REAUTH;
       if (!dao || !jwt || !pinPolicy || typeof verifyPin !== 'function') return FAIL_UNAVAIL;
-      // Generic format rejection — indistinguishable from a wrong PIN, no length/shape oracle.
-      if (!pinPolicy.validatePinFormat(pin, role).ok) return FAIL_CRED;
+      // Reconfirm the SAME credential the session logged in with: the universal login's PIN
+      // format gate (6–12 digits, any actor's own hash) for legacy_universal sessions, the
+      // stricter per-role gate for actor_pin sessions. Generic format rejection — indistinguishable
+      // from a wrong PIN, no length/shape oracle.
+      const formatOk = authMethod === jwt.AUTH_METHOD_LEGACY_UNIVERSAL
+        ? pinPolicy.validateUniversalPinFormat(pin).ok
+        : pinPolicy.validatePinFormat(pin, role).ok;
+      if (!formatOk) return FAIL_CRED;
 
       // 1) lock pre-check (optimization only; the RPC behind recordFailedAttempt is authoritative)
       try {
@@ -82,7 +101,7 @@ function createPinStepUpVerifier(deps = {}) {
         // DB-fresh read (req.authCtx.sv) and this call, not a race with that read itself.
         if (!Number.isInteger(reset.session_version) || reset.session_version !== sv) return FAIL_CRED;
 
-        const stepUpProof = jwt.signStepUpProof({ actor, role, sv, sid });
+        const stepUpProof = jwt.signStepUpProof({ actor, role, sv, sid, authMethod });
         if (!stepUpProof) return FAIL_UNAVAIL;
         return Object.freeze({ ok: true, stepUpProof, expiresInSec: jwt.STEP_UP_TTL_SECONDS });
       }
