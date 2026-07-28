@@ -35,7 +35,7 @@ const assert = (n, c, d = '') => { if (c) { pass++; console.log('  PASS  ' + n);
     const h = await scrypt.hashPin(pin);          // real hash (never printed)
     assert(`${role}/${sub} verify correct`, (await scrypt.verifyPin(pin, h)) === true);
     assert(`${role}/${sub} verify wrong`, (await scrypt.verifyPin('111119', h)) === false);
-    const token = jwt.signToken({ role, sub, sv: 4 });
+    const token = jwt.signToken({ role, sub, sv: 4, authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
     const p = jwt.verifyToken(token);
     assert(`${role}/${sub} JWT payload`, p && p.role === role && p.sub === sub && p.sv === 4 && p.v === 2);
     assert(`${role}/${sub} JWT TTL`, p && (p.exp - p.iat) === jwt.TTL_SECONDS[role]);

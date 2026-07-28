@@ -66,7 +66,7 @@ test("an Auth V2 PIN JWT is rejected by the account verifier (BAD_ALG, HS256)", 
   // Build a real PIN JWT if the V2 secret is loadable; otherwise synthesize an HS256 token.
   let pinJwt = null;
   try {
-    if (jwtV2.isReady()) pinJwt = jwtV2.signToken({ role: "admin", sub: "owner", sv: 1 });
+    if (jwtV2.isReady()) pinJwt = jwtV2.signToken({ role: "admin", sub: "owner", sv: 1, authMethod: jwtV2.AUTH_METHOD_ACTOR_PIN });
   } catch (_) {}
   if (!pinJwt) {
     const header = b64u(JSON.stringify({ alg: "HS256", typ: "JWT" }));

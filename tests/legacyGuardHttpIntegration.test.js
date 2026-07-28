@@ -40,7 +40,7 @@ const { app } = require("../index");
 let pass = 0, fail = 0;
 const check = (l, c) => { if (c) { pass++; console.log("  ✓ " + l); } else { fail++; console.log("  ✗ " + l); } };
 
-function tok(role, sub, sv) { return jwt.signToken({ role, sub, sv }); }
+function tok(role, sub, sv) { return jwt.signToken({ role, sub, sv, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }); }
 function reqHttp(server, { method = "POST", path = "/api", key = "testkey", auth, action, body } = {}) {
   return new Promise((resolve) => {
     const headers = { "Content-Type": "application/json" };

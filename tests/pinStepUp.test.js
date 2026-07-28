@@ -49,8 +49,8 @@ function crafted(payloadObj) {
     const realNow = Date.now;
     const frozen = realNow(); // same instant for both logins — that's the whole point
     Date.now = () => frozen;
-    const tokenA = jwt.signToken({ role: 'admin', sub: 'owner', sv: 5 });
-    const tokenB = jwt.signToken({ role: 'admin', sub: 'owner', sv: 5 });
+    const tokenA = jwt.signToken({ role: 'admin', sub: 'owner', sv: 5, authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
+    const tokenB = jwt.signToken({ role: 'admin', sub: 'owner', sv: 5, authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
     assert('A0: two logins minted in the identical second are DIFFERENT tokens (sid fix)', tokenA !== tokenB);
     const plA = jwt.verifyToken(tokenA), plB = jwt.verifyToken(tokenB);
     Date.now = realNow;
@@ -63,11 +63,11 @@ function crafted(payloadObj) {
 
   // ══ A1. Token domain separation ══════════════════════════════════════════════════
   {
-    const sessionToken = jwt.signToken({ role: 'admin', sub: 'owner', sv: 5 });
+    const sessionToken = jwt.signToken({ role: 'admin', sub: 'owner', sv: 5, authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
     const sid = jwt.verifyToken(sessionToken).sid;
-    const stepUpProof = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid });
+    const stepUpProof = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid, authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
     assert('A1: the normal Auth V2 verifier rejects a v=su1 token', jwt.verifyToken(stepUpProof) === null);
-    assert('A1: the step-up verifier rejects a normal session token', jwt.verifyStepUpProof(sessionToken, { sid }) === null);
+    assert('A1: the step-up verifier rejects a normal session token', jwt.verifyStepUpProof(sessionToken, { sid, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
   }
 
   // ══ A2. Cross-session rejection, same-session success, using REAL logins ════════════
@@ -75,65 +75,97 @@ function crafted(payloadObj) {
     const realNow = Date.now;
     const frozen = realNow();
     Date.now = () => frozen;
-    const sessionA = jwt.signToken({ role: 'admin', sub: 'owner', sv: 5 });
-    const sessionB = jwt.signToken({ role: 'admin', sub: 'owner', sv: 5 }); // same actor/role/sv/instant
+    const sessionA = jwt.signToken({ role: 'admin', sub: 'owner', sv: 5, authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
+    const sessionB = jwt.signToken({ role: 'admin', sub: 'owner', sv: 5, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }); // same actor/role/sv/instant
     const sidA = jwt.verifyToken(sessionA).sid;
     const sidB = jwt.verifyToken(sessionB).sid;
     Date.now = realNow;
     assert('A2: sessions A and B (same owner, same second) have different sid', sidA !== sidB);
 
-    const stepUpA = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid: sidA });
-    assert('A2: step-up A is REJECTED when checked against session B', jwt.verifyStepUpProof(stepUpA, { sid: sidB }) === null);
-    assert('A2: step-up A WORKS in session A', jwt.verifyStepUpProof(stepUpA, { sid: sidA }) !== null);
+    const stepUpA = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid: sidA, authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
+    assert('A2: step-up A is REJECTED when checked against session B', jwt.verifyStepUpProof(stepUpA, { sid: sidB, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
+    assert('A2: step-up A WORKS in session A', jwt.verifyStepUpProof(stepUpA, { sid: sidA, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) !== null);
   }
 
-  // ══ A3. A token with no sid cannot obtain OR use a step-up proof ═══════════════════
+  // ══ A2b. Cross-auth_method rejection — S2-7D4C, the multi-device (same sid) analog ═══
+  // A proof minted under one auth_method must never be usable by a verification context
+  // expecting the OTHER method, even for the identical actor/role/sv/sid.
   {
-    assert('A3: signStepUpProof refuses a missing sid', jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5 }) === null);
-    assert('A3: signStepUpProof refuses an empty sid', jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid: '' }) === null);
-    const proofFromElsewhere = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid: 'some-real-sid' });
-    assert('A3: verifyStepUpProof refuses a missing sid to check against', jwt.verifyStepUpProof(proofFromElsewhere, {}) === null);
-    assert('A3: verifyStepUpProof refuses an empty sid to check against', jwt.verifyStepUpProof(proofFromElsewhere, { sid: '' }) === null);
+    const sid = 'sid-same-for-both-methods';
+    const proofUniversal = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid, authMethod: jwt.AUTH_METHOD_LEGACY_UNIVERSAL });
+    assert('A2b: legacy_universal proof rejected when session expects actor_pin (same sid)',
+      jwt.verifyStepUpProof(proofUniversal, { sid, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
+    assert('A2b: legacy_universal proof accepted when session expects legacy_universal (same sid)',
+      jwt.verifyStepUpProof(proofUniversal, { sid, authMethod: jwt.AUTH_METHOD_LEGACY_UNIVERSAL }) !== null);
+
+    const proofActorPin = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid, authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
+    assert('A2b: actor_pin proof rejected when session expects legacy_universal (same sid)',
+      jwt.verifyStepUpProof(proofActorPin, { sid, authMethod: jwt.AUTH_METHOD_LEGACY_UNIVERSAL }) === null);
+  }
+
+  // ══ A3. A token with no sid, or no valid auth_method, cannot obtain OR use a step-up proof ══
+  {
+    assert('A3: signStepUpProof refuses a missing sid', jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
+    assert('A3: signStepUpProof refuses an empty sid', jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid: '', authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
+    const proofFromElsewhere = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid: 'some-real-sid', authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
+    assert('A3: verifyStepUpProof refuses a missing sid to check against', jwt.verifyStepUpProof(proofFromElsewhere, { authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
+    assert('A3: verifyStepUpProof refuses an empty sid to check against', jwt.verifyStepUpProof(proofFromElsewhere, { sid: '', authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
     assert('A3: verifyStepUpProof refuses no options object at all', jwt.verifyStepUpProof(proofFromElsewhere) === null);
+    // S2-7D4C — the auth_method analog: missing/invalid authMethod refuses sign AND verify.
+    assert('A3: signStepUpProof refuses a missing authMethod', jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid: 'some-real-sid' }) === null);
+    assert('A3: signStepUpProof refuses an invalid authMethod', jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid: 'some-real-sid', authMethod: 'universal' }) === null);
+    assert('A3: verifyStepUpProof refuses a missing authMethod to check against', jwt.verifyStepUpProof(proofFromElsewhere, { sid: 'some-real-sid' }) === null);
+    assert('A3: verifyStepUpProof refuses an invalid authMethod to check against', jwt.verifyStepUpProof(proofFromElsewhere, { sid: 'some-real-sid', authMethod: 'universal' }) === null);
   }
 
   // ══ A4. Round-trip, expiry, tamper, hand-crafted-but-correctly-signed wrong shapes ══
   {
     const sid = 'sid-fixed-for-this-block';
-    const proof = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid });
-    const verified = jwt.verifyStepUpProof(proof, { sid });
-    assert('A4: a fresh proof verifies and carries actor/role/sv/purpose/sid',
+    const authMethod = jwt.AUTH_METHOD_ACTOR_PIN;
+    const proof = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid, authMethod });
+    const verified = jwt.verifyStepUpProof(proof, { sid, authMethod });
+    assert('A4: a fresh proof verifies and carries actor/role/sv/purpose/sid/am',
       verified && verified.sub === 'owner' && verified.role === 'admin' && verified.sv === 5
-      && verified.purpose === 'manage_pins' && verified.sid === sid);
+      && verified.purpose === 'manage_pins' && verified.sid === sid && verified.am === authMethod);
 
     const realNow = Date.now;
     Date.now = () => realNow() - 700 * 1000; // TTL 600s + SKEW 30s cleared by 700s
-    const staleProof = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid });
+    const staleProof = jwt.signStepUpProof({ actor: 'owner', role: 'admin', sv: 5, sid, authMethod });
     Date.now = realNow;
-    assert('A4: a proof past its 10-minute TTL is rejected', jwt.verifyStepUpProof(staleProof, { sid }) === null);
+    assert('A4: a proof past its 10-minute TTL is rejected', jwt.verifyStepUpProof(staleProof, { sid, authMethod }) === null);
 
     const [h, p, s] = proof.split('.');
     const flipped = s[0] === 'A' ? 'B' + s.slice(1) : 'A' + s.slice(1);
-    assert('A4: a tampered signature is rejected', jwt.verifyStepUpProof(`${h}.${p}.${flipped}`, { sid }) === null);
+    assert('A4: a tampered signature is rejected', jwt.verifyStepUpProof(`${h}.${p}.${flipped}`, { sid, authMethod }) === null);
 
     const iat = Math.floor(Date.now() / 1000);
-    const wrongPurpose = crafted({ v: 'su1', purpose: 'delete_everything', sub: 'owner', role: 'admin', sv: 5, sid, iat, exp: iat + 600 });
-    assert('A4: correctly-signed but WRONG PURPOSE rejected', jwt.verifyStepUpProof(wrongPurpose, { sid }) === null);
+    const wrongPurpose = crafted({ v: 'su1', purpose: 'delete_everything', sub: 'owner', role: 'admin', sv: 5, sid, am: authMethod, iat, exp: iat + 600 });
+    assert('A4: correctly-signed but WRONG PURPOSE rejected', jwt.verifyStepUpProof(wrongPurpose, { sid, authMethod }) === null);
 
-    const wrongRoleSub = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'rider', role: 'admin', sv: 5, sid, iat, exp: iat + 600 });
-    assert('A4: correctly-signed but invalid role/sub pairing rejected', jwt.verifyStepUpProof(wrongRoleSub, { sid }) === null);
+    const wrongRoleSub = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'rider', role: 'admin', sv: 5, sid, am: authMethod, iat, exp: iat + 600 });
+    assert('A4: correctly-signed but invalid role/sub pairing rejected', jwt.verifyStepUpProof(wrongRoleSub, { sid, authMethod }) === null);
 
-    const badSv = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 0, sid, iat, exp: iat + 600 });
-    assert('A4: correctly-signed but sv<1 rejected', jwt.verifyStepUpProof(badSv, { sid }) === null);
+    const badSv = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 0, sid, am: authMethod, iat, exp: iat + 600 });
+    assert('A4: correctly-signed but sv<1 rejected', jwt.verifyStepUpProof(badSv, { sid, authMethod }) === null);
 
-    const overCapTtl = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 5, sid, iat, exp: iat + 3600 });
-    assert('A4: correctly-signed but TTL above the 10-minute cap rejected', jwt.verifyStepUpProof(overCapTtl, { sid }) === null);
+    const overCapTtl = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 5, sid, am: authMethod, iat, exp: iat + 3600 });
+    assert('A4: correctly-signed but TTL above the 10-minute cap rejected', jwt.verifyStepUpProof(overCapTtl, { sid, authMethod }) === null);
 
-    const emptySid = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 5, sid: '', iat, exp: iat + 600 });
-    assert('A4: correctly-signed but empty sid in the payload rejected', jwt.verifyStepUpProof(emptySid, { sid }) === null);
+    const emptySid = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 5, sid: '', am: authMethod, iat, exp: iat + 600 });
+    assert('A4: correctly-signed but empty sid in the payload rejected', jwt.verifyStepUpProof(emptySid, { sid, authMethod }) === null);
 
-    const oversizeSid = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 5, sid: 'x'.repeat(65), iat, exp: iat + 600 });
-    assert('A4: an oversized sid in the payload is rejected', jwt.verifyStepUpProof(oversizeSid, { sid: 'x'.repeat(65) }) === null);
+    const oversizeSid = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 5, sid: 'x'.repeat(65), am: authMethod, iat, exp: iat + 600 });
+    assert('A4: an oversized sid in the payload is rejected', jwt.verifyStepUpProof(oversizeSid, { sid: 'x'.repeat(65), authMethod }) === null);
+
+    // S2-7D4C — am-specific malformed shapes
+    const missingAm = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 5, sid, iat, exp: iat + 600 }); // no am at all
+    assert('A4: a step-up proof with NO am claim is rejected (unlike a session token, no legacy tolerance)', jwt.verifyStepUpProof(missingAm, { sid, authMethod }) === null);
+
+    const invalidAm = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 5, sid, am: 'universal', iat, exp: iat + 600 });
+    assert('A4: a step-up proof with an invalid am value is rejected', jwt.verifyStepUpProof(invalidAm, { sid, authMethod }) === null);
+
+    const mismatchedAm = crafted({ v: 'su1', purpose: 'manage_pins', sub: 'owner', role: 'admin', sv: 5, sid, am: jwt.AUTH_METHOD_LEGACY_UNIVERSAL, iat, exp: iat + 600 });
+    assert('A4: a validly-signed proof for the OTHER am is rejected against this authMethod', jwt.verifyStepUpProof(mismatchedAm, { sid, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
   }
 
   assert('A5: STEP_UP_TTL_SECONDS is 10 minutes', jwt.STEP_UP_TTL_SECONDS === 600);
@@ -173,8 +205,12 @@ function crafted(payloadObj) {
       recordFailedAttempt: async (actor) => { rec.recordCalls.push(actor); return rec.recRet; },
       resetFailedAttempts: async (actor) => { rec.resetCalls.push(actor); return rec.resetRet; },
     };
+    const FAKE_AUTH_METHODS = new Set(['actor_pin', 'legacy_universal']);
     const fakeJwt = {
-      signStepUpProof: ({ actor, role, sv, sid }) => (sid ? `PROOF:${actor}:${role}:${sv}:${sid}` : null),
+      AUTH_METHOD_ACTOR_PIN: 'actor_pin',
+      AUTH_METHOD_LEGACY_UNIVERSAL: 'legacy_universal',
+      isValidAuthMethod: (m) => typeof m === 'string' && FAKE_AUTH_METHODS.has(m),
+      signStepUpProof: ({ actor, role, sv, sid, authMethod }) => (sid && FAKE_AUTH_METHODS.has(authMethod) ? `PROOF:${actor}:${role}:${sv}:${sid}:${authMethod}` : null),
       STEP_UP_TTL_SECONDS: 600,
     };
     const verifier = createPinStepUpVerifier({
@@ -183,7 +219,10 @@ function crafted(payloadObj) {
     return { verifier, dao, rec, verify };
   }
 
-  const BASE = { actor: 'owner', role: 'admin', sv: 5, pin: '284917563', sid: 'sid-X' };
+  // BASE uses authMethod:'actor_pin' with a 9-digit PIN — valid under BOTH the strict admin
+  // format (9-12) AND the universal format (6-12), so every pre-existing assertion below that
+  // doesn't care about auth_method keeps passing unchanged regardless of which selector fires.
+  const BASE = { actor: 'owner', role: 'admin', sv: 5, pin: '284917563', sid: 'sid-X', authMethod: 'actor_pin' };
 
   {
     const { verifier, rec, verify } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:284917563' } } });
@@ -192,7 +231,8 @@ function crafted(payloadObj) {
     assert('B: expiresInSec forwarded', r.expiresInSec === 600);
     assert('B: exactly one verifyPin derivation', verify.state.calls === 1);
     assert('B: success calls resetFailedAttempts, not recordFailedAttempt', rec.resetCalls.length === 1 && rec.recordCalls.length === 0);
-    assert('B: proof is bound to THIS session\'s sid', r.stepUpProof.endsWith(':sid-X'));
+    assert('B: proof is bound to THIS session\'s sid', r.stepUpProof.includes(':sid-X:'));
+    assert('B: proof is bound to THIS session\'s auth_method', r.stepUpProof.endsWith(':actor_pin'));
   }
 
   {
@@ -242,6 +282,68 @@ function crafted(payloadObj) {
     assert('B-sid: non-string sid -> reauth_required', r.ok === false && r.code === 'reauth_required');
   }
 
+  // ══ B-am. S2-7D4C: no valid auth_method, no step-up, ever (same discipline as sid) ═══
+  {
+    const { verifier, rec, verify } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:284917563' } } });
+    const r = await verifier.verifyOwnPin({ ...BASE, authMethod: undefined });
+    assert('B-am: missing authMethod -> reauth_required, distinct from a wrong PIN', r.ok === false && r.code === 'reauth_required');
+    assert('B-am: NO db calls at all — refused before touching lockout/PIN state',
+      rec.lockCalls.length === 0 && rec.recordCalls.length === 0 && rec.resetCalls.length === 0 && verify.state.calls === 0);
+  }
+  {
+    const { verifier } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:284917563' } } });
+    const r = await verifier.verifyOwnPin({ ...BASE, authMethod: '' });
+    assert('B-am: empty-string authMethod -> reauth_required too', r.ok === false && r.code === 'reauth_required');
+  }
+  {
+    const { verifier } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:284917563' } } });
+    const r = await verifier.verifyOwnPin({ ...BASE, authMethod: 'universal' }); // not the canonical enum value
+    assert('B-am: unrecognized authMethod string -> reauth_required', r.ok === false && r.code === 'reauth_required');
+  }
+  {
+    const { verifier } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:284917563' } } });
+    const r = await verifier.verifyOwnPin({ ...BASE, authMethod: 'ACTOR_PIN' }); // wrong case
+    assert('B-am: wrong-case authMethod -> reauth_required', r.ok === false && r.code === 'reauth_required');
+  }
+
+  // ══ B-format. THE ROOT CAUSE FIX: the PIN-format validator is selected by auth_method ═══
+  // '284917' is 6 digits: valid under validateUniversalPinFormat (6-12) but BELOW the admin
+  // floor of validatePinFormat (9-12) — exactly the real-world shape (a short owner PIN that
+  // authenticates universal login but used to be rejected on FORMAT ALONE by step-up).
+  {
+    const { verifier, verify } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:284917' } } });
+    const r = await verifier.verifyOwnPin({ ...BASE, pin: '284917', authMethod: 'legacy_universal' });
+    assert('B-format: legacy_universal session + matching 6-digit PIN -> 200 (root cause fixed)', r.ok === true && typeof r.stepUpProof === 'string');
+    assert('B-format: reaches the hash check (one derivation), not rejected on format', verify.state.calls === 1);
+  }
+  {
+    const { verifier, verify } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:284917' } } });
+    const r = await verifier.verifyOwnPin({ ...BASE, pin: '284917', authMethod: 'actor_pin' });
+    assert('B-format: actor_pin session + the SAME 6-digit PIN -> cred (admin format needs 9-12)', r.ok === false && r.code === 'cred');
+    // Still exactly one derivation? No — format is rejected BEFORE any hash derivation, so zero.
+    assert('B-format: actor_pin rejects on format alone, no derivation reaches the hash', verify.state.calls === 0);
+  }
+  {
+    // legacy_universal + an 8-digit value ALSO passes the universal gate (6-12) but would also
+    // fail the strict admin gate (9-12) if authMethod had been actor_pin — confirms the boundary.
+    const { verifier } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:28491763' } } });
+    const r = await verifier.verifyOwnPin({ ...BASE, pin: '28491763', authMethod: 'legacy_universal' });
+    assert('B-format: legacy_universal + matching 8-digit PIN -> 200', r.ok === true);
+  }
+  {
+    // A WRONG-value PIN still fails under either method — the format fix does not weaken the
+    // hash check itself.
+    const { verifier } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:284917' } } });
+    const r = await verifier.verifyOwnPin({ ...BASE, pin: '284918', authMethod: 'legacy_universal' }); // well-formed but wrong value
+    assert('B-format: legacy_universal + WRONG 6-digit PIN -> cred (format ok, hash mismatch)', r.ok === false && r.code === 'cred');
+  }
+  {
+    // The minted proof itself carries the authMethod it was confirmed under.
+    const { verifier } = makeDeps({ rec: { row: { active: true, pin_hash: 'HASH:284917' } } });
+    const r = await verifier.verifyOwnPin({ ...BASE, pin: '284917', authMethod: 'legacy_universal' });
+    assert('B-format: minted proof is bound to legacy_universal', r.ok === true && r.stepUpProof.endsWith(':legacy_universal'));
+  }
+
   {
     const { verifier } = makeDeps({});
     const r = await verifier.verifyOwnPin({ ...BASE, pin: '' });
@@ -281,12 +383,15 @@ function crafted(payloadObj) {
   assert('C: branch sources role from req.authCtx', /req\.authCtx\.role/.test(branch));
   assert('C: branch sources sv from req.authCtx', /req\.authCtx\.sv/.test(branch));
   assert('C: branch sources sid from req.authCtx (never the body)', /req\.authCtx\.sid/.test(branch));
-  assert('C: branch never reads an actor/role/sv/sid override from the body',
+  assert('C: branch sources authMethod from req.authCtx (never the body) — S2-7D4C', /req\.authCtx\.authMethod/.test(branch));
+  assert('C: branch never reads an actor/role/sv/sid/auth_method override from the body',
     !/req\.body\s*&&\s*req\.body\.actor\b/.test(branch)
     && !/req\.body\.role\b/.test(branch)
     && !/req\.body\.sv\b/.test(branch)
     && !/req\.body\.sid\b/.test(branch)
-    && !/req\.body\.session_version\b/.test(branch));
+    && !/req\.body\.session_version\b/.test(branch)
+    && !/req\.body\.auth_method\b/.test(branch)
+    && !/req\.body\.authMethod\b/.test(branch));
   assert('C: branch only reads the pin from the body', /req\.body\s*&&\s*req\.body\.pin\b/.test(branch));
   assert('C: branch maps reauth_required to a distinct response', /reauth_required/.test(branch) && /REAUTH_REQUIRED/.test(branch));
 

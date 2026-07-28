@@ -20,11 +20,12 @@ const ACTORS = {
   inactive:         { actor: "operator_primary", role: "operator", active: false, session_version: 5 },
 };
 const getActor = async (sub) => ACTORS[sub] || null;
-// verifyToken stub: token string "role:sub:sv" -> payload, "BAD" -> null.
+// verifyToken stub: token string "role:sub:sv[:am]" -> payload, "BAD" -> null. The optional
+// 4th segment lets tests assert ctx.authMethod passthrough (S2-7D4C) without a real JWT.
 const verifyToken = (t) => {
   if (t === "BAD") return null;
-  const [role, sub, sv] = String(t).split(":");
-  return { role, sub, sv: Number(sv), v: 2 };
+  const [role, sub, sv, am] = String(t).split(":");
+  return { role, sub, sv: Number(sv), v: 2, ...(am !== undefined ? { am } : {}) };
 };
 const deps = { getActor, verifyToken };
 
@@ -66,6 +67,12 @@ function req({ method = "POST", action, token, path } = {}) {
   // Allowed role -> ok
   const okAdmin = await authorizeLegacyRequest(req({ action: "setConfig", token: "admin:owner:5" }), deps);
   check("admin setConfig -> ok", okAdmin.ok === true && okAdmin.ctx.role === "admin");
+
+  // S2-7D4C — ctx.authMethod passthrough: present in the token -> exposed; absent -> null
+  // (never invented), same tolerance already established for ctx.sid.
+  const withAm = await authorizeLegacyRequest(req({ action: "setConfig", token: "admin:owner:5:actor_pin" }), deps);
+  check("ctx.authMethod reflects the token's am claim", withAm.ok === true && withAm.ctx.authMethod === "actor_pin");
+  check("ctx.authMethod is null for a token with no am claim (legacy)", okAdmin.ctx.authMethod === null);
 
   // Operator parity: both operator actors allowed for a normal action
   check("operator_primary createOrden -> ok",

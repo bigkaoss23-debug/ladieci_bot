@@ -193,7 +193,7 @@ test("E2E: a PIN JWT is always rejected (401) and never reaches the authority", 
   let called = false;
   await withServer({ assertAccountSession: async () => { called = true; return { id: "x", emailConfirmed: true }; } }, async (base) => {
     let pinJwt = null;
-    try { if (jwtV2.isReady()) pinJwt = jwtV2.signToken({ role: "admin", sub: "owner", sv: 1 }); } catch (_) {}
+    try { if (jwtV2.isReady()) pinJwt = jwtV2.signToken({ role: "admin", sub: "owner", sv: 1, authMethod: jwtV2.AUTH_METHOD_ACTOR_PIN }); } catch (_) {}
     if (!pinJwt) {
       const header = b64u(JSON.stringify({ alg: "HS256", typ: "JWT" }));
       const body = b64u(JSON.stringify({ role: "admin", sub: "owner", sv: 1, v: 2, exp: nowSec() + 3600 }));

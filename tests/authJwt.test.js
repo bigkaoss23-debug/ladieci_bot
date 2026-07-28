@@ -12,22 +12,36 @@ const now = () => Math.floor(Date.now() / 1000);
 
 assert('isReady with valid secret', jwt.isReady() === true);
 
-// sign/verify roundtrip + TTL per role
+// S2-7D4C — auth_method closed enum
+assert('AUTH_METHOD_ACTOR_PIN constant', jwt.AUTH_METHOD_ACTOR_PIN === 'actor_pin');
+assert('AUTH_METHOD_LEGACY_UNIVERSAL constant', jwt.AUTH_METHOD_LEGACY_UNIVERSAL === 'legacy_universal');
+assert('isValidAuthMethod accepts both enum values', jwt.isValidAuthMethod('actor_pin') === true && jwt.isValidAuthMethod('legacy_universal') === true);
+for (const bad of [undefined, null, '', 'ACTOR_PIN', 'universal', 'admin', 123, {}]) {
+  assert(`isValidAuthMethod rejects ${JSON.stringify(bad)}`, jwt.isValidAuthMethod(bad) === false);
+}
+
+// sign/verify roundtrip + TTL per role, both auth methods
 for (const [role, sub, ttl] of [['admin', 'owner', 14400], ['operator', 'operator_primary', 36000], ['operator', 'operator_backup', 36000], ['rider', 'rider', 43200]]) {
-  const t = jwt.signToken({ role, sub, sv: 1 });
-  const p = jwt.verifyToken(t);
-  assert(`sign+verify ${role}/${sub}`, p && p.role === role && p.sub === sub && p.v === 2 && p.sv === 1);
-  assert(`TTL ${role} = ${ttl}`, p && (p.exp - p.iat) === ttl);
+  for (const am of [jwt.AUTH_METHOD_ACTOR_PIN, jwt.AUTH_METHOD_LEGACY_UNIVERSAL]) {
+    const t = jwt.signToken({ role, sub, sv: 1, authMethod: am });
+    const p = jwt.verifyToken(t);
+    assert(`sign+verify ${role}/${sub}/${am}`, p && p.role === role && p.sub === sub && p.v === 2 && p.sv === 1 && p.am === am);
+    assert(`TTL ${role} = ${ttl} (${am})`, p && (p.exp - p.iat) === ttl);
+  }
 }
 assert('expiresInFor', jwt.expiresInFor('admin') === '4h' && jwt.expiresInFor('rider') === '12h');
 
 // invalid sign inputs
-assert('sign rejects bad role/sub', jwt.signToken({ role: 'operator', sub: 'owner', sv: 1 }) === null);
-assert('sign rejects sv<1', jwt.signToken({ role: 'admin', sub: 'owner', sv: 0 }) === null);
-assert('sign rejects non-int sv', jwt.signToken({ role: 'admin', sub: 'owner', sv: 1.5 }) === null);
+assert('sign rejects bad role/sub', jwt.signToken({ role: 'operator', sub: 'owner', sv: 1, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
+assert('sign rejects sv<1', jwt.signToken({ role: 'admin', sub: 'owner', sv: 0, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
+assert('sign rejects non-int sv', jwt.signToken({ role: 'admin', sub: 'owner', sv: 1.5, authMethod: jwt.AUTH_METHOD_ACTOR_PIN }) === null);
+// S2-7D4C — auth_method is REQUIRED and closed-enum on sign: missing/invalid never mints silently.
+assert('sign rejects missing authMethod', jwt.signToken({ role: 'admin', sub: 'owner', sv: 1 }) === null);
+assert('sign rejects unknown authMethod string', jwt.signToken({ role: 'admin', sub: 'owner', sv: 1, authMethod: 'universal' }) === null);
+assert('sign rejects authMethod from the wrong case', jwt.signToken({ role: 'admin', sub: 'owner', sv: 1, authMethod: 'ACTOR_PIN' }) === null);
 
 // verify strict rejections
-const good = jwt.signToken({ role: 'admin', sub: 'owner', sv: 3 });
+const good = jwt.signToken({ role: 'admin', sub: 'owner', sv: 3, authMethod: jwt.AUTH_METHOD_ACTOR_PIN });
 assert('verify good', jwt.verifyToken(good) !== null);
 assert('reject 2 segments', jwt.verifyToken(good.split('.').slice(0, 2).join('.')) === null);
 assert('reject tampered payload (sig mismatch)', (() => { const [h, , s] = good.split('.'); return jwt.verifyToken(h + '.' + b64({ role: 'admin', sub: 'owner', iat: now(), exp: now() + 100, sv: 99, v: 2 }) + '.' + s) === null; })());
@@ -52,12 +66,28 @@ assert('reject non-string', jwt.verifyToken(12345) === null && jwt.verifyToken(n
 // wrong signature (different secret)
 { const h = b64({ alg: 'HS256', typ: 'JWT' }); const p = b64({ role: 'admin', sub: 'owner', iat: now(), exp: now() + 100, sv: 1, v: 2 }); const bad = crypto.createHmac('sha256', crypto.randomBytes(32)).update(h + '.' + p).digest('base64url'); assert('reject wrong signature', jwt.verifyToken(h + '.' + p + '.' + bad) === null); }
 
+// ── S2-7D4C: `am` claim on verify ──────────────────────────────────────────
+// Absent `am` = a token signed before this change: still authorizes ordinary actions
+// (no downgrade of any OTHER check), matching the sid tolerance already established.
+{ const h = b64({ alg: 'HS256', typ: 'JWT' }); const p = b64({ role: 'admin', sub: 'owner', iat: now(), exp: now() + 100, sv: 1, v: 2 }); assert('legacy token with no am claim still verifies', jwt.verifyToken(h + '.' + p + '.' + sig(h, p)) !== null); }
+// Present-but-invalid `am` is tampering, not a silent downgrade — the WHOLE token is rejected.
+for (const badAm of ['universal', 'ACTOR_PIN', '', 123, null]) {
+  const h = b64({ alg: 'HS256', typ: 'JWT' }); const p = b64({ role: 'admin', sub: 'owner', iat: now(), exp: now() + 100, sv: 1, v: 2, am: badAm });
+  assert(`reject malformed am claim ${JSON.stringify(badAm)}`, jwt.verifyToken(h + '.' + p + '.' + sig(h, p)) === null);
+}
+// Roundtrip: both valid values pass through verify unchanged.
+for (const am of [jwt.AUTH_METHOD_ACTOR_PIN, jwt.AUTH_METHOD_LEGACY_UNIVERSAL]) {
+  const h = b64({ alg: 'HS256', typ: 'JWT' }); const p = b64({ role: 'admin', sub: 'owner', iat: now(), exp: now() + 100, sv: 1, v: 2, am });
+  const pl = jwt.verifyToken(h + '.' + p + '.' + sig(h, p));
+  assert(`am claim roundtrips (${am})`, pl !== null && pl.am === am);
+}
+
 // fail-closed: reload module with a too-short secret
 delete require.cache[require.resolve('../src/auth/jwt')];
 process.env.AUTH_JWT_SECRET_B64URL = crypto.randomBytes(16).toString('base64url'); // only 16 bytes
 const jwt2 = require('../src/auth/jwt');
 assert('not ready with <32 byte secret', jwt2.isReady() === false);
-assert('sign returns null when not ready', jwt2.signToken({ role: 'admin', sub: 'owner', sv: 1 }) === null);
+assert('sign returns null when not ready', jwt2.signToken({ role: 'admin', sub: 'owner', sv: 1, authMethod: jwt2.AUTH_METHOD_ACTOR_PIN }) === null);
 assert('verify returns null when not ready', jwt2.verifyToken(good) === null);
 // missing secret
 delete require.cache[require.resolve('../src/auth/jwt')];

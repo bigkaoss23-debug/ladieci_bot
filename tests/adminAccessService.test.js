@@ -33,9 +33,15 @@ function makeDao(roleByActor, over = {}) {
 function makeLogger() { const rec = []; const f = (...a) => rec.push(a); return { rec, info: f, warn: f, error: f, debug: f, log: f }; }
 let hashCalls; const hashPin = async (pin) => { hashCalls.push(pin); return 'scrypt$1$32768$8$1$c2FsdA$ZGln'; };
 const ipOK = (ip) => (ip ? 'a'.repeat(32) : null);           // hash for any truthy ip, else null (disabled)
+// S2-7D4C — isValidAuthMethod is INJECTED into the real service (never required directly,
+// see adminAccessBoundary.static.test.js); the shared closed-enum fake below mirrors
+// jwt.isValidAuthMethod so every setActorPin test gets it without repeating it per-call.
+const FAKE_AUTH_METHODS = Object.freeze(new Set(['actor_pin', 'legacy_universal']));
+const isValidAuthMethod = (m) => typeof m === 'string' && FAKE_AUTH_METHODS.has(m);
 const svc = (deps) => createAdminAccessService({
   listActorsForVerify: async () => [],
   verifyPin: async () => false,
+  isValidAuthMethod,
   ...deps,
 });
 
@@ -55,21 +61,25 @@ const svc = (deps) => createAdminAccessService({
   // same actor at the same session_version within the same clock second produce a
   // byte-identical token, verified empirically) is covered end to end against the actual
   // src/auth/jwt.js in tests/pinStepUp.test.js.
-  const signProof = ({ actor, role, sv, sid }) =>
-    JSON.stringify({ sub: actor, role, sv, purpose: 'manage_pins', sid });
-  const verifyStepUpProof = (tok, { sid } = {}) => {
+  const signProof = ({ actor, role, sv, sid, am = 'actor_pin' }) =>
+    JSON.stringify({ sub: actor, role, sv, purpose: 'manage_pins', sid, am });
+  // S2-7D4C — fake verifyStepUpProof also binds to authMethod, same discipline as sid: a
+  // proof minted under one auth_method is rejected when the caller expects the other.
+  const verifyStepUpProof = (tok, { sid, authMethod } = {}) => {
     if (typeof tok !== 'string') return null;
     if (typeof sid !== 'string' || sid.length === 0) return null; // no sid, no step-up — ever
+    if (typeof authMethod !== 'string' || authMethod.length === 0) return null; // no auth_method, no step-up — ever
     try {
       const o = JSON.parse(tok);
       if (!o || o.sid !== sid) return null;
+      if (o.am !== authMethod) return null;
       return { sub: o.sub, role: o.role, sv: o.sv, purpose: o.purpose };
     } catch (_) { return null; }
   };
   const SID_A = 'sid-session-A';
-  const ownerStepUp = (sv = 7) => ({
-    byRole: 'admin', bySv: sv, bySid: SID_A,
-    stepUpProof: signProof({ actor: 'owner', role: 'admin', sv, sid: SID_A }),
+  const ownerStepUp = (sv = 7, am = 'actor_pin') => ({
+    byRole: 'admin', bySv: sv, bySid: SID_A, byAuthMethod: am,
+    stepUpProof: signProof({ actor: 'owner', role: 'admin', sv, sid: SID_A, am }),
   });
 
   {
@@ -150,7 +160,7 @@ const svc = (deps) => createAdminAccessService({
     // ── S2-7D6E4 — step-up enforcement: a normal admin session is NEVER enough alone ──
     {
       const { dao } = makeDao({ operator_primary: 'operator' });
-      const base = { byActor: 'owner', byRole: 'admin', bySv: 7, targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' };
+      const base = { byActor: 'owner', byRole: 'admin', bySv: 7, byAuthMethod: 'actor_pin', targetActor: 'operator_primary', newPin: '835274', trustedClientIp: '1.2.3.4' };
 
       {
         const { calls, rotation } = mkRot(okRot());
@@ -174,7 +184,7 @@ const svc = (deps) => createAdminAccessService({
       {
         const { calls, rotation } = mkRot(okRot());
         const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof });
-        const wrongPurposeProof = JSON.stringify({ sub: 'owner', role: 'admin', sv: 7, purpose: 'something_else', sid: SID_A });
+        const wrongPurposeProof = JSON.stringify({ sub: 'owner', role: 'admin', sv: 7, purpose: 'something_else', sid: SID_A, am: 'actor_pin' });
         const r = await s.setActorPin({ ...base, stepUpProof: wrongPurposeProof, bySid: SID_A });
         assert('step-up: wrong purpose rejected', r === ADMIN_FAIL && calls.length === 0);
       }
@@ -210,6 +220,33 @@ const svc = (deps) => createAdminAccessService({
         const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof });
         const r = await s.setActorPin({ ...base, stepUpProof: signProof({ actor: 'owner', role: 'admin', sv: 7, sid: SID_A }), bySid: undefined });
         assert('step-up: missing bySid rejected (identity provenance)', r === ADMIN_FAIL && calls.length === 0);
+      }
+
+      // ── S2-7D4C — auth_method enforcement: same discipline as sid ──────────────────
+      {
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof });
+        const r = await s.setActorPin({ ...base, byAuthMethod: undefined, stepUpProof: signProof({ actor: 'owner', role: 'admin', sv: 7, sid: SID_A }), bySid: SID_A });
+        assert('step-up: missing byAuthMethod rejected (identity provenance)', r === ADMIN_FAIL && calls.length === 0);
+      }
+      {
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof });
+        const r = await s.setActorPin({ ...base, byAuthMethod: 'universal', stepUpProof: signProof({ actor: 'owner', role: 'admin', sv: 7, sid: SID_A }), bySid: SID_A });
+        assert('step-up: unrecognized byAuthMethod string rejected', r === ADMIN_FAIL && calls.length === 0);
+      }
+      {
+        // THE auth_method analog of the session-A/session-B guardrail above: a proof minted
+        // under legacy_universal must be REJECTED when the caller's session is actor_pin, even
+        // for the identical actor/role/sv/sid — and must succeed when it matches.
+        const { calls, rotation } = mkRot(okRot());
+        const s = svc({ dao, hashPin, pinPolicy, ipHash: ipOK, rotation, verifyStepUpProof });
+        const universalProof = signProof({ actor: 'owner', role: 'admin', sv: 7, sid: SID_A, am: 'legacy_universal' });
+        const r = await s.setActorPin({ ...base, byAuthMethod: 'actor_pin', stepUpProof: universalProof, bySid: SID_A });
+        assert('step-up: proof minted under legacy_universal rejected from an actor_pin session (same actor/sv/sid)',
+          r === ADMIN_FAIL && calls.length === 0);
+        const r2 = await s.setActorPin({ ...base, byAuthMethod: 'legacy_universal', stepUpProof: universalProof, bySid: SID_A });
+        assert('step-up: the same proof succeeds when the session auth_method matches', r2.ok === true && calls.length === 1);
       }
     }
   }
