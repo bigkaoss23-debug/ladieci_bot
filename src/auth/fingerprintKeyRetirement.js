@@ -53,4 +53,23 @@ function actorsBlockingRetirement({ actors, keyId } = {}) {
   );
 }
 
-module.exports = { KEY_STATUSES, keyEligibility, canRetireKey, actorsBlockingRetirement };
+// keysToWriteFingerprintsFor({currentId, previousId}) -> [keyId, ...]
+//   Expresses the "graceful rotation dual-write" rule as pure, testable logic: while
+//   both a current and a gracefully-accepted previous key exist, every new/changed PIN
+//   writes a fingerprint under BOTH — never only current, never a compromised key.
+//   Deliberately decoupled from pinFingerprintKeyConfig.js's shape (accepts bare ids,
+//   not secret material) — this module has no crypto/env dependency and stays that way.
+//   A `previousId` is only ever meaningful when the key it names is gracefully
+//   accepted (keyEligibility('previous_accepted').write === true); a compromised key
+//   must never reach this function as `previousId` at all — that exclusion happens
+//   one layer up, in pinFingerprintKeyConfig.js, which refuses to even load a
+//   configuration naming a compromised id as current or previous (see its own tests).
+function keysToWriteFingerprintsFor({ currentId, previousId } = {}) {
+  if (typeof currentId !== 'string' || currentId.length === 0) return Object.freeze([]);
+  if (typeof previousId === 'string' && previousId.length > 0 && previousId !== currentId) {
+    return Object.freeze([currentId, previousId]);
+  }
+  return Object.freeze([currentId]);
+}
+
+module.exports = { KEY_STATUSES, keyEligibility, canRetireKey, actorsBlockingRetirement, keysToWriteFingerprintsFor };
