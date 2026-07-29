@@ -63,10 +63,15 @@ const rbEvents = extractCheckEvents(RB_NC);
 assert('Node ALLOWED_EVENTS contains actor_unlocked', audit.ALLOWED_EVENTS.includes(NEW_EVENT));
 assert('Node ALLOWED_EVENTS keeps all previously allowed events',
   PREVIOUS_ALLOWLIST.every((e) => audit.ALLOWED_EVENTS.includes(e)));
-assert('Node ALLOWED_EVENTS equals the exact final allowlist (order preserved)',
-  eq(audit.ALLOWED_EVENTS.slice(), FINAL_ALLOWLIST), audit.ALLOWED_EVENTS.join(','));
-assert('Node adds no unexpected event beyond actor_unlocked',
-  audit.ALLOWED_EVENTS.filter((e) => !FINAL_ALLOWLIST.includes(e)).length === 0);
+// NOTE: this used to require EXACT equality — correct only for as long as no LATER
+// migration ever widens auth_audit_event_chk again. Access Control V3's 2026-07-29
+// migration legitimately does exactly that (adds 11 more events on top, same
+// widen-never-narrow discipline). What THIS migration must still prove, forever, is
+// that its own slice (FINAL_ALLOWLIST) is present and untouched — not that nothing was
+// ever added after it. Event order carries no behavioral meaning (assertEvent uses
+// .includes(), not position), so this is a containment check, not an equality one.
+assert('Node ALLOWED_EVENTS is a superset of (never narrower than) this migration\'s FINAL_ALLOWLIST',
+  FINAL_ALLOWLIST.every((e) => audit.ALLOWED_EVENTS.includes(e)), audit.ALLOWED_EVENTS.join(','));
 assert('assertEvent accepts actor_unlocked (no throw)', (() => {
   try { require('../src/auth/audit.js'); audit.writeAuthAudit; return audit.ALLOWED_EVENTS.includes(NEW_EVENT); } catch (_) { return false; }
 })());
@@ -74,7 +79,12 @@ assert('assertEvent accepts actor_unlocked (no throw)', (() => {
 // ── (4) forward SQL allowlist EQUALS Node allowlist ──────────────────────────
 assert('forward SQL CHECK parsed successfully', Array.isArray(fwdEvents) && fwdEvents.length > 0, String(fwdEvents));
 assert('forward SQL allowlist equals final allowlist exactly', fwdEvents && eq(fwdEvents, FINAL_ALLOWLIST), (fwdEvents || []).join(','));
-assert('forward SQL allowlist equals Node allowlist exactly', fwdEvents && eq(fwdEvents, audit.ALLOWED_EVENTS.slice()), (fwdEvents || []).join(','));
+// Was an exact-equality check — only valid while this was the LAST migration to touch
+// auth_audit_event_chk. Access Control V3's 2026-07-29 migration legitimately widens the
+// same constraint further; this file's own historical SQL text is immutable and correct
+// for what IT introduced, so the correct ongoing check is containment, not equality.
+assert('forward SQL allowlist (this migration\'s own text) is contained in the current Node allowlist',
+  fwdEvents && fwdEvents.every((e) => audit.ALLOWED_EVENTS.includes(e)), (fwdEvents || []).join(','));
 assert('forward preserves every previous event', fwdEvents && PREVIOUS_ALLOWLIST.every((e) => fwdEvents.includes(e)));
 assert('forward adds exactly actor_unlocked (one new event only)',
   fwdEvents && fwdEvents.filter((e) => !PREVIOUS_ALLOWLIST.includes(e)).length === 1 && fwdEvents.includes(NEW_EVENT));

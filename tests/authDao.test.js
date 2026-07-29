@@ -68,7 +68,10 @@ async function throwsCode(fn, code) {
   // 3 — meta sanitization: accept clean incl. auth_method; reject sensitive forms/limits
   assert('accepts clean meta', (() => { try { audit.sanitizeMeta({ info: 'x', n: 2, nested: { a: 1 } }); return true; } catch (_) { return false; } })());
   assert('accepts innocuous key auth_method', (() => { try { audit.sanitizeMeta({ auth_method: 'pin_flow', authMethod: 'x' }); return true; } catch (_) { return false; } })());
-  const sensForms = ['pin', 'PIN', 'password', 'token', 'access_token', 'accessToken', 'access-token', 'refresh_token', 'jwt', 'secret', 'recovery_secret', 'Authorization', 'api_key', 'apiKey', 'api-key', 'apikey', 'bearer', 'cookie'];
+  const sensForms = ['pin', 'PIN', 'password', 'token', 'access_token', 'accessToken', 'access-token', 'refresh_token', 'jwt', 'secret', 'recovery_secret', 'Authorization', 'api_key', 'apiKey', 'api-key', 'apikey', 'bearer', 'cookie',
+    // Access Control V3 (V3-A) — a fingerprint or its key material is exactly as
+    // sensitive as a PIN or hash and must never enter audit metadata.
+    'fingerprint', 'pin_fingerprint', 'pinFingerprint', 'pin_fingerprint_key_id', 'fingerprint_key', 'hmac_key', 'hmacKey'];
   let sensAllRejected = true;
   for (const k of sensForms) {
     try { audit.sanitizeMeta({ [k]: 'v' }); sensAllRejected = false; } catch (e) { if (e.code !== 'VALIDATION') sensAllRejected = false; }
@@ -160,6 +163,24 @@ async function throwsCode(fn, code) {
   const ad = await audit.writeAuthAudit({ event: 'actor_disabled', targetActor: 'rider', byActor: 'owner' });
   const ae = await audit.writeAuthAudit({ event: 'actor_enabled', targetActor: 'rider', byActor: 'owner' });
   assert('writeAuthAudit accepts actor_disabled/actor_enabled', ad.ok === true && ae.ok === true);
+
+  // 9c — Access Control V3 (V3-A) event vocabulary
+  const v3Events = ['user_created', 'user_renamed', 'role_changed', 'user_deactivated', 'user_reactivated',
+    'access_denied', 'credential_cleared', 'fingerprint_upgraded', 'session_invalidated',
+    'rate_limit_triggered', 'migration_login_used'];
+  assert('ALLOWED_EVENTS includes every V3-A event', v3Events.every((e) => audit.ALLOWED_EVENTS.includes(e)));
+  reset(() => ({ ok: true, status: 201, bodyObj: null }));
+  let v3AllAccepted = true;
+  for (const event of v3Events) {
+    const r = await audit.writeAuthAudit({ event, targetActor: 'owner', byActor: 'owner' });
+    if (!r || r.ok !== true) v3AllAccepted = false;
+  }
+  assert('writeAuthAudit accepts every V3-A event', v3AllAccepted);
+  // pre-existing events must still be accepted — widening never narrows
+  assert('pre-existing events still accepted (widening, not replacement)',
+    audit.ALLOWED_EVENTS.length === 8 + 3 + 11 &&
+    ['login_ok', 'login_fail', 'locked', 'pin_set', 'pin_change', 'revoke', 'bootstrap', 'recovery']
+      .every((e) => audit.ALLOWED_EVENTS.includes(e)));
 
   // 10 — getLockState computes lock/retry
   reset(() => ({ bodyObj: [{ actor: 'owner', role: 'admin', active: true, session_version: 1, failed_count: 5, locked_until: new Date(Date.now() + 60000).toISOString(), updated_at: 't', updated_by: null }] }));
