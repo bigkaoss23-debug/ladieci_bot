@@ -100,20 +100,21 @@ const ROLE_CAPABILITIES = Object.freeze({
     // both default-denied per the frozen design (opt-in-off / empty-until-named).
   ]),
   legacy_operator: Object.freeze([
-    // Exactly today's pre-V3 operator allow-list, with ONE deliberate exception:
-    // 'orders.general.delete' is withheld even here, universally, because the eliminaOrdine
-    // freeze this round ("owner only while it performs physical deletion") is a genuine
-    // risk-reduction decision about an irreversible action, not a label-specific one — it is
-    // safer applied uniformly than carved out for the transitional role. This registry is
-    // unwired in V3-A (no live behavior changes), so this is a considered choice for whoever
-    // wires it in later, not a change anyone experiences today.
-    // 'service.session.backup' IS kept — that freeze is about a NEW role's data exposure,
-    // not a new risk for staff who already have this access live today.
+    // Exactly today's pre-V3 operator allow-list, with TWO deliberate exceptions, both
+    // withheld universally (not label-specific) even from the transitional role:
+    // 'orders.general.delete' — the eliminaOrdine freeze ("owner only while it performs
+    // physical deletion") is a risk-reduction decision about an irreversible action.
+    // 'service.session.backup' — backupSerata is a financial/order snapshot; that legacy
+    // operators could historically invoke it is not a reason to preserve that privilege
+    // under V3. Corrected per explicit instruction: a capability is not grandfathered in
+    // just because a predecessor role happened to have it. This registry is unwired in
+    // V3-A (no live behavior changes today), so this is a considered choice for whoever
+    // wires it in later, not a change anyone experiences right now.
     'orders.general', 'orders.table.create',
     'orders.table.update.general', 'kitchen.read_operational', 'kitchen.notes.update',
     'delivery.read_operational', 'delivery.dispatch',
     'payments.standard.process', 'billing.table.request', 'billing.table.close',
-    'service.session.open_close', 'service.session.read', 'service.session.backup', 'menu.read',
+    'service.session.open_close', 'service.session.read', 'menu.read',
   ]),
 });
 

@@ -53,12 +53,30 @@ assert('getOrdenes is shared by multiple roles (not a single-role action)', role
 assert('getMenu is shared by every role (universal minimal read)', ROLE_CODES.every((r) => rolesFor('getMenu').includes(r)));
 
 // ══ explicit freezes from this review round ═══════════════════════════════════
-assert('backupSerata is NOT granted to cashier', !rolesFor('backupSerata').includes('cashier'));
+// backupSerata: owner ONLY. A predecessor role (legacy_operator) having historically
+// been able to invoke this financial/order-snapshot action is explicitly NOT a reason
+// to preserve that privilege under V3 — corrected from an earlier draft that kept it
+// for legacy_operator on a "matches today's live behavior" rationale the owner
+// overruled: financial privilege is never grandfathered in by role relabeling alone.
 assert('backupSerata IS granted to owner', rolesFor('backupSerata').includes('owner'));
+assert('backupSerata is NOT granted to cashier', !rolesFor('backupSerata').includes('cashier'));
+assert('backupSerata is NOT granted to legacy_operator (financial privilege is not grandfathered in)', !rolesFor('backupSerata').includes('legacy_operator'));
+assert('backupSerata is NOT granted to waiter', !rolesFor('backupSerata').includes('waiter'));
+assert('backupSerata is NOT granted to kitchen', !rolesFor('backupSerata').includes('kitchen'));
+assert('backupSerata is NOT granted to rider', !rolesFor('backupSerata').includes('rider'));
+assert('backupSerata is NOT granted to shift_manager', !rolesFor('backupSerata').includes('shift_manager'));
+assert('backupSerata resolves to EXACTLY one role: owner, nothing else', rolesFor('backupSerata').length === 1 && rolesFor('backupSerata')[0] === 'owner');
+// System automation is allowed only through the explicit system policy (isSystemAction),
+// never implied by any human role capability. backupSerata is NOT marked as a system
+// action in V3-A — no automated identity for it exists in the current architecture
+// (unlike triggerCloseIfNeeded, it is still human-triggered, gated only by a
+// time-of-day check) — so its ONLY caller today is the owner role.
+assert('backupSerata is not itself a system action (still human-triggered, unlike triggerCloseIfNeeded)', getActionPolicy('backupSerata').isSystemAction !== true);
+assert('the only actual system action is triggerCloseIfNeeded — system automation is never implied by a human role', getActionPolicy('triggerCloseIfNeeded').isSystemAction === true && getActionPolicy('backupSerata').isSystemAction !== true);
+
 assert('eliminaOrdine is NOT granted to cashier', !rolesFor('eliminaOrdine').includes('cashier'));
 assert('eliminaOrdine IS granted to owner', rolesFor('eliminaOrdine').includes('owner'));
 assert('eliminaOrdine is NOT granted to legacy_operator either (universal tightening — irreversible action)', !rolesFor('eliminaOrdine').includes('legacy_operator'));
-assert('backupSerata IS still granted to legacy_operator (matches today\'s live behavior, not a new risk)', rolesFor('backupSerata').includes('legacy_operator'));
 assert('triggerCloseIfNeeded has no human role at all', rolesFor('triggerCloseIfNeeded').length === 0);
 
 // ── source-verified corrections from this round ───────────────────────────────
