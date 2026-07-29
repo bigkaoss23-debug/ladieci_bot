@@ -68,6 +68,31 @@ assert('forward: fingerprint table has composite (workspace_id, actor) FK', /FOR
 assert('forward: key_id has a strict format CHECK', /key_id ~ '\^k\[0-9\]\+\$'/.test(fwd));
 assert('forward: new non-partial UNIQUE(workspace_id, actor) added for the composite FK to reference', /auth_actors_ws_actor_key UNIQUE \(workspace_id, actor\)/.test(fwd));
 
+// ── REGRESSION: auth_actors_ws_actor_key must be existence-checked create-only, ──
+// ── NEVER "DROP CONSTRAINT IF EXISTS ... ADD CONSTRAINT ..." ──────────────────
+// Found by an actual disposable-Postgres apply/rollback rehearsal (not static
+// parsing): this migration's own auth_actor_pin_fingerprints table has a composite
+// FK REFERENCING this constraint. A DROP-then-ADD pattern — safe for a plain CHECK
+// constraint, which is what the other three DROP+ADD pairs in this file are — fails
+// on re-apply once that FK exists, with "cannot drop constraint ... because other
+// objects depend on it". The constraint's definition never needs to change, so
+// existence-checked create-only is the correct fix, not a workaround.
+// A real DDL statement always has the exact "ALTER TABLE ... DROP CONSTRAINT ...;"
+// shape; the migration's own explanatory comment quotes this same string in prose
+// ("... DROP CONSTRAINT IF EXISTS auth_actors_ws_actor_key" fails with ...") without
+// that shape — the same class of comment-vs-statement bug already fixed twice before
+// in this file. Require the real statement shape, not a bare substring match.
+assert('forward: auth_actors_ws_actor_key uses existence-checked create-only (NOT DROP CONSTRAINT IF EXISTS + ADD, which breaks idempotent re-apply once the FK exists)',
+  !/ALTER TABLE public\.auth_actors DROP CONSTRAINT IF EXISTS auth_actors_ws_actor_key;/.test(fwd) &&
+  /IF NOT EXISTS \(SELECT 1 FROM pg_constraint WHERE conname = 'auth_actors_ws_actor_key'\)/.test(fwd));
+// The 3 plain CHECK constraints (no possible FK dependent) may safely keep the
+// simpler DROP+ADD pattern — this regression is specific to auth_actors_ws_actor_key,
+// not a blanket ban on DROP+ADD everywhere in the file.
+for (const chk of ['auth_actors_created_by_chk', 'auth_actors_role_chk', 'auth_audit_event_chk']) {
+  assert(`forward: ${chk} (a plain CHECK, never an FK target) still safely uses DROP CONSTRAINT IF EXISTS + ADD`,
+    new RegExp(`DROP CONSTRAINT IF EXISTS ${chk}`).test(fwd) && new RegExp(`ADD CONSTRAINT ${chk}`).test(fwd));
+}
+
 // ── RLS / no anonymous access ──────────────────────────────────────────────────
 // A real CREATE POLICY statement always starts a line; this repo's own convention
 // documents the absence with a "-- ZERO CREATE POLICY" comment, which must NOT be

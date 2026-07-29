@@ -85,8 +85,20 @@ ALTER TABLE public.auth_actors ALTER COLUMN workspace_id SET NOT NULL;
 -- NULL") and Postgres cannot use a partial index as a foreign-key target even once the
 -- predicate is vacuously true — a composite FK requires a genuine UNIQUE constraint.
 -- Safe to add: 4 rows, 4 distinct actor ids, one workspace.
-ALTER TABLE public.auth_actors DROP CONSTRAINT IF EXISTS auth_actors_ws_actor_key;
-ALTER TABLE public.auth_actors ADD CONSTRAINT auth_actors_ws_actor_key UNIQUE (workspace_id, actor);
+--
+-- CREATE-ONLY, never DROP+ADD: this migration itself creates auth_actor_pin_fingerprints
+-- with a composite FK that REFERENCES this constraint (below). Once that FK exists, a
+-- subsequent re-apply's "DROP CONSTRAINT IF EXISTS auth_actors_ws_actor_key" fails with
+-- "cannot drop constraint ... because other objects depend on it" — proven by an actual
+-- disposable-Postgres idempotent-re-apply rehearsal, not assumed. The constraint's
+-- definition never needs to change, so existence-checked create-only is the correct
+-- fix, not a workaround: there is nothing to redefine, only something to create once.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'auth_actors_ws_actor_key') THEN
+    ALTER TABLE public.auth_actors ADD CONSTRAINT auth_actors_ws_actor_key UNIQUE (workspace_id, actor);
+  END IF;
+END $$;
 
 -- ── 2) role vocabulary — CHECK widened to a permissive union; NO row's role VALUE
 --       changes. auth_actors_actor_role_map is left COMPLETELY UNTOUCHED: it already
