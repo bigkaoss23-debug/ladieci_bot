@@ -33,6 +33,12 @@ async function sbRest(method, resource, { query, body, prefer } = {}) {
 const ALLOWED_EVENTS = Object.freeze([
   'login_ok', 'login_fail', 'locked', 'pin_set', 'pin_change', 'revoke', 'bootstrap', 'recovery',
   'actor_disabled', 'actor_enabled', 'actor_unlocked',
+  // Access Control V3 (V3-A) — verified against the live auth_audit_event_chk before
+  // widening it (not against the original B0 migration file, which predates
+  // auth_active_events/auth_unlocked_event and would have been stale).
+  'user_created', 'user_renamed', 'role_changed', 'user_deactivated', 'user_reactivated',
+  'access_denied', 'credential_cleared', 'fingerprint_upgraded', 'session_invalidated',
+  'rate_limit_triggered', 'migration_login_used',
 ]);
 
 // Sensitive keys in NORMALIZED form: lowercased, separators (_ - space) removed.
@@ -41,6 +47,9 @@ const ALLOWED_EVENTS = Object.freeze([
 const SENSITIVE_NORMALIZED = Object.freeze(new Set([
   'pin', 'password', 'token', 'accesstoken', 'refreshtoken', 'jwt', 'secret',
   'recoverysecret', 'authorization', 'apikey', 'bearer', 'cookie',
+  // Access Control V3 (V3-A) — a fingerprint or its key material is exactly as
+  // sensitive as a PIN or hash and must never enter audit metadata.
+  'fingerprint', 'pinfingerprint', 'pinfingerprintkeyid', 'fingerprintkey', 'hmackey',
 ]));
 
 const LIMITS = Object.freeze({ maxDepth: 4, maxKeys: 32, maxBytes: 2048 });
