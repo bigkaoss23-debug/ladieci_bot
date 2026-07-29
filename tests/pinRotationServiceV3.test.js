@@ -37,10 +37,14 @@ async function seedActors() {
 }
 
 function makeDb(actors) {
-  const db = { actors, writes: [], fingerprints: [], chain: Promise.resolve(), stale: 0 };
+  const db = { actors, writes: [], fingerprints: [], chain: Promise.resolve(), stale: 0, scopedReads: [] };
   const dao = {
-    async listActorsWithWorkspaceForVerify_SENSITIVE() {
-      return db.actors.map((a) => ({ ...a }));
+    // Mirrors the real DAO: filters by workspace_id IN THE QUERY, not in Node — a row
+    // belonging to a different workspace is never even returned from this call.
+    async listWorkspaceActorsForVerify_SENSITIVE(workspaceId) {
+      db.scopedReads.push(workspaceId);
+      if (typeof workspaceId !== 'string' || workspaceId.length === 0) throw new Error('WORKSPACE_REQUIRED');
+      return db.actors.filter((a) => a.workspace_id === workspaceId).map((a) => ({ ...a }));
     },
     setActorPinV3(args) {
       const run = db.chain.then(async () => {
@@ -92,9 +96,9 @@ const asOwner = (dao, pin, fkc) => rot(dao, fkc).rotate({
   targetActor: 'owner', newPin: pin, trustedClientIp: '1.2.3.4',
   callerKind: 'account_owner', userId: UID, workspaceId: WID,
 });
-const asAdmin = (dao, target, pin, fkc, confirm = null) => rot(dao, fkc).rotate({
+const asAdmin = (dao, target, pin, fkc, confirm = null, workspaceId = WID) => rot(dao, fkc).rotate({
   targetActor: target, newPin: pin, trustedClientIp: '1.2.3.4',
-  callerKind: 'operational_admin', byActor: 'owner', confirm,
+  callerKind: 'operational_admin', byActor: 'owner', confirm, workspaceId,
 });
 
 // ── policy (unchanged from v2) ─────────────────────────────────────────────────
@@ -273,10 +277,147 @@ test('a non-legacy expected role (e.g. a future V3 code) is accepted by the serv
   const { db, dao } = makeDb(actors);
   const r = await rot(dao, K_CURRENT_ONLY).rotate({
     targetActor: 'usr_shift1', newPin: '482915', trustedClientIp: '1.2.3.4',
-    callerKind: 'operational_admin', byActor: 'owner',
+    callerKind: 'operational_admin', byActor: 'owner', workspaceId: WID,
   });
   assert.equal(r.ok, true);
   assert.equal(r.role, 'shift_manager');
+});
+
+// ── inactive-credential reservation (frozen inactive-credential policy) ────────
+test('a candidate matching an INACTIVE configured actor is still PIN_DUPLICATE', async () => {
+  const actors = await seedActors();
+  const backup = actors.find((a) => a.actor === 'operator_backup');
+  backup.active = false; // deactivated, but pin_hash and its reservation remain live
+  const { db, dao } = makeDb(actors);
+  const r = await asOwner(dao, '573914', K_CURRENT_ONLY); // operator_backup's PIN
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'pin_duplicate');
+  assert.equal(db.writes.length, 0);
+});
+
+test('a candidate matching an INACTIVE owner-role fixture is still PIN_RESERVED', async () => {
+  const actors = await seedActors();
+  const owner = actors.find((a) => a.actor === 'owner');
+  owner.active = false;
+  owner.pin_hash = await hashPin('304857'); // new-style 6-digit owner PIN
+  const { db, dao } = makeDb(actors);
+  const r = await asAdmin(dao, 'rider', '304857', K_CURRENT_ONLY); // owner's PIN
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'pin_reserved');
+  assert.equal(db.writes.length, 0);
+});
+
+test('every other configured actor is slow-hash checked even after an early match — inactive rows included, constant work preserved', async () => {
+  const actors = await seedActors();
+  actors.find((a) => a.actor === 'operator_backup').active = false;
+  const { dao } = makeDb(actors);
+  const calls = [];
+  const spyVerify = async (pin, hash) => {
+    calls.push(hash);
+    return verifyPin(pin, hash);
+  };
+  const svc = createPinRotationV3({
+    dao, hashPin, verifyPin: spyVerify, pinPolicy, ipHash,
+    fingerprintKeyConfig: K_CURRENT_ONLY, deriveForAcceptedKeys,
+  });
+  const r = await svc.rotate({
+    targetActor: 'rider', newPin: '482913', trustedClientIp: '1.2.3.4', // operator_primary's PIN — first in iteration order
+    callerKind: 'operational_admin', byActor: 'owner', workspaceId: WID,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'pin_duplicate');
+  // three other actors are configured (operator_backup incl. inactive, operator_primary, owner) — all checked, no short-circuit
+  assert.equal(calls.length, 3);
+});
+
+test('an actor with pin_hash=NULL is excluded from the duplicate check', async () => {
+  const actors = await seedActors();
+  const unassigned = { actor: 'usr_new1', role: 'cashier', active: true, workspace_id: WID, session_version: 0, pin_hash: null };
+  actors.push(unassigned);
+  const { db, dao } = makeDb(actors);
+  const r = await asAdmin(dao, 'usr_new1', '482915', K_CURRENT_ONLY);
+  assert.equal(r.ok, true);
+  assert.deepEqual(db.writes, ['usr_new1']);
+});
+
+// ── owner classification by ROLE, never by the actor id literal ────────────────
+test('a UUID owner actor (role "owner", not the legacy id "owner") is PIN_RESERVED', async () => {
+  const actors = await seedActors();
+  const uuidOwner = { actor: 'a1b2c3d4-0000-4000-8000-000000000001', role: 'owner', active: true, workspace_id: WID, session_version: 0, pin_hash: await hashPin('221144') };
+  actors.push(uuidOwner);
+  const { db, dao } = makeDb(actors);
+  const r = await asAdmin(dao, 'rider', '221144', K_CURRENT_ONLY);
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'pin_reserved');
+  assert.equal(db.writes.length, 0);
+});
+
+test('an arbitrary actor id with role "admin" is PIN_RESERVED (role decides, not the id)', async () => {
+  const actors = await seedActors();
+  const founder = actors.find((a) => a.actor === 'owner');
+  founder.actor = 'usr_founder';
+  founder.pin_hash = await hashPin('715928'); // new-style 6-digit owner PIN
+  const { db, dao } = makeDb(actors);
+  const r = await asAdmin(dao, 'rider', '715928', K_CURRENT_ONLY); // usr_founder's (formerly owner's) PIN
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'pin_reserved');
+  assert.equal(db.writes.length, 0);
+});
+
+test('the actor id "owner" with a NON-owner role does not gain owner semantics — PIN_DUPLICATE, not PIN_RESERVED', async () => {
+  const actors = await seedActors();
+  const owner = actors.find((a) => a.actor === 'owner');
+  owner.role = 'cashier'; // contrived: id says 'owner', role does not
+  owner.pin_hash = await hashPin('839261'); // new-style 6-digit PIN
+  const { db, dao } = makeDb(actors);
+  const r = await asAdmin(dao, 'rider', '839261', K_CURRENT_ONLY);
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'pin_duplicate');
+  assert.equal(db.writes.length, 0);
+});
+
+test('an owner-role collision takes precedence over a simultaneous staff collision', async () => {
+  const actors = await seedActors();
+  const samePin = '336699';
+  actors.find((a) => a.actor === 'owner').pin_hash = await hashPin(samePin);
+  actors.find((a) => a.actor === 'operator_primary').pin_hash = await hashPin(samePin);
+  const { db, dao } = makeDb(actors);
+  const r = await asAdmin(dao, 'rider', samePin, K_CURRENT_ONLY);
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'pin_reserved');
+  assert.equal(db.writes.length, 0);
+});
+
+// ── DAO workspace contract ──────────────────────────────────────────────────────
+test('workspaceId is mandatory for the operational-admin path too — missing it fails closed with no DAO read', async () => {
+  const { db, dao } = makeDb(await seedActors());
+  const r = await rot(dao, K_CURRENT_ONLY).rotate({
+    targetActor: 'rider', newPin: '482915', trustedClientIp: '1.2.3.4',
+    callerKind: 'operational_admin', byActor: 'owner', // no workspaceId
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'rotation_failed');
+  assert.equal(db.scopedReads.length, 0, 'the DAO must never be called without a workspaceId');
+  assert.equal(db.writes.length, 0);
+});
+
+test('the same PIN reserved in ANOTHER workspace does not block rotation in this one', async () => {
+  const actors = await seedActors();
+  const OTHER_WID = '44444444-4444-4444-8444-444444444444';
+  actors.push({ actor: 'operator_primary', role: 'operator', active: true, workspace_id: OTHER_WID, session_version: 1, pin_hash: await hashPin('926314') });
+  const { db, dao } = makeDb(actors);
+  const r = await asAdmin(dao, 'rider', '926314', K_CURRENT_ONLY);
+  assert.equal(r.ok, true);
+  assert.deepEqual(db.writes, ['rider']);
+});
+
+test('the read is scoped to exactly the workspace supplied — cross-workspace rows never reach the comparison set', async () => {
+  const actors = await seedActors();
+  const OTHER_WID = '44444444-4444-4444-8444-444444444444';
+  actors.push({ actor: 'ghost', role: 'cashier', active: true, workspace_id: OTHER_WID, session_version: 0, pin_hash: await hashPin('555555') });
+  const { db, dao } = makeDb(actors);
+  await asAdmin(dao, 'rider', '482915', K_CURRENT_ONLY);
+  assert.deepEqual(db.scopedReads, [WID]);
 });
 
 console.log('\n=== node:test suite complete (see summary above) ===');
