@@ -111,17 +111,37 @@ assert('role fixed by (actor,role) CHECK constraint at foundation', /actor='owne
 // silently mutate role outside of a reviewed migration — remains fully enforced below and
 // by the separate Node-service check; this migration is excluded from the scan by name,
 // not by weakening the pattern for anything else, past or future.
+//
+// Access Control V3 (V3-C) — 2026-07-29_v3c_auth_change_actor_role.sql is a SECOND
+// deliberate, human-reviewed exception, of a different kind: auth_change_actor_role_v3
+// is a live, callable RPC (still completely UNWIRED from any current route — see
+// tests/v3cWriterUnwired.static.test.js) whose ENTIRE, explicit purpose is one
+// owner-authorized, audited, session-bound-idempotent role conversion per call — never a
+// silent mutation. It is not "no role mutation exists"; it is "every role mutation is
+// gated by acting-owner authorization (role IN admin/owner, checked server-side under
+// lock), restricted to a 5-value assignable whitelist, and unconditionally audited
+// (role_changed + session_invalidated) — reviewed here by name, exactly like V3-A,
+// rather than by weakening the pattern for anything else, past or future.
 const V3A_ROLE_MIGRATION = '2026-07-29_v3a_access_control_foundation.sql';
+const V3C_ROLE_MIGRATION = '2026-07-29_v3c_auth_change_actor_role.sql';
+const ROLE_MUTATION_EXCEPTIONS = new Set([
+  V3A_ROLE_MIGRATION, V3A_ROLE_MIGRATION.replace('.sql', '.ROLLBACK.sql'),
+  V3C_ROLE_MIGRATION, V3C_ROLE_MIGRATION.replace('.sql', '.ROLLBACK.sql'),
+]);
 const ALL_SQL = fs.readdirSync(path.join(__dirname, '..', 'migrations'))
-  .filter((f) => f.endsWith('.sql') && f !== V3A_ROLE_MIGRATION && f !== V3A_ROLE_MIGRATION.replace('.sql', '.ROLLBACK.sql'))
+  .filter((f) => f.endsWith('.sql') && !ROLE_MUTATION_EXCEPTIONS.has(f))
   .map((f) => read('migrations/' + f)).join('\n');
 // statement-bounded: an UPDATE public.auth_actors whose SET clause (up to the terminating
-// semicolon) assigns role would be a mutation. None do (outside the excepted V3-A
-// migration); and there is no p_role/new_role param anywhere.
-assert('no RPC/migration mutates auth_actors.role, except the one reviewed V3-A vocabulary transition',
+// semicolon) assigns role would be a mutation. None do (outside the two excepted
+// migrations, which are excluded from ALL_SQL entirely — their own p_role/new_role-shaped
+// identifiers never reach this scan); and no OTHER, non-excepted file introduces a
+// p_role/new_role-style parameter either.
+assert('no RPC/migration mutates auth_actors.role, except the two reviewed exceptions (V3-A vocabulary transition, V3-C owner-authorized role-change RPC)',
   !/UPDATE\s+public\.auth_actors\s+SET\s+[^;]*\brole\s*=/i.test(ALL_SQL) && !/\bp_role\b|\bnew_role\b/i.test(ALL_SQL));
 assert('the V3-A exception file actually exists (the exclusion above is not silently vacuous)',
   fs.existsSync(path.join(__dirname, '..', 'migrations', V3A_ROLE_MIGRATION)));
+assert('the V3-C exception file actually exists (the exclusion above is not silently vacuous)',
+  fs.existsSync(path.join(__dirname, '..', 'migrations', V3C_ROLE_MIGRATION)));
 const SVC_SRC = read('src/auth/adminAccessService.js') + read('src/auth/financialService.js') + read('src/auth/dao.js');
 assert('no Node service mutates actor role', !/setActorRole|updateRole|['"]role['"]\s*:\s*(p_|req|body)/.test(SVC_SRC));
 
