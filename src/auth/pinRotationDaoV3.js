@@ -19,6 +19,24 @@ const SAFE_RESULT_FIELDS = Object.freeze([
   'updated_at', 'updated_by', 'changed', 'event', 'onboarding_completed',
 ]);
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// SENSITIVE read, workspace-scoped IN THE QUERY ITSELF (not a Node-side filter of an
+// unscoped table read): the v3 semantic duplicate/reserved check must never pull
+// another workspace's pin_hash rows into this process. workspaceId is required and
+// must already be an authoritative value the caller resolved (its own verified session
+// context) — never a value taken from a client request body.
+async function listWorkspaceActorsForVerify_SENSITIVE(workspaceId) {
+  if (typeof workspaceId !== 'string' || !UUID_RE.test(workspaceId)) {
+    throw new AuthDaoError('PIN_ROTATION_FAILED', 'workspace required');
+  }
+  const r = await sbRest('GET', 'auth_actors', {
+    query: `select=actor,role,active,workspace_id,pin_hash&workspace_id=eq.${encodeURIComponent(workspaceId)}&order=actor.asc`,
+  });
+  if (!r.ok || !Array.isArray(r.body)) throw new AuthDaoError('PIN_ROTATION_FAILED', 'read failed');
+  return r.body;
+}
+
 function sanitizeRotation(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
     throw new AuthDaoError('PIN_ROTATION_FAILED', 'malformed response');
@@ -63,6 +81,7 @@ async function setActorPinV3({
 
 module.exports = {
   SAFE_RESULT_FIELDS, sanitizeRotation,
-  listActorsWithWorkspaceForVerify_SENSITIVE, // re-exported for a single import surface
+  listActorsWithWorkspaceForVerify_SENSITIVE, // re-exported for a single import surface (unused by the v3 service — see listWorkspaceActorsForVerify_SENSITIVE)
+  listWorkspaceActorsForVerify_SENSITIVE,
   setActorPinV3,
 };
