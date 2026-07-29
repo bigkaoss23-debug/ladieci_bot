@@ -17,12 +17,16 @@ END $$;
 DO $$
 DECLARE v_bad_role int; v_bad_event int; v_fp_rows int;
 BEGIN
-  -- No row may hold a role V3-C would have assigned (cashier/waiter/kitchen/shift_manager) —
-  -- narrowing the CHECK back to admin/operator/rider would corrupt such a row.
+  -- Forward V3-A never changes any row's role value — it only widens the CHECK to a
+  -- permissive union. So EVERY V3-only value (all 6: owner, cashier, waiter, kitchen,
+  -- shift_manager, legacy_operator — not just the 4 "new business roles") is equally
+  -- foreign to a legitimate post-V3-A-forward, pre-V3-C state. Any row holding one of
+  -- these six means a LATER migration (V3-C) has already done real per-row conversion;
+  -- narrowing the CHECK back to admin/operator/rider would corrupt that row.
   SELECT count(*) INTO v_bad_role FROM public.auth_actors
-   WHERE role IN ('cashier','waiter','kitchen','shift_manager');
+   WHERE role IN ('owner','cashier','waiter','kitchen','shift_manager','legacy_operator');
   IF v_bad_role <> 0 THEN
-    RAISE EXCEPTION 'V3-A rollback refused: % auth_actors row(s) already carry a V3-C-assigned role — narrowing would corrupt them', v_bad_role
+    RAISE EXCEPTION 'V3-A rollback refused: % auth_actors row(s) already carry a V3-only role — narrowing would corrupt them', v_bad_role
       USING ERRCODE = 'P0001';
   END IF;
 
@@ -58,24 +62,11 @@ ALTER TABLE public.auth_audit ADD CONSTRAINT auth_audit_event_chk CHECK (event I
 DROP TABLE IF EXISTS public.access_management_idempotency;
 DROP TABLE IF EXISTS public.auth_actor_pin_fingerprints;
 
--- ── auth_actors — revert constraints, then data, then columns ────────────────
-ALTER TABLE public.auth_actors DROP CONSTRAINT IF EXISTS auth_actors_actor_role_map;
-ALTER TABLE public.auth_actors ADD CONSTRAINT auth_actors_actor_role_map CHECK (
-  (actor = 'owner'            AND role = 'admin')    OR
-  (actor = 'operator_primary' AND role = 'operator') OR
-  (actor = 'operator_backup'  AND role = 'operator') OR
-  (actor = 'rider'            AND role = 'rider')
-);
-
-ALTER TABLE public.auth_actors DROP CONSTRAINT IF EXISTS auth_actors_role_chk;
--- widen transiently so the data revert below is legal, then narrow to the original 3
-ALTER TABLE public.auth_actors ADD CONSTRAINT auth_actors_role_chk
-  CHECK (role IN ('admin','operator','rider','owner','legacy_operator'));
-
-UPDATE public.auth_actors SET role = 'admin'    WHERE actor = 'owner'            AND role = 'owner';
-UPDATE public.auth_actors SET role = 'operator' WHERE actor = 'operator_primary' AND role = 'legacy_operator';
-UPDATE public.auth_actors SET role = 'operator' WHERE actor = 'operator_backup'  AND role = 'legacy_operator';
-
+-- ── auth_actors — revert the CHECK only; there is no role DATA to revert, and
+--    auth_actors_actor_role_map was never touched by forward, so it is left alone here
+--    too. The precondition above already proved every row's role is still one of
+--    admin/operator/rider, so narrowing directly is safe — no transient widening step
+--    is needed (that was only ever required to legalize a data revert, and there is none).
 ALTER TABLE public.auth_actors DROP CONSTRAINT IF EXISTS auth_actors_role_chk;
 ALTER TABLE public.auth_actors ADD CONSTRAINT auth_actors_role_chk
   CHECK (role IN ('admin','operator','rider'));

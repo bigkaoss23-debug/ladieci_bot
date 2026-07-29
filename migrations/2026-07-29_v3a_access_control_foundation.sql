@@ -4,30 +4,38 @@
 -- DRAFT — NOT APPLIED. Additive + idempotent where possible; two explicit, guarded
 -- data/constraint changes are described below (both fail closed on drift).
 --
--- SCOPE. V3-A widens the role vocabulary and adds foundation tables. It does NOT:
+-- SCOPE. V3-A widens the DATABASE role vocabulary (a permissive superset) and adds
+-- foundation tables. It does NOT:
 --   * lift the auth_actors.actor identifier CHECK (still exactly the 4 legacy ids;
 --     dynamic actor creation is V3-D);
---   * auto-map operator_primary -> cashier or operator_backup -> waiter/cashier
---     (both land on the safe transitional role 'legacy_operator'; real business-role
---     assignment is V3-C, after explicit owner confirmation);
+--   * change the role VALUE of any existing row. The live runtime (jwt.js ROLE_SUB,
+--     pinPolicy.ROLE_PIN_RULES, legacyActionRoles.js) still authorizes exclusively
+--     against 'admin'/'operator'/'rider' — it has no idea 'owner'/'legacy_operator'
+--     exist. Rewriting owner's role to 'owner' or the two operator actors' role to
+--     'legacy_operator' in this migration, before any backend deploy teaches the
+--     runtime the new vocabulary, would make every one of those actors fail
+--     roleSubValid()/ROLE_PIN_RULES lookups on their very next request — a live
+--     backward-compatibility break, not a foundation step. A CORRECTED-earlier draft
+--     of this migration did exactly that; it is fixed here, not layered around.
+--   * auto-map operator_primary -> cashier or operator_backup -> waiter/cashier;
 --   * create table_sessions (V3-G);
 --   * wire any new runtime authorization decision — the live guard keeps using
 --     src/auth/legacyActionRoles.js unchanged; the new registries added alongside
 --     this migration (roleRegistry.js / capabilityRegistry.js / actionPolicyRegistry.js)
 --     are foundation-only, not yet consulted by any request path.
 --
--- WHY role VALUES change for the 4 legacy rows in THIS migration, not later. The new
--- role CHECK is the closed V3 vocabulary (owner/cashier/waiter/kitchen/rider/
--- shift_manager/legacy_operator) with NO carry-over of the old values (admin/operator).
--- Keeping 'admin'/'operator' valid "for compatibility" would leave two live vocabularies
--- simultaneously legal, which is exactly the kind of dual-source-of-truth this whole
--- initiative exists to remove. Since CHECK compatibility genuinely requires updating the
--- 4 existing rows' role values, they are updated HERE, narrowly: owner -> 'owner' (direct,
--- unambiguous, every design review agreed), rider -> 'rider' (already correct, no-op),
--- operator_primary/operator_backup -> 'legacy_operator' (the safe non-decision placeholder
--- — NEVER cashier/waiter, that mapping is a separate, explicit, owner-confirmed V3-C step).
+-- WHY the role CHECK still widens even though no row's VALUE changes. The CHECK is
+-- widened to the UNION of the legacy vocabulary the runtime still requires
+-- ('admin','operator','rider') and the 7 accepted V3 role codes
+-- ('owner','cashier','waiter','kitchen','rider','shift_manager','legacy_operator') —
+-- 9 distinct values ('rider' is shared, not duplicated). This is a PERMISSIVE
+-- database-level allowance, not a statement that 'admin'/'operator' are valid V3 roles
+-- (they are not — src/auth/roleRegistry.js's ROLE_CODES is exactly the 7, and
+-- 'admin'/'operator' are deliberately absent from it). Real per-row role CONVERSION
+-- happens only in V3-C, after the backend is deployed with support for both
+-- vocabularies and after an explicit owner decision per actor — never here.
 -- pin_hash / session_version / active / failed_count / locked_until / updated_at /
--- updated_by / active_manual_giro_id are untouched on every row.
+-- updated_by / active_manual_giro_id / role are untouched on every existing row.
 BEGIN;
 
 -- Staging-positive guard (same sentinel as every prior auth migration).
@@ -80,31 +88,23 @@ ALTER TABLE public.auth_actors ALTER COLUMN workspace_id SET NOT NULL;
 ALTER TABLE public.auth_actors DROP CONSTRAINT IF EXISTS auth_actors_ws_actor_key;
 ALTER TABLE public.auth_actors ADD CONSTRAINT auth_actors_ws_actor_key UNIQUE (workspace_id, actor);
 
--- ── 2) role vocabulary — data first, then the tightened CHECKs ───────────────
-UPDATE public.auth_actors SET role = 'owner'           WHERE actor = 'owner'            AND role = 'admin';
-UPDATE public.auth_actors SET role = 'legacy_operator' WHERE actor = 'operator_primary'  AND role = 'operator';
-UPDATE public.auth_actors SET role = 'legacy_operator' WHERE actor = 'operator_backup'   AND role = 'operator';
--- rider stays 'rider' — already correct in both vocabularies, no UPDATE needed.
-
-UPDATE public.auth_actors SET display_name = 'Propietario'                     WHERE actor = 'owner'            AND display_name IS NULL;
-UPDATE public.auth_actors SET display_name = 'Operador principal heredado'     WHERE actor = 'operator_primary'  AND display_name IS NULL;
+-- ── 2) role vocabulary — CHECK widened to a permissive union; NO row's role VALUE
+--       changes. auth_actors_actor_role_map is left COMPLETELY UNTOUCHED: it already
+--       correctly requires (owner,admin)/(operator_primary,operator)/
+--       (operator_backup,operator)/(rider,rider), and since no row's role changes in
+--       this migration, that existing constraint keeps holding without modification. ──
+UPDATE public.auth_actors SET display_name = 'Propietario'                    WHERE actor = 'owner'            AND display_name IS NULL;
+UPDATE public.auth_actors SET display_name = 'Operador principal heredado'    WHERE actor = 'operator_primary'  AND display_name IS NULL;
 UPDATE public.auth_actors SET display_name = 'Operador de apoyo heredado'     WHERE actor = 'operator_backup'   AND display_name IS NULL;
 UPDATE public.auth_actors SET display_name = 'Repartidor'                     WHERE actor = 'rider'             AND display_name IS NULL;
 
+-- Transitional union: the 3 legacy values the runtime still requires, PLUS the 7
+-- accepted V3 codes (roleRegistry.ROLE_CODES) — 9 distinct values total ('rider' is
+-- shared). No existing row uses any of the 6 new-only values yet; V3-C introduces them
+-- per-row, only after the backend understands both vocabularies.
 ALTER TABLE public.auth_actors DROP CONSTRAINT IF EXISTS auth_actors_role_chk;
 ALTER TABLE public.auth_actors ADD CONSTRAINT auth_actors_role_chk
-  CHECK (role IN ('owner','cashier','waiter','kitchen','rider','shift_manager','legacy_operator'));
-
-ALTER TABLE public.auth_actors DROP CONSTRAINT IF EXISTS auth_actors_actor_role_map;
-ALTER TABLE public.auth_actors ADD CONSTRAINT auth_actors_actor_role_map CHECK (
-  (actor = 'owner'            AND role = 'owner')          OR
-  (actor = 'operator_primary' AND role = 'legacy_operator') OR
-  (actor = 'operator_backup'  AND role = 'legacy_operator') OR
-  (actor = 'rider'            AND role = 'rider')
-);
--- Note: this map constraint, like auth_actors_actor_chk (untouched here), is specific to
--- the 4 legacy actor ids. V3-D replaces both when it lifts actor-id enumeration for
--- dynamic user creation — that is out of scope for V3-A.
+  CHECK (role IN ('admin','operator','rider','owner','cashier','waiter','kitchen','shift_manager','legacy_operator'));
 
 -- ── 3) auth_actor_pin_fingerprints — normalized, workspace-wide, key-versioned ──
 CREATE TABLE IF NOT EXISTS public.auth_actor_pin_fingerprints (
