@@ -108,9 +108,11 @@ function freshTransport() {
   }
 
   // ── 9) risposta vuota ammessa quando prevista ───────────────────────────
+  // resource 'conv' (non 'ordenes'): DELETE è un metodo registrato per conv
+  // (servizio.js close), non per ordenes — vedi supabaseResourcePolicy.js (H1B).
   {
     global.fetch = async () => ({ ok: true, status: 204, text: async () => '' });
-    const r = await mod.supabaseRequest({ resource: 'ordenes', method: 'DELETE', operation: 'test' });
+    const r = await mod.supabaseRequest({ resource: 'conv', method: 'DELETE', operation: 'test' });
     assert('9. risposta vuota → ok:true, bodyIsJson=false, body=undefined',
       r.ok === true && r.bodyIsJson === false && r.body === undefined);
   }
@@ -168,12 +170,20 @@ function freshTransport() {
   }
 
   // ── 14) limite timeout massimo ──────────────────────────────────────────
+  // H1B tightens H1A's behavior: an explicitly requested timeoutMs beyond the
+  // resource's own ceiling is now REJECTED (SUPABASE_TIMEOUT_NOT_ALLOWED), not
+  // silently clamped — no real call site today ever passes an explicit
+  // timeoutMs, so this cannot regress production behavior (verified in the H1B
+  // audit). A value within the ceiling still succeeds normally.
   {
+    global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
+    const err = await captureErr(() => mod.supabaseRequest({ resource: 'ordenes', operation: 'test', timeoutMs: 999999 }));
+    assert('14a. timeoutMs oltre il massimo della risorsa → SUPABASE_TIMEOUT_NOT_ALLOWED (rifiutato, non clampato)',
+      err && err.code === mod.ERROR_CODES.TIMEOUT_NOT_ALLOWED);
     let capturedSignal;
     global.fetch = async (url, opts) => { capturedSignal = opts.signal; return { ok: true, status: 200, text: async () => '{}' }; };
-    // richiesto un timeout enorme, deve essere clampato a MAX_TIMEOUT_MS
-    await mod.supabaseRequest({ resource: 'ordenes', operation: 'test', timeoutMs: 999999 });
-    assert('14. timeoutMs richiesto oltre il massimo viene clampato (nessun crash, richiesta completata)', capturedSignal instanceof AbortSignal);
+    await mod.supabaseRequest({ resource: 'ordenes', operation: 'test', timeoutMs: 15000 });
+    assert('14b. timeoutMs entro il massimo della risorsa → richiesta completata normalmente', capturedSignal instanceof AbortSignal);
   }
 
   // ── 15) operation name opzionale con default sicuro ─────────────────────
@@ -186,7 +196,11 @@ function freshTransport() {
   // ── extra) resource mancante → fail-closed (non è nella lista numerata ma è un requisito esplicito) ──
   {
     const err = await captureErr(() => mod.supabaseRequest({ operation: 'test' }));
-    assert('extra. resource assente → fail-closed SUPABASE_CONFIGURATION_ERROR', err && err.code === mod.ERROR_CODES.CONFIG);
+    // H1B reclassifies this from SUPABASE_CONFIGURATION_ERROR (a server/env issue)
+    // to SUPABASE_REQUEST_INVALID (a malformed caller request) — still fail-closed,
+    // more accurate code. No real call site ever omits resource (verified in the
+    // H1B audit), so this is unreachable in production either way.
+    assert('extra. resource assente → fail-closed SUPABASE_REQUEST_INVALID', err && err.code === mod.ERROR_CODES.REQUEST_INVALID);
   }
 
   setEnv(ORIGINAL_URL, ORIGINAL_KEY);

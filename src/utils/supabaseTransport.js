@@ -1,5 +1,5 @@
 'use strict';
-// H1A — Security Foundation Block: hardened server-side Supabase/PostgREST transport.
+// H1A/H1B — Security Foundation Block: hardened server-side Supabase/PostgREST transport.
 //
 // This module is the ONLY place in the backend allowed to call `fetch()` against
 // Supabase. It does not decide business logic, does not choose tables dynamically
@@ -14,6 +14,17 @@
 // Credential: reads the SAME server-side credential already used by the rest of the
 // backend (SUPABASE_KEY, service_role — see src/utils/supabase.js / src/auth/audit.js
 // prior to H1A). No publishable/anon key fallback exists anywhere in this file.
+//
+// H1B additionally enforces the resource registry (src/utils/supabaseResourcePolicy.js):
+// only a registered {resource, method} pair may reach the network, structural request
+// shape is validated before any fetch is attempted, and an explicit timeoutMs above a
+// resource's own ceiling is rejected rather than silently clamped.
+
+const {
+  getResourcePolicy,
+  isMethodAllowed,
+  isTimeoutAllowed,
+} = require('./supabaseResourcePolicy');
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const MAX_TIMEOUT_MS = 20000;
@@ -24,7 +35,89 @@ const ERROR_CODES = Object.freeze({
   NETWORK: 'SUPABASE_NETWORK_ERROR',
   UPSTREAM: 'SUPABASE_UPSTREAM_ERROR',
   INVALID_RESPONSE: 'SUPABASE_INVALID_RESPONSE',
+  RESOURCE_NOT_ALLOWED: 'SUPABASE_RESOURCE_NOT_ALLOWED',
+  METHOD_NOT_ALLOWED: 'SUPABASE_METHOD_NOT_ALLOWED',
+  TIMEOUT_NOT_ALLOWED: 'SUPABASE_TIMEOUT_NOT_ALLOWED',
+  REQUEST_INVALID: 'SUPABASE_REQUEST_INVALID',
 });
+
+// Only these caller-supplied keys are ever read from params — anything else
+// (headers, url, key, apikey, serviceKey, or any publishable/anon credential
+// field) is rejected outright rather than silently ignored, so a typo or a
+// future careless caller can never smuggle an arbitrary header or override
+// the credential.
+const ALLOWED_PARAM_KEYS = Object.freeze([
+  'resource', 'method', 'query', 'body', 'prefer', 'timeoutMs',
+  'operation', 'correlationId', 'silent',
+]);
+
+// Methods that never carry a body today (verified against every real call site
+// in src/utils/supabase.js and src/auth/audit.js at H1B audit time — see
+// tests/supabaseResourcePolicy.test.js #14).
+const METHODS_WITHOUT_BODY = Object.freeze(['GET', 'DELETE']);
+
+const OPERATION_NAME_RE = /^[A-Za-z0-9_:./-]{1,200}$/;
+
+function validateRequestShape(params) {
+  const badKeys = Object.keys(params).filter((k) => !ALLOWED_PARAM_KEYS.includes(k));
+  if (badKeys.length > 0) {
+    throw new SupabaseTransportError(ERROR_CODES.REQUEST_INVALID, 'unexpected request parameter');
+  }
+
+  const { resource, method = 'GET', query, body, timeoutMs, operation } = params;
+
+  if (typeof resource !== 'string' || resource.length === 0) {
+    throw new SupabaseTransportError(ERROR_CODES.REQUEST_INVALID, 'resource is required');
+  }
+  // Absolute URL, protocol-relative, path traversal, duplicated "?", fragment,
+  // CR/LF (header/response-splitting defense in depth) — resource must be a bare
+  // PostgREST path segment like "ordenes" or "rpc/start_rider_trip", never a URL.
+  if (
+    resource.includes('://') ||
+    resource.startsWith('/') ||
+    resource.includes('..') ||
+    resource.includes('?') ||
+    resource.includes('#') ||
+    /[\r\n]/.test(resource)
+  ) {
+    throw new SupabaseTransportError(ERROR_CODES.REQUEST_INVALID, 'resource is not a valid PostgREST path segment');
+  }
+
+  if (query !== undefined) {
+    if (typeof query !== 'string') {
+      throw new SupabaseTransportError(ERROR_CODES.REQUEST_INVALID, 'query must be a string');
+    }
+    if (query.includes('?') || query.includes('#') || /[\r\n]/.test(query)) {
+      throw new SupabaseTransportError(ERROR_CODES.REQUEST_INVALID, 'query is not a valid PostgREST query string');
+    }
+  }
+
+  const httpMethod = String(method).toUpperCase();
+  if (body !== undefined && METHODS_WITHOUT_BODY.includes(httpMethod)) {
+    throw new SupabaseTransportError(ERROR_CODES.REQUEST_INVALID, `${httpMethod} does not accept a body`);
+  }
+
+  if (operation !== undefined && !OPERATION_NAME_RE.test(String(operation))) {
+    throw new SupabaseTransportError(ERROR_CODES.REQUEST_INVALID, 'operation name is not valid');
+  }
+
+  // ── resource policy enforcement (H1B) ──
+  const policy = getResourcePolicy(resource);
+  if (!policy) {
+    throw new SupabaseTransportError(ERROR_CODES.RESOURCE_NOT_ALLOWED, 'resource is not registered');
+  }
+  if (!isMethodAllowed(resource, httpMethod)) {
+    throw new SupabaseTransportError(ERROR_CODES.METHOD_NOT_ALLOWED, 'method is not allowed for this resource');
+  }
+  // Only an EXPLICITLY requested timeout is checked against the resource's own
+  // ceiling — omitting timeoutMs (every real call site today) always uses the
+  // resource's default and can never hit this branch.
+  if (timeoutMs !== undefined && !isTimeoutAllowed(resource, timeoutMs)) {
+    throw new SupabaseTransportError(ERROR_CODES.TIMEOUT_NOT_ALLOWED, 'requested timeout exceeds the resource ceiling');
+  }
+
+  return { policy, httpMethod };
+}
 
 class SupabaseTransportError extends Error {
   constructor(code, message) {
@@ -109,28 +202,25 @@ function logResult({ operation, resource, method, status, durationMs, timedOut, 
 // exactly like the pre-H1A helpers this replaces (callers decide what a non-2xx
 // status means for their own contract).
 async function supabaseRequest(params = {}) {
+  const { policy, httpMethod: validatedMethod } = validateRequestShape(params);
   const {
     resource,
-    method = 'GET',
     query,
     body,
     prefer,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
+    timeoutMs,
     operation,
     correlationId,
     silent = false,
   } = params;
   const emit = silent ? () => {} : logResult;
 
-  if (typeof resource !== 'string' || resource.length === 0) {
-    throw new SupabaseTransportError(ERROR_CODES.CONFIG, 'resource is required');
-  }
-
   const { url: base, key } = loadConfig();
 
+  const requestedTimeout = timeoutMs !== undefined ? Number(timeoutMs) : policy.defaultTimeoutMs;
   const effectiveTimeout = Math.min(
-    Math.max(1, Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : DEFAULT_TIMEOUT_MS),
-    MAX_TIMEOUT_MS
+    Math.max(1, Number.isFinite(requestedTimeout) ? requestedTimeout : DEFAULT_TIMEOUT_MS),
+    policy.maxTimeoutMs
   );
 
   let url = `${base}/rest/v1/${resource}`;
@@ -138,7 +228,7 @@ async function supabaseRequest(params = {}) {
 
   const hasBody = body !== undefined;
   const headers = buildHeaders(key, prefer, hasBody);
-  const httpMethod = String(method).toUpperCase();
+  const httpMethod = validatedMethod;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), effectiveTimeout);

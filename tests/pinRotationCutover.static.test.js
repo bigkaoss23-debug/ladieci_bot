@@ -274,12 +274,20 @@ test('cutover: no direct REST write targets auth_actors.pin_hash or active', () 
 
 test('cutover: workspace claim remains the only runtime writer of workspace_id', () => {
   const callers = SRC.filter((f) => codeOf(f).includes('auth_account_claim_workspace'));
-  assert.deepEqual(callers, ['src/account/workspaceOwnerDao.js']);
+  // H1B adds src/utils/supabaseResourcePolicy.js: a DECLARATIVE, non-executing
+  // registry entry (resource name + allowed method only, no call, no args) used
+  // to fail-closed-validate the request shape before it reaches the network. It
+  // is not a second runtime caller — the actual RPC invocation still happens
+  // exclusively in workspaceOwnerDao.js.
+  assert.deepEqual(callers.sort(), ['src/account/workspaceOwnerDao.js', 'src/utils/supabaseResourcePolicy.js'].sort());
 });
 
 test('cutover: the only PIN-rotation RPC invoked is auth_set_actor_pin_v2', () => {
   const callers = SRC.filter((f) => codeOf(f).includes('auth_set_actor_pin_v2'));
-  assert.deepEqual(callers, ['src/auth/pinRotationDao.js'], 'exactly one DAO may call it');
+  // H1B adds src/utils/supabaseResourcePolicy.js as a declarative registry entry
+  // (see note above) — pinRotationDao.js remains the only file that actually
+  // invokes the RPC.
+  assert.deepEqual(callers.sort(), ['src/auth/pinRotationDao.js', 'src/utils/supabaseResourcePolicy.js'].sort(), 'exactly one DAO may call it, plus the declarative resource registry');
 });
 
 test('cutover: both mutation services delegate to the canonical rotation', () => {
