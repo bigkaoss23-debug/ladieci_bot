@@ -127,19 +127,10 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'WORKSPACE_NOT_FOUND' USING ERRCODE='P0002'; END IF;
   IF v_ws.lifecycle_status <> 'active' THEN RAISE EXCEPTION 'WORKSPACE_NOT_ACTIVE' USING ERRCODE='22023'; END IF;
 
-  -- ── idempotency lookup, already serialised by the workspace lock above ────
-  SELECT * INTO v_idem FROM public.access_management_idempotency
-   WHERE workspace_id = p_workspace_id AND by_actor = p_by_actor AND by_sid_hash = p_by_sid_hash
-     AND action = v_action AND client_request_id = p_client_request_id;
-  IF FOUND THEN
-    IF v_idem.request_hash = p_request_hash THEN
-      RETURN v_idem.response_body; -- safe replay: no mutation, no new audit
-    ELSE
-      RAISE EXCEPTION 'AUTH_IDEMPOTENCY_CONFLICT' USING ERRCODE='23505';
-    END IF;
-  END IF;
-
   -- ── deterministic actor-id locking — acting + target, ordered ─────────────
+  -- Authorization is proved BEFORE any idempotency lookup/replay below — a revoked,
+  -- deactivated, or demoted acting actor must never receive a stored success response
+  -- merely because a matching idempotency record exists from when they WERE authorized.
   PERFORM 1 FROM public.auth_actors WHERE actor IN (p_by_actor, p_target_actor) ORDER BY actor FOR UPDATE;
 
   SELECT * INTO v_by FROM public.auth_actors WHERE actor = p_by_actor;
@@ -153,10 +144,29 @@ BEGIN
   IF v_by.active <> true THEN RAISE EXCEPTION 'AUTH_INITIATOR_INACTIVE' USING ERRCODE='22023'; END IF;
   IF v_by.role NOT IN ('admin', 'owner') THEN RAISE EXCEPTION 'AUTH_NOT_OWNER' USING ERRCODE='P0001'; END IF;
 
-  -- ── target — same workspace, never owner semantics (by ROLE, never actor id) ──
+  -- ── target — same workspace; owner rejected by ROLE; everything else must be on
+  --    the explicit POSITIVE allowlist (never a denylist — an unknown, malformed, or
+  --    future role that has not been explicitly approved must fail closed, not pass
+  --    through as "not admin/owner") ─────────────────────────────────────────
   IF v_tgt.workspace_id IS DISTINCT FROM p_workspace_id THEN
     RAISE EXCEPTION 'AUTH_TARGET_OTHER_WORKSPACE' USING ERRCODE='P0001'; END IF;
   IF v_tgt.role IN ('admin', 'owner') THEN RAISE EXCEPTION 'AUTH_TARGET_IS_OWNER' USING ERRCODE='P0001'; END IF;
+  IF v_tgt.role IS NULL OR v_tgt.role NOT IN
+     ('operator', 'legacy_operator', 'cashier', 'waiter', 'kitchen', 'rider', 'shift_manager')
+  THEN RAISE EXCEPTION 'AUTH_TARGET_ROLE_INELIGIBLE' USING ERRCODE='P0001'; END IF;
+
+  -- ── idempotency lookup — ONLY now, after acting-owner AND target-eligibility are
+  --    both proved against the CURRENT authoritative rows under lock ───────────
+  SELECT * INTO v_idem FROM public.access_management_idempotency
+   WHERE workspace_id = p_workspace_id AND by_actor = p_by_actor AND by_sid_hash = p_by_sid_hash
+     AND action = v_action AND client_request_id = p_client_request_id;
+  IF FOUND THEN
+    IF v_idem.request_hash = p_request_hash THEN
+      RETURN v_idem.response_body; -- safe replay: no mutation, no new audit
+    ELSE
+      RAISE EXCEPTION 'AUTH_IDEMPOTENCY_CONFLICT' USING ERRCODE='23505';
+    END IF;
+  END IF;
 
   -- ── expected active state must match the locked, authoritative target row ─
   IF v_tgt.active <> p_expected_active THEN RAISE EXCEPTION 'AUTH_TARGET_STATE_MISMATCH' USING ERRCODE='22023'; END IF;
@@ -265,19 +275,10 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'WORKSPACE_NOT_FOUND' USING ERRCODE='P0002'; END IF;
   IF v_ws.lifecycle_status <> 'active' THEN RAISE EXCEPTION 'WORKSPACE_NOT_ACTIVE' USING ERRCODE='22023'; END IF;
 
-  -- ── idempotency lookup, already serialised by the workspace lock above ────
-  SELECT * INTO v_idem FROM public.access_management_idempotency
-   WHERE workspace_id = p_workspace_id AND by_actor = p_by_actor AND by_sid_hash = p_by_sid_hash
-     AND action = 'clear_access_user_credential_v3' AND client_request_id = p_client_request_id;
-  IF FOUND THEN
-    IF v_idem.request_hash = p_request_hash THEN
-      RETURN v_idem.response_body; -- safe replay: no mutation, no new audit
-    ELSE
-      RAISE EXCEPTION 'AUTH_IDEMPOTENCY_CONFLICT' USING ERRCODE='23505';
-    END IF;
-  END IF;
-
   -- ── deterministic actor-id locking — acting + target, ordered ─────────────
+  -- Authorization is proved BEFORE any idempotency lookup/replay below — a revoked,
+  -- deactivated, or demoted acting actor must never receive a stored success response
+  -- merely because a matching idempotency record exists from when they WERE authorized.
   PERFORM 1 FROM public.auth_actors WHERE actor IN (p_by_actor, p_target_actor) ORDER BY actor FOR UPDATE;
 
   SELECT * INTO v_by FROM public.auth_actors WHERE actor = p_by_actor;
@@ -291,11 +292,28 @@ BEGIN
   IF v_by.active <> true THEN RAISE EXCEPTION 'AUTH_INITIATOR_INACTIVE' USING ERRCODE='22023'; END IF;
   IF v_by.role NOT IN ('admin', 'owner') THEN RAISE EXCEPTION 'AUTH_NOT_OWNER' USING ERRCODE='P0001'; END IF;
 
-  -- ── target — same workspace, never owner semantics (by ROLE, never actor id) ──
-  -- Works on an ACTIVE or INACTIVE target -- no active check here, deliberately.
+  -- ── target — same workspace; owner rejected by ROLE; everything else must be on
+  --    the explicit POSITIVE allowlist (never a denylist). Works on an ACTIVE or
+  --    INACTIVE target -- no active check here, deliberately. ───────────────────
   IF v_tgt.workspace_id IS DISTINCT FROM p_workspace_id THEN
     RAISE EXCEPTION 'AUTH_TARGET_OTHER_WORKSPACE' USING ERRCODE='P0001'; END IF;
   IF v_tgt.role IN ('admin', 'owner') THEN RAISE EXCEPTION 'AUTH_TARGET_IS_OWNER' USING ERRCODE='P0001'; END IF;
+  IF v_tgt.role IS NULL OR v_tgt.role NOT IN
+     ('operator', 'legacy_operator', 'cashier', 'waiter', 'kitchen', 'rider', 'shift_manager')
+  THEN RAISE EXCEPTION 'AUTH_TARGET_ROLE_INELIGIBLE' USING ERRCODE='P0001'; END IF;
+
+  -- ── idempotency lookup — ONLY now, after acting-owner AND target-eligibility are
+  --    both proved against the CURRENT authoritative rows under lock ───────────
+  SELECT * INTO v_idem FROM public.access_management_idempotency
+   WHERE workspace_id = p_workspace_id AND by_actor = p_by_actor AND by_sid_hash = p_by_sid_hash
+     AND action = 'clear_access_user_credential_v3' AND client_request_id = p_client_request_id;
+  IF FOUND THEN
+    IF v_idem.request_hash = p_request_hash THEN
+      RETURN v_idem.response_body; -- safe replay: no mutation, no new audit
+    ELSE
+      RAISE EXCEPTION 'AUTH_IDEMPOTENCY_CONFLICT' USING ERRCODE='23505';
+    END IF;
+  END IF;
 
   -- ── stale-snapshot check against the locked, authoritative target row ─────
   IF v_tgt.session_version <> p_expected_session_version THEN
