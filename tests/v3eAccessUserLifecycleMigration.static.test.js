@@ -50,6 +50,50 @@ assert('forward: creates auth_clear_access_user_credential_v3 (new function)', /
 assert('forward: no generic unrestricted auth_actors patch RPC exists (exactly 2 new functions)',
   (fwd.match(/CREATE OR REPLACE FUNCTION public\./g) || []).length === 2);
 
+// ── SECURITY CLOSURE: exact positive target-role allowlist, both RPCs ────────────
+// The old (unsafe) contract only rejected admin/owner and silently ACCEPTED any other
+// value, including an unknown/malformed/future role. The fix requires exactly the 7
+// approved values and fails closed (via NOT IN, plus an explicit IS NULL guard) on
+// anything else -- verified by exact allowlist text, not by absence-of-denylist alone.
+assert('forward: exact positive target-role allowlist present exactly twice (once per RPC)',
+  (fwd.match(/v_tgt\.role IS NULL OR v_tgt\.role NOT IN\s*\n\s*\('operator', 'legacy_operator', 'cashier', 'waiter', 'kitchen', 'rider', 'shift_manager'\)/g) || []).length === 2);
+assert('forward: ineligible target role is rejected with a DEDICATED error code (not silently accepted)',
+  (fwd.match(/AUTH_TARGET_ROLE_INELIGIBLE/g) || []).length === 2);
+assert('forward: the allowlist is exactly the 7 approved roles -- no admin/owner/legacy-only alias slipped in',
+  (() => {
+    const m = fwd.match(/v_tgt\.role NOT IN\s*\n\s*\(([^)]*)\)/);
+    if (!m) return false;
+    const roles = m[1].split(',').map((s) => s.trim().replace(/'/g, ''));
+    return JSON.stringify(roles.sort()) === JSON.stringify(['cashier', 'kitchen', 'legacy_operator', 'operator', 'rider', 'shift_manager', 'waiter']);
+  })());
+
+// ── SECURITY CLOSURE: authorization proved BEFORE idempotency replay, both RPCs ──
+// A revoked/deactivated/demoted acting actor must never receive a stored success
+// response merely because a matching idempotency record exists from when they WERE
+// authorized. Verify by TEXT POSITION: the acting-owner check (AUTH_NOT_OWNER) and the
+// target-eligibility check (AUTH_TARGET_ROLE_INELIGIBLE) must both appear BEFORE the
+// idempotency SELECT ... access_management_idempotency lookup, in EACH function body.
+{
+  const activeBody = fwd.match(/CREATE OR REPLACE FUNCTION public\.auth_set_access_user_active_v3[\s\S]*?\$fn\$;/)[0];
+  const clearBody = fwd.match(/CREATE OR REPLACE FUNCTION public\.auth_clear_access_user_credential_v3[\s\S]*?\$fn\$;/)[0];
+  for (const [label, body] of [['active-state', activeBody], ['clear-credential', clearBody]]) {
+    const notOwnerIdx = body.indexOf('AUTH_NOT_OWNER');
+    const ineligibleIdx = body.indexOf('AUTH_TARGET_ROLE_INELIGIBLE');
+    const idemSelectIdx = body.indexOf('SELECT * INTO v_idem FROM public.access_management_idempotency');
+    assert(`forward (${label}): acting-owner check (AUTH_NOT_OWNER) appears BEFORE the idempotency lookup`,
+      notOwnerIdx !== -1 && idemSelectIdx !== -1 && notOwnerIdx < idemSelectIdx);
+    assert(`forward (${label}): target-eligibility check (AUTH_TARGET_ROLE_INELIGIBLE) appears BEFORE the idempotency lookup`,
+      ineligibleIdx !== -1 && idemSelectIdx !== -1 && ineligibleIdx < idemSelectIdx);
+    // and the actor lock (PERFORM ... FOR UPDATE) must precede the idempotency lookup too --
+    // proving the acting/target rows are re-read under lock before any replay decision.
+    const lockIdx = body.indexOf('PERFORM 1 FROM public.auth_actors WHERE actor IN');
+    assert(`forward (${label}): deterministic actor lock precedes the idempotency lookup`,
+      lockIdx !== -1 && idemSelectIdx !== -1 && lockIdx < idemSelectIdx);
+  }
+}
+assert('forward: idempotency replay (RETURN v_idem.response_body) still bound to workspace+by_actor+by_sid_hash+action+client_request_id (both RPCs)',
+  (fwd.match(/WHERE workspace_id = p_workspace_id AND by_actor = p_by_actor AND by_sid_hash = p_by_sid_hash\s*\n\s*AND action = /g) || []).length === 2);
+
 // ── active-state RPC: canonical event names reused, both directions bump session_version ──
 assert('forward: reuses the canonical V3 event names user_deactivated/user_reactivated (not the legacy actor_disabled/actor_enabled)',
   fwd.includes("'user_reactivated'") && fwd.includes("'user_deactivated'") &&

@@ -47,17 +47,17 @@ function makeDb(actors) {
     r.workspace_id === args.workspaceId && r.by_actor === args.byActor && r.by_sid_hash === args.bySidHash &&
     r.action === action && r.client_request_id === args.clientRequestId);
 
+  const ELIGIBLE_TARGET_ROLES = ['operator', 'legacy_operator', 'cashier', 'waiter', 'kitchen', 'rider', 'shift_manager'];
+
   const dao = {
     async setAccessUserActiveV3(args) {
       db.activeCalls += 1;
       const action = args.requestedActive ? 'reactivate_access_user_v3' : 'deactivate_access_user_v3';
-      const existing = findIdem(action, args);
-      if (existing) {
-        if (existing.request_hash === args.requestHash) return { ...existing.response_body };
-        const e = new Error('conflict'); e.code = 'ACCESS_USER_LIFECYCLE_CONFLICT'; throw e;
-      }
       const ws = db.workspaces[args.workspaceId];
       if (!ws || ws.lifecycle_status !== 'active') throw new Error('WORKSPACE_NOT_ACTIVE');
+      // Deterministic lock + re-read + full authorization -- BEFORE any idempotency
+      // lookup/replay, mirroring the corrected RPC ordering: a revoked/deactivated/
+      // demoted acting actor must never receive a stored success from a stale record.
       const by = db.actors.find((a) => a.actor === args.byActor);
       if (!by) throw new Error('AUTH_INITIATOR_NOT_FOUND');
       const tgt = db.actors.find((a) => a.actor === args.targetActor);
@@ -67,6 +67,14 @@ function makeDb(actors) {
       if (!['admin', 'owner'].includes(by.role)) throw new Error('AUTH_NOT_OWNER');
       if (tgt.workspace_id !== args.workspaceId) throw new Error('AUTH_TARGET_OTHER_WORKSPACE');
       if (['admin', 'owner'].includes(tgt.role)) throw new Error('AUTH_TARGET_IS_OWNER');
+      if (!tgt.role || !ELIGIBLE_TARGET_ROLES.includes(tgt.role)) throw new Error('AUTH_TARGET_ROLE_INELIGIBLE'); // positive allowlist, never a denylist
+
+      const existing = findIdem(action, args);
+      if (existing) {
+        if (existing.request_hash === args.requestHash) return { ...existing.response_body };
+        const e = new Error('conflict'); e.code = 'ACCESS_USER_LIFECYCLE_CONFLICT'; throw e;
+      }
+
       if (tgt.active !== args.expectedActive) throw new Error('AUTH_TARGET_STATE_MISMATCH');
 
       const changed = tgt.active !== args.requestedActive;
@@ -89,13 +97,10 @@ function makeDb(actors) {
     async clearAccessUserCredentialV3(args) {
       db.clearCalls += 1;
       const action = 'clear_access_user_credential_v3';
-      const existing = findIdem(action, args);
-      if (existing) {
-        if (existing.request_hash === args.requestHash) return { ...existing.response_body };
-        const e = new Error('conflict'); e.code = 'ACCESS_USER_LIFECYCLE_CONFLICT'; throw e;
-      }
       const ws = db.workspaces[args.workspaceId];
       if (!ws || ws.lifecycle_status !== 'active') throw new Error('WORKSPACE_NOT_ACTIVE');
+      // Same corrected ordering as setAccessUserActiveV3: full authorization BEFORE
+      // any idempotency lookup/replay.
       const by = db.actors.find((a) => a.actor === args.byActor);
       if (!by) throw new Error('AUTH_INITIATOR_NOT_FOUND');
       const tgt = db.actors.find((a) => a.actor === args.targetActor);
@@ -105,6 +110,14 @@ function makeDb(actors) {
       if (!['admin', 'owner'].includes(by.role)) throw new Error('AUTH_NOT_OWNER');
       if (tgt.workspace_id !== args.workspaceId) throw new Error('AUTH_TARGET_OTHER_WORKSPACE');
       if (['admin', 'owner'].includes(tgt.role)) throw new Error('AUTH_TARGET_IS_OWNER');
+      if (!tgt.role || !ELIGIBLE_TARGET_ROLES.includes(tgt.role)) throw new Error('AUTH_TARGET_ROLE_INELIGIBLE');
+
+      const existing = findIdem(action, args);
+      if (existing) {
+        if (existing.request_hash === args.requestHash) return { ...existing.response_body };
+        const e = new Error('conflict'); e.code = 'ACCESS_USER_LIFECYCLE_CONFLICT'; throw e;
+      }
+
       if (tgt.session_version !== args.expectedSessionVersion) throw new Error('AUTH_TARGET_STALE');
 
       const hasCredential = tgt.pin_hash !== null || tgt.fingerprints.length > 0;
@@ -430,6 +443,158 @@ test('the returned summary carries no PIN, hash, fingerprint, or token material'
   for (const bad of ['pin_hash', 'scrypt$', 'fingerprint', 'token', 'proof']) {
     assert.ok(!s.includes(bad), bad);
   }
+});
+
+// ══ SECURITY CLOSURE: exact positive target-role allowlist ═════════════════════════
+// Fixture helper: seed a target actor with an arbitrary role, active=true, a fresh
+// UUID id, and a known session_version, then attempt deactivate/reactivate/clear on it.
+function withTargetRole(role) {
+  return async () => {
+    const actors = await seedActors();
+    actors.push({ actor: 'ttttttt1-0000-4000-8000-000000000001', role, active: true, workspace_id: WID, session_version: 1, pin_hash: null, failed_count: 0, locked_until: null, fingerprints: [] });
+    return actors;
+  };
+}
+const ELIGIBLE = ['operator', 'legacy_operator', 'cashier', 'waiter', 'kitchen', 'rider', 'shift_manager'];
+
+for (const role of ELIGIBLE) {
+  test(`target role allowlist: '${role}' is accepted`, async () => {
+    const actors = await withTargetRole(role)();
+    const { dao } = makeDb(actors);
+    const r = await deactivate(dao, { targetActor: 'ttttttt1-0000-4000-8000-000000000001', expectedActive: true });
+    assert.equal(r.ok, true, role);
+  });
+}
+
+test("target role allowlist: 'admin' is rejected", async () => {
+  const actors = await withTargetRole('admin')();
+  const { db, dao } = makeDb(actors);
+  const r = await deactivate(dao, { targetActor: 'ttttttt1-0000-4000-8000-000000000001', expectedActive: true });
+  assert.equal(r.ok, false);
+  assert.equal(db.activeChanges.length, 0);
+});
+
+test("target role allowlist: 'owner' is rejected", async () => {
+  const actors = await withTargetRole('owner')();
+  const { db, dao } = makeDb(actors);
+  const r = await deactivate(dao, { targetActor: 'ttttttt1-0000-4000-8000-000000000001', expectedActive: true });
+  assert.equal(r.ok, false);
+  assert.equal(db.activeChanges.length, 0);
+});
+
+test('target role allowlist: an UNKNOWN role is rejected (positive allowlist, not a denylist)', async () => {
+  const actors = await withTargetRole('superuser')();
+  const { db, dao } = makeDb(actors);
+  const r = await deactivate(dao, { targetActor: 'ttttttt1-0000-4000-8000-000000000001', expectedActive: true });
+  assert.equal(r.ok, false);
+  assert.equal(db.activeChanges.length, 0);
+});
+
+test('target role allowlist: NULL/missing role is rejected', async () => {
+  const actors = await withTargetRole(null)();
+  const { db, dao } = makeDb(actors);
+  const r = await deactivate(dao, { targetActor: 'ttttttt1-0000-4000-8000-000000000001', expectedActive: true });
+  assert.equal(r.ok, false);
+  assert.equal(db.activeChanges.length, 0);
+});
+
+test('target role allowlist decides by ROLE, not the actor id literal "owner", in both directions', async () => {
+  // direction 1: a UUID actor (id has nothing to do with "owner") whose ROLE is the
+  // reserved 'owner' role must still be rejected -- ownership is never decided by id.
+  const roleOwnerActors = await seedActors();
+  roleOwnerActors.push({ actor: 'zzzzzzz1-0000-4000-8000-000000000009', role: 'owner', active: true, workspace_id: WID, session_version: 1, pin_hash: null, failed_count: 0, locked_until: null, fingerprints: [] });
+  const { db: db1, dao: dao1 } = makeDb(roleOwnerActors);
+  const r1 = await deactivate(dao1, { targetActor: 'zzzzzzz1-0000-4000-8000-000000000009', expectedActive: true });
+  assert.equal(r1.ok, false, 'a UUID actor with role=owner must be rejected exactly like the legacy id "owner"');
+  assert.equal(db1.activeChanges.length, 0);
+});
+
+test('credential clear also enforces the same exact allowlist', async () => {
+  const bad = await withTargetRole('superuser')();
+  const { db: db1, dao: dao1 } = makeDb(bad);
+  const r1 = await clearCred(dao1, 'ttttttt1-0000-4000-8000-000000000001', 1);
+  assert.equal(r1.ok, false);
+  const good = await withTargetRole('shift_manager')();
+  const { db: db2, dao: dao2 } = makeDb(good);
+  const r2 = await clearCred(dao2, 'ttttttt1-0000-4000-8000-000000000001', 1);
+  assert.equal(r2.ok, true);
+});
+
+// ══ SECURITY CLOSURE: authorization proved BEFORE idempotency replay ══════════════
+test('a valid owner CAN replay their own prior successful request', async () => {
+  const { db, dao } = makeDb(await seedActors());
+  const first = await deactivate(dao);
+  const replay = await deactivate(dao);
+  assert.equal(replay.ok, true);
+  assert.deepEqual(replay, first);
+  assert.equal(db.activeChanges.length, 1, 'replay must not mutate again');
+});
+
+test('an acting owner who has since become INACTIVE cannot replay a prior successful request', async () => {
+  const actors = await seedActors();
+  const { db, dao } = makeDb(actors);
+  const first = await deactivate(dao);
+  assert.equal(first.ok, true);
+  // the acting owner is deactivated AFTER the first call succeeded -- simulating a
+  // revoke that happens between the original call and the replay attempt
+  actors.find((a) => a.actor === 'owner').active = false;
+  const replay = await deactivate(dao);
+  assert.equal(replay.ok, false, 'an inactive acting owner must not receive the stored success response');
+});
+
+test('an acting owner who has since been DEMOTED (role no longer admin/owner) cannot replay a prior successful request', async () => {
+  const actors = await seedActors();
+  const { db, dao } = makeDb(actors);
+  const first = await deactivate(dao);
+  assert.equal(first.ok, true);
+  actors.find((a) => a.actor === 'owner').role = 'cashier'; // demoted after the original success
+  const replay = await deactivate(dao);
+  assert.equal(replay.ok, false, 'a demoted acting owner must not receive the stored success response');
+});
+
+test('a cross-workspace acting actor cannot replay a prior successful request', async () => {
+  const actors = await seedActors();
+  const { db, dao } = makeDb(actors);
+  const first = await deactivate(dao);
+  assert.equal(first.ok, true);
+  actors.find((a) => a.actor === 'owner').workspace_id = OTHER_WID; // moved out from under the original workspace
+  const replay = await deactivate(dao);
+  assert.equal(replay.ok, false);
+});
+
+test('a different sid cannot reuse another session\'s stored idempotency result', async () => {
+  const { db, dao } = makeDb(await seedActors());
+  const first = await deactivate(dao, { sid: 'sid-1', stepUp: stepUp('owner', 'sid-1'), clientRequestId: 'req-sidbind-1' });
+  assert.equal(first.ok, true);
+  // SAME client_request_id and SAME believed expectedActive (true, the ORIGINAL
+  // request's belief) but a DIFFERENT sid -> different bySidHash -> a completely
+  // different idempotency key. If this incorrectly hit the first call's stored
+  // response, it would return ok:true with the identical (now stale) payload. Instead
+  // it must be evaluated FRESH against current state (already deactivated), and fail
+  // with a state mismatch -- proving one session's sid can never unlock another
+  // session's stored result, replay or otherwise.
+  const wrongSid = await deactivate(dao, { sid: 'sid-2', stepUp: stepUp('owner', 'sid-2'), clientRequestId: 'req-sidbind-1' });
+  assert.equal(wrongSid.ok, false, 'must not resolve as the first session\'s replay');
+});
+
+test('same key with a CHANGED payload still conflicts even after authorization is proved', async () => {
+  const { db, dao } = makeDb(await seedActors());
+  const first = await deactivate(dao);
+  assert.equal(first.ok, true);
+  const conflict = await deactivate(dao, { targetActor: 'operator_backup', expectedActive: false, clientRequestId: 'req-deact-1' });
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.error, 'idempotency_conflict');
+});
+
+test('authorization failure happens BEFORE any stored response could be returned -- the DAO is invoked and itself rejects, proving order at the orchestration boundary', async () => {
+  const actors = await seedActors();
+  const { db, dao } = makeDb(actors);
+  await deactivate(dao); // establish a stored success
+  actors.find((a) => a.actor === 'owner').active = false; // then revoke
+  const before = db.activeCalls;
+  const replay = await deactivate(dao);
+  assert.equal(replay.ok, false);
+  assert.equal(db.activeCalls, before + 1, 'the DAO/RPC was invoked (not skipped) and itself refused the stale replay');
 });
 
 console.log('\n=== node:test suite complete (see summary above) ===');
