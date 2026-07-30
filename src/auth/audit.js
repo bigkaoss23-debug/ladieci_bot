@@ -3,31 +3,37 @@
 // a small self-contained REST helper (sbRest) shared with dao.js.
 // service_role only (backend). auth_audit is append-only BY CONTRACT: this
 // module exposes NO update/delete. Never logs. Never prints secrets.
+//
+// H1A — Security Foundation Block: sbRest is internally routed through the
+// hardened server-side transport (src/utils/supabaseTransport.js — timeout,
+// AbortController, normalized error codes). Called with silent:true: this
+// domain's zero-console-output contract predates H1A and is covered by
+// tests/authDao.test.js ("modules emit ZERO console output") — H1A must not
+// regress it, so no operation/status/duration line is ever emitted here. The
+// external contract (never throws; always resolves to {ok,status,body}, with
+// {ok:false,status:0,body:null} on any configuration/network/timeout failure —
+// exactly as before H1A) is preserved byte-for-byte — see
+// tests/supabaseHelpersRegression.test.js.
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const { supabaseRequest } = require('../utils/supabaseTransport');
 
 class AuthDaoError extends Error {
   constructor(code, message) { super(message || code); this.name = 'AuthDaoError'; this.code = code; }
 }
 
 // ── minimal REST helper (does NOT force select=*; returns {ok,status,body}) ───
+// Never throws: a configuration/network/timeout failure (previously an uncaught
+// fetch() rejection) collapses to the same {ok:false,status:0,body:null} shape
+// callers (dao.js, adminAccessDao.js, financialDao.js, recoveryDao.js,
+// pinRotationDao.js, workspaceOwnerDao.js) already handle today.
 async function sbRest(method, resource, { query, body, prefer } = {}) {
-  const headers = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (prefer) headers['Prefer'] = prefer;
-  let url = `${SUPABASE_URL}/rest/v1/${resource}`;
-  if (query) url += '?' + query;
-  let res;
+  let r;
   try {
-    res = await fetch(url, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+    r = await supabaseRequest({ resource, method, query, body, prefer, operation: `sbRest:${resource}`, silent: true });
   } catch (_) {
     return { ok: false, status: 0, body: null };
   }
-  const text = await res.text();
-  let parsed = null;
-  try { parsed = text ? JSON.parse(text) : null; } catch (_) { parsed = null; }
-  return { ok: res.ok, status: res.status, body: parsed };
+  return { ok: r.ok, status: r.status, body: r.bodyIsJson ? r.body : null };
 }
 
 const ALLOWED_EVENTS = Object.freeze([

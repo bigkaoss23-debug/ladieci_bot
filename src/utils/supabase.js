@@ -1,30 +1,26 @@
 // ===============================================================
 // supabase.js — Supabase REST helpers
 // ===============================================================
+// H1A — Security Foundation Block: internally routed through the hardened
+// server-side transport (src/utils/supabaseTransport.js — timeout, AbortController,
+// normalized error codes, secret/PII-safe logging). The external contract of every
+// export below (arguments, return shape, tolerant-JSON-parse behavior) is preserved
+// byte-for-byte from the pre-H1A version — see tests/supabaseHelpersRegression.test.js.
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-
-function sbHeaders(extra = {}) {
-  return {
-    "apikey": SUPABASE_KEY,
-    "Authorization": "Bearer " + SUPABASE_KEY,
-    "Content-Type": "application/json",
-    ...extra
-  };
-}
+const { supabaseRequest } = require('./supabaseTransport');
 
 async function sbFetch(table, method, params = {}) {
-  let url = `${SUPABASE_URL}/rest/v1/${table}`;
-  const options = { method: method.toUpperCase(), headers: sbHeaders() };
-
-  if (params.query) url += "?" + params.query;
-  if (params.prefer) options.headers["Prefer"] = params.prefer;
-  if (params.body) options.body = JSON.stringify(params.body);
-
-  const res = await fetch(url, options);
-  const text = await res.text();
-  try { return JSON.parse(text); } catch { return text; }
+  const r = await supabaseRequest({
+    resource: table,
+    method,
+    query: params.query,
+    body: params.body ? params.body : undefined,
+    prefer: params.prefer,
+    operation: `sbFetch:${table}`,
+  });
+  // Preserves the original tolerant behavior: parsed JSON when possible,
+  // otherwise the raw response text (never throws on a non-JSON 2xx/4xx body).
+  return r.bodyIsJson ? r.body : r.text;
 }
 
 async function sbSelect(table, query = "") {
@@ -66,16 +62,13 @@ async function getConfig() {
 // never surfaces raw PostgREST text — callers (src/agents/riderTrip.js) normalize
 // the structured {ok,code,...} JSON result.
 async function sbRpc(functionName, args = {}) {
-  const url = `${SUPABASE_URL}/rest/v1/rpc/${functionName}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: sbHeaders(),
-    body: JSON.stringify(args || {}),
+  const r = await supabaseRequest({
+    resource: `rpc/${functionName}`,
+    method: 'POST',
+    body: args || {},
+    operation: `sbRpc:${functionName}`,
   });
-  const text = await res.text();
-  let body;
-  try { body = JSON.parse(text); } catch { body = null; }
-  return { httpStatus: res.status, ok: res.ok, body };
+  return { httpStatus: r.status, ok: r.ok, body: r.bodyIsJson ? r.body : null };
 }
 
 module.exports = { sbSelect, sbUpsert, sbUpdate, sbDelete, sbInsert, getConfig, sbRpc };
