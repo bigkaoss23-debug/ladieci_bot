@@ -86,8 +86,11 @@ for (const f of ALL_SRC_AUTH) {
   assert('pinRotationServiceV3.js (V3-B) still exports exactly {createPinRotationV3, FAILED, DUPLICATE, RESERVED} -- unchanged by V3-D',
     JSON.stringify(Object.keys(v3PinService).sort()) === JSON.stringify(['DUPLICATE', 'FAILED', 'RESERVED', 'createPinRotationV3']));
   const v3RoleService = require('../src/auth/roleChangeServiceV3');
-  assert('roleChangeServiceV3.js (V3-C) still exports exactly {createRoleChangeV3, FAILED, CONFLICT} -- unchanged by V3-D',
-    JSON.stringify(Object.keys(v3RoleService).sort()) === JSON.stringify(['CONFLICT', 'FAILED', 'createRoleChangeV3']));
+  // V3-G.1 later added WAITER_HAS_OPEN_TABLES to this export set (a legitimate
+  // extension, not a V3-D change) -- accept any shape that still includes the original
+  // V3-C-era exports; V3-D itself added nothing here.
+  assert('roleChangeServiceV3.js (V3-C) exports at least {createRoleChangeV3, FAILED, CONFLICT} -- V3-D itself added nothing here',
+    typeof v3RoleService.createRoleChangeV3 === 'function' && !!v3RoleService.FAILED && !!v3RoleService.CONFLICT);
 }
 
 // ── the new modules' own exports match the documented, isolated contract ─────────

@@ -12,6 +12,7 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const fwd = read('migrations/2026-07-31_v3g_waiter_table_assignment_safety.sql');
 const rb = read('migrations/2026-07-31_v3g_waiter_table_assignment_safety.ROLLBACK.sql');
 const v3e = read('migrations/2026-07-30_v3e_access_user_lifecycle.sql');
+const v3c = read('migrations/2026-07-29_v3c_auth_change_actor_role.sql');
 // Strip full-line SQL comments (-- ...) so structural/positional checks below can't be
 // tripped by prose in header/doc comments mentioning the same marker names as the code.
 const stripSql = (s) => s.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n');
@@ -110,9 +111,9 @@ assert('no UPDATE/DELETE statement anywhere targets table_session_assignment_his
     (v3gFn.match(/workspace_id, by_actor, by_sid_hash, action, client_request_id, request_hash, response_status, response_body/g) || []).length === 1);
 }
 
-// ── exact conflict code ──────────────────────────────────────────────────────────────
-assert('conflict code is exactly AUTH_WAITER_HAS_OPEN_TABLES (once in real code, in the active-state RPC only)',
-  (fwdCode.match(/AUTH_WAITER_HAS_OPEN_TABLES/g) || []).length === 1);
+// ── exact conflict code (V3-G.1: now raised by TWO RPCs -- active-state AND role-change) ──
+assert('conflict code is exactly AUTH_WAITER_HAS_OPEN_TABLES, appearing exactly twice in real code (active-state + role-change)',
+  (fwdCode.match(/AUTH_WAITER_HAS_OPEN_TABLES/g) || []).length === 2);
 assert('guard only fires for a genuinely NEW, real DEACTIVATION of a locked role=\'waiter\' target',
   /v_changed AND NOT p_requested_active AND v_tgt\.role = 'waiter'/.test(fwdCode));
 assert('guard is placed AFTER idempotency-replay evaluation and expected-state check',
@@ -142,6 +143,86 @@ assert('rollback: drops only the new assignment RPC',
 for (const [label, text] of [['forward', fwd], ['rollback', rb]]) {
   assert(`${label}: never sets active/role/pin_hash on any actor outside the guarded RPC bodies`,
     !/UPDATE public\.auth_actors SET (active|role|pin_hash) = /.test(text.replace(/CREATE OR REPLACE FUNCTION[\s\S]*?\$fn\$;/g, '')));
+}
+
+// ══════════════════ V3-G.1: WAITER ROLE-CHANGE SAFETY CLOSURE ══════════════════
+
+// ── V3-C migration itself remains untouched (accepted, already-live on staging) ────
+assert('V3-C migration file unchanged (still contains its own accepted checksum marker text, no V3-G symbols)',
+  !v3c.includes('AUTH_WAITER_HAS_OPEN_TABLES') && !v3c.includes('table_sessions') && v3c.includes('change_actor_role'));
+
+// ── predecessor guard: exact V3-C 9-arg signature ───────────────────────────────────
+assert('forward: predecessor guard checks the EXACT V3-C role-change signature',
+  /p_workspace_id uuid, p_by_actor text, p_target_actor text, p_expected_role text, p_requested_role text, p_by_sid_hash text, p_client_request_id text, p_request_hash text, p_meta jsonb/.test(fwd));
+assert('forward: refuses if the V3-C predecessor is not found', /V3-G refused: auth_change_actor_role_v3 \(V3-C exact signature\) not found — apply V3-C first/.test(fwd));
+
+// ── role-change function revised only in V3-G(.1), not V3-C ─────────────────────────
+assert('forward: contains exactly one CREATE OR REPLACE FUNCTION public.auth_change_actor_role_v3( in real code',
+  (fwdCode.match(/CREATE OR REPLACE FUNCTION public\.auth_change_actor_role_v3\(/g) || []).length === 1);
+
+// ── actor-first/session-second ordering for the role-change RPC ────────────────────
+{
+  const roleFn = fwd.match(/CREATE OR REPLACE FUNCTION public\.auth_change_actor_role_v3\([\s\S]*?\$fn\$;/)[0];
+  const wsLockIdx = roleFn.indexOf('FROM public.workspaces WHERE id = p_workspace_id FOR UPDATE');
+  const actorLockIdx = roleFn.indexOf("WHERE actor IN (p_by_actor, p_target_actor) ORDER BY actor FOR UPDATE");
+  const guardTableLockIdx = roleFn.indexOf('FROM public.table_sessions');
+  assert('role-change RPC: workspace lock before actor lock', wsLockIdx > 0 && wsLockIdx < actorLockIdx);
+  assert('role-change RPC: actor lock before any table_sessions reference (frozen order)', actorLockIdx > 0 && actorLockIdx < guardTableLockIdx);
+  assert('role-change RPC: table-session lock uses FOR UPDATE with deterministic ORDER BY id',
+    /table_sessions[\s\S]{0,120}ORDER BY id FOR UPDATE/.test(roleFn));
+}
+
+// ── open-session predicate exact (status='open', same workspace, same target) ──────
+{
+  const roleFnCode = stripSql(fwd.match(/CREATE OR REPLACE FUNCTION public\.auth_change_actor_role_v3\([\s\S]*?\$fn\$;/)[0]);
+  assert('role-change RPC: open-session predicate is exact (workspace_id, assigned_waiter_actor, status=\'open\')',
+    (roleFnCode.match(/WHERE workspace_id = p_workspace_id AND assigned_waiter_actor = p_target_actor AND status = 'open'/g) || []).length === 2);
+}
+
+// ── exact conflict marker, once in real code ────────────────────────────────────────
+{
+  const roleFnCode = stripSql(fwd.match(/CREATE OR REPLACE FUNCTION public\.auth_change_actor_role_v3\([\s\S]*?\$fn\$;/)[0]);
+  assert('role-change RPC: AUTH_WAITER_HAS_OPEN_TABLES appears exactly once in real code', (roleFnCode.match(/AUTH_WAITER_HAS_OPEN_TABLES/g) || []).length === 1);
+  assert('role-change RPC: guard condition is v_changed AND v_old_role = \'waiter\' (never fires for waiter->waiter no-op)',
+    /IF v_changed AND v_old_role = 'waiter' THEN/.test(roleFnCode));
+}
+
+// ── replay correctness: idempotency lookup precedes the expected-role check AND the
+//    guard (so a genuine replay is never re-litigated against now-stale state) ─────
+{
+  const roleFnCode = stripSql(fwd.match(/CREATE OR REPLACE FUNCTION public\.auth_change_actor_role_v3\([\s\S]*?\$fn\$;/)[0]);
+  const actorLockIdx = roleFnCode.indexOf("WHERE actor IN (p_by_actor, p_target_actor) ORDER BY actor FOR UPDATE");
+  const idemIdx = roleFnCode.indexOf('FROM public.access_management_idempotency');
+  const expectedRoleIdx = roleFnCode.indexOf('AUTH_TARGET_ROLE_MISMATCH');
+  const guardIdx = roleFnCode.indexOf('AUTH_WAITER_HAS_OPEN_TABLES');
+  const insertIdx = roleFnCode.lastIndexOf('INSERT INTO public.access_management_idempotency');
+  assert('role-change RPC: actor lock precedes idempotency lookup (auth-before-replay, V3-G.1 reorder fix)', actorLockIdx > 0 && actorLockIdx < idemIdx);
+  assert('role-change RPC: idempotency lookup precedes the expected-role staleness check (replay correctness)', idemIdx > 0 && idemIdx < expectedRoleIdx);
+  assert('role-change RPC: idempotency lookup precedes the waiter guard (replay correctness)', idemIdx > 0 && idemIdx < guardIdx);
+  assert('role-change RPC: the waiter guard precedes the final idempotency INSERT (a rejected attempt writes no idempotency row)', guardIdx > 0 && guardIdx < insertIdx);
+}
+
+// ── rollback restores the exact V3-C predecessor body ───────────────────────────────
+assert('rollback: restores the byte-identical V3-C function body', (() => {
+  const v3cFn = v3c.match(/CREATE OR REPLACE FUNCTION public\.auth_change_actor_role_v3\([\s\S]*?\$fn\$;/)[0];
+  const rbFn = rb.match(/CREATE OR REPLACE FUNCTION public\.auth_change_actor_role_v3\([\s\S]*?\$fn\$;/)[0];
+  const norm = (s) => s.replace(/\s+/g, ' ').trim();
+  return norm(v3cFn) === norm(rbFn);
+})());
+assert('rollback: does not touch auth_actors_actor_role_map in real code (V3-C\'s own CHECK, out of scope for this rollback)',
+  !/ALTER TABLE public\.auth_actors (DROP|ADD) CONSTRAINT auth_actors_actor_role_map/.test(rbCode));
+assert('rollback: still refuses if assignment history/idempotency/assignment state exists (shared guard covers both restored functions)',
+  /table_session_assignment_history/.test(rb) && /table_sessions row\(s\) carry a non-NULL/.test(rb));
+
+// ── active-state V3-G guard remains intact (unaffected by the V3-G.1 role-change work) ──
+assert('active-state RPC: AUTH_WAITER_HAS_OPEN_TABLES guard still present and unique to that RPC (2 total: 1 active-state, 1 role-change)',
+  (fwdCode.match(/AUTH_WAITER_HAS_OPEN_TABLES/g) || []).length === 2);
+
+// ── manifest checksum updated ────────────────────────────────────────────────────────
+{
+  const manifest = read('migrations/MIGRATION_MANIFEST.md');
+  const fwdChecksum = require('crypto').createHash('sha256').update(fwd, 'utf8').digest('hex').slice(0, 16);
+  assert('manifest row 44 checksum matches the current forward migration file', manifest.includes(fwdChecksum));
 }
 
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);

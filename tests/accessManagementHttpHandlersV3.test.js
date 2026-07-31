@@ -116,6 +116,9 @@ function fakeRoleChangeService() {
     calls,
     async changeRole(args) {
       calls.push({ name: 'changeRole', args });
+      // V3-G.1: the database RPC is authoritative for the waiter/open-table-session
+      // conflict -- simulate its exact result shape for a designated fixture target.
+      if (args.targetActor === 'dyn_waiter_with_tables') return { ok: false, error: 'waiter_has_open_tables' };
       return { ok: true, actor: args.targetActor, oldRole: args.expectedRole, role: args.requestedRole, sessionVersion: 3, changed: true };
     },
   };
@@ -481,6 +484,18 @@ function bearer(t) { return { authorization: 'Bearer ' + t }; }
     res = fakeRes();
     await runChain(route.chain, { headers: bearer('good-owner'), params: { actor: 'dyn_cashier' }, body: { expectedRole: 'cashier', requestedRole: 'waiter', clientRequestId: 'c9', stepUpProof: 'proof-owner-good' } }, res);
     assert('role change: valid assignable target -> 200', res._status === 200);
+
+    // V3-G.1: role change away from waiter with open table sessions -> database-
+    // authoritative 409, mapped through the SAME generic error-code table the
+    // deactivate handler already uses (zero handler-specific code needed).
+    res = fakeRes();
+    await runChain(route.chain, { headers: bearer('good-owner'), params: { actor: 'dyn_waiter_with_tables' }, body: { expectedRole: 'waiter', requestedRole: 'cashier', clientRequestId: 'c10', stepUpProof: 'proof-owner-good' } }, res);
+    assert('role change: waiter with open table sessions -> stable 409 AUTH_WAITER_HAS_OPEN_TABLES', res._status === 409 && res._json.code === 'AUTH_WAITER_HAS_OPEN_TABLES');
+    assert('role change: the conflict came FROM the service call, not a Node-side pre-check',
+      deps.roleChangeService.calls.some((c) => c.name === 'changeRole' && c.args.targetActor === 'dyn_waiter_with_tables'));
+    assert('role change: no table-session identifier, count, or customer detail appears in the conflict response',
+      !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.test(JSON.stringify(res._json))
+      && !('openTableCount' in (res._json || {})) && !('tableSessionId' in (res._json || {})));
 
     // clear pin
     route = findRoute(app.routes, 'DELETE', '/api/auth/v3/access-users/:actor/pin');

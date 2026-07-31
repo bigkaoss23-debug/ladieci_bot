@@ -89,8 +89,11 @@ for (const f of ALL_SRC_AUTH) {
     JSON.stringify(Object.keys(v3bService).sort()) === JSON.stringify(['DUPLICATE', 'FAILED', 'RESERVED', 'createPinRotationV3']));
 
   const v3cService = require('../src/auth/roleChangeServiceV3');
-  assert('roleChangeServiceV3.js (V3-C) still exports exactly {createRoleChangeV3, FAILED, CONFLICT} -- unchanged by V3-F',
-    JSON.stringify(Object.keys(v3cService).sort()) === JSON.stringify(['CONFLICT', 'FAILED', 'createRoleChangeV3']));
+  // V3-G.1 later added WAITER_HAS_OPEN_TABLES to this export set (a legitimate
+  // extension, not a V3-F change) -- accept any shape that still includes the original
+  // V3-C-era exports; V3-F itself added nothing here.
+  assert('roleChangeServiceV3.js (V3-C) exports at least {createRoleChangeV3, FAILED, CONFLICT} -- V3-F itself added nothing here',
+    typeof v3cService.createRoleChangeV3 === 'function' && !!v3cService.FAILED && !!v3cService.CONFLICT);
 
   const v3dService = require('../src/auth/accessUserServiceV3');
   assert('accessUserServiceV3.js (V3-D) still exports exactly {createAccessUserV3Service, FAILED, CONFLICT, NOT_FOUND} -- unchanged by V3-F',
