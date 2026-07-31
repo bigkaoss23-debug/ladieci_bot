@@ -30,6 +30,15 @@ const { computeRoleChangeRequestHash } = require('./roleChangeRequestHash');
 
 const FAILED = Object.freeze({ ok: false, error: 'role_change_failed' });
 const CONFLICT = Object.freeze({ ok: false, error: 'idempotency_conflict' });
+// V3-G.1 addition: distinguishes the database-authoritative "this waiter still has open
+// table sessions" conflict from every other generic failure, mirroring exactly how
+// CONFLICT above already distinguishes idempotency-key reuse, and using the SAME error
+// string as the access-user lifecycle service's own equivalent constant so the HTTP
+// boundary's existing generic error-code table (waiter_has_open_tables ->
+// AUTH_WAITER_HAS_OPEN_TABLES -> 409) already routes it correctly with zero handler
+// changes. Raised only by auth_change_actor_role_v3 for a role change away from
+// role='waiter' while open table sessions remain assigned.
+const WAITER_HAS_OPEN_TABLES = Object.freeze({ ok: false, error: 'waiter_has_open_tables' });
 
 function createRoleChangeV3(deps = {}) {
   const { dao, sidHash } = deps;
@@ -73,6 +82,7 @@ function createRoleChangeV3(deps = {}) {
         });
       } catch (e) {
         if (e && e.code === 'ROLE_CHANGE_CONFLICT') return CONFLICT;
+        if (e && e.code === 'ROLE_CHANGE_WAITER_OPEN_TABLES') return WAITER_HAS_OPEN_TABLES;
         return FAILED;
       }
       if (!result || result.actor !== targetActor) return FAILED;
@@ -93,4 +103,4 @@ function createRoleChangeV3(deps = {}) {
   return { changeRole };
 }
 
-module.exports = { createRoleChangeV3, FAILED, CONFLICT };
+module.exports = { createRoleChangeV3, FAILED, CONFLICT, WAITER_HAS_OPEN_TABLES };

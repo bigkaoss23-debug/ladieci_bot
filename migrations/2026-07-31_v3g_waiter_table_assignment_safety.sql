@@ -94,6 +94,26 @@ BEGIN
   END IF;
 END $$;
 
+-- V3-G.1 addition -- required predecessor: the exact V3-C role-change writer, by its
+-- exact accepted 9-argument signature -- proves this migration is about to CREATE OR
+-- REPLACE the real V3-C function (also revised below, to add the waiter/open-table
+-- guard), not something else that happens to share its name, and that V3-C has actually
+-- been applied (it has -- V3-C is already live on shared staging, ledger version
+-- 20260729162816 -- this migration never edits the original V3-C file, only additively
+-- CREATE OR REPLACEs the live function it installed, exactly like it already does for
+-- V3-E's auth_set_access_user_active_v3 above).
+DO $$
+DECLARE v_v3c_found int;
+BEGIN
+  SELECT count(*) INTO v_v3c_found FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'auth_change_actor_role_v3'
+     AND pg_get_function_identity_arguments(p.oid) =
+       'p_workspace_id uuid, p_by_actor text, p_target_actor text, p_expected_role text, p_requested_role text, p_by_sid_hash text, p_client_request_id text, p_request_hash text, p_meta jsonb';
+  IF v_v3c_found <> 1 THEN
+    RAISE EXCEPTION 'V3-G refused: auth_change_actor_role_v3 (V3-C exact signature) not found — apply V3-C first' USING ERRCODE='P0001';
+  END IF;
+END $$;
+
 -- ── 1) table_sessions -- one row per restaurant table's open/closed dine-in session ──
 CREATE TABLE IF NOT EXISTS public.table_sessions (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -511,6 +531,219 @@ $fn$;
 REVOKE ALL ON FUNCTION public.auth_set_access_user_active_v3(uuid, text, text, boolean, boolean, text, text, text, jsonb)
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.auth_set_access_user_active_v3(uuid, text, text, boolean, boolean, text, text, text, jsonb)
+  TO service_role;
+
+-- ── 5) auth_change_actor_role_v3 -- V3-G.1 revision: waiter-open-tables guard,
+--       PLUS a reorder correction ────────────────────────────────────────────────
+-- Source-audit finding (V3-G.1): the committed V3-C body evaluates the idempotency
+-- lookup/replay BEFORE the actor lock and authorization checks -- workspace lock ->
+-- idempotency lookup -> actor lock -> authorization, the OPPOSITE of V3-E's already-
+-- corrected order (actor lock -> authorization -> idempotency lookup). Under the old
+-- V3-C order, a revoked/deactivated/demoted acting owner could still receive a stored
+-- success response from a stale idempotency record, because authorization was never
+-- re-proved before the replay short-circuit. This revision corrects that ordering to
+-- match V3-E's pattern AND places the new waiter guard even earlier -- BEFORE
+-- idempotency evaluation -- so a stale idempotency record can never bypass the new
+-- guard either. Every other V3-C behavior (workspace lock, deterministic actor
+-- locking, actor re-read under lock, active acting owner, owner semantics by role,
+-- same-workspace target, owner-target rejection, expected-current-role snapshot,
+-- exact requested-role allowlist, target-only role update, target-only
+-- session_version increment, role_changed audit, session_invalidated audit, safe
+-- no-op behavior, same-key/same-payload replay, changed-payload conflict,
+-- service-role-only execution, SECURITY INVOKER, pinned search_path, no credential
+-- mutation) is preserved -- only the RELATIVE ORDER of blocks changes, not their
+-- content, plus the one new guard block.
+--
+-- New rule: when the target's authoritative locked role is 'waiter', the requested
+-- role differs (v_changed), and one or more OPEN table sessions are assigned to the
+-- target, the RPC locks those sessions deterministically, performs no role mutation,
+-- no session_version increment, no role_changed/session_invalidated audit, no
+-- idempotency insertion, and raises AUTH_WAITER_HAS_OPEN_TABLES. A waiter->waiter
+-- no-op never reaches the guard (v_changed is false). Closed historical sessions
+-- never block a role change (the guard only counts status='open').
+CREATE OR REPLACE FUNCTION public.auth_change_actor_role_v3(
+  p_workspace_id uuid, p_by_actor text, p_target_actor text,
+  p_expected_role text, p_requested_role text,
+  p_by_sid_hash text, p_client_request_id text, p_request_hash text,
+  p_meta jsonb DEFAULT '{}'::jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_ws public.workspaces%ROWTYPE;
+  v_by public.auth_actors%ROWTYPE;
+  v_tgt public.auth_actors%ROWTYPE;
+  r public.auth_actors%ROWTYPE;
+  v_idem public.access_management_idempotency%ROWTYPE;
+  v_meta jsonb := COALESCE(p_meta, '{}'::jsonb);
+  v_now timestamptz := now();
+  v_old_role text;
+  v_changed boolean;
+  v_open_tables int;
+  v_result jsonb;
+BEGIN
+  -- ── input guards (byte-identical to V3-C) ─────────────────────────────────
+  IF p_workspace_id IS NULL THEN RAISE EXCEPTION 'AUTH_WORKSPACE_REQUIRED' USING ERRCODE='22023'; END IF;
+  IF p_by_actor IS NULL OR btrim(p_by_actor) = '' THEN RAISE EXCEPTION 'AUTH_INITIATOR_REQUIRED' USING ERRCODE='22023'; END IF;
+  IF p_target_actor IS NULL OR btrim(p_target_actor) = '' THEN RAISE EXCEPTION 'AUTH_ACTOR_INVALID' USING ERRCODE='22023'; END IF;
+  IF p_expected_role IS NULL OR btrim(p_expected_role) = '' THEN RAISE EXCEPTION 'AUTH_ROLE_INVALID' USING ERRCODE='22023'; END IF;
+  IF p_requested_role IS NULL OR p_requested_role NOT IN ('cashier', 'waiter', 'kitchen', 'rider', 'shift_manager')
+  THEN RAISE EXCEPTION 'AUTH_REQUESTED_ROLE_INVALID' USING ERRCODE='22023'; END IF;
+  IF p_by_sid_hash IS NULL OR btrim(p_by_sid_hash) = '' OR length(p_by_sid_hash) > 64
+  THEN RAISE EXCEPTION 'AUTH_SID_HASH_INVALID' USING ERRCODE='22023'; END IF;
+  IF p_client_request_id IS NULL OR btrim(p_client_request_id) = '' OR length(p_client_request_id) > 128
+  THEN RAISE EXCEPTION 'AUTH_CLIENT_REQUEST_ID_INVALID' USING ERRCODE='22023'; END IF;
+  IF p_request_hash IS NULL OR p_request_hash !~ '^[0-9a-f]{64}$'
+  THEN RAISE EXCEPTION 'AUTH_REQUEST_HASH_INVALID' USING ERRCODE='22023'; END IF;
+  IF jsonb_typeof(v_meta) <> 'object' THEN RAISE EXCEPTION 'AUTH_META_INVALID' USING ERRCODE='22023'; END IF;
+  IF length(v_meta::text) > 2048 THEN RAISE EXCEPTION 'AUTH_META_TOO_LARGE' USING ERRCODE='22023'; END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_object_keys(v_meta) k WHERE lower(k) = ANY (ARRAY[
+       'pin','pin_hash','password','token','access_token','refresh_token','jwt','secret',
+       'recovery_secret','authorization','api_key','apikey','bearer','cookie','raw_ip',
+       'confirmation','fingerprint','pin_fingerprint','fingerprint_key','hmac_key',
+       'proof','step_up_proof','sid']))
+  THEN RAISE EXCEPTION 'AUTH_META_SENSITIVE_KEY' USING ERRCODE='22023'; END IF;
+
+  -- ── 1) workspace row lock — the serialisation point (unchanged discipline) ──
+  SELECT * INTO v_ws FROM public.workspaces WHERE id = p_workspace_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'WORKSPACE_NOT_FOUND' USING ERRCODE='P0002'; END IF;
+  IF v_ws.lifecycle_status <> 'active' THEN RAISE EXCEPTION 'WORKSPACE_NOT_ACTIVE' USING ERRCODE='22023'; END IF;
+
+  -- ── 2) deterministic actor-id locking — acting + target, ordered ─────────────
+  -- V3-G.1 REORDER: moved BEFORE idempotency lookup (was after, in the committed V3-C
+  -- body) -- authorization must be proved BEFORE any idempotency lookup/replay, exactly
+  -- like V3-E's own corrected pattern: a revoked, deactivated, or demoted acting actor
+  -- must never receive a stored success response merely because a matching idempotency
+  -- record exists from when they WERE authorized.
+  PERFORM 1 FROM public.auth_actors WHERE actor IN (p_by_actor, p_target_actor) ORDER BY actor FOR UPDATE;
+
+  -- ── 3) re-read both actors under lock ─────────────────────────────────────
+  SELECT * INTO v_by FROM public.auth_actors WHERE actor = p_by_actor;
+  IF NOT FOUND THEN RAISE EXCEPTION 'AUTH_INITIATOR_NOT_FOUND' USING ERRCODE='P0002'; END IF;
+  SELECT * INTO v_tgt FROM public.auth_actors WHERE actor = p_target_actor;
+  IF NOT FOUND THEN RAISE EXCEPTION 'AUTH_ACTOR_NOT_FOUND' USING ERRCODE='P0002'; END IF;
+
+  -- ── 4) acting actor — owner semantics decided by ROLE, never the actor id ────
+  IF v_by.workspace_id IS DISTINCT FROM p_workspace_id THEN
+    RAISE EXCEPTION 'AUTH_INITIATOR_OTHER_WORKSPACE' USING ERRCODE='P0001'; END IF;
+  IF v_by.active <> true THEN RAISE EXCEPTION 'AUTH_INITIATOR_INACTIVE' USING ERRCODE='22023'; END IF;
+  IF v_by.role NOT IN ('admin', 'owner') THEN RAISE EXCEPTION 'AUTH_NOT_OWNER' USING ERRCODE='P0001'; END IF;
+
+  -- ── 5) target — same workspace, not the owner (by ROLE, never the actor id) ──
+  IF v_tgt.workspace_id IS DISTINCT FROM p_workspace_id THEN
+    RAISE EXCEPTION 'AUTH_TARGET_OTHER_WORKSPACE' USING ERRCODE='P0001'; END IF;
+  IF v_tgt.role IN ('admin', 'owner') THEN RAISE EXCEPTION 'AUTH_TARGET_IS_OWNER' USING ERRCODE='P0001'; END IF;
+
+  -- ── 6) idempotency lookup — ONLY now, after acting-owner AND target identity are
+  --    both proved against the CURRENT authoritative rows under lock (V3-G.1 REORDER:
+  --    was evaluated before actor locking/authorization in the committed V3-C body --
+  --    corrected to match V3-E's pattern exactly). A genuine replay (same key, same
+  --    payload) MUST short-circuit here, BEFORE the expected-role staleness check and
+  --    BEFORE the waiter guard below -- by the time a request is replayed, the
+  --    target's role may have already legitimately changed (that is exactly what the
+  --    first, original call did), so re-evaluating a snapshot check or the guard
+  --    against a replay's OLD payload would incorrectly reject a safe, already-decided
+  --    replay. This mirrors V3-E's own auth_set_access_user_active_v3 exactly: its
+  --    idempotency lookup also precedes its expected-state check and its waiter guard,
+  --    for the identical reason. ─────────────────────────────────────────────────
+  SELECT * INTO v_idem FROM public.access_management_idempotency
+   WHERE workspace_id = p_workspace_id AND by_actor = p_by_actor AND by_sid_hash = p_by_sid_hash
+     AND action = 'change_actor_role' AND client_request_id = p_client_request_id;
+  IF FOUND THEN
+    IF v_idem.request_hash = p_request_hash THEN
+      RETURN v_idem.response_body; -- safe replay: no mutation, no new audit, no re-check
+    ELSE
+      RAISE EXCEPTION 'AUTH_IDEMPOTENCY_CONFLICT' USING ERRCODE='23505';
+    END IF;
+  END IF;
+
+  -- ── 7) expected current role must match the locked, authoritative target row ──
+  IF v_tgt.role <> p_expected_role THEN RAISE EXCEPTION 'AUTH_TARGET_ROLE_MISMATCH' USING ERRCODE='22023'; END IF;
+
+  v_old_role := v_tgt.role;
+  v_changed := (v_old_role <> p_requested_role);
+
+  -- ── V3-G.1 ADDITION: waiter-open-tables role-change guard ─────────────────
+  -- Only for a genuinely NEW (v_changed) role change AWAY from a locked, authoritative
+  -- role='waiter' target (p_requested_role is already constrained to the 5 assignable
+  -- roles above, so v_changed=true with v_old_role='waiter' already implies the
+  -- requested role is something other than 'waiter' -- a waiter->waiter request would
+  -- have v_changed=false and never reach this block). Locks every open table session
+  -- currently assigned to this waiter, deterministically (ORDER BY id). This runs
+  -- AFTER the idempotency-replay short-circuit above (so a genuine replay of an
+  -- already-decided request is never re-litigated against now-stale state) but BEFORE
+  -- any mutation, audit, or idempotency INSERT below -- a rejected, genuinely NEW
+  -- attempt writes nothing: no role mutation, no session_version increment, no
+  -- role_changed/session_invalidated audit, no idempotency row.
+  IF v_changed AND v_old_role = 'waiter' THEN
+    PERFORM 1 FROM public.table_sessions
+     WHERE workspace_id = p_workspace_id AND assigned_waiter_actor = p_target_actor AND status = 'open'
+     ORDER BY id FOR UPDATE;
+    SELECT count(*) INTO v_open_tables FROM public.table_sessions
+     WHERE workspace_id = p_workspace_id AND assigned_waiter_actor = p_target_actor AND status = 'open';
+    IF v_open_tables > 0 THEN
+      RAISE EXCEPTION 'AUTH_WAITER_HAS_OPEN_TABLES' USING ERRCODE='P0001';
+    END IF;
+  END IF;
+  -- ── END V3-G.1 ADDITION ────────────────────────────────────────────────────
+
+  IF NOT v_changed THEN
+    -- ── identical current/requested role — deterministic no-op, no session_version
+    --    bump, no audit row. Still recorded below so a literal replay of this exact
+    --    no-op request is itself idempotent. ──────────────────────────────────────
+    v_result := jsonb_build_object(
+      'actor', v_tgt.actor, 'old_role', v_old_role, 'role', v_tgt.role,
+      'session_version', v_tgt.session_version, 'changed', false,
+      'updated_at', v_tgt.updated_at, 'updated_by', v_tgt.updated_by
+    );
+  ELSE
+    -- ── real change — ONLY role + session_version on the TARGET row; pin_hash,
+    --    fingerprint rows, active, display_name, failed_count, locked_until are
+    --    never touched (the UPDATE below does not name them, and nothing else in
+    --    this function writes to any other actor or to auth_actor_pin_fingerprints)
+    UPDATE public.auth_actors
+       SET role = p_requested_role, session_version = session_version + 1,
+           updated_at = v_now, updated_by = p_by_actor
+     WHERE actor = p_target_actor
+     RETURNING * INTO r;
+
+    INSERT INTO public.auth_audit(event, target_actor, by_actor, ip_hash, meta)
+    VALUES ('role_changed', p_target_actor, p_by_actor, NULL,
+            v_meta || jsonb_build_object(
+              'old_role', v_old_role, 'new_role', p_requested_role,
+              'workspace_id', p_workspace_id, 'client_request_id', p_client_request_id
+            ));
+
+    -- No global session invalidation: only the TARGET's session_version moved, so only
+    -- the target's own live sessions stop verifying — everyone else is untouched.
+    INSERT INTO public.auth_audit(event, target_actor, by_actor, ip_hash, meta)
+    VALUES ('session_invalidated', p_target_actor, p_by_actor, NULL,
+            jsonb_build_object('workspace_id', p_workspace_id, 'session_version', r.session_version));
+
+    v_result := jsonb_build_object(
+      'actor', r.actor, 'old_role', v_old_role, 'role', r.role,
+      'session_version', r.session_version, 'changed', true,
+      'updated_at', r.updated_at, 'updated_by', r.updated_by
+    );
+  END IF;
+
+  -- ── idempotency record, same transaction as the mutation (or the no-op) above ──
+  INSERT INTO public.access_management_idempotency
+    (workspace_id, by_actor, by_sid_hash, action, client_request_id, request_hash, response_status, response_body)
+  VALUES (p_workspace_id, p_by_actor, p_by_sid_hash, 'change_actor_role', p_client_request_id, p_request_hash, 200, v_result);
+
+  RETURN v_result;
+END;
+$fn$;
+
+-- ── grants: service_role only (re-asserted; CREATE OR REPLACE preserves prior grants,
+--    but this is explicit and byte-identical to V3-C's own grant statement) ──────
+REVOKE ALL ON FUNCTION public.auth_change_actor_role_v3(uuid, text, text, text, text, text, text, text, jsonb)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.auth_change_actor_role_v3(uuid, text, text, text, text, text, text, text, jsonb)
   TO service_role;
 
 NOTIFY pgrst, 'reload schema';

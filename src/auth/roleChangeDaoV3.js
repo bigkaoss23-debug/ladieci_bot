@@ -58,6 +58,10 @@ async function changeActorRoleV3({
   if (!r.ok) {
     const marker = r.body && typeof r.body.message === 'string' ? r.body.message : '';
     if (marker.includes('AUTH_IDEMPOTENCY_CONFLICT')) throw new AuthDaoError('ROLE_CHANGE_CONFLICT', 'idempotency conflict');
+    // V3-G.1 addition: distinguishes the database-authoritative "this waiter still has
+    // open table sessions" conflict from every other generic failure, mirroring exactly
+    // how the active-state DAO already distinguishes the identical marker.
+    if (marker.includes('AUTH_WAITER_HAS_OPEN_TABLES')) throw new AuthDaoError('ROLE_CHANGE_WAITER_OPEN_TABLES', 'waiter has open table sessions');
     throw new AuthDaoError('ROLE_CHANGE_FAILED', 'operation failed');
   }
   return sanitizeRoleChangeResult(r.body);
