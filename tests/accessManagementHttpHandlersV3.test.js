@@ -625,7 +625,13 @@ function bearer(t) { return { authorization: 'Bearer ' + t }; }
     // role) -- distinct from the ACTING actor's own role, which must never come from the
     // body. This check targets the acting-identity fields specifically.
     assert('handlers never read acting workspace/actor/sid/session/auth-method from the body', !/b\.(workspaceId|byActor|actingActor|sid|sessionVersion|authMethod)\b/.test(HND));
-    assert('access-management http modules not wired into index.js', !/accessManagementHttpHandlersV3|accessManagementHttpIntegrationV3|registerAccessManagementRoutes|integrateAccessManagementRoutes/.test(idx));
+    // V3-H: index.js now wires the boundary in behind a runtime gate (default OFF), but
+    // ONLY through the canonical integration module -- it must still never mention the
+    // handler/DAO internals or a second registration function directly.
+    assert('index.js does not import the handlers module directly', !idx.includes('accessManagementHttpHandlersV3'));
+    assert('index.js does not import registerAccessManagementRoutes directly', !idx.includes('registerAccessManagementRoutes'));
+    assert('index.js wires in the boundary through the canonical integration module exactly once',
+      (idx.match(/integrateAccessManagementRoutes\(app/g) || []).length === 1);
     assert('never returns 201 (idempotent-safe, always 200 on ok)', !/\.status\(\s*201\s*\)/.test(HND));
     assert('handler reads acting identity only from req.ownerContext', /req\.ownerContext/.test(HND) && !/req\.body\.byActor|body\.byActor/.test(HND));
   }
