@@ -29,12 +29,16 @@ function sanitizeResult(body, code) {
 }
 
 // Same marker-based error mapping as the role-change V3 DAO / access-user V3 DAO: surface
-// ONLY the one known, non-sensitive idempotency-conflict marker distinctly; everything
-// else collapses into the single generic failure shape. No SQL text or PostgREST body
-// ever escapes.
+// ONLY the known, non-sensitive markers distinctly; everything else collapses into the
+// single generic failure shape. No SQL text or PostgREST body ever escapes.
+// AUTH_WAITER_HAS_OPEN_TABLES (V3-G addition) is only ever raised by
+// auth_set_access_user_active_v3, never by auth_clear_access_user_credential_v3, but
+// checking it here in the shared mapper is harmless -- the marker can never appear in
+// the other RPC's response.
 function mapError(r, failedCode) {
   const marker = r.body && typeof r.body.message === 'string' ? r.body.message : '';
   if (marker.includes('AUTH_IDEMPOTENCY_CONFLICT')) throw new AuthDaoError('ACCESS_USER_LIFECYCLE_CONFLICT', 'idempotency conflict');
+  if (marker.includes('AUTH_WAITER_HAS_OPEN_TABLES')) throw new AuthDaoError('ACCESS_USER_LIFECYCLE_WAITER_OPEN_TABLES', 'waiter has open table sessions');
   throw new AuthDaoError(failedCode, 'operation failed');
 }
 

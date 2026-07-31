@@ -34,7 +34,7 @@ const STATUS_BY_CODE = Object.freeze({
   AUTH_IDEMPOTENCY_CONFLICT: 409,
   AUTH_PIN_DUPLICATE: 409,
   AUTH_PIN_RESERVED: 409,
-  AUTH_WAITER_DEACTIVATION_REQUIRES_TABLE_GUARD: 409,
+  AUTH_WAITER_HAS_OPEN_TABLES: 409, // V3-G: database-authoritative, replaces the V3-F temporary blanket block
   // ── 503 ──────────────────────────────────────────────────────────────────────
   AUTH_ACCESS_MANAGEMENT_UNAVAILABLE: 503,
   // ── 500 ──────────────────────────────────────────────────────────────────────

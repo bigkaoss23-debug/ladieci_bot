@@ -28,6 +28,11 @@ const { computeActiveStateRequestHash, computeClearCredentialRequestHash } = req
 
 const FAILED = Object.freeze({ ok: false, error: 'access_user_lifecycle_failed' });
 const CONFLICT = Object.freeze({ ok: false, error: 'idempotency_conflict' });
+// V3-G addition: distinguishes the database-authoritative "this waiter still has open
+// table sessions" conflict from every other generic failure, mirroring exactly how
+// CONFLICT above already distinguishes idempotency-key reuse. Raised only by
+// auth_set_access_user_active_v3 for a role='waiter' deactivation attempt.
+const WAITER_HAS_OPEN_TABLES = Object.freeze({ ok: false, error: 'waiter_has_open_tables' });
 
 function createAccessUserLifecycleV3Service(deps = {}) {
   const { dao, sidHash } = deps;
@@ -70,6 +75,7 @@ function createAccessUserLifecycleV3Service(deps = {}) {
         });
       } catch (e) {
         if (e && e.code === 'ACCESS_USER_LIFECYCLE_CONFLICT') return CONFLICT;
+        if (e && e.code === 'ACCESS_USER_LIFECYCLE_WAITER_OPEN_TABLES') return WAITER_HAS_OPEN_TABLES;
         return FAILED;
       }
       if (!result || result.actor !== targetActor) return FAILED;
@@ -157,4 +163,4 @@ function createAccessUserLifecycleV3Service(deps = {}) {
   return { deactivateAccessUser, reactivateAccessUser, clearAccessUserCredential };
 }
 
-module.exports = { createAccessUserLifecycleV3Service, FAILED, CONFLICT };
+module.exports = { createAccessUserLifecycleV3Service, FAILED, CONFLICT, WAITER_HAS_OPEN_TABLES };

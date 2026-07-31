@@ -36,7 +36,7 @@
 const jwt = require('./jwt');
 const accessManagementHttpDao = require('./accessManagementHttpDaoV3');
 const { isOwnerCredentialRole } = require('./ownerCredentialRole');
-const { isAssignableRole, canonicalRoleForDbRole } = require('./roleTransition');
+const { isAssignableRole } = require('./roleTransition');
 const { normalizeDisplayName } = require('./accessUserDisplayName');
 const { sidHash } = require('./sidHash');
 const { computeSetAccessUserPinRequestHash } = require('./accessUserPinRequestHash');
@@ -101,6 +101,9 @@ const SERVICE_ERROR_CODE = Object.freeze({
   rotation_failed: 'AUTH_INVALID_REQUEST',
   pin_duplicate: 'AUTH_PIN_DUPLICATE',
   pin_reserved: 'AUTH_PIN_RESERVED',
+  // V3-G: database-authoritative waiter/open-table-session conflict, surfaced by the
+  // lifecycle service exactly like idempotency_conflict is.
+  waiter_has_open_tables: 'AUTH_WAITER_HAS_OPEN_TABLES',
 });
 function mapServiceError(errorString) {
   return SERVICE_ERROR_CODE[errorString] || INTERNAL_ERROR_CODE;
@@ -448,10 +451,13 @@ function createAccessManagementHandlers(deps = {}) {
     return res.status(200).json({ ok: true, user: toWireLifecycleResult(out) });
   }
 
-  // V3-G has not yet implemented the DB-transactional open-table guard for waiters. Fail
-  // CLOSED here -- read the target's DB-fresh canonical role and refuse before ANY call
-  // into the lifecycle service/DAO/RPC if it is 'waiter'. This is a TEMPORARY route-level
-  // safety block, not a substitute for the eventual real database guard.
+  // V3-G: the waiter/open-table-session safety guard is the DATABASE RPC's own
+  // authoritative decision (auth_set_access_user_active_v3, revised by the V3-G
+  // migration) -- this handler performs no Node-side pre-check or open-table count of
+  // its own. It calls the lifecycle service exactly like every other lifecycle write;
+  // if the target is a role='waiter' actor with open assigned table sessions, the RPC
+  // raises AUTH_WAITER_HAS_OPEN_TABLES, which mapServiceError below turns into a stable
+  // HTTP 409 -- identical in shape to every other RPC-raised conflict.
   async function deactivateAccessUser(req, res) {
     const log = mkLog('deactivate_access_user', req);
     const ctx = ctxOf(req, res); if (!ctx) return undefined;
@@ -463,18 +469,6 @@ function createAccessManagementHandlers(deps = {}) {
     const clientRequestId = extractClientRequestId(b);
     if (!clientRequestId) return sendError(res, 'AUTH_CLIENT_REQUEST_ID_INVALID');
     if (typeof b.expectedActive !== 'boolean') return sendError(res, 'AUTH_INVALID_REQUEST');
-    if (!accessUserDao || typeof accessUserDao.getAccessUserForWorkspace !== 'function') {
-      return sendError(res, 'AUTH_ACCESS_MANAGEMENT_UNAVAILABLE');
-    }
-
-    let target;
-    try { target = await accessUserDao.getAccessUserForWorkspace(ctx.workspaceId, targetActor); }
-    catch (_) { return sendError(res, INTERNAL_ERROR_CODE); }
-    if (!target) { log('fail', 404, 'AUTH_TARGET_NOT_FOUND'); return sendError(res, 'AUTH_TARGET_NOT_FOUND'); }
-    if (canonicalRoleForDbRole(target.role) === 'waiter') {
-      log('fail', 409, 'AUTH_WAITER_DEACTIVATION_REQUIRES_TABLE_GUARD');
-      return sendError(res, 'AUTH_WAITER_DEACTIVATION_REQUIRES_TABLE_GUARD');
-    }
 
     if (!lifecycleService || typeof lifecycleService.deactivateAccessUser !== 'function') {
       return sendError(res, 'AUTH_ACCESS_MANAGEMENT_UNAVAILABLE');
