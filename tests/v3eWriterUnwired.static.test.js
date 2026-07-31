@@ -62,6 +62,9 @@ for (const rel of V3E_FILES) {
 const ALL_SRC_AUTH = fs.readdirSync(path.join(ROOT, 'src', 'auth')).filter((f) => f.endsWith('.js'));
 for (const f of ALL_SRC_AUTH) {
   if (f === 'accessUserLifecycleServiceV3.js' || f === 'accessUserLifecycleDaoV3.js') continue;
+  // V3-F's integration layer legitimately constructs the real V3-E service graph (still
+  // never called from index.js itself -- see accessManagementHttpUnwiredV3.static.test.js).
+  if (f === 'accessManagementHttpIntegrationV3.js') continue;
   const text = read(path.join('src', 'auth', f));
   assert(`src/auth/${f} does not require accessUserLifecycleServiceV3.js`, !text.includes('accessUserLifecycleServiceV3'));
   assert(`src/auth/${f} does not require accessUserLifecycleDaoV3.js`, !text.includes('accessUserLifecycleDaoV3'));

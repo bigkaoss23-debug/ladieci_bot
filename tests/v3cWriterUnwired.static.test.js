@@ -62,6 +62,9 @@ for (const rel of V3C_FILES) {
 const ALL_SRC_AUTH = fs.readdirSync(path.join(ROOT, 'src', 'auth')).filter((f) => f.endsWith('.js'));
 for (const f of ALL_SRC_AUTH) {
   if (f === 'roleChangeServiceV3.js' || f === 'roleChangeDaoV3.js') continue;
+  // V3-F's integration layer legitimately constructs the real V3-C service graph (still
+  // never called from index.js itself -- see accessManagementHttpUnwiredV3.static.test.js).
+  if (f === 'accessManagementHttpIntegrationV3.js') continue;
   const text = read(path.join('src', 'auth', f));
   assert(`src/auth/${f} does not require roleChangeServiceV3.js`, !text.includes('roleChangeServiceV3'));
   assert(`src/auth/${f} does not require roleChangeDaoV3.js`, !text.includes('roleChangeDaoV3'));

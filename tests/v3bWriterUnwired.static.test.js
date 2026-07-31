@@ -58,6 +58,9 @@ for (const rel of V3B_FILES) {
 const ALL_SRC_AUTH = fs.readdirSync(path.join(ROOT, 'src', 'auth')).filter((f) => f.endsWith('.js'));
 for (const f of ALL_SRC_AUTH) {
   if (f === 'pinRotationServiceV3.js' || f === 'pinRotationDaoV3.js') continue;
+  // V3-F's integration layer legitimately constructs the real V3-B service graph (still
+  // never called from index.js itself -- see accessManagementHttpUnwiredV3.static.test.js).
+  if (f === 'accessManagementHttpIntegrationV3.js') continue;
   const text = read(path.join('src', 'auth', f));
   assert(`src/auth/${f} does not require pinRotationServiceV3.js`, !text.includes('pinRotationServiceV3'));
   assert(`src/auth/${f} does not require pinRotationDaoV3.js`, !text.includes('pinRotationDaoV3'));

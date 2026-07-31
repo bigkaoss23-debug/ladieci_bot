@@ -61,6 +61,9 @@ for (const rel of V3D_FILES) {
 const ALL_SRC_AUTH = fs.readdirSync(path.join(ROOT, 'src', 'auth')).filter((f) => f.endsWith('.js'));
 for (const f of ALL_SRC_AUTH) {
   if (f === 'accessUserServiceV3.js' || f === 'accessUserDaoV3.js') continue;
+  // V3-F's integration layer legitimately constructs the real V3-D service graph (still
+  // never called from index.js itself -- see accessManagementHttpUnwiredV3.static.test.js).
+  if (f === 'accessManagementHttpIntegrationV3.js') continue;
   const text = read(path.join('src', 'auth', f));
   assert(`src/auth/${f} does not require accessUserServiceV3.js`, !text.includes('accessUserServiceV3'));
   assert(`src/auth/${f} does not require accessUserDaoV3.js`, !text.includes('accessUserDaoV3'));
