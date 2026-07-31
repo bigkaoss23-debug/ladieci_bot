@@ -187,19 +187,37 @@ assert('forward: contains exactly one CREATE OR REPLACE FUNCTION public.auth_cha
     /IF v_changed AND v_old_role = 'waiter' THEN/.test(roleFnCode));
 }
 
-// ── replay correctness: idempotency lookup precedes the expected-role check AND the
-//    guard (so a genuine replay is never re-litigated against now-stale state) ─────
+// ── V3-G.2: replay-order correctness. A real-PostgreSQL reproduction proved the V3-G.1
+//    body (guard strictly AFTER the idempotency short-circuit RETURN) let a STORED
+//    historical role-change success be replayed after an intervening state change
+//    (target reassigned back to waiter + given a newly-open table session) and still
+//    return the old success, bypassing the guard entirely. The corrected structure:
+//    idempotency KEY lookup + changed-payload conflict check (unconditional, first) ->
+//    identify current operation (v_old_role/v_changed) -> waiter guard (ALWAYS
+//    re-evaluated against CURRENT state, replay or not) -> replay-return (only now,
+//    having survived the guard) -> expected-role staleness check (brand-new path only,
+//    after the replay-return, so a genuine replay is never re-litigated against it) ->
+//    mutate/audit/insert. ─────────────────────────────────────────────────────────────
 {
   const roleFnCode = stripSql(fwd.match(/CREATE OR REPLACE FUNCTION public\.auth_change_actor_role_v3\([\s\S]*?\$fn\$;/)[0]);
   const actorLockIdx = roleFnCode.indexOf("WHERE actor IN (p_by_actor, p_target_actor) ORDER BY actor FOR UPDATE");
-  const idemIdx = roleFnCode.indexOf('FROM public.access_management_idempotency');
-  const expectedRoleIdx = roleFnCode.indexOf('AUTH_TARGET_ROLE_MISMATCH');
+  const idemSelectIdx = roleFnCode.indexOf('FROM public.access_management_idempotency');
+  const idemFoundVarIdx = roleFnCode.indexOf('v_idem_found := FOUND');
+  const conflictIdx = roleFnCode.indexOf('AUTH_IDEMPOTENCY_CONFLICT');
   const guardIdx = roleFnCode.indexOf('AUTH_WAITER_HAS_OPEN_TABLES');
+  const replayReturnIdx = roleFnCode.indexOf('RETURN v_idem.response_body');
+  const mismatchIdx = roleFnCode.indexOf('AUTH_TARGET_ROLE_MISMATCH');
   const insertIdx = roleFnCode.lastIndexOf('INSERT INTO public.access_management_idempotency');
-  assert('role-change RPC: actor lock precedes idempotency lookup (auth-before-replay, V3-G.1 reorder fix)', actorLockIdx > 0 && actorLockIdx < idemIdx);
-  assert('role-change RPC: idempotency lookup precedes the expected-role staleness check (replay correctness)', idemIdx > 0 && idemIdx < expectedRoleIdx);
-  assert('role-change RPC: idempotency lookup precedes the waiter guard (replay correctness)', idemIdx > 0 && idemIdx < guardIdx);
-  assert('role-change RPC: the waiter guard precedes the final idempotency INSERT (a rejected attempt writes no idempotency row)', guardIdx > 0 && guardIdx < insertIdx);
+
+  assert('role-change RPC: actor lock precedes the idempotency lookup (auth-before-replay, V3-G.1 fix preserved)', actorLockIdx > 0 && actorLockIdx < idemSelectIdx);
+  assert('role-change RPC: idempotency FOUND is captured into v_idem_found immediately after the lookup (never relies on the ambient FOUND, which the guard\'s own SELECT/PERFORM would overwrite)',
+    idemFoundVarIdx > 0 && idemFoundVarIdx > idemSelectIdx && idemFoundVarIdx < guardIdx);
+  assert('role-change RPC: changed-payload idempotency conflict check precedes the waiter guard (payload-conflict detection is never preempted by the guard)', conflictIdx > 0 && conflictIdx < guardIdx);
+  assert('role-change RPC: the waiter guard precedes the replay short-circuit RETURN (V3-G.2 fix — a genuine replay is re-validated against CURRENT state every time, never returns a stale stored success)',
+    guardIdx > 0 && replayReturnIdx > 0 && guardIdx < replayReturnIdx);
+  assert('role-change RPC: the replay short-circuit RETURN precedes the expected-role staleness check (so a genuine replay is never re-litigated against a now-different current role)',
+    replayReturnIdx > 0 && replayReturnIdx < mismatchIdx);
+  assert('role-change RPC: the waiter guard precedes the final idempotency INSERT (a rejected attempt — replay or brand-new — writes no idempotency row)', guardIdx > 0 && guardIdx < insertIdx);
 }
 
 // ── rollback restores the exact V3-C predecessor body ───────────────────────────────
