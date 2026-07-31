@@ -26,6 +26,7 @@ const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPrevi
 const { integrateFinancialRoutes } = require("./src/auth/financialHttpIntegration");
 const { integrateLoginRoute } = require("./src/auth/loginHttpIntegration");
 const { integrateAccountRoutes } = require("./src/account/accountHttpIntegration");
+const { integrateAccessManagementRoutes } = require("./src/auth/accessManagementHttpIntegrationV3");
 const authDao = require("./src/auth/dao");
 const adminAccessDao = require("./src/auth/adminAccessDao");
 const { createAdminAccessService } = require("./src/auth/adminAccessService");
@@ -85,6 +86,24 @@ integrateLoginRoute(app, { env: process.env, logger: console });
 // PIN JWT. It never touches auth_actors, PIN JWTs, or operational tables. Fully independent
 // of the login/financial/legacy flags.
 integrateAccountRoutes(app, { env: process.env, logger: console });
+
+// V3-H — staging-gated owner ACCESS-MANAGEMENT boundary (V3-B/C/D/E/G). DISABLED BY
+// DEFAULT (mounts nothing unless AUTH_V3_ACCESS_MANAGEMENT_HTTP_ENABLED === 'true',
+// exact lowercase match — see accessManagementHttpIntegrationV3.isAccessManagementHttpEnabled).
+// Mounted here — after CORS/JSON parsing, BEFORE the legacy /api X-Api-Key proxy — so the
+// nine static /api/auth/v3/access-users paths enter their own Bearer-JWT + DB-fresh owner
+// chain first and never require/accept the legacy key, while every other /api path
+// continues to the legacy proxy unchanged. Not wrapped in try/catch: if a genuinely
+// required dependency is missing or invalid while the flag is on, construction throws and
+// boot fails closed, exactly like the financial/login/account integrations above — this
+// file adds no separate dependency-validation layer of its own.
+const accessManagementIntegration = integrateAccessManagementRoutes(app, { env: process.env, logger: console });
+console.log(JSON.stringify({
+  component: "access-management-v3",
+  state: accessManagementIntegration.enabled ? "enabled" : "disabled",
+  routeBase: accessManagementIntegration.prefix,
+  env: process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV || "unknown",
+}));
 
 // Auth middleware — protegge tutti gli endpoint /api
 const DASHBOARD_API_KEY = process.env.DASHBOARD_API_KEY;
