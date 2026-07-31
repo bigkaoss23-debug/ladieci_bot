@@ -561,6 +561,20 @@ GRANT EXECUTE ON FUNCTION public.auth_set_access_user_active_v3(uuid, text, text
 -- idempotency insertion, and raises AUTH_WAITER_HAS_OPEN_TABLES. A waiter->waiter
 -- no-op never reaches the guard (v_changed is false). Closed historical sessions
 -- never block a role change (the guard only counts status='open').
+--
+-- V3-G.2 FIX (2026-07-31, later same day): the V3-G.1 body above placed the guard
+-- AFTER the idempotency replay short-circuit -- reproduced against real PostgreSQL,
+-- this let a STORED historical role-change success be replayed after an intervening
+-- state change (the target reassigned back to 'waiter' and given a newly-open table
+-- session) and still return the old success, bypassing the guard entirely. Fixed by
+-- splitting idempotency evaluation into two parts: a changed-payload KEY lookup that
+-- still conflicts immediately and unconditionally (payload-conflict detection is
+-- never weakened), and a deferred "return the stored response" step that now happens
+-- AFTER the guard is re-evaluated against CURRENT state -- so a genuine replay is
+-- re-validated every time, while an immediate replay of an already-successful change
+-- remains unaffected (its current role already differs from the replayed request's
+-- requested role in the OTHER direction, so the guard's v_changed condition is false
+-- and it never applies). See the numbered steps inside the function body below.
 CREATE OR REPLACE FUNCTION public.auth_change_actor_role_v3(
   p_workspace_id uuid, p_by_actor text, p_target_actor text,
   p_expected_role text, p_requested_role text,
@@ -578,6 +592,7 @@ DECLARE
   v_tgt public.auth_actors%ROWTYPE;
   r public.auth_actors%ROWTYPE;
   v_idem public.access_management_idempotency%ROWTYPE;
+  v_idem_found boolean;
   v_meta jsonb := COALESCE(p_meta, '{}'::jsonb);
   v_now timestamptz := now();
   v_old_role text;
@@ -637,47 +652,51 @@ BEGIN
     RAISE EXCEPTION 'AUTH_TARGET_OTHER_WORKSPACE' USING ERRCODE='P0001'; END IF;
   IF v_tgt.role IN ('admin', 'owner') THEN RAISE EXCEPTION 'AUTH_TARGET_IS_OWNER' USING ERRCODE='P0001'; END IF;
 
-  -- ── 6) idempotency lookup — ONLY now, after acting-owner AND target identity are
-  --    both proved against the CURRENT authoritative rows under lock (V3-G.1 REORDER:
-  --    was evaluated before actor locking/authorization in the committed V3-C body --
-  --    corrected to match V3-E's pattern exactly). A genuine replay (same key, same
-  --    payload) MUST short-circuit here, BEFORE the expected-role staleness check and
-  --    BEFORE the waiter guard below -- by the time a request is replayed, the
-  --    target's role may have already legitimately changed (that is exactly what the
-  --    first, original call did), so re-evaluating a snapshot check or the guard
-  --    against a replay's OLD payload would incorrectly reject a safe, already-decided
-  --    replay. This mirrors V3-E's own auth_set_access_user_active_v3 exactly: its
-  --    idempotency lookup also precedes its expected-state check and its waiter guard,
-  --    for the identical reason. ─────────────────────────────────────────────────
+  -- ── 6) idempotency KEY lookup — ONLY now, after acting-owner AND target identity
+  --    are both proved against the CURRENT authoritative rows under lock (V3-G.1
+  --    REORDER, preserved). V3-G.2 FIX: this fetches the stored row but does NOT yet
+  --    return it — a changed-payload reuse of the same key conflicts IMMEDIATELY,
+  --    unconditionally, exactly as before and BEFORE anything else runs (payload-
+  --    conflict detection must never be preempted by the guard below). ─────────────
   SELECT * INTO v_idem FROM public.access_management_idempotency
    WHERE workspace_id = p_workspace_id AND by_actor = p_by_actor AND by_sid_hash = p_by_sid_hash
      AND action = 'change_actor_role' AND client_request_id = p_client_request_id;
-  IF FOUND THEN
-    IF v_idem.request_hash = p_request_hash THEN
-      RETURN v_idem.response_body; -- safe replay: no mutation, no new audit, no re-check
-    ELSE
-      RAISE EXCEPTION 'AUTH_IDEMPOTENCY_CONFLICT' USING ERRCODE='23505';
-    END IF;
+  -- Captured into a dedicated variable IMMEDIATELY: the guard block below (step 8)
+  -- runs its own SELECT/PERFORM statements, which would silently overwrite the
+  -- ambient FOUND variable if it were relied on any later than this line.
+  v_idem_found := FOUND;
+  IF v_idem_found AND v_idem.request_hash <> p_request_hash THEN
+    RAISE EXCEPTION 'AUTH_IDEMPOTENCY_CONFLICT' USING ERRCODE='23505';
   END IF;
 
-  -- ── 7) expected current role must match the locked, authoritative target row ──
-  IF v_tgt.role <> p_expected_role THEN RAISE EXCEPTION 'AUTH_TARGET_ROLE_MISMATCH' USING ERRCODE='22023'; END IF;
-
+  -- ── 7) identify the CURRENT operation from the locked, authoritative target row —
+  --    computed unconditionally, for BOTH a genuine replay and a brand-new request
+  --    (the guard in step 8 needs it either way). This is NOT the expected-role
+  --    staleness check (that stays gated to the brand-new-request path in step 9,
+  --    below the replay short-circuit — checking it here would reintroduce the
+  --    exact bug V3-G.1 already fixed: replaying an already-decided request would
+  --    incorrectly fail AUTH_TARGET_ROLE_MISMATCH against the target's now-different
+  --    CURRENT role instead of returning the stored response). ─────────────────────
   v_old_role := v_tgt.role;
   v_changed := (v_old_role <> p_requested_role);
 
-  -- ── V3-G.1 ADDITION: waiter-open-tables role-change guard ─────────────────
-  -- Only for a genuinely NEW (v_changed) role change AWAY from a locked, authoritative
-  -- role='waiter' target (p_requested_role is already constrained to the 5 assignable
-  -- roles above, so v_changed=true with v_old_role='waiter' already implies the
-  -- requested role is something other than 'waiter' -- a waiter->waiter request would
-  -- have v_changed=false and never reach this block). Locks every open table session
-  -- currently assigned to this waiter, deterministically (ORDER BY id). This runs
-  -- AFTER the idempotency-replay short-circuit above (so a genuine replay of an
-  -- already-decided request is never re-litigated against now-stale state) but BEFORE
-  -- any mutation, audit, or idempotency INSERT below -- a rejected, genuinely NEW
-  -- attempt writes nothing: no role mutation, no session_version increment, no
-  -- role_changed/session_invalidated audit, no idempotency row.
+  -- ── 8) V3-G.2 FIX — waiter-open-tables role-change guard: ALWAYS evaluated against
+  --    CURRENT authoritative state, for BOTH a genuine replay and a brand-new
+  --    request. V3-G.1 placed this guard AFTER the idempotency short-circuit, so a
+  --    STORED historical success could be replayed after intervening state changes
+  --    (the target reassigned back to waiter and given an open table session) and
+  --    still return the old success — a real bypass, reproduced against real
+  --    PostgreSQL and closed here. Moving the guard here — after the changed-payload
+  --    conflict check (step 6) but before the replay-return (step 9) — means a
+  --    genuine replay is re-validated against CURRENT truth every time, while a
+  --    changed-payload reuse still conflicts first, and an immediate replay of an
+  --    already-successful change is unaffected (its CURRENT role already differs
+  --    from p_requested_role in the OTHER direction, so v_changed there is false and
+  --    the guard never applies). Only for a genuinely changed role (v_changed) AWAY
+  --    from a locked, authoritative role='waiter' target — locks every open table
+  --    session currently assigned to this waiter, deterministically (ORDER BY id).
+  --    Raises BEFORE any mutation, audit, replay-return, or idempotency INSERT below
+  --    — a rejected attempt (replay or new) writes nothing and returns nothing stale.
   IF v_changed AND v_old_role = 'waiter' THEN
     PERFORM 1 FROM public.table_sessions
      WHERE workspace_id = p_workspace_id AND assigned_waiter_actor = p_target_actor AND status = 'open'
@@ -688,7 +707,21 @@ BEGIN
       RAISE EXCEPTION 'AUTH_WAITER_HAS_OPEN_TABLES' USING ERRCODE='P0001';
     END IF;
   END IF;
-  -- ── END V3-G.1 ADDITION ────────────────────────────────────────────────────
+
+  -- ── 9) genuine replay (same key, same payload) — survived the guard above, so it
+  --    is safe to return the stored response: no mutation, no new audit, no re-check
+  --    of expected-role staleness. Uses v_idem_found (captured at step 6), NEVER the
+  --    ambient FOUND — the guard's own SELECT/PERFORM statements overwrite FOUND. ──
+  IF v_idem_found THEN
+    RETURN v_idem.response_body;
+  END IF;
+
+  -- ── 10) brand-new request (no stored idempotency row): expected current role must
+  --     match the locked, authoritative target row (unchanged V3-C behavior/order —
+  --     this stays AFTER the guard so a brand-new attempt against an open-assigned
+  --     waiter reports the same AUTH_WAITER_HAS_OPEN_TABLES conflict a replay would,
+  --     rather than a less specific staleness error). ────────────────────────────────
+  IF v_tgt.role <> p_expected_role THEN RAISE EXCEPTION 'AUTH_TARGET_ROLE_MISMATCH' USING ERRCODE='22023'; END IF;
 
   IF NOT v_changed THEN
     -- ── identical current/requested role — deterministic no-op, no session_version
