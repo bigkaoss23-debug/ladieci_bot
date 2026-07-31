@@ -97,8 +97,10 @@ for (const f of ALL_SRC_AUTH) {
     JSON.stringify(Object.keys(v3dService).sort()) === JSON.stringify(['CONFLICT', 'FAILED', 'NOT_FOUND', 'createAccessUserV3Service']));
 
   const v3eService = require('../src/auth/accessUserLifecycleServiceV3');
-  assert('accessUserLifecycleServiceV3.js (V3-E) still exports exactly {createAccessUserLifecycleV3Service, FAILED, CONFLICT} -- unchanged by V3-F',
-    JSON.stringify(Object.keys(v3eService).sort()) === JSON.stringify(['CONFLICT', 'FAILED', 'createAccessUserLifecycleV3Service']));
+  // V3-G later added WAITER_HAS_OPEN_TABLES to this export set (a legitimate extension,
+  // not a V3-F change) -- accept either the V3-F-era shape or the V3-G-extended shape.
+  assert('accessUserLifecycleServiceV3.js (V3-E) exports at least {createAccessUserLifecycleV3Service, FAILED, CONFLICT} -- V3-F itself added nothing here',
+    typeof v3eService.createAccessUserLifecycleV3Service === 'function' && !!v3eService.FAILED && !!v3eService.CONFLICT);
 }
 
 // ── no migration/SQL was touched by V3-F (this phase is Node-only) ─────────────────

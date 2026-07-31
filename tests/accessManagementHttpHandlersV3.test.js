@@ -126,6 +126,10 @@ function fakeLifecycleService() {
     calls,
     async deactivateAccessUser(args) {
       calls.push({ name: 'deactivateAccessUser', args });
+      // V3-G: the database RPC is authoritative for the waiter/open-table-session
+      // conflict -- simulate its exact result shape for a designated fixture target.
+      if (args.targetActor === 'dyn_waiter_with_tables') return { ok: false, error: 'waiter_has_open_tables' };
+      if (args.targetActor === 'no-such-target') return { ok: false, error: 'access_user_lifecycle_failed' };
       return { ok: true, userId: args.targetActor, dbRole: 'cashier', active: false, sessionVersion: 4, updatedAt: 't3' };
     },
     async reactivateAccessUser(args) {
@@ -497,26 +501,47 @@ function bearer(t) { return { authorization: 'Bearer ' + t }; }
       && deps.lifecycleService.calls.some((c) => c.name === 'reactivateAccessUser' && c.args.targetActor === 'dyn_cashier'));
   }
 
-  // ══════════════════ DEACTIVATE + WAITER SAFETY ══════════════════
+  // ══════════════════ DEACTIVATE + WAITER SAFETY (V3-G: database-authoritative) ══════════════════
   {
     const app = fakeApp();
     const deps = buildDeps();
     registerAccessManagementRoutes(app, deps);
     const route = findRoute(app.routes, 'POST', '/api/auth/v3/access-users/:actor/deactivate');
 
+    // a waiter WITH open table sessions: the handler performs NO Node-side pre-check --
+    // it calls the lifecycle service/RPC exactly like any other target, and the
+    // DATABASE's AUTH_WAITER_HAS_OPEN_TABLES marker (simulated here via the fake
+    // service, mirroring the real DAO/service marker-mapping chain) is what produces
+    // the 409.
     let res = fakeRes();
-    await runChain(route.chain, { headers: bearer('good-owner'), params: { actor: 'dyn_waiter' }, body: { expectedActive: true, clientRequestId: 'w1', stepUpProof: 'proof-owner-good' } }, res);
-    assert('waiter deactivation returns a stable 409 conflict', res._status === 409 && res._json.code === 'AUTH_WAITER_DEACTIVATION_REQUIRES_TABLE_GUARD');
-    assert('waiter deactivation never calls the lifecycle mutation DAO/service', deps.lifecycleService.calls.filter((c) => c.name === 'deactivateAccessUser').length === 0);
+    await runChain(route.chain, { headers: bearer('good-owner'), params: { actor: 'dyn_waiter_with_tables' }, body: { expectedActive: true, clientRequestId: 'w1', stepUpProof: 'proof-owner-good' } }, res);
+    assert('waiter with open table sessions returns a stable 409 conflict', res._status === 409 && res._json.code === 'AUTH_WAITER_HAS_OPEN_TABLES');
+    assert('the conflict came FROM the lifecycle service call, not a Node-side pre-check', deps.lifecycleService.calls.some((c) => c.name === 'deactivateAccessUser' && c.args.targetActor === 'dyn_waiter_with_tables'));
+    // The stable code AUTH_WAITER_HAS_OPEN_TABLES legitimately contains the word
+    // "TABLES" -- check for a leaked UUID/identifier or a session-count field instead.
+    assert('no table-session identifier, count, or customer detail appears in the conflict response',
+      !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.test(JSON.stringify(res._json))
+      && !('openTableCount' in (res._json || {})) && !('tableSessionId' in (res._json || {})));
+
+    // a waiter with ZERO open table sessions reaches the RPC and succeeds normally --
+    // being a waiter is no longer a blanket block.
+    res = fakeRes();
+    await runChain(route.chain, { headers: bearer('good-owner'), params: { actor: 'dyn_waiter' }, body: { expectedActive: true, clientRequestId: 'w1b', stepUpProof: 'proof-owner-good' } }, res);
+    assert('waiter with zero open table sessions deactivates normally', res._status === 200
+      && deps.lifecycleService.calls.some((c) => c.name === 'deactivateAccessUser' && c.args.targetActor === 'dyn_waiter'));
 
     res = fakeRes();
     await runChain(route.chain, { headers: bearer('good-owner'), params: { actor: 'dyn_cashier' }, body: { expectedActive: true, clientRequestId: 'w2', stepUpProof: 'proof-owner-good' } }, res);
     assert('non-waiter synthetic staff reaches the dormant lifecycle service contract', res._status === 200
       && deps.lifecycleService.calls.some((c) => c.name === 'deactivateAccessUser' && c.args.targetActor === 'dyn_cashier'));
 
+    // unknown target: no Node pre-read exists anymore (consistent with reactivate/clear/
+    // role-change, none of which pre-read either) -- the RPC's own generic failure
+    // collapses to 400, exactly like every other lifecycle write's not-found case.
     res = fakeRes();
     await runChain(route.chain, { headers: bearer('good-owner'), params: { actor: 'no-such-target' }, body: { expectedActive: true, clientRequestId: 'w3', stepUpProof: 'proof-owner-good' } }, res);
-    assert('deactivate: unknown target -> 404 before any mutation call', res._status === 404);
+    assert('deactivate: unknown target reaches the RPC and fails generically (400), consistent with every other lifecycle write', res._status === 400
+      && deps.lifecycleService.calls.some((c) => c.name === 'deactivateAccessUser' && c.args.targetActor === 'no-such-target'));
   }
 
   // ══════════════════ PIN HYGIENE + SET-PIN IDEMPOTENCY ══════════════════
