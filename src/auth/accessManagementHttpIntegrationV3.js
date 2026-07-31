@@ -102,7 +102,9 @@ function createAccessManagementIntegrationApp(deps = {}) {
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
   const integration = integrateAccessManagementRoutes(app, deps);
   app.get('/health', (_req, res) => res.status(200).json({ ok: true }));
-  return { app, integration };
+  if (deps.listen !== true) return { app, integration, server: null };
+  const server = app.listen(0, '127.0.0.1');
+  return { app, integration, server };
 }
 
 module.exports = {

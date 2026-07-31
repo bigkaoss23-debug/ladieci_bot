@@ -117,5 +117,15 @@ for (const f of ALL_SRC_AUTH) {
   assert('isAccessManagementHttpEnabled accepts the exact flag value', integ.isAccessManagementHttpEnabled({ AUTH_V3_ACCESS_MANAGEMENT_HTTP_ENABLED: 'true' }) === true);
 }
 
+// ── createAccessManagementIntegrationApp only binds a real socket when explicitly asked ──
+{
+  const { createAccessManagementIntegrationApp } = require('../src/auth/accessManagementHttpIntegrationV3');
+  const noListen = createAccessManagementIntegrationApp({});
+  assert('createAccessManagementIntegrationApp({}) does not bind a socket (server === null)', noListen.server === null);
+  const withListen = createAccessManagementIntegrationApp({ listen: true });
+  assert('createAccessManagementIntegrationApp({ listen: true }) returns a real net.Server', !!withListen.server && typeof withListen.server.close === 'function');
+  withListen.server.close();
+}
+
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
 process.exit(fail === 0 ? 0 : 1);
