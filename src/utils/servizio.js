@@ -117,6 +117,7 @@ async function scanServizio() {
   const convAttive       = await sbSelect("conv", "stato_ordine=not.in.(ritirata,confermata,chiusa)") || [];
   const waMsgsAttivi     = await sbSelect("wa_msgs", "stato=in.(NUEVO,IN_TRATTAMENTO)") || [];
   const ordiniInCorso    = await sbSelect("ordenes", "estado=in.(POR_CONFIRMAR,EN_COCINA,LISTO,EN_ENTREGA)") || [];
+  const contiMesaAperti  = await sbSelect("table_sessions", "status=eq.open") || [];
 
   const attiviMap = {};
   (Array.isArray(convAttive)    ? convAttive    : []).forEach(c => { attiviMap[c.wa_id] = { wa_id: c.wa_id, nombre: c.nombre || c.wa_id, hora: c.hora || "", stato: c.stato_ordine || "" }; });
@@ -124,6 +125,15 @@ async function scanServizio() {
   (Array.isArray(ordiniInCorso) ? ordiniInCorso : []).forEach(o => {
     const key = o.wa_id || o.tel || o.id;
     if (!attiviMap[key]) attiviMap[key] = { wa_id: o.wa_id || o.tel || "", nombre: o.nombre || o.id || "", hora: o.hora || "", stato: o.estado || "" };
+  });
+  (Array.isArray(contiMesaAperti) ? contiMesaAperti : []).forEach(session => {
+    const key = `messa:${session.table_id || session.id}`;
+    attiviMap[key] = {
+      wa_id: "",
+      nombre: session.table_ref || "Mesa",
+      hora: "",
+      stato: "CUENTA_ABIERTA",
+    };
   });
 
   return {
@@ -238,6 +248,12 @@ function buildStoricoPayload(o, oggi, diaSemana, estadoOverride = null, serviceS
     hora_entrega:   o.hora_entrega ? Number(o.hora_entrega) : null,
     llegado:        o.llegado === true,
     cucina_check:   o.cucina_check || null,
+    // Mesa identity must survive the ordenes -> storico move so customer bills,
+    // closeout and kitchen-command history keep the original physical table.
+    table_session_id:      o.table_session_id || null,
+    table_number_snapshot: o.table_number_snapshot != null ? Number(o.table_number_snapshot) : null,
+    table_name_snapshot:   o.table_name_snapshot || null,
+    table_command_number:  o.table_command_number != null ? Number(o.table_command_number) : null,
     fecha:          oggi,
     dia_semana:     diaSemana,
     fascia_ora:     fasciaOraDa(o.hora),
@@ -400,6 +416,44 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   // Derived from the immutable opening business date, not the close clock date
   // (a service may close after midnight).
   const diaSemana = diaSemanaIta(new Date(`${oggi}T12:00:00Z`));
+
+  // A table account has a lifecycle beyond the individual kitchen tickets. Even
+  // if every command is terminal, the service must not archive/delete its orders
+  // while money is still due. Full payment closes the account and frees the Mesa.
+  // This gate runs before the rider gate and before beginClose, so refusal is
+  // entirely read-only and leaves the service open for the operator.
+  let openTableAccounts;
+  try {
+    openTableAccounts = await sbSelect(
+      "table_sessions",
+      `service_session_id=eq.${encodeURIComponent(currentIdentity.session.id)}`
+        + "&status=eq.open",
+    );
+  } catch (error) {
+    console.warn(`[chiudiServizio ${source}] Mesa gate failed:`, error?.message || error);
+    return { success: false, error: "messa_table_gate_failed", deferred: true, data: oggi };
+  }
+  if (!Array.isArray(openTableAccounts)) {
+    return { success: false, error: "messa_table_gate_failed", deferred: true, data: oggi };
+  }
+  if (openTableAccounts.length > 0) {
+    const detailsByTable = new Map();
+    openTableAccounts.forEach((row) => detailsByTable.set(String(row.table_id || row.id), {
+      id: row.table_id || row.id,
+      name: row.table_ref || "Mesa",
+      status: "open",
+    }));
+    return {
+      success: false,
+      error: "messa_tables_not_released",
+      deferred: true,
+      data: oggi,
+      details: {
+        count: detailsByTable.size,
+        tables: Array.from(detailsByTable.values()),
+      },
+    };
+  }
 
   // ─── PASSO 1b (S2-1F): ACTIVE-TRIP GATE ───────────────────────
   // A service close must NEVER run destructively over an active rider trip (PASSO 6/10

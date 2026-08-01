@@ -11,12 +11,14 @@ let existingSummary = [];
 let completedOrders = [];
 let throwStorico = false;
 let ordersDeleted = false;
+let tableSessions = [];
 require.cache[supaPath].exports = Object.assign({}, realSupa, {
   sbSelect: async (t, q) => {
     if (t === "serata_summary") return existingSummary;
     // S2-6A3B: the close now re-reads ordenes after deleting to prove the rows are gone,
     // so the stub must model deletion instead of always replaying the same rows.
     if (t === "ordenes") return ordersDeleted ? [] : completedOrders;
+    if (t === "table_sessions") return tableSessions;
     if (t === "storico" && /select=orden_id/.test(q || "")) return completedOrders.map(o => ({ orden_id: o.id }));
     return [];
   },
@@ -58,15 +60,24 @@ const order = { id: "O1", service_session_id:session.id, wa_id: "wa1", tel: "wa1
 const reset = () => {
   deletes = []; inserts = []; upserts = []; ordersDeleted = false; throwReset = false; endCalls = 0; beginCalls = 0; endIds = [];
   existingSummary = []; completedOrders = []; throwStorico = false;
+  tableSessions = [];
   SESSION_CURRENT = { ok:true, code:"OK", session:{...session,status:"open"} };
   SESSION_BEGIN = { ok:true, code:"CLOSING", session }; sessionCompleteCalls=[];
 };
 
 (async () => {
+  // ── Open Mesa -> fail closed before every destructive gate ──
+  reset();
+  tableSessions = [{ id: "table-session-1", table_ref: "Mesa 3", status: "open" }];
+  let r = await chiudiServizio(true, "manual");
+  check("open Mesa -> close is refused", r.success === false && r.error === "messa_tables_not_released");
+  check("open Mesa -> rider gate never opens", beginCalls === 0);
+  check("open Mesa -> no destructive work", deletes.length === 0 && inserts.length === 0);
+
   // ── Active trip -> DEFERRED, no destructive work ──
   reset();
   RESET = { status: 409, payload: { ok: false, error: "ACTIVE_TRIP_CONFLICT" } };
-  let r = await chiudiServizio(true, "cron2350");
+  r = await chiudiServizio(true, "cron2350");
   check("active trip -> deferred skipped result", r.skipped === true && r.deferred === true && r.reason === "active_rider_trip");
   check("active trip -> NO ordenes deletion", !deletes.some(([t]) => t === "ordenes"));
   check("active trip -> NO serata_summary lock insert", !inserts.includes("serata_summary"));

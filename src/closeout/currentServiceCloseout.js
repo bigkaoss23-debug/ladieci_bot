@@ -20,6 +20,15 @@ function eventAmount(event) {
   return round(event?.amount ?? event?.importe ?? 0);
 }
 
+function emptyPaymentTotals() {
+  return { efectivo: 0, tarjeta: 0, bizum: 0, other: 0 };
+}
+
+function addMethodAmount(target, method, amount) {
+  const key = paymentBucket(method);
+  target[key] = round(target[key] + amount);
+}
+
 function safeTicket(order, events) {
   const state = String(order.estado || order.state || "");
   const amount = round(order.totale ?? order.total ?? 0);
@@ -28,12 +37,30 @@ function safeTicket(order, events) {
   const voided = events.some((event) => eventType(event) === "void") || CANCELLED.has(state.toUpperCase());
   const refundedAmount = round(refunds.reduce((sum, event) => sum + eventAmount(event), 0));
   const paidAmount = round(payments.reduce((sum, event) => sum + eventAmount(event), 0));
-  const legacyPaid = payments.length === 0 && (order.cobrado === true || order.ya_pagado === true);
+  const hasLedgerEvidence = events.length > 0;
+  const legacyPaid = !hasLedgerEvidence && (order.cobrado === true || order.ya_pagado === true);
   const grossCollected = round(paidAmount || (legacyPaid ? amount : 0));
   // A refund hands money back, so it must LEAVE the collected total — in the live
   // closeout and in the archived summary alike, which now share this function.
-  const collectedAmount = voided ? 0 : Math.max(0, round(grossCollected - refundedAmount));
-  const method = payments.at(-1)?.payment_method || order.metodo_pago || "";
+  const collectedAmount = voided ? 0 : Math.min(amount, Math.max(0, round(grossCollected - refundedAmount)));
+  const unpaidAmount = voided ? 0 : Math.max(0, round(amount - collectedAmount));
+  const methods = new Set(payments.map((event) => paymentBucket(event.payment_method)));
+  const method = methods.size > 1 ? "mixto" : (payments.at(-1)?.payment_method || order.metodo_pago || "");
+  const methodTotals = emptyPaymentTotals();
+  if (!voided) {
+    if (payments.length > 0) {
+      for (const event of payments) addMethodAmount(methodTotals, event.payment_method, eventAmount(event));
+      for (const event of refunds) addMethodAmount(methodTotals, event.payment_method, -eventAmount(event));
+    } else if (legacyPaid) {
+      addMethodAmount(methodTotals, order.metodo_pago, amount);
+    }
+  }
+
+  const paymentState = voided ? "cancelled"
+    : refundedAmount > 0 && collectedAmount === 0 ? "refunded"
+    : collectedAmount >= amount && amount > 0 ? "paid"
+    : collectedAmount > 0 ? "partially_paid"
+    : "unpaid";
 
   return Object.freeze({
     // storico rows carry BOTH their own identity PK `id` and the real order key
@@ -46,9 +73,11 @@ function safeTicket(order, events) {
     state,
     amount,
     paymentMethod: method || null,
-    paymentState: voided ? "cancelled" : refundedAmount > 0 ? "refunded" : collectedAmount > 0 ? "paid" : "unpaid",
+    paymentState,
     collectedAmount,
+    unpaidAmount,
     refundedAmount,
+    paymentTotals: methodTotals,
     cancelled: voided,
     refunded: refundedAmount > 0,
   });
@@ -66,17 +95,17 @@ function aggregate(session, orders, events) {
     const id = String(order.orden_id || order.id || "");
     return safeTicket(order, byOrder.get(id) || []);
   });
-  const paymentTotals = { efectivo: 0, tarjeta: 0, bizum: 0, other: 0 };
+  const paymentTotals = emptyPaymentTotals();
   for (const ticket of tickets) {
-    if (!ticket.cancelled && ticket.collectedAmount > 0) {
-      const key = paymentBucket(ticket.paymentMethod);
-      paymentTotals[key] = round(paymentTotals[key] + ticket.collectedAmount);
+    if (ticket.cancelled) continue;
+    for (const key of Object.keys(paymentTotals)) {
+      paymentTotals[key] = round(paymentTotals[key] + (ticket.paymentTotals[key] || 0));
     }
   }
   const grossTotal = round(tickets.filter((t) => !t.cancelled).reduce((s, t) => s + t.amount, 0));
   const collectedTotal = round(tickets.reduce((s, t) => s + t.collectedAmount, 0));
   const refundedTotal = round(tickets.reduce((s, t) => s + t.refundedAmount, 0));
-  const unpaidTotal = round(tickets.filter((t) => t.paymentState === "unpaid").reduce((s, t) => s + t.amount, 0));
+  const unpaidTotal = round(tickets.reduce((s, t) => s + t.unpaidAmount, 0));
   return {
     ok: true,
     available: status !== "none",
@@ -103,6 +132,7 @@ function aggregate(session, orders, events) {
       cancelled: tickets.filter((t) => t.cancelled).length,
       refunded: tickets.filter((t) => t.refunded).length,
       unpaid: tickets.filter((t) => t.paymentState === "unpaid").length,
+      partiallyPaid: tickets.filter((t) => t.paymentState === "partially_paid").length,
     },
   };
 }

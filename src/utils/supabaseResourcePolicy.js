@@ -102,7 +102,15 @@ const REGISTRY = Object.freeze([
   entry('access_management_idempotency', KIND.TABLE, ['GET', 'POST'], SENSITIVITY.AUTH_SECURITY,
     'accessManagementHttpDaoV3.js replays and records owner access-management operations'),
   entry('table_sessions', KIND.TABLE, ['GET'], SENSITIVITY.INTERNAL_OPERATIONAL,
-    'tableSessionAssignmentDaoV3.js reads the target session before waiter assignment'),
+    'tableSessionAssignmentDaoV3.js and tables/messaDao.js read active table sessions'),
+  entry('restaurant_tables', KIND.TABLE, ['GET'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'tables/messaDao.js reads the persisted floor; writes are RPC-only'),
+  entry('table_order_lines', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
+    'tables/messaDao.js reads immutable per-unit bill charges; writes are trigger-only'),
+  entry('payment_transactions', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
+    'tables/messaDao.js reads posted Mesa money movements; writes are RPC-only'),
+  entry('payment_allocations', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
+    'tables/messaDao.js reads transaction-to-charge allocations; writes are RPC-only'),
 
   // ── account domain tables — src/account/accountHttpIntegration.js ──
   entry('user_profiles', KIND.TABLE, ['GET'], SENSITIVITY.PII, 'accountHttpIntegration.js selectProfile'),
@@ -142,6 +150,12 @@ const REGISTRY = Object.freeze([
     'accessUserLifecycleDaoV3.js'),
   entry('rpc/auth_assign_table_session_waiter_v3', KIND.RPC, ['POST'], SENSITIVITY.AUTH_SECURITY,
     'tableSessionAssignmentDaoV3.js'),
+
+  // ── Mesa floor, table session and billing RPCs ──
+  entry('rpc/messa_open_session_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/messaDao.js'),
+  entry('rpc/messa_release_table_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/messaDao.js'),
+  entry('rpc/messa_save_table_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/messaDao.js'),
+  entry('rpc/messa_post_payment_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'tables/messaDao.js'),
 
   // ── account RPC ──
   entry('rpc/auth_account_claim_workspace', KIND.RPC, ['POST'], SENSITIVITY.AUTH_SECURITY, 'workspaceOwnerDao.js claimWorkspace'),

@@ -94,3 +94,43 @@ test("financial reconciliation and role boundary remain intact",async()=>{
   assert.equal(roles.isAllowed("admin","getCurrentServiceCloseout"),true); assert.equal(roles.isAllowed("operator","getCurrentServiceCloseout"),true); assert.equal(roles.isAllowed("rider","getCurrentServiceCloseout"),false);
   assert.equal(roles.isAllowed("admin","openServiceSession"),true); assert.equal(roles.isAllowed("operator","openServiceSession"),true); assert.equal(roles.isAllowed("rider","openServiceSession"),false);
 });
+
+test("partial mixed-method table payments preserve exact method buckets and residual",async()=>{
+  const s=session();
+  const orders=[{id:"table-1",service_session_id:s.id,totale:50}];
+  const events=[
+    {order_id:"table-1",service_session_id:s.id,type:"payment",amount:12,payment_method:"efectivo"},
+    {order_id:"table-1",service_session_id:s.id,type:"payment",amount:8,payment_method:"tarjeta"},
+  ];
+  const out=await createCurrentServiceCloseout({
+    select:async(t)=>t==="ordenes"?orders:events,
+    sessionLifecycle:identity({ok:true,code:"OK",session:s}),
+  })();
+  assert.equal(out.totals.gross,50);
+  assert.equal(out.totals.collected,20);
+  assert.equal(out.totals.unpaid,30);
+  assert.equal(out.paymentTotals.efectivo,12);
+  assert.equal(out.paymentTotals.tarjeta,8);
+  assert.equal(out.tickets[0].paymentState,"partially_paid");
+  assert.equal(out.tickets[0].paymentMethod,"mixto");
+  assert.equal(out.counts.partiallyPaid,1);
+});
+
+test("a partial refund reduces its original method without erasing other methods",async()=>{
+  const s=session();
+  const orders=[{id:"table-2",service_session_id:s.id,totale:30}];
+  const events=[
+    {order_id:"table-2",service_session_id:s.id,type:"payment",amount:10,payment_method:"efectivo"},
+    {order_id:"table-2",service_session_id:s.id,type:"payment",amount:20,payment_method:"tarjeta"},
+    {order_id:"table-2",service_session_id:s.id,type:"refund",amount:5,payment_method:"tarjeta"},
+  ];
+  const out=await createCurrentServiceCloseout({
+    select:async(t)=>t==="ordenes"?orders:events,
+    sessionLifecycle:identity({ok:true,code:"OK",session:s}),
+  })();
+  assert.equal(out.totals.collected,25);
+  assert.equal(out.totals.unpaid,5);
+  assert.equal(out.paymentTotals.efectivo,10);
+  assert.equal(out.paymentTotals.tarjeta,15);
+  assert.equal(out.tickets[0].paymentState,"partially_paid");
+});

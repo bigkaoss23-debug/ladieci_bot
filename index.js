@@ -28,6 +28,7 @@ const { integrateFinancialRoutes } = require("./src/auth/financialHttpIntegratio
 const { integrateLoginRoute } = require("./src/auth/loginHttpIntegration");
 const { integrateAccountRoutes } = require("./src/account/accountHttpIntegration");
 const { integrateAccessManagementRoutes } = require("./src/auth/accessManagementHttpIntegrationV3");
+const { integrateMessaRoutes } = require("./src/tables/messaHttpIntegration");
 const authDao = require("./src/auth/dao");
 const adminAccessDao = require("./src/auth/adminAccessDao");
 const { createAdminAccessService } = require("./src/auth/adminAccessService");
@@ -109,6 +110,17 @@ console.log(JSON.stringify({
   component: "access-management-v3",
   state: accessManagementIntegration.enabled ? "enabled" : "disabled",
   routeBase: accessManagementIntegration.prefix,
+  env: process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV || "unknown",
+}));
+
+// Messa floor/table billing boundary. Staging-only and disabled by default; mounted
+// before the legacy X-Api-Key proxy so its seven static routes use the DB-fresh Bearer
+// context and never trust actor/workspace/payment identity from a request body.
+const messaIntegration = integrateMessaRoutes(app, { env: process.env, logger: console });
+console.log(JSON.stringify({
+  component: "messa-v1",
+  state: messaIntegration.enabled ? "enabled" : "disabled",
+  routeBase: messaIntegration.prefix,
   env: process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV || "unknown",
 }));
 

@@ -494,7 +494,11 @@ async function creaOrdine(params) {
       metodo_pago:    params.metodo_pago    || "",
       descuento_tipo:    (descTipo && descuentoImporte > 0) ? descTipo  : null,
       descuento_valor:   (descTipo && descuentoImporte > 0) ? descValor : null,
-      descuento_importe: descuentoImporte > 0 ? descuentoImporte : null
+      descuento_importe: descuentoImporte > 0 ? descuentoImporte : null,
+      // Mesa: the DB trigger validates the open session, snapshots the physical
+      // table identity, assigns the next command number and expands immutable
+      // settlement lines in the SAME insert transaction. Non-table orders stay null.
+      table_session_id: params.table_session_id || null
     });
 
     // Successo: sbInsert ritorna array con il record inserito
