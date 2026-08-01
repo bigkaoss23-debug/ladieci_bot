@@ -19,11 +19,12 @@ const { createFinancialService } = require('../src/auth/financialService');
 
 const jsonParser = express.json(); // same default parser the app mounts (limit 100kb)
 
-// CORS middleware mirroring index.js (Access-Control-* + OPTIONS → 204).
+// CORS middleware mirroring index.js (Access-Control-* + OPTIONS → 204). V3-H.2 added
+// PATCH/PUT/DELETE + Authorization for the V3 access-management routes.
 function corsMw(req, res, next) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key, Authorization');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   return next();
 }

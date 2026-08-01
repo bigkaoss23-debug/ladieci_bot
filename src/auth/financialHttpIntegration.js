@@ -80,10 +80,10 @@ function integrateFinancialRoutes(app, deps = {}) {
 function createFinancialIntegrationApp(deps = {}) {
   const app = express();
   app.use(express.json());                                  // identical global parser (default 100kb)
-  app.use((req, res, next) => {                             // CORS mirror of index.js
+  app.use((req, res, next) => {                             // CORS mirror of index.js (V3-H.2)
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key, Authorization');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     return next();
   });

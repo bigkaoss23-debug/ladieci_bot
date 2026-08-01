@@ -126,10 +126,10 @@ function integrateLoginRoute(app, deps = {}) {
 function createAuthV2IntegrationApp(deps = {}) {
   const app = express();
   app.use(express.json());
-  app.use((req, res, next) => {
+  app.use((req, res, next) => {                             // CORS mirror of index.js (V3-H.2)
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key, Authorization');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     return next();
   });
