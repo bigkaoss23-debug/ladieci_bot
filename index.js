@@ -57,10 +57,16 @@ const { hasPendingOperationalActivity } = require("./src/serviceSessions/pending
 
 const app = express();
 app.use(express.json());
+// V3-H.2 — the nine V3 access-management routes are the first callers to need
+// PATCH/PUT/DELETE and a bearer Authorization header; no legacy route (app.patch/
+// app.put/app.delete) exists anywhere in this file, so extending the allow-lists here
+// is purely additive. Wildcard origin remains safe: the V3 API is bearer-token-only
+// (never cookies), and Access-Control-Allow-Credentials is deliberately never set, so
+// the wildcard-plus-credentials combination browsers reject never applies here.
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Api-Key");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Api-Key, Authorization");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
