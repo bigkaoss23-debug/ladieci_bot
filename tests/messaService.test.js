@@ -37,6 +37,29 @@ test('floor exposes exact partial balance, mixed methods and remaining covers', 
   assert.deepEqual(table.session.paymentTotals, { efectivo: 12, tarjeta: 8 });
   assert.equal(table.session.lines[0].remaining, 8);
   assert.equal(table.session.lines[1].remaining, 22);
+  assert.deepEqual(table.reservations, []);
+});
+
+test('floor keeps reservation identity separate from the open/free account state', () => {
+  const [table] = buildFloor({
+    tables: [{ id: 't1', table_number: 5, display_name: 'Mesa 5', capacity: 4, position_x: 50, position_y: 50, shape: 'square', active: true }],
+    reservations: [{
+      id: 'r1', table_id: 't1', table_session_id: null, status: 'booked',
+      guest_name: 'Antonio', guest_phone: '600123123', covers_total: 4,
+      reserved_at: '2026-08-01T18:00:00.000Z', duration_minutes: 120,
+      note: 'Cumpleaños', version: 3, created_by: 'operator_primary', updated_by: 'waiter-1',
+    }],
+    sessions: [], orders: [], lines: [], transactions: [], allocations: [],
+  });
+  assert.equal(table.status, 'free');
+  assert.equal(table.session, null);
+  assert.deepEqual(table.reservations[0], {
+    id: 'r1', tableId: 't1', tableSessionId: null, status: 'booked',
+    guestName: 'Antonio', guestPhone: '600123123', coversTotal: 4,
+    reservedAt: '2026-08-01T18:00:00.000Z', durationMinutes: 120,
+    note: 'Cumpleaños', version: 3, createdAt: undefined, updatedAt: undefined,
+    createdBy: 'operator_primary', updatedBy: 'waiter-1',
+  });
 });
 
 test('a table without a session is free', () => {
@@ -150,6 +173,62 @@ test('waiter cannot post money even if assigned', async () => {
     service.pay({ context: ctx({ actor: 'waiter-1', role: 'waiter' }) }),
     (error) => error instanceof MessaServiceError && error.code === 'MESSA_FORBIDDEN'
   );
+});
+
+test('waiter can move a reservation without layout or payment authority', async () => {
+  let args;
+  const service = createMessaService({
+    dao: { saveReservation: async (value) => { args = value; return { ok: true }; } },
+  });
+  await service.saveReservation({
+    context: ctx({ actor: 'waiter-1', role: 'waiter' }),
+    reservation: {
+      reservationId: 'r1', tableId: 't4', guestName: 'Antonio', guestPhone: '600',
+      coversTotal: 4, reservedLocalDate: '2026-08-02', reservedLocalTime: '20:00',
+      note: '', expectedVersion: 2,
+    },
+  });
+  assert.deepEqual(args, {
+    workspaceId: 'ws-1', byActor: 'waiter-1',
+    reservationId: 'r1', tableId: 't4', guestName: 'Antonio', guestPhone: '600',
+    coversTotal: 4, reservedLocalDate: '2026-08-02', reservedLocalTime: '20:00',
+    note: '', expectedVersion: 2,
+  });
+  await assert.rejects(
+    service.saveTable({ context: ctx({ actor: 'waiter-1', role: 'waiter' }), table: {} }),
+    (error) => error instanceof MessaServiceError && error.code === 'MESSA_FORBIDDEN'
+  );
+});
+
+test('waiter can cancel a reservation', async () => {
+  let args;
+  const service = createMessaService({
+    dao: { setReservationStatus: async (value) => { args = value; return { ok: true }; } },
+  });
+  await service.setReservationStatus({
+    context: ctx({ actor: 'waiter-1', role: 'waiter' }),
+    reservationId: 'r1', expectedVersion: 4, status: 'cancelled',
+  });
+  assert.deepEqual(args, {
+    workspaceId: 'ws-1', byActor: 'waiter-1', reservationId: 'r1',
+    expectedVersion: 4, status: 'cancelled',
+  });
+});
+
+test('opening a reservation derives the service and forwards its version atomically', async () => {
+  let args;
+  const service = createMessaService({
+    dao: { openReservation: async (value) => { args = value; return { ok: true, sessionId: 's2' }; } },
+    lifecycle: { currentCloseout: async () => ({ ok: true, session: { id: 'service-2', status: 'open' } }) },
+  });
+  const result = await service.openReservation({
+    context: ctx({ actor: 'waiter-1', role: 'waiter' }), reservationId: 'r1', expectedVersion: 5,
+  });
+  assert.equal(result.sessionId, 's2');
+  assert.deepEqual(args, {
+    workspaceId: 'ws-1', byActor: 'waiter-1', reservationId: 'r1',
+    expectedVersion: 5, serviceSessionId: 'service-2',
+  });
 });
 
 test('a reordered item after settlement opens a brand-new account id', async () => {

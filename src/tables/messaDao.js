@@ -34,14 +34,21 @@ async function listFloorRows(workspaceId, { includeInactive = false } = {}) {
     + (includeInactive ? '' : '&active=eq.true')
     + '&order=table_number.asc');
 
-  const sessions = await select('table_sessions',
-    `select=id,workspace_id,table_id,service_session_id,table_ref,status,assigned_waiter_actor,`
-    + `covers_total,next_command_number,opened_at,settled_at,updated_at`
-    + `&workspace_id=eq.${encodeURIComponent(workspaceId)}`
-    + '&status=eq.open&order=opened_at.asc');
+  const [sessions, reservations] = await Promise.all([
+    select('table_sessions',
+      `select=id,workspace_id,table_id,service_session_id,table_ref,status,assigned_waiter_actor,`
+      + `covers_total,next_command_number,opened_at,settled_at,updated_at`
+      + `&workspace_id=eq.${encodeURIComponent(workspaceId)}`
+      + '&status=eq.open&order=opened_at.asc'),
+    select('table_reservations',
+      `select=id,workspace_id,table_id,table_session_id,status,guest_name,guest_phone,covers_total,`
+      + `reserved_at,duration_minutes,note,version,created_at,updated_at,created_by,updated_by`
+      + `&workspace_id=eq.${encodeURIComponent(workspaceId)}`
+      + '&status=in.(booked,seated)&order=reserved_at.asc'),
+  ]);
   const sessionIds = sessions.map((row) => row.id);
   const sessionFilter = idsFilter(sessionIds);
-  if (!sessionFilter) return { tables, sessions, orders: [], lines: [], transactions: [], allocations: [] };
+  if (!sessionFilter) return { tables, sessions, reservations, orders: [], lines: [], transactions: [], allocations: [] };
 
   const [orders, lines, transactions] = await Promise.all([
     select('ordenes',
@@ -64,7 +71,7 @@ async function listFloorRows(workspaceId, { includeInactive = false } = {}) {
       `select=id,payment_transaction_id,table_order_line_id,order_id,amount,created_at`
       + `&payment_transaction_id=${txFilter}&order=created_at.asc`)
     : [];
-  return { tables, sessions, orders, lines, transactions, allocations };
+  return { tables, sessions, reservations, orders, lines, transactions, allocations };
 }
 
 async function getSession(workspaceId, sessionId) {
@@ -119,6 +126,36 @@ const postPayment = (args) => rpc('messa_post_payment_v1', {
   p_meta: args.meta || {},
 });
 
+const saveReservation = (args) => rpc('messa_save_reservation_v1', {
+  p_workspace_id: args.workspaceId,
+  p_by_actor: args.byActor,
+  p_reservation_id: args.reservationId || null,
+  p_table_id: args.tableId,
+  p_guest_name: args.guestName,
+  p_guest_phone: args.guestPhone || null,
+  p_covers_total: args.coversTotal,
+  p_reserved_local_date: args.reservedLocalDate,
+  p_reserved_local_time: args.reservedLocalTime,
+  p_note: args.note || null,
+  p_expected_version: args.expectedVersion ?? null,
+});
+
+const setReservationStatus = (args) => rpc('messa_set_reservation_status_v1', {
+  p_workspace_id: args.workspaceId,
+  p_by_actor: args.byActor,
+  p_reservation_id: args.reservationId,
+  p_expected_version: args.expectedVersion,
+  p_status: args.status,
+});
+
+const openReservation = (args) => rpc('messa_open_reservation_v1', {
+  p_workspace_id: args.workspaceId,
+  p_by_actor: args.byActor,
+  p_reservation_id: args.reservationId,
+  p_expected_version: args.expectedVersion,
+  p_service_session_id: args.serviceSessionId,
+});
+
 module.exports = {
   listFloorRows,
   getSession,
@@ -126,4 +163,7 @@ module.exports = {
   openSession,
   saveTable,
   postPayment,
+  saveReservation,
+  setReservationStatus,
+  openReservation,
 };

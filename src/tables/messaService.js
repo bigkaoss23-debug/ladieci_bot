@@ -20,6 +20,7 @@ const FLOOR_ROLES = new Set(['admin','operator','owner','cashier','waiter','lega
 const OPEN_ROLES = new Set(['admin','operator','owner','cashier','waiter','legacy_operator']);
 const PAYMENT_ROLES = new Set(['admin','operator','owner','cashier','legacy_operator']);
 const LAYOUT_ROLES = new Set(['admin','owner']);
+const RESERVATION_ROLES = new Set(['admin','operator','owner','cashier','waiter','shift_manager','legacy_operator']);
 const CANCELLED = new Set(['ANULADO','CANCELADO','CANCELLED','CHIUSO_FORZATO']);
 
 function requireContext(context, allowed) {
@@ -52,6 +53,28 @@ function canonicalHash(value) {
 }
 
 function buildFloor(rows) {
+  const reservationsByTable = new Map();
+  for (const reservation of rows.reservations || []) {
+    const key = String(reservation.table_id);
+    if (!reservationsByTable.has(key)) reservationsByTable.set(key, []);
+    reservationsByTable.get(key).push({
+      id: reservation.id,
+      tableId: reservation.table_id,
+      tableSessionId: reservation.table_session_id,
+      status: reservation.status,
+      guestName: reservation.guest_name,
+      guestPhone: reservation.guest_phone,
+      coversTotal: Number(reservation.covers_total),
+      reservedAt: reservation.reserved_at,
+      durationMinutes: Number(reservation.duration_minutes),
+      note: reservation.note,
+      version: Number(reservation.version),
+      createdAt: reservation.created_at,
+      updatedAt: reservation.updated_at,
+      createdBy: reservation.created_by,
+      updatedBy: reservation.updated_by,
+    });
+  }
   const sessionByTable = new Map(rows.sessions
     .filter((session) => session.status === 'open')
     .map((session) => [String(session.table_id), session]));
@@ -107,6 +130,7 @@ function buildFloor(rows) {
       id: table.id, number: table.table_number, name: table.display_name,
       capacity: table.capacity, x: Number(table.position_x), y: Number(table.position_y),
       shape: table.shape, active: table.active, status: 'free', session: null,
+      reservations: reservationsByTable.get(String(table.id)) || [],
     };
     const key = String(session.id);
     const lines = linesBySession.get(key) || [];
@@ -125,6 +149,7 @@ function buildFloor(rows) {
       capacity: table.capacity, x: Number(table.position_x), y: Number(table.position_y),
       shape: table.shape, active: table.active,
       status: 'open',
+      reservations: reservationsByTable.get(String(table.id)) || [],
       session: {
         id: session.id,
         serviceSessionId: session.service_session_id,
@@ -262,6 +287,41 @@ function createMessaService({
     async saveTable({ context, table } = {}) {
       const ctx = requireContext(context, LAYOUT_ROLES);
       return dao.saveTable({ workspaceId: ctx.workspaceId, byActor: ctx.actor, ...table });
+    },
+
+    async saveReservation({ context, reservation } = {}) {
+      const ctx = requireContext(context, RESERVATION_ROLES);
+      return dao.saveReservation({
+        workspaceId: ctx.workspaceId,
+        byActor: ctx.actor,
+        ...reservation,
+      });
+    },
+
+    async setReservationStatus({ context, reservationId, expectedVersion, status } = {}) {
+      const ctx = requireContext(context, RESERVATION_ROLES);
+      return dao.setReservationStatus({
+        workspaceId: ctx.workspaceId,
+        byActor: ctx.actor,
+        reservationId,
+        expectedVersion,
+        status,
+      });
+    },
+
+    async openReservation({ context, reservationId, expectedVersion } = {}) {
+      const ctx = requireContext(context, OPEN_ROLES);
+      const identity = await lifecycle.currentCloseout();
+      if (!identity || !identity.ok || !identity.session || identity.session.status !== 'open') {
+        throw new MessaServiceError('MESSA_SERVICE_NOT_OPEN', 409);
+      }
+      return dao.openReservation({
+        workspaceId: ctx.workspaceId,
+        byActor: ctx.actor,
+        reservationId,
+        expectedVersion,
+        serviceSessionId: identity.session.id,
+      });
     },
   });
 }

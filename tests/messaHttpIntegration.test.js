@@ -18,7 +18,7 @@ test('disabled integration mounts zero routes', () => {
   assert.deepEqual(result, { enabled: false, prefix: PREFIX, routes: 0 });
 });
 
-test('enabled integration mounts exactly six static routes', () => {
+test('enabled integration mounts exactly ten static routes', () => {
   const app = express();
   const service = {
     floor: async () => ({ ok: true, tables: [] }),
@@ -27,6 +27,9 @@ test('enabled integration mounts exactly six static routes', () => {
     addCommand: async () => ({ ok: true }),
     markServed: async () => ({ ok: true }),
     pay: async () => ({ ok: true }),
+    saveReservation: async () => ({ ok: true }),
+    setReservationStatus: async () => ({ ok: true }),
+    openReservation: async () => ({ ok: true }),
   };
   const result = integrateMessaRoutes(app, {
     env: { MESSA_HTTP_ENABLED: 'true' },
@@ -34,5 +37,5 @@ test('enabled integration mounts exactly six static routes', () => {
     verifyToken: () => ({ sub: 'operator_primary', role: 'operator', sv: 1, sid: 'sid' }),
     getActor: async () => ({ actor: 'operator_primary', role: 'operator', active: true, session_version: 1, workspace_id: 'ws' }),
   });
-  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 6 });
+  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 10 });
 });

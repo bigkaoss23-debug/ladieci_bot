@@ -16,9 +16,12 @@ function safeError(error) {
     'MESSA_ALREADY_SETTLED','MESSA_LINE_SELECTION_SETTLED',
     'MESSA_COMMAND_NOT_READY','MESSA_COMMAND_STATE_FAILED',
     'MESSA_PAYMENT_IDEMPOTENCY_CONFLICT',
+    'MESSA_RESERVATION_OVERLAP','MESSA_RESERVATION_VERSION_CONFLICT',
+    'MESSA_RESERVATION_NOT_BOOKED','MESSA_RESERVATION_CAPACITY_EXCEEDED',
+    'MESSA_TABLE_HAS_RESERVATIONS',
   ]);
-  const denied = new Set(['MESSA_PAYMENT_FORBIDDEN','MESSA_OPEN_FORBIDDEN','MESSA_LAYOUT_FORBIDDEN']);
-  const missing = new Set(['MESSA_SESSION_NOT_FOUND','MESSA_TABLE_NOT_FOUND','MESSA_WORKSPACE_NOT_FOUND','MESSA_COMMAND_NOT_FOUND']);
+  const denied = new Set(['MESSA_PAYMENT_FORBIDDEN','MESSA_OPEN_FORBIDDEN','MESSA_LAYOUT_FORBIDDEN','MESSA_RESERVATION_FORBIDDEN']);
+  const missing = new Set(['MESSA_SESSION_NOT_FOUND','MESSA_TABLE_NOT_FOUND','MESSA_WORKSPACE_NOT_FOUND','MESSA_COMMAND_NOT_FOUND','MESSA_RESERVATION_NOT_FOUND']);
   return {
     status: conflict.has(code) ? 409 : denied.has(code) ? 403 : missing.has(code) ? 404 : code === 'MESSA_INTERNAL_ERROR' ? 500 : 400,
     code,
@@ -129,6 +132,45 @@ function createMessaHandlers({ service = createMessaService(), logger = console 
         active: req.body?.active,
       },
     })),
+    createReservation: run('create_reservation', (req) => service.saveReservation({
+      context: req.messaContext,
+      reservation: {
+        reservationId: null,
+        tableId: requireId(req.params.tableId),
+        guestName: req.body?.guestName,
+        guestPhone: req.body?.guestPhone,
+        coversTotal: Number(req.body?.coversTotal),
+        reservedLocalDate: req.body?.reservedLocalDate,
+        reservedLocalTime: req.body?.reservedLocalTime,
+        note: req.body?.note,
+        expectedVersion: null,
+      },
+    })),
+    updateReservation: run('update_reservation', (req) => service.saveReservation({
+      context: req.messaContext,
+      reservation: {
+        reservationId: requireId(req.params.reservationId),
+        tableId: requireId(req.body?.tableId),
+        guestName: req.body?.guestName,
+        guestPhone: req.body?.guestPhone,
+        coversTotal: Number(req.body?.coversTotal),
+        reservedLocalDate: req.body?.reservedLocalDate,
+        reservedLocalTime: req.body?.reservedLocalTime,
+        note: req.body?.note,
+        expectedVersion: Number(req.body?.expectedVersion),
+      },
+    })),
+    setReservationStatus: run('set_reservation_status', (req) => service.setReservationStatus({
+      context: req.messaContext,
+      reservationId: requireId(req.params.reservationId),
+      expectedVersion: Number(req.body?.expectedVersion),
+      status: req.body?.status,
+    })),
+    openReservation: run('open_reservation', (req) => service.openReservation({
+      context: req.messaContext,
+      reservationId: requireId(req.params.reservationId),
+      expectedVersion: Number(req.body?.expectedVersion),
+    })),
   });
 }
 
@@ -141,7 +183,11 @@ function registerMessaRoutes(router, deps = {}) {
   router.post('/sessions/:sessionId/commands', auth, handlers.addCommand);
   router.post('/sessions/:sessionId/commands/:orderId/served', auth, handlers.markServed);
   router.post('/sessions/:sessionId/payments', auth, handlers.pay);
-  return Object.freeze({ routes: 6 });
+  router.post('/tables/:tableId/reservations', auth, handlers.createReservation);
+  router.put('/reservations/:reservationId', auth, handlers.updateReservation);
+  router.post('/reservations/:reservationId/status', auth, handlers.setReservationStatus);
+  router.post('/reservations/:reservationId/open', auth, handlers.openReservation);
+  return Object.freeze({ routes: 10 });
 }
 
 module.exports = {

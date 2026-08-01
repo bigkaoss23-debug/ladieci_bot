@@ -111,6 +111,8 @@ const REGISTRY = Object.freeze([
     'tables/messaDao.js reads posted Mesa money movements; writes are RPC-only'),
   entry('payment_allocations', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
     'tables/messaDao.js reads transaction-to-charge allocations; writes are RPC-only'),
+  entry('table_reservations', KIND.TABLE, ['GET'], SENSITIVITY.PII,
+    'tables/messaDao.js reads active Mesa reservations; writes are RPC-only'),
 
   // ── account domain tables — src/account/accountHttpIntegration.js ──
   entry('user_profiles', KIND.TABLE, ['GET'], SENSITIVITY.PII, 'accountHttpIntegration.js selectProfile'),
@@ -156,6 +158,9 @@ const REGISTRY = Object.freeze([
   entry('rpc/messa_release_table_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/messaDao.js'),
   entry('rpc/messa_save_table_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/messaDao.js'),
   entry('rpc/messa_post_payment_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'tables/messaDao.js'),
+  entry('rpc/messa_save_reservation_v1', KIND.RPC, ['POST'], SENSITIVITY.PII, 'tables/messaDao.js'),
+  entry('rpc/messa_set_reservation_status_v1', KIND.RPC, ['POST'], SENSITIVITY.PII, 'tables/messaDao.js'),
+  entry('rpc/messa_open_reservation_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/messaDao.js'),
 
   // ── account RPC ──
   entry('rpc/auth_account_claim_workspace', KIND.RPC, ['POST'], SENSITIVITY.AUTH_SECURITY, 'workspaceOwnerDao.js claimWorkspace'),
