@@ -2,6 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert, sbInsert } = require("./src/utils/supabase");
+const { supabaseRequest } = require("./src/utils/supabaseTransport");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
 // DRIVER_STATO = telemetria visiva opzionale (best-effort). getDriverStatus per la
 // UI, closeGiroInternal condiviso col legacy chiudiGiro (idempotente).
@@ -259,17 +260,18 @@ app.post("/webhook", async (req, res) => {
 
 // --- API DASHBOARD ---
 
-async function readShadowPreviewOrders(table, query) {
-  const base = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_KEY;
-  if (!base || !key) throw new Error("supabase_env_missing");
-  const res = await fetch(`${base}/rest/v1/${table}?${query}`, {
-    method: "GET",
-    headers: { apikey: key, Authorization: "Bearer " + key },
-  });
-  if (!res.ok) throw new Error(`shadow_preview_read_failed_${res.status}`);
-  const text = await res.text();
-  try { return JSON.parse(text); } catch { return []; }
+// H1B — routed through the shared hardened transport (fail-closed config,
+// timeout, resource-policy enforcement) instead of an inline, un-timed fetch().
+// The table is a fixed internal constant, never a caller-supplied parameter —
+// see src/core/delivery/shadowPreviewEndpoint.js's readOrderRows(), the only
+// caller, which always requests "ordenes" (source-verified, never dynamic).
+// Endpoint, payload shape, query, columns and status code are unchanged: a
+// non-2xx upstream response still throws a plain Error with no .statusCode,
+// which handleShadowPreviewReadOnly still maps to HTTP 500, exactly as before.
+async function readShadowPreviewOrders(query) {
+  const r = await supabaseRequest({ resource: "ordenes", method: "GET", query, operation: "readShadowPreviewOrders" });
+  if (!r.ok) throw new Error(`shadow_preview_read_failed_${r.status}`);
+  return r.bodyIsJson ? r.body : [];
 }
 
 app.get("/api/delivery/shadow-preview", (req, res) => {

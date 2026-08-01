@@ -80,7 +80,11 @@ async function readOrderRows({ date, dbClient, limit }) {
     throw e;
   }
   const query = buildOrdersQuery(date, limit);
-  if (typeof dbClient === "function") return dbClient("ordenes", query);
+  // H1B: the function-shaped dbClient (index.js's readShadowPreviewOrders, the
+  // only production caller) now fixes its own resource internally and takes
+  // only `query` — see src/utils/supabaseTransport.js. The object-shaped
+  // `.select(table, query)` form (used only by test fakes) is unchanged.
+  if (typeof dbClient === "function") return dbClient(query);
   if (typeof dbClient.select === "function") return dbClient.select("ordenes", query);
   const e = new Error("db_client_invalid");
   e.statusCode = 500;
