@@ -108,8 +108,7 @@ function freshTransport() {
   }
 
   // ── 9) risposta vuota ammessa quando prevista ───────────────────────────
-  // resource 'conv' (non 'ordenes'): DELETE è un metodo registrato per conv
-  // (servizio.js close), non per ordenes — vedi supabaseResourcePolicy.js (H1B).
+  // resource 'conv': DELETE è un metodo registrato per la chiusura servizio.
   {
     global.fetch = async () => ({ ok: true, status: 204, text: async () => '' });
     const r = await mod.supabaseRequest({ resource: 'conv', method: 'DELETE', operation: 'test' });

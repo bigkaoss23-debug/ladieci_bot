@@ -43,13 +43,25 @@ global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
     assert('3b. metodo consentito → richiesta eseguita', r.ok === true);
   }
 
-  // ── 4) metodo vietato ────────────────────────────────────────────────────
-  assert('4. metodo vietato (ordenes DELETE, mai usato da un call site reale)', !policy.isMethodAllowed('ordenes', 'DELETE'));
+  // ── 4) DELETE ordini usato dalla chiusura servizio ───────────────────────
+  assert('4. metodo consentito (ordenes DELETE, chiusura servizio dopo archivio)', policy.isMethodAllowed('ordenes', 'DELETE'));
   {
-    const err = await captureErr(() => transport.supabaseRequest({ resource: 'ordenes', method: 'DELETE', operation: 'test' }));
-    assert('4b. metodo vietato nel transport → SUPABASE_METHOD_NOT_ALLOWED',
+    const r = await transport.supabaseRequest({ resource: 'ordenes', method: 'DELETE', operation: 'test' });
+    assert('4b. DELETE ordenes registrato → richiesta eseguita', r.ok === true);
+  }
+  {
+    const err = await captureErr(() => transport.supabaseRequest({ resource: 'clientes', method: 'DELETE', operation: 'test' }));
+    assert('4c. DELETE resta vietato per una risorsa senza call site reale',
       err && err.code === transport.ERROR_CODES.METHOD_NOT_ALLOWED);
   }
+
+  // ── 4d–4f) call site indiretti registrati ────────────────────────────────
+  assert('4d. order-intake può leggere il puntatore del servizio corrente',
+    policy.isMethodAllowed('service_session_state', 'GET'));
+  assert('4e. order-intake può leggere la sessione servizio corrente',
+    policy.isMethodAllowed('service_sessions', 'GET'));
+  assert('4f. il logger può inserire le transizioni di stato sanificate',
+    policy.isMethodAllowed('orden_estado_logs', 'POST'));
 
   // ── 5) RPC registrata ────────────────────────────────────────────────────
   assert('5. RPC registrata (rpc/start_rider_trip)', policy.getResourcePolicy('rpc/start_rider_trip') !== null);

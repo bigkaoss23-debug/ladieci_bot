@@ -55,8 +55,9 @@ function entry(resource, kind, allowedMethods, sensitivity, provenance, override
 const REGISTRY = Object.freeze([
   // ── operational tables — src/utils/supabase.js consumers (agentOrdini.js,
   // servizio.js, manualGiros.js, agenteMiglioramento.js, readActions.js, ecc.) ──
-  entry('ordenes', KIND.TABLE, ['GET', 'POST', 'PATCH'], SENSITIVITY.PII,
-    'agentOrdini.js, servizio.js, readActions.js, index.js (updateEstado/marcarLlegado/setUiOffset)'),
+  entry('ordenes', KIND.TABLE, ['GET', 'POST', 'PATCH', 'DELETE'], SENSITIVITY.PII,
+    'agentOrdini.js, readActions.js, index.js (updateEstado/marcarLlegado/setUiOffset),'
+    + ' servizio.js close (DELETE after archive/backup verification)'),
   entry('conv', KIND.TABLE, ['GET', 'POST', 'PATCH', 'DELETE'], SENSITIVITY.WHATSAPP_CONTENT,
     'App flow (orchestrator.js), servizio.js close (DELETE), readActions.js'),
   entry('wa_msgs', KIND.TABLE, ['GET', 'POST', 'PATCH', 'DELETE'], SENSITIVITY.WHATSAPP_CONTENT,
@@ -79,12 +80,18 @@ const REGISTRY = Object.freeze([
   entry('order_financial_events', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
     'closeout/economiaLedgerAggregate.js (writes to this table happen exclusively via'
     + ' the financial RPCs below, never a direct sbInsert/sbUpsert)'),
+  entry('orden_estado_logs', KIND.TABLE, ['POST'], SENSITIVITY.AUDIT,
+    'utils/orderStateLogger.js appends sanitized order lifecycle transitions'),
   entry('archivio_conv', KIND.TABLE, ['GET', 'POST'], SENSITIVITY.WHATSAPP_CONTENT,
     'servizio.js chiudiServizio archive step'),
   entry('backup_serata', KIND.TABLE, ['POST'], SENSITIVITY.FINANCIAL,
     'servizio.js backupSerata (owner-only action per legacyActionRoles.js)'),
   entry('serata_summary', KIND.TABLE, ['GET', 'POST', 'PATCH', 'DELETE'], SENSITIVITY.FINANCIAL,
     'servizio.js close/rollback lifecycle'),
+  entry('service_session_state', KIND.TABLE, ['GET'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'serviceSessions/orderIntakePolicy.js reads the current service pointer before every new order'),
+  entry('service_sessions', KIND.TABLE, ['GET'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'serviceSessions/orderIntakePolicy.js validates the active service kind/date/status before every new order'),
 
   // ── menu catalogue — src/menu/menuRepository.js, read-only ──
   entry('menu_categorias', KIND.TABLE, ['GET'], SENSITIVITY.PUBLIC_OPERATIONAL, 'menuRepository.js readMenuTables'),
