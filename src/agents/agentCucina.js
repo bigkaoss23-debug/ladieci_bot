@@ -5,6 +5,7 @@
 const { sbSelect } = require("../utils/supabase");
 const { isBevanda, isDesert, getConversazione } = require("../utils/helpers");
 const { ZONE_DELIVERY, calcolaTempoGiro, simulateDriverSchedule, BUFFER_OPS_DRIVER_MIN, calcolaFornoOut } = require("../utils/zones");
+const { getCurrentOperationalSession, serviceSessionQuery } = require("../serviceSessions/currentOperationalSession");
 
 function pad(n) { return n < 10 ? "0" + n : "" + n; }
 
@@ -35,7 +36,12 @@ function tuttiSlotValidi() {
 
 async function getStatoCliente(waId) {
   if (!waId) return { haOrdine: false };
-  const rows = await sbSelect("ordenes", `wa_id=eq.${waId}&estado=in.(EN_COCINA,LISTO)&order=ts.desc&limit=1`);
+  const currentService = await getCurrentOperationalSession();
+  if (!currentService) return { haOrdine: false };
+  const rows = await sbSelect("ordenes", serviceSessionQuery(
+    currentService.id,
+    `wa_id=eq.${encodeURIComponent(waId)}&estado=in.(EN_COCINA,LISTO)&order=ts.desc&limit=1`,
+  ));
   if (!rows || !Array.isArray(rows) || rows.length === 0) return { haOrdine: false };
   const o = rows[0];
   return { haOrdine: true, ordenId: o.id, estado: o.estado, items: o.items || [], hora: o.hora || "", nombre: o.nombre || "" };
@@ -43,8 +49,14 @@ async function getStatoCliente(waId) {
 
 async function getCaricoForno(oraRichiesta) {
   const MAX_PIZZE_SLOT = 4;
-  const rows = await sbSelect("ordenes", "estado=eq.EN_COCINA") || [];
-  const convRows = await sbSelect("conv", "stato_ordine=eq.confermata") || [];
+  const currentService = await getCurrentOperationalSession();
+  const rows = currentService
+    ? await sbSelect("ordenes", serviceSessionQuery(currentService.id, "estado=eq.EN_COCINA")) || []
+    : [];
+  const openedAtMs = currentService ? new Date(currentService.opened_at).getTime() : NaN;
+  const convRows = currentService && Number.isFinite(openedAtMs)
+    ? await sbSelect("conv", `ts=gte.${openedAtMs}&stato_ordine=eq.confermata`) || []
+    : [];
 
   const pizzeSlot = {};
   function contaItems(itemsList, horaRecord) {
@@ -103,7 +115,13 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
   const driverInGiro = !!(driverStato?.stato === "IN_GIRO" && driverStato?.zona === zonaId && driverStato?.partito_alle);
 
   // Ordini delivery attivi (per consolidazione zonale + simulazione cascade)
-  const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)") || [];
+  const currentService = await getCurrentOperationalSession();
+  const rows = currentService
+    ? await sbSelect("ordenes", serviceSessionQuery(
+        currentService.id,
+        "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)",
+      )) || []
+    : [];
 
   // ── Conta ordini per (zona, slot10(hora)) — coerente con la logica di aggregazione ──
   const slotKey = (z, h) => {

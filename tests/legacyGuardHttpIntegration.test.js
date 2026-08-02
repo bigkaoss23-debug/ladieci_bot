@@ -24,6 +24,20 @@ require.cache[supaPath].exports = Object.assign({}, realSupa, {
   sbUpsert: async () => ({}), sbUpdate: async () => ({}), sbInsert: async () => ({}), sbDelete: async () => ({}),
 });
 
+// The operator board is scoped by the lifecycle pointer before it touches
+// ordenes. Keep this integration fully offline while returning a real open
+// service identity to that guard.
+const lifecyclePath = require.resolve("../src/serviceSessions/serviceSessionLifecycle");
+const realLifecycle = require(lifecyclePath);
+require.cache[lifecyclePath].exports = Object.assign({}, realLifecycle, {
+  lifecycle: Object.assign({}, realLifecycle.lifecycle, {
+    currentCloseout: async () => ({
+      ok: true,
+      session: { id: "00000000-0000-4000-8000-000000000001", status: "open", opened_at: "2026-08-02T09:00:00Z" },
+    }),
+  }),
+});
+
 // ── stub dao.getActor ──
 const daoPath = require.resolve("../src/auth/dao");
 const realDao = require(daoPath);

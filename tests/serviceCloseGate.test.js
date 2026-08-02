@@ -9,6 +9,7 @@ const realSupa = require(supaPath);
 let deletes = [], inserts = [], upserts = [];
 let existingSummary = [];
 let completedOrders = [];
+let activeOrders = [];
 let throwStorico = false;
 let ordersDeleted = false;
 let tableSessions = [];
@@ -17,7 +18,10 @@ require.cache[supaPath].exports = Object.assign({}, realSupa, {
     if (t === "serata_summary") return existingSummary;
     // S2-6A3B: the close now re-reads ordenes after deleting to prove the rows are gone,
     // so the stub must model deletion instead of always replaying the same rows.
-    if (t === "ordenes") return ordersDeleted ? [] : completedOrders;
+    if (t === "ordenes") {
+      if (/select=id,estado/.test(q || "")) return activeOrders;
+      return ordersDeleted ? [] : completedOrders;
+    }
     if (t === "table_sessions") return tableSessions;
     if (t === "storico" && /select=orden_id/.test(q || "")) return completedOrders.map(o => ({ orden_id: o.id }));
     return [];
@@ -59,17 +63,48 @@ const session = { id:"00000000-0000-4000-8000-000000000001", business_date:"2026
 const order = { id: "O1", service_session_id:session.id, wa_id: "wa1", tel: "wa1", estado: "RETIRADO", items: [], tipo_consegna: "DOMICILIO", totale: 10 };
 const reset = () => {
   deletes = []; inserts = []; upserts = []; ordersDeleted = false; throwReset = false; endCalls = 0; beginCalls = 0; endIds = [];
-  existingSummary = []; completedOrders = []; throwStorico = false;
+  existingSummary = []; completedOrders = []; activeOrders = []; throwStorico = false;
   tableSessions = [];
   SESSION_CURRENT = { ok:true, code:"OK", session:{...session,status:"open"} };
   SESSION_BEGIN = { ok:true, code:"CLOSING", session }; sessionCompleteCalls=[];
 };
 
 (async () => {
+  // ── Active order + "leave messages" -> refuse before close starts ──
+  reset();
+  activeOrders = [{ id: "O-live", estado: "EN_COCINA" }];
+  let r = await chiudiServizio(false, "manual");
+  check("active order + non-forced close -> close is refused", r.success === false && r.error === "service_active_orders_not_resolved");
+  check("active order refusal exposes the blocking order", r.details?.orders?.[0]?.id === "O-live");
+  check("active order refusal is read-only", beginCalls === 0 && deletes.length === 0 && inserts.length === 0);
+
+  // ── Missing/unknown states are unresolved too (SQL not.in would miss NULL) ──
+  reset();
+  activeOrders = [{ id: "O-null", estado: null }, { id: "O-unknown", estado: "CUSTOM_STATE" }];
+  r = await chiudiServizio(false, "manual");
+  check("null/unknown order states -> close is refused", r.success === false && r.error === "service_active_orders_not_resolved");
+  check("null/unknown refusal reports both blockers", r.details?.count === 2);
+  check("null/unknown refusal remains read-only", beginCalls === 0 && deletes.length === 0 && inserts.length === 0);
+
+  // ── Every supported terminal spelling/state is allowed ──
+  reset();
+  activeOrders = [
+    { id: "O-ret", estado: "RETIRADO" },
+    { id: "O-es", estado: "COMPLETADO" },
+    { id: "O-it", estado: "COMPLETATO" },
+    { id: "O-ca", estado: "CANCELADO" },
+    { id: "O-cx", estado: "CANCELLED" },
+    { id: "O-an", estado: "ANULADO" },
+    { id: "O-force", estado: "CHIUSO_FORZATO" },
+  ];
+  RESET = { status: 200, payload: { ok: true, code: "OK", close_id: "terminal-ok", marker: { close_id: "terminal-ok" }, resumed: false } };
+  r = await chiudiServizio(false, "manual");
+  check("supported terminal states do not block close", r.success === true);
+
   // ── Open Mesa -> fail closed before every destructive gate ──
   reset();
   tableSessions = [{ id: "table-session-1", table_ref: "Mesa 3", status: "open" }];
-  let r = await chiudiServizio(true, "manual");
+  r = await chiudiServizio(true, "manual");
   check("open Mesa -> close is refused", r.success === false && r.error === "messa_tables_not_released");
   check("open Mesa -> rider gate never opens", beginCalls === 0);
   check("open Mesa -> no destructive work", deletes.length === 0 && inserts.length === 0);

@@ -19,6 +19,7 @@
 const { sbSelect, sbInsert, sbUpsert, sbUpdate, sbDelete } = require("./supabase");
 const { calcolaTotale, calcolaTotaleOrdine, deliveryFeeFor, isBevanda, isDesert, direccionToCacheKey } = require("./helpers");
 const { lifecycle: serviceSessionLifecycle } = require("../serviceSessions/serviceSessionLifecycle");
+const { getCurrentOperationalSession, serviceSessionQuery } = require("../serviceSessions/currentOperationalSession");
 // S2-7D6E2 — UNA sola fonte contabile. Il summary archiviato non ricalcola il denaro
 // con una seconda regola più debole: chiama lo stesso aggregatore del closeout live.
 const { aggregate: aggregateCloseout } = require("../closeout/currentServiceCloseout");
@@ -112,12 +113,20 @@ function fasciaOraDa(hora) {
 // ─── Scan: cosa c'è prima di chiudere (read-only) ────────────────
 async function scanServizio() {
   const oggi = madridDateStr();
-  const ordiniCompletati = await sbSelect("ordenes", "estado=in.(RETIRADO,COMPLETADO,COMPLETATO)") || [];
-  const convChiuse       = await sbSelect("conv", "stato_ordine=in.(ritirata,confermata,chiusa)") || [];
-  const convAttive       = await sbSelect("conv", "stato_ordine=not.in.(ritirata,confermata,chiusa)") || [];
-  const waMsgsAttivi     = await sbSelect("wa_msgs", "stato=in.(NUEVO,IN_TRATTAMENTO)") || [];
-  const ordiniInCorso    = await sbSelect("ordenes", "estado=in.(POR_CONFIRMAR,EN_COCINA,LISTO,EN_ENTREGA)") || [];
-  const contiMesaAperti  = await sbSelect("table_sessions", "status=eq.open") || [];
+  const currentService = await getCurrentOperationalSession();
+  if (!currentService) {
+    return { ok: true, data: oggi, service_session_id: null, completati: { ordini: 0, conv: 0 }, attivi: [] };
+  }
+  const sessionFilter = (query) => serviceSessionQuery(currentService.id, query);
+  const openedAtMs = new Date(currentService.opened_at).getTime();
+  if (!Number.isFinite(openedAtMs)) throw new Error("SERVICE_SESSION_OPENED_AT_INVALID");
+  const conversationWindow = `ts=gte.${openedAtMs}`;
+  const ordiniCompletati = await sbSelect("ordenes", sessionFilter("estado=in.(RETIRADO,COMPLETADO,COMPLETATO)")) || [];
+  const convChiuse       = await sbSelect("conv", `${conversationWindow}&stato_ordine=in.(ritirata,confermata,chiusa)`) || [];
+  const convAttive       = await sbSelect("conv", `${conversationWindow}&stato_ordine=not.in.(ritirata,confermata,chiusa)`) || [];
+  const waMsgsAttivi     = await sbSelect("wa_msgs", `${conversationWindow}&stato=in.(NUEVO,IN_TRATTAMENTO)`) || [];
+  const ordiniInCorso    = await sbSelect("ordenes", sessionFilter("estado=in.(POR_CONFIRMAR,NUEVO,EN_COCINA,LISTO,EN_ENTREGA)")) || [];
+  const contiMesaAperti  = await sbSelect("table_sessions", sessionFilter("status=eq.open")) || [];
 
   const attiviMap = {};
   (Array.isArray(convAttive)    ? convAttive    : []).forEach(c => { attiviMap[c.wa_id] = { wa_id: c.wa_id, nombre: c.nombre || c.wa_id, hora: c.hora || "", stato: c.stato_ordine || "" }; });
@@ -139,6 +148,11 @@ async function scanServizio() {
   return {
     ok: true,
     data: oggi,
+    service_session_id: currentService.id,
+    blocking: {
+      orders: Array.isArray(ordiniInCorso) ? ordiniInCorso.length : 0,
+      tables: Array.isArray(contiMesaAperti) ? contiMesaAperti.length : 0,
+    },
     completati: {
       ordini: Array.isArray(ordiniCompletati) ? ordiniCompletati.length : 0,
       conv:   Array.isArray(convChiuse)       ? convChiuse.length       : 0
@@ -150,9 +164,17 @@ async function scanServizio() {
 
 // ─── Backup raw: snapshot completo della serata in 1 riga ────────
 // Indipendente da tutto. Anche se la chiusura fallisce, qui c'è tutto.
-async function backupSerata() {
+async function backupSerata({ serviceSessionId = null } = {}) {
   const oggi = madridDateStr();
-  const ordini = await sbSelect("ordenes", "select=*") || [];
+  let targetSessionId = serviceSessionId;
+  if (!targetSessionId) {
+    const currentService = await getCurrentOperationalSession();
+    targetSessionId = currentService?.id || null;
+  }
+  if (!targetSessionId) {
+    return { success: false, error: "NO_OPEN_SERVICE_SESSION", n_ordini: 0, totale: 0 };
+  }
+  const ordini = await sbSelect("ordenes", serviceSessionQuery(targetSessionId, "select=*")) || [];
   const lista = Array.isArray(ordini) ? ordini : [];
 
   let totale = 0, nPizze = 0, nBevande = 0, nDessert = 0;
@@ -184,6 +206,7 @@ async function backupSerata() {
 
   return {
     success: Array.isArray(res) && res.length > 0,
+    service_session_id: targetSessionId,
     n_ordini: lista.length,
     totale: Math.round(totale * 100) / 100
   };
@@ -417,6 +440,49 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   // (a service may close after midnight).
   const diaSemana = diaSemanaIta(new Date(`${oggi}T12:00:00Z`));
 
+  // "Dejar mensajes activos" may preserve WhatsApp conversations, but it must
+  // never close the accounting container around a live order. That was the hole
+  // that allowed a closed service to retain an EN_COCINA row. Refuse before any
+  // rider lock, summary write, archive, or delete so the failure is read-only.
+  if (!deleteAttivi) {
+    let serviceOrders;
+    try {
+      serviceOrders = await sbSelect(
+        "ordenes",
+        `service_session_id=eq.${encodeURIComponent(currentIdentity.session.id)}`
+          + "&select=id,estado&limit=200",
+      );
+    } catch (error) {
+      console.warn(`[chiudiServizio ${source}] active-order gate failed:`, error?.message || error);
+      return { success: false, error: "service_active_order_gate_failed", deferred: true, data: oggi };
+    }
+    if (!Array.isArray(serviceOrders)) {
+      return { success: false, error: "service_active_order_gate_failed", deferred: true, data: oggi };
+    }
+    // Classify in application code instead of relying on SQL `not.in`: SQL's
+    // NULL semantics would otherwise omit an order whose state is missing. An
+    // unknown/null state is unresolved and must fail closed as well.
+    const terminalOrderStates = new Set([
+      "RETIRADO", "COMPLETADO", "COMPLETATO", "CANCELADO",
+      "CANCELLED", "ANULADO", "CHIUSO_FORZATO",
+    ]);
+    const activeOrders = serviceOrders.filter(
+      (row) => !terminalOrderStates.has(String(row?.estado || "").toUpperCase()),
+    );
+    if (activeOrders.length > 0) {
+      return {
+        success: false,
+        error: "service_active_orders_not_resolved",
+        deferred: true,
+        data: oggi,
+        details: {
+          count: activeOrders.length,
+          orders: activeOrders.map((row) => ({ id: row.id, estado: row.estado })),
+        },
+      };
+    }
+  }
+
   // A table account has a lifecycle beyond the individual kitchen tickets. Even
   // if every command is terminal, the service must not archive/delete its orders
   // while money is still due. Full payment closes the account and frees the Mesa.
@@ -512,7 +578,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   // completed close was already handled by the lifecycle's explicit recent pointer.
 
   // ─── PASSO 2: backup raw SUBITO (safety net) ──────────────────
-  const bkp = await backupSerata().catch(e => {
+  const bkp = await backupSerata({ serviceSessionId }).catch(e => {
     console.error(`[chiudiServizio ${source}] backup fallito:`, e);
     return { success: false };
   });

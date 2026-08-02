@@ -56,6 +56,7 @@ const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureSer
 const { resolveSchedule, closeEligibility, SCHEDULE_STATE, SERVICE_KIND } = require("./src/schedule/serviceSchedule");
 const { computeAutoCloseDecision } = require("./src/serviceSessions/autoCloseDecision");
 const { hasPendingOperationalActivity } = require("./src/serviceSessions/pendingActivityGuard");
+const { getCurrentOperationalSession, serviceSessionQuery } = require("./src/serviceSessions/currentOperationalSession");
 
 const app = express();
 app.use(express.json());
@@ -319,7 +320,16 @@ app.get("/api", async (req, res) => {
     }
 
     if (action === "getOrdenes") {
-      result = await sbSelect("ordenes", "estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)&order=ts.asc");
+      const currentService = await getCurrentOperationalSession();
+      result = currentService
+        ? await sbSelect(
+            "ordenes",
+            serviceSessionQuery(
+              currentService.id,
+              "estado=in.(POR_CONFIRMAR,NUEVO,EN_COCINA,LISTO,EN_ENTREGA)&order=ts.asc",
+            ),
+          )
+        : [];
     } else if (action === "getWaMsgs") {
       result = await sbSelect("wa_msgs", "stato=not.eq.COMPLETATO&order=ts.desc&limit=100");
     } else if (action === "getConfig") {

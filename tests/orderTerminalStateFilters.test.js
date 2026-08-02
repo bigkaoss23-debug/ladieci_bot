@@ -111,12 +111,16 @@ for (const file of PROD_FILES) {
 }
 
 // ── PART 4: targeted named-path / behavioral proofs ──────────────────────────
-// 4.1 index.js getOrdenes active board excludes RETIRADO + BOTH completed.
+// 4.1 index.js getOrdenes uses a positive active-state allowlist. This is
+// stronger than a terminal denylist: cancelled/void/unknown historical states
+// cannot leak into the live board.
 {
   const src = read('index.js');
-  const m = src.match(/getOrdenes[\s\S]{0,200}?estado=not\.in\.\(([^)]*)\)/);
-  assert('[P4.1] index.js getOrdenes excludes RETIRADO,COMPLETADO,COMPLETATO',
-    !!m && /RETIRADO/.test(m[1]) && hasBoth(m[1]), m ? m[1] : 'getOrdenes filter not found');
+  const m = src.match(/getOrdenes[\s\S]{0,700}?estado=in\.\(([^)]*)\)/);
+  assert('[P4.1] index.js getOrdenes includes only live operational states',
+    !!m && m[1] === 'POR_CONFIRMAR,NUEVO,EN_COCINA,LISTO,EN_ENTREGA', m ? m[1] : 'getOrdenes filter not found');
+  assert('[P4.1b] index.js getOrdenes is scoped to the current service session',
+    /getOrdenes[\s\S]{0,700}?serviceSessionQuery\(/.test(src));
 }
 // 4.2 service-close COMPLETED selections (scan + close read + close delete) → both.
 {
@@ -199,7 +203,6 @@ for (const file of PROD_FILES) {
 // ── PART 7: RETIRADO behavior preserved in every fixed ordenes selector ──────
 {
   const mustHaveRetirado = [
-    ['index.js', /getOrdenes[\s\S]{0,200}?estado=not\.in\.\(RETIRADO,/],
     ['src/utils/servizio.js', /estado=in\.\(RETIRADO,COMPLETADO,COMPLETATO\)/],
     ['src/utils/readActions.js', /estado=in\.\(COMPLETADO,COMPLETATO,RETIRADO\)/],
     ['src/agents/agentCucina.js', /estado=not\.in\.\(RETIRADO,/],
