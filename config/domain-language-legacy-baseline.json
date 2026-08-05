@@ -1,0 +1,3035 @@
+{
+  "generatedAt": "2026-08-05T18:33:20.476Z",
+  "entries": [
+    {
+      "file": "index.js",
+      "term": "archivio",
+      "count": 2
+    },
+    {
+      "file": "index.js",
+      "term": "chiudi",
+      "count": 20
+    },
+    {
+      "file": "index.js",
+      "term": "completato",
+      "count": 2
+    },
+    {
+      "file": "index.js",
+      "term": "consegna",
+      "count": 8
+    },
+    {
+      "file": "index.js",
+      "term": "cucina",
+      "count": 4
+    },
+    {
+      "file": "index.js",
+      "term": "ordine",
+      "count": 18
+    },
+    {
+      "file": "index.js",
+      "term": "ordini",
+      "count": 14
+    },
+    {
+      "file": "index.js",
+      "term": "pizze",
+      "count": 2
+    },
+    {
+      "file": "index.js",
+      "term": "pranzo",
+      "count": 4
+    },
+    {
+      "file": "index.js",
+      "term": "ritiro",
+      "count": 4
+    },
+    {
+      "file": "index.js",
+      "term": "serata",
+      "count": 8
+    },
+    {
+      "file": "index.js",
+      "term": "servizio",
+      "count": 21
+    },
+    {
+      "file": "index.js",
+      "term": "storico",
+      "count": 8
+    },
+    {
+      "file": "index.js",
+      "term": "suggerimenti",
+      "count": 5
+    },
+    {
+      "file": "index.js",
+      "term": "suggerimento",
+      "count": 3
+    },
+    {
+      "file": "migrations/2026-05-14_geo_cache_confidence.sql",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-05-14_geo_cache_confidence.sql",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-05-14_geo_cache_confidence.sql",
+      "term": "ordini",
+      "count": 5
+    },
+    {
+      "file": "migrations/2026-05-14_geo_cache_confidence.sql",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-05-25_manual_giros.sql",
+      "term": "storico",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-05-29_manual_giros_entrega_ref.sql",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "migrations/2026-05-29_manual_giros_entrega_ref.sql",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-05-29_manual_giros_entrega_ref.sql",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-05-29_manual_giros_entrega_ref.sql",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-05-29_manual_giros_hora_ref.sql",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-05-29_manual_giros_hora_ref.sql",
+      "term": "ordine",
+      "count": 5
+    },
+    {
+      "file": "migrations/2026-05-29_manual_giros_hora_ref.sql",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-05-29_manual_giros_hora_ref.sql",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-06-02_driver_schedule_fields.sql",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-06-02_driver_schedule_fields.sql",
+      "term": "cucina",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-06-05_order_state_transition_logs.sql",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-06-05_order_state_transition_logs.sql",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-10_p0_lock_sensitive_reads.ROLLBACK.sql",
+      "term": "archivio",
+      "count": 4
+    },
+    {
+      "file": "migrations/2026-07-10_p0_lock_sensitive_reads.ROLLBACK.sql",
+      "term": "storico",
+      "count": 4
+    },
+    {
+      "file": "migrations/2026-07-10_p0_lock_sensitive_reads.ROLLBACK.sql",
+      "term": "suggerimenti",
+      "count": 4
+    },
+    {
+      "file": "migrations/2026-07-10_p0_lock_sensitive_reads.sql",
+      "term": "archivio",
+      "count": 7
+    },
+    {
+      "file": "migrations/2026-07-10_p0_lock_sensitive_reads.sql",
+      "term": "storico",
+      "count": 7
+    },
+    {
+      "file": "migrations/2026-07-10_p0_lock_sensitive_reads.sql",
+      "term": "suggerimenti",
+      "count": 6
+    },
+    {
+      "file": "migrations/2026-07-20_rider_trip_rpcs.sql",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-20_rider_trip_rpcs.sql",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-07-20_rider_trip_rpcs.sql",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "migrations/2026-07-21_fix_rider_delivery_log_timestamps.ROLLBACK.sql",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-21_fix_rider_delivery_log_timestamps.ROLLBACK.sql",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-21_fix_rider_delivery_log_timestamps.sql",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-21_fix_rider_delivery_log_timestamps.sql",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-21_fix_rider_trip_json_null_idempotency.ROLLBACK.sql",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-21_fix_rider_trip_json_null_idempotency.ROLLBACK.sql",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-21_fix_rider_trip_json_null_idempotency.sql",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-21_fix_rider_trip_json_null_idempotency.sql",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-22_service_session_identity.ROLLBACK.sql",
+      "term": "serata",
+      "count": 10
+    },
+    {
+      "file": "migrations/2026-07-22_service_session_identity.ROLLBACK.sql",
+      "term": "storico",
+      "count": 6
+    },
+    {
+      "file": "migrations/2026-07-22_service_session_identity.sql",
+      "term": "serata",
+      "count": 10
+    },
+    {
+      "file": "migrations/2026-07-22_service_session_identity.sql",
+      "term": "storico",
+      "count": 7
+    },
+    {
+      "file": "migrations/2026-07-23_storico_drop_legacy_orden_fecha_uniqueness.ROLLBACK.sql",
+      "term": "storico",
+      "count": 5
+    },
+    {
+      "file": "migrations/2026-07-23_storico_drop_legacy_orden_fecha_uniqueness.sql",
+      "term": "storico",
+      "count": 16
+    },
+    {
+      "file": "migrations/2026-07-23_storico_session_order_uq_nonpartial.ROLLBACK.sql",
+      "term": "storico",
+      "count": 8
+    },
+    {
+      "file": "migrations/2026-07-23_storico_session_order_uq_nonpartial.sql",
+      "term": "storico",
+      "count": 8
+    },
+    {
+      "file": "migrations/2026-07-26_two_service_identity.ROLLBACK.sql",
+      "term": "archivio",
+      "count": 8
+    },
+    {
+      "file": "migrations/2026-07-26_two_service_identity.ROLLBACK.sql",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-26_two_service_identity.ROLLBACK.sql",
+      "term": "serata",
+      "count": 3
+    },
+    {
+      "file": "migrations/2026-07-26_two_service_identity.ROLLBACK.sql",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-07-26_two_service_identity.sql",
+      "term": "archivio",
+      "count": 9
+    },
+    {
+      "file": "migrations/2026-07-26_two_service_identity.sql",
+      "term": "pranzo",
+      "count": 6
+    },
+    {
+      "file": "migrations/2026-07-26_two_service_identity.sql",
+      "term": "serata",
+      "count": 5
+    },
+    {
+      "file": "migrations/2026-07-26_two_service_identity.sql",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-07-27_order_state_logs_session_identity.sql",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-27_order_state_logs_session_identity.sql",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-27_order_state_logs_session_identity.sql",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-28_service_order_number.sql",
+      "term": "pranzo",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-07-31_v3g_waiter_table_assignment_safety.sql",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-07-31_v3g_waiter_table_assignment_safety.sql",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-02_service_close_live_work_guard.sql",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-02_service_close_live_work_guard.sql",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-02_service_close_live_work_guard.sql",
+      "term": "messa",
+      "count": 1
+    },
+    {
+      "file": "ops/backup/b7a2_e2e_b_restore_2026-07-22.sql",
+      "term": "chiuso",
+      "count": 6
+    },
+    {
+      "file": "ops/backup/b7a2_e2e_b_restore_2026-07-22.sql",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "ops/backup/b7a2_e2e_b_restore_2026-07-22.sql",
+      "term": "cucina",
+      "count": 2
+    },
+    {
+      "file": "ops/backup/b7a2_e2e_b_restore_2026-07-22.sql",
+      "term": "ritiro",
+      "count": 7
+    },
+    {
+      "file": "ops/backup/b7a2_e2e_b_restore_2026-07-22.sql",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "ops/staging_cleanup_b7a2_e2e_b.sql",
+      "term": "chiuso",
+      "count": 3
+    },
+    {
+      "file": "ops/staging_cleanup_b7a2_e2e_b.sql",
+      "term": "storico",
+      "count": 8
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowBackupReadOnly.js",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowBackupReadOnly.js",
+      "term": "ordini",
+      "count": 18
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowBackupReadOnly.js",
+      "term": "serata",
+      "count": 11
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowLiveReadOnly.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowLiveReadOnly.js",
+      "term": "cucina",
+      "count": 2
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowLiveReadOnly.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowLiveReadOnly.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowLiveReadOnly.js",
+      "term": "pizze",
+      "count": 2
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowPreviewReadOnly.js",
+      "term": "ordini",
+      "count": 4
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowPreviewReadOnly.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowReadOnly.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowReadOnly.js",
+      "term": "consegna",
+      "count": 6
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowReadOnly.js",
+      "term": "pizze",
+      "count": 2
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowReadOnly.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowReadOnly.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "scripts/deliveryPlannerShadowReadOnly.js",
+      "term": "storico",
+      "count": 2
+    },
+    {
+      "file": "src/agents/agentCucina.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agentCucina.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "src/agents/agentCucina.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agentCucina.js",
+      "term": "ordine",
+      "count": 6
+    },
+    {
+      "file": "src/agents/agentCucina.js",
+      "term": "ordini",
+      "count": 9
+    },
+    {
+      "file": "src/agents/agentCucina.js",
+      "term": "pizze",
+      "count": 12
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "archivio",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "oggi",
+      "count": 2
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "settimana",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "storico",
+      "count": 9
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "suggerimenti",
+      "count": 14
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "suggerimento",
+      "count": 2
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "completato",
+      "count": 8
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "consegna",
+      "count": 71
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "cucina",
+      "count": 15
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "oggi",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "ordine",
+      "count": 42
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "ordini",
+      "count": 17
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "pagamento",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "ritiro",
+      "count": 6
+    },
+    {
+      "file": "src/agents/agentOrdini.js",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agentWhatsapp.js",
+      "term": "consegna",
+      "count": 19
+    },
+    {
+      "file": "src/agents/agentWhatsapp.js",
+      "term": "ordine",
+      "count": 6
+    },
+    {
+      "file": "src/agents/agentWhatsapp.js",
+      "term": "pizze",
+      "count": 4
+    },
+    {
+      "file": "src/agents/agentWhatsapp.js",
+      "term": "ritiro",
+      "count": 3
+    },
+    {
+      "file": "src/agents/agentWhatsapp.js",
+      "term": "suggerimento",
+      "count": 1
+    },
+    {
+      "file": "src/agents/manualGiros.js",
+      "term": "chiudi",
+      "count": 2
+    },
+    {
+      "file": "src/agents/manualGiros.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "src/agents/manualGiros.js",
+      "term": "servizio",
+      "count": 3
+    },
+    {
+      "file": "src/agents/manualGiros.js",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "src/agents/orchestrator.js",
+      "term": "completato",
+      "count": 6
+    },
+    {
+      "file": "src/agents/orchestrator.js",
+      "term": "consegna",
+      "count": 78
+    },
+    {
+      "file": "src/agents/orchestrator.js",
+      "term": "cucina",
+      "count": 3
+    },
+    {
+      "file": "src/agents/orchestrator.js",
+      "term": "ordine",
+      "count": 51
+    },
+    {
+      "file": "src/agents/orchestrator.js",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "src/agents/orchestrator.js",
+      "term": "ritiro",
+      "count": 4
+    },
+    {
+      "file": "src/agents/previewTiming.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/agents/previewTiming.js",
+      "term": "consegna",
+      "count": 14
+    },
+    {
+      "file": "src/agents/previewTiming.js",
+      "term": "ordine",
+      "count": 7
+    },
+    {
+      "file": "src/agents/previewTiming.js",
+      "term": "ordini",
+      "count": 4
+    },
+    {
+      "file": "src/agents/previewTiming.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "src/agents/previewTiming.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/agents/riderReads.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/agents/riderReads.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "src/agents/riderReads.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/auth/actionPolicyRegistry.js",
+      "term": "archivio",
+      "count": 1
+    },
+    {
+      "file": "src/auth/actionPolicyRegistry.js",
+      "term": "chiudi",
+      "count": 2
+    },
+    {
+      "file": "src/auth/actionPolicyRegistry.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/auth/actionPolicyRegistry.js",
+      "term": "ordine",
+      "count": 7
+    },
+    {
+      "file": "src/auth/actionPolicyRegistry.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "src/auth/actionPolicyRegistry.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "src/auth/actionPolicyRegistry.js",
+      "term": "servizio",
+      "count": 4
+    },
+    {
+      "file": "src/auth/actionPolicyRegistry.js",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "src/auth/actionPolicyRegistry.js",
+      "term": "suggerimenti",
+      "count": 2
+    },
+    {
+      "file": "src/auth/actionPolicyRegistry.js",
+      "term": "suggerimento",
+      "count": 1
+    },
+    {
+      "file": "src/auth/authorizationContract.js",
+      "term": "archivio",
+      "count": 3
+    },
+    {
+      "file": "src/auth/authorizationContract.js",
+      "term": "chiudi",
+      "count": 4
+    },
+    {
+      "file": "src/auth/authorizationContract.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/auth/authorizationContract.js",
+      "term": "ordine",
+      "count": 8
+    },
+    {
+      "file": "src/auth/authorizationContract.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/auth/authorizationContract.js",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "src/auth/authorizationContract.js",
+      "term": "storico",
+      "count": 3
+    },
+    {
+      "file": "src/auth/authorizationContract.js",
+      "term": "suggerimenti",
+      "count": 6
+    },
+    {
+      "file": "src/auth/authorizationContract.js",
+      "term": "suggerimento",
+      "count": 3
+    },
+    {
+      "file": "src/auth/capabilityRegistry.js",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "src/auth/capabilityRegistry.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "src/auth/legacyActionRoles.js",
+      "term": "archivio",
+      "count": 2
+    },
+    {
+      "file": "src/auth/legacyActionRoles.js",
+      "term": "chiudi",
+      "count": 4
+    },
+    {
+      "file": "src/auth/legacyActionRoles.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/auth/legacyActionRoles.js",
+      "term": "ordine",
+      "count": 5
+    },
+    {
+      "file": "src/auth/legacyActionRoles.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/auth/legacyActionRoles.js",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "src/auth/legacyActionRoles.js",
+      "term": "storico",
+      "count": 2
+    },
+    {
+      "file": "src/auth/legacyActionRoles.js",
+      "term": "suggerimenti",
+      "count": 4
+    },
+    {
+      "file": "src/auth/legacyActionRoles.js",
+      "term": "suggerimento",
+      "count": 2
+    },
+    {
+      "file": "src/closeout/currentServiceCloseout.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/currentServiceCloseout.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/currentServiceCloseout.js",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/currentServiceCloseout.js",
+      "term": "storico",
+      "count": 2
+    },
+    {
+      "file": "src/closeout/economiaLedgerAggregate.js",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/economiaLedgerAggregate.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/economiaLedgerAggregate.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/economiaLedgerAggregate.js",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "src/config.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "src/core/delivery/deliveryOperationalMetrics.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryOperationalMetrics.js",
+      "term": "consegna",
+      "count": 8
+    },
+    {
+      "file": "src/core/delivery/deliveryOperationalMetrics.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryOperationalMetrics.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryOperationalMetrics.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryOperationalMetrics.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/operationalAdjustmentMetrics.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "src/core/delivery/operationalAdjustmentMetrics.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/operationalAdjustmentMetrics.js",
+      "term": "oggi",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/operationalAdjustmentMetrics.js",
+      "term": "ordine",
+      "count": 4
+    },
+    {
+      "file": "src/core/delivery/operationalAdjustmentMetrics.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "src/core/delivery/operationalAdjustmentMetrics.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/planner.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/planner.js",
+      "term": "consegna",
+      "count": 8
+    },
+    {
+      "file": "src/core/delivery/planner.js",
+      "term": "cucina",
+      "count": 3
+    },
+    {
+      "file": "src/core/delivery/planner.js",
+      "term": "ordine",
+      "count": 6
+    },
+    {
+      "file": "src/core/delivery/planner.js",
+      "term": "ordini",
+      "count": 9
+    },
+    {
+      "file": "src/core/delivery/planner.js",
+      "term": "pizze",
+      "count": 28
+    },
+    {
+      "file": "src/core/delivery/planner.js",
+      "term": "ritiro",
+      "count": 6
+    },
+    {
+      "file": "src/core/delivery/planner.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/planner.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/riderChainExplanation.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/riderChainExplanation.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/shadowPreview.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/shadowPreview.js",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/shadowPreviewEndpoint.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/shadowPreviewEndpoint.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/financial/registerOperatorPayment.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/financial/registerOperatorPayment.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/agentWhatsappShadowIntegration.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/agentWhatsappShadowIntegration.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/agentWhatsappShadowIntegration.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/agentWhatsappShadowIntegration.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/customSnapshotRoundtrip.test.js",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "src/menu/__tests__/customSnapshotRoundtrip.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/menuConsumerWiring.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/menuConsumerWiring.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/menuReadAdapter.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/menuSemanticResolver.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/menuSemanticResolver.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/menuShadowComparison.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/menuShadowCorpus.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/menuShadowDebugEntrypoint.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/orderWriteBoundary.test.js",
+      "term": "ordine",
+      "count": 12
+    },
+    {
+      "file": "src/menu/__tests__/orderWriteBoundary.test.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "src/menu/__tests__/orderWriteBoundary.test.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "src/menu/__tests__/whatsappMenuShadow.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/whatsappMenuShadow.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/menu/__tests__/whatsappMenuShadow.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/schedule/serviceSchedule.js",
+      "term": "pranzo",
+      "count": 9
+    },
+    {
+      "file": "src/serviceSessions/autoCloseDecision.js",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/autoCloseDecision.js",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/autoCloseDecision.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/ensureServiceSession.js",
+      "term": "chiudi",
+      "count": 6
+    },
+    {
+      "file": "src/serviceSessions/ensureServiceSession.js",
+      "term": "servizio",
+      "count": 7
+    },
+    {
+      "file": "src/serviceSessions/orderIntakePolicy.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/orderIntakePolicy.js",
+      "term": "pranzo",
+      "count": 2
+    },
+    {
+      "file": "src/serviceSessions/pendingActivityGuard.js",
+      "term": "chiudi",
+      "count": 3
+    },
+    {
+      "file": "src/serviceSessions/pendingActivityGuard.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/pendingActivityGuard.js",
+      "term": "servizio",
+      "count": 3
+    },
+    {
+      "file": "src/tables/mesaDao.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/tables/mesaService.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "src/tables/mesaService.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/tables/mesaService.js",
+      "term": "cucina",
+      "count": 2
+    },
+    {
+      "file": "src/tables/mesaService.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/tables/mesaService.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/tables/mesaService.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "src/utils/addressGuard.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/utils/closingTime.js",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "src/utils/driverTelemetry.js",
+      "term": "chiudi",
+      "count": 2
+    },
+    {
+      "file": "src/utils/driverTelemetry.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "src/utils/driverTelemetry.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "src/utils/driverTelemetry.js",
+      "term": "cucina",
+      "count": 2
+    },
+    {
+      "file": "src/utils/driverTelemetry.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/utils/driverTelemetry.js",
+      "term": "ordini",
+      "count": 6
+    },
+    {
+      "file": "src/utils/driverTelemetry.js",
+      "term": "pagamenti",
+      "count": 1
+    },
+    {
+      "file": "src/utils/driverTelemetry.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/utils/driverTelemetry.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/utils/geoResolver.js",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "src/utils/geoResolver.js",
+      "term": "consegna",
+      "count": 5
+    },
+    {
+      "file": "src/utils/geoResolver.js",
+      "term": "ordine",
+      "count": 4
+    },
+    {
+      "file": "src/utils/geoResolver.js",
+      "term": "ordini",
+      "count": 8
+    },
+    {
+      "file": "src/utils/geoResolver.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/utils/geoResolver.js",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "src/utils/helpers.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/utils/helpers.js",
+      "term": "consegna",
+      "count": 17
+    },
+    {
+      "file": "src/utils/helpers.js",
+      "term": "ordine",
+      "count": 13
+    },
+    {
+      "file": "src/utils/helpers.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "src/utils/orderStateLogger.js",
+      "term": "chiuso",
+      "count": 3
+    },
+    {
+      "file": "src/utils/orderStateLogger.js",
+      "term": "consegna",
+      "count": 9
+    },
+    {
+      "file": "src/utils/orderStateLogger.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/utils/orderStateLogger.js",
+      "term": "ordine",
+      "count": 5
+    },
+    {
+      "file": "src/utils/orderStateLogger.js",
+      "term": "storico",
+      "count": 3
+    },
+    {
+      "file": "src/utils/orderStateMachine.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "src/utils/orderStateMachine.js",
+      "term": "completato",
+      "count": 7
+    },
+    {
+      "file": "src/utils/orderStateMachine.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/utils/orderStateMachine.js",
+      "term": "oggi",
+      "count": 1
+    },
+    {
+      "file": "src/utils/orderStateMachine.js",
+      "term": "ordine",
+      "count": 5
+    },
+    {
+      "file": "src/utils/orderStateMachine.js",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "src/utils/orderStateMachine.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "src/utils/orderStateMachine.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "src/utils/orderStateMachine.js",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "src/utils/readActions.js",
+      "term": "archivio",
+      "count": 3
+    },
+    {
+      "file": "src/utils/readActions.js",
+      "term": "completato",
+      "count": 2
+    },
+    {
+      "file": "src/utils/readActions.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/utils/readActions.js",
+      "term": "ordine",
+      "count": 3
+    },
+    {
+      "file": "src/utils/readActions.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "src/utils/readActions.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/utils/readActions.js",
+      "term": "storico",
+      "count": 4
+    },
+    {
+      "file": "src/utils/readActions.js",
+      "term": "suggerimenti",
+      "count": 5
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "archivio",
+      "count": 3
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "chiudi",
+      "count": 15
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "chiuso",
+      "count": 8
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "completato",
+      "count": 10
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "consegna",
+      "count": 12
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "cucina",
+      "count": 4
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "oggi",
+      "count": 35
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "ordine",
+      "count": 19
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "ordini",
+      "count": 37
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "pagamento",
+      "count": 1
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "pizze",
+      "count": 7
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "pranzo",
+      "count": 6
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "ritiro",
+      "count": 6
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "serata",
+      "count": 20
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "servizio",
+      "count": 21
+    },
+    {
+      "file": "src/utils/servizio.js",
+      "term": "storico",
+      "count": 44
+    },
+    {
+      "file": "src/utils/supabaseResourcePolicy.js",
+      "term": "archivio",
+      "count": 1
+    },
+    {
+      "file": "src/utils/supabaseResourcePolicy.js",
+      "term": "chiudi",
+      "count": 2
+    },
+    {
+      "file": "src/utils/supabaseResourcePolicy.js",
+      "term": "ordini",
+      "count": 4
+    },
+    {
+      "file": "src/utils/supabaseResourcePolicy.js",
+      "term": "serata",
+      "count": 3
+    },
+    {
+      "file": "src/utils/supabaseResourcePolicy.js",
+      "term": "servizio",
+      "count": 10
+    },
+    {
+      "file": "src/utils/supabaseResourcePolicy.js",
+      "term": "storico",
+      "count": 2
+    },
+    {
+      "file": "src/utils/supabaseResourcePolicy.js",
+      "term": "suggerimenti",
+      "count": 2
+    },
+    {
+      "file": "src/utils/supabaseResourcePolicy.js",
+      "term": "suggerimento",
+      "count": 1
+    },
+    {
+      "file": "src/utils/zones.js",
+      "term": "completato",
+      "count": 2
+    },
+    {
+      "file": "src/utils/zones.js",
+      "term": "consegna",
+      "count": 27
+    },
+    {
+      "file": "src/utils/zones.js",
+      "term": "cucina",
+      "count": 3
+    },
+    {
+      "file": "src/utils/zones.js",
+      "term": "ordine",
+      "count": 8
+    },
+    {
+      "file": "src/utils/zones.js",
+      "term": "ordini",
+      "count": 12
+    },
+    {
+      "file": "src/utils/zones.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/utils/zones.js",
+      "term": "prenotazione",
+      "count": 1
+    },
+    {
+      "file": "src/utils/zones.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "src/utils/zones.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/utils/zones.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "tests/actionPolicyAuthorityBoundary.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/actionPolicyRegistry.test.js",
+      "term": "cucina",
+      "count": 2
+    },
+    {
+      "file": "tests/actionPolicyRegistry.test.js",
+      "term": "ordine",
+      "count": 6
+    },
+    {
+      "file": "tests/actionPolicyRegistry.test.js",
+      "term": "serata",
+      "count": 22
+    },
+    {
+      "file": "tests/actionPolicyRegistry.test.js",
+      "term": "servizio",
+      "count": 5
+    },
+    {
+      "file": "tests/actorIdNeverFromRequestBody.test.js",
+      "term": "ordine",
+      "count": 9
+    },
+    {
+      "file": "tests/addressGuard.test.js",
+      "term": "chiuso",
+      "count": 2
+    },
+    {
+      "file": "tests/authorizationContract.test.js",
+      "term": "archivio",
+      "count": 4
+    },
+    {
+      "file": "tests/authorizationContract.test.js",
+      "term": "chiudi",
+      "count": 7
+    },
+    {
+      "file": "tests/authorizationContract.test.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "tests/authorizationContract.test.js",
+      "term": "ordine",
+      "count": 10
+    },
+    {
+      "file": "tests/authorizationContract.test.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "tests/authorizationContract.test.js",
+      "term": "servizio",
+      "count": 3
+    },
+    {
+      "file": "tests/authorizationContract.test.js",
+      "term": "storico",
+      "count": 4
+    },
+    {
+      "file": "tests/authorizationContract.test.js",
+      "term": "suggerimenti",
+      "count": 9
+    },
+    {
+      "file": "tests/authorizationContract.test.js",
+      "term": "suggerimento",
+      "count": 3
+    },
+    {
+      "file": "tests/autoCloseDecision.test.js",
+      "term": "pranzo",
+      "count": 14
+    },
+    {
+      "file": "tests/autoCloseEngine.test.js",
+      "term": "chiudi",
+      "count": 5
+    },
+    {
+      "file": "tests/autoCloseEngine.test.js",
+      "term": "servizio",
+      "count": 6
+    },
+    {
+      "file": "tests/closeoutSummaryAccountingParity.test.js",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "tests/closeoutSummaryAccountingParity.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/closeoutSummaryAccountingParity.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/closeoutSummaryAccountingParity.test.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "tests/closeoutSummaryAccountingParity.test.js",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "tests/closeoutSummaryAccountingParity.test.js",
+      "term": "storico",
+      "count": 5
+    },
+    {
+      "file": "tests/closingTimeGuard.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/closingTimeGuard.test.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "tests/closingTimeGuard.test.js",
+      "term": "ordine",
+      "count": 15
+    },
+    {
+      "file": "tests/closingTimeGuard.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/closingTimeGuard.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/createOrdenAuthoritative.test.js",
+      "term": "consegna",
+      "count": 8
+    },
+    {
+      "file": "tests/createOrdenAuthoritative.test.js",
+      "term": "ordine",
+      "count": 13
+    },
+    {
+      "file": "tests/createOrdenAuthoritative.test.js",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "tests/currentServiceCloseout.test.js",
+      "term": "pranzo",
+      "count": 6
+    },
+    {
+      "file": "tests/currentServiceCloseout.test.js",
+      "term": "storico",
+      "count": 2
+    },
+    {
+      "file": "tests/currentServiceOperationalReads.static.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/currentServiceOperationalReads.static.test.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "tests/currentServiceOperationalReads.static.test.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "tests/currentServiceOperationalReads.static.test.js",
+      "term": "servizio",
+      "count": 3
+    },
+    {
+      "file": "tests/deliveryOperationalMetrics.test.js",
+      "term": "consegna",
+      "count": 16
+    },
+    {
+      "file": "tests/deliveryOperationalMetrics.test.js",
+      "term": "ritiro",
+      "count": 5
+    },
+    {
+      "file": "tests/deliveryPlanner.test.js",
+      "term": "consegna",
+      "count": 4
+    },
+    {
+      "file": "tests/deliveryPlanner.test.js",
+      "term": "ordine",
+      "count": 5
+    },
+    {
+      "file": "tests/deliveryPlanner.test.js",
+      "term": "pizze",
+      "count": 6
+    },
+    {
+      "file": "tests/deliveryPlanner.test.js",
+      "term": "ritiro",
+      "count": 5
+    },
+    {
+      "file": "tests/deliveryPlannerAB.test.js",
+      "term": "consegna",
+      "count": 6
+    },
+    {
+      "file": "tests/deliveryPlannerAB.test.js",
+      "term": "ordine",
+      "count": 4
+    },
+    {
+      "file": "tests/deliveryPlannerAB.test.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerAB.test.js",
+      "term": "pizze",
+      "count": 4
+    },
+    {
+      "file": "tests/deliveryPlannerAB.test.js",
+      "term": "ritiro",
+      "count": 6
+    },
+    {
+      "file": "tests/deliveryPlannerDirtyGeoRecovery.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerDirtyGeoRecovery.test.js",
+      "term": "pizze",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerMultiSnapshotAB.test.js",
+      "term": "consegna",
+      "count": 4
+    },
+    {
+      "file": "tests/deliveryPlannerMultiSnapshotAB.test.js",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "tests/deliveryPlannerMultiSnapshotAB.test.js",
+      "term": "pizze",
+      "count": 8
+    },
+    {
+      "file": "tests/deliveryPlannerMultiSnapshotAB.test.js",
+      "term": "ritiro",
+      "count": 3
+    },
+    {
+      "file": "tests/deliveryPlannerMultiSnapshotAB.test.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerRealSnapshot.test.js",
+      "term": "consegna",
+      "count": 4
+    },
+    {
+      "file": "tests/deliveryPlannerRealSnapshot.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerRealSnapshot.test.js",
+      "term": "ordini",
+      "count": 5
+    },
+    {
+      "file": "tests/deliveryPlannerRealSnapshot.test.js",
+      "term": "pizze",
+      "count": 8
+    },
+    {
+      "file": "tests/deliveryPlannerRealSnapshot.test.js",
+      "term": "ritiro",
+      "count": 6
+    },
+    {
+      "file": "tests/deliveryPlannerRealSnapshot.test.js",
+      "term": "serata",
+      "count": 5
+    },
+    {
+      "file": "tests/deliveryPlannerRiderChainExplanation.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerRiderChainExplanation.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerRiderEvents.test.js",
+      "term": "consegna",
+      "count": 5
+    },
+    {
+      "file": "tests/deliveryPlannerRiderEvents.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerRiderEvents.test.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerRiderEvents.test.js",
+      "term": "pizze",
+      "count": 8
+    },
+    {
+      "file": "tests/deliveryPlannerRiderEvents.test.js",
+      "term": "ritiro",
+      "count": 3
+    },
+    {
+      "file": "tests/deliveryPlannerShadowBackupReadOnly.test.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "tests/deliveryPlannerShadowBackupReadOnly.test.js",
+      "term": "ordini",
+      "count": 14
+    },
+    {
+      "file": "tests/deliveryPlannerShadowBackupReadOnly.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowBackupReadOnly.test.js",
+      "term": "serata",
+      "count": 5
+    },
+    {
+      "file": "tests/deliveryPlannerShadowDiagnostics.test.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerShadowDiagnostics.test.js",
+      "term": "pizze",
+      "count": 8
+    },
+    {
+      "file": "tests/deliveryPlannerShadowDiagnostics.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowLiveReadOnly.test.js",
+      "term": "consegna",
+      "count": 5
+    },
+    {
+      "file": "tests/deliveryPlannerShadowLiveReadOnly.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowLiveReadOnly.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreview.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreview.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewContract.test.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewEndpoint.test.js",
+      "term": "consegna",
+      "count": 7
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewEndpoint.test.js",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewEndpoint.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewEndpoint.test.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewFrozenOrders.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewFrozenOrders.test.js",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewFrozenOrders.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewGrouping.test.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewReadOnly.test.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewReadOnly.test.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerShadowPreviewReadOnly.test.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerShadowReadOnly.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowReadOnly.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowReadOnly.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerShadowReadOnly.test.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerSyntheticStress.test.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerSyntheticStress.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/deliveryPlannerSyntheticStress.test.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryPlannerSyntheticStress.test.js",
+      "term": "pizze",
+      "count": 20
+    },
+    {
+      "file": "tests/deliveryPlannerSyntheticStress.test.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "tests/driverScheduleSeparation.test.js",
+      "term": "consegna",
+      "count": 10
+    },
+    {
+      "file": "tests/driverScheduleSeparation.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/driverScheduleSeparation.test.js",
+      "term": "ritiro",
+      "count": 5
+    },
+    {
+      "file": "tests/driverStatoSingleAuthority.test.js",
+      "term": "oggi",
+      "count": 1
+    },
+    {
+      "file": "tests/driverStatoSingleAuthority.test.js",
+      "term": "ordini",
+      "count": 7
+    },
+    {
+      "file": "tests/driverStatoSingleAuthority.test.js",
+      "term": "servizio",
+      "count": 6
+    },
+    {
+      "file": "tests/driverTelemetrySecondGiro.test.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "tests/economiaBotAdminRbac.test.js",
+      "term": "archivio",
+      "count": 1
+    },
+    {
+      "file": "tests/economiaBotAdminRbac.test.js",
+      "term": "storico",
+      "count": 2
+    },
+    {
+      "file": "tests/economiaBotAdminRbac.test.js",
+      "term": "suggerimenti",
+      "count": 2
+    },
+    {
+      "file": "tests/economiaBotAdminRbac.test.js",
+      "term": "suggerimento",
+      "count": 1
+    },
+    {
+      "file": "tests/economiaLedgerAggregateParity.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/economiaLedgerAggregateParity.test.js",
+      "term": "pranzo",
+      "count": 12
+    },
+    {
+      "file": "tests/economiaLedgerAggregateParity.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/economiaLedgerAggregateParity.test.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "tests/economiaLedgerAggregateParity.test.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "tests/economiaLedgerAggregateParity.test.js",
+      "term": "storico",
+      "count": 7
+    },
+    {
+      "file": "tests/ensureCurrentSessionRecovery.test.js",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "tests/ensureCurrentSessionRecovery.test.js",
+      "term": "pranzo",
+      "count": 10
+    },
+    {
+      "file": "tests/ensureCurrentSessionRecovery.test.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "tests/ensureServiceSession.test.js",
+      "term": "pranzo",
+      "count": 8
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260528.js",
+      "term": "consegna",
+      "count": 11
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260528.js",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260528.js",
+      "term": "pizze",
+      "count": 11
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260528.js",
+      "term": "ritiro",
+      "count": 5
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260528.js",
+      "term": "serata",
+      "count": 3
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260529.js",
+      "term": "consegna",
+      "count": 29
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260529.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260529.js",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260529.js",
+      "term": "pizze",
+      "count": 33
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260529.js",
+      "term": "ritiro",
+      "count": 25
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260529.js",
+      "term": "serata",
+      "count": 3
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260530.js",
+      "term": "consegna",
+      "count": 26
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260530.js",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260530.js",
+      "term": "pizze",
+      "count": 29
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260530.js",
+      "term": "ritiro",
+      "count": 22
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260530.js",
+      "term": "serata",
+      "count": 3
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260531.js",
+      "term": "consegna",
+      "count": 21
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260531.js",
+      "term": "ordini",
+      "count": 6
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260531.js",
+      "term": "pizze",
+      "count": 22
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260531.js",
+      "term": "ritiro",
+      "count": 15
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerRealSnapshot20260531.js",
+      "term": "serata",
+      "count": 7
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerSyntheticStress.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerSyntheticStress.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerSyntheticStress.js",
+      "term": "pizze",
+      "count": 4
+    },
+    {
+      "file": "tests/fixtures/deliveryPlannerSyntheticStress.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/forcedCloseDeleteVerification.test.js",
+      "term": "archivio",
+      "count": 1
+    },
+    {
+      "file": "tests/forcedCloseDeleteVerification.test.js",
+      "term": "chiudi",
+      "count": 13
+    },
+    {
+      "file": "tests/forcedCloseDeleteVerification.test.js",
+      "term": "chiuso",
+      "count": 3
+    },
+    {
+      "file": "tests/forcedCloseDeleteVerification.test.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "tests/forcedCloseDeleteVerification.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/forcedCloseDeleteVerification.test.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "tests/forcedCloseDeleteVerification.test.js",
+      "term": "servizio",
+      "count": 25
+    },
+    {
+      "file": "tests/forcedCloseDeleteVerification.test.js",
+      "term": "storico",
+      "count": 17
+    },
+    {
+      "file": "tests/fornoOutFallbackSlot.test.js",
+      "term": "consegna",
+      "count": 10
+    },
+    {
+      "file": "tests/fornoOutFallbackSlot.test.js",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "tests/fornoOutFallbackSlot.test.js",
+      "term": "ritiro",
+      "count": 4
+    },
+    {
+      "file": "tests/fornoOutWrap.test.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "tests/fornoOutWrap.test.js",
+      "term": "ritiro",
+      "count": 3
+    },
+    {
+      "file": "tests/fornoOutWrapModifica.test.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "tests/fornoOutWrapModifica.test.js",
+      "term": "ordine",
+      "count": 4
+    },
+    {
+      "file": "tests/fornoOutWrapModifica.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/geoResolverEnrich.test.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "tests/geoResolverEnrich.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/geoResolverEnrich.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/legacyActionRoleMapCompleteness.test.js",
+      "term": "chiudi",
+      "count": 3
+    },
+    {
+      "file": "tests/legacyActionRoleMapCompleteness.test.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "tests/legacyAuthGuard.test.js",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "tests/lifecycleReset.test.js",
+      "term": "oggi",
+      "count": 1
+    },
+    {
+      "file": "tests/lifecycleReset.test.js",
+      "term": "servizio",
+      "count": 13
+    },
+    {
+      "file": "tests/liveSafetyGuards.stress.test.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "tests/liveSafetyGuards.stress.test.js",
+      "term": "consegna",
+      "count": 11
+    },
+    {
+      "file": "tests/liveSafetyGuards.stress.test.js",
+      "term": "cucina",
+      "count": 2
+    },
+    {
+      "file": "tests/liveSafetyGuards.stress.test.js",
+      "term": "ordine",
+      "count": 8
+    },
+    {
+      "file": "tests/liveSafetyGuards.stress.test.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "tests/liveSafetyGuards.stress.test.js",
+      "term": "ritiro",
+      "count": 4
+    },
+    {
+      "file": "tests/manualGiros.test.js",
+      "term": "consegna",
+      "count": 9
+    },
+    {
+      "file": "tests/manualGiros.test.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "tests/manualGiros.test.js",
+      "term": "servizio",
+      "count": 6
+    },
+    {
+      "file": "tests/manualOrderTime.test.js",
+      "term": "consegna",
+      "count": 4
+    },
+    {
+      "file": "tests/manualOrderTime.test.js",
+      "term": "ordine",
+      "count": 6
+    },
+    {
+      "file": "tests/manualOrderTime.test.js",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "tests/manualOrderTime.test.js",
+      "term": "ritiro",
+      "count": 3
+    },
+    {
+      "file": "tests/mesaService.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/mesaService.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/operatorCollectionScenarios.test.js",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "tests/orderIntakePolicy.test.js",
+      "term": "consegna",
+      "count": 10
+    },
+    {
+      "file": "tests/orderIntakePolicy.test.js",
+      "term": "ordine",
+      "count": 12
+    },
+    {
+      "file": "tests/orderIntakePolicy.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/orderIntakePolicy.test.js",
+      "term": "pranzo",
+      "count": 27
+    },
+    {
+      "file": "tests/orderIntakePolicy.test.js",
+      "term": "ritiro",
+      "count": 9
+    },
+    {
+      "file": "tests/orderStateMachine.test.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "tests/orderStateMachine.test.js",
+      "term": "completato",
+      "count": 3
+    },
+    {
+      "file": "tests/orderStateMachine.test.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "tests/orderStateMachine.test.js",
+      "term": "oggi",
+      "count": 4
+    },
+    {
+      "file": "tests/orderStateMachine.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/orderStateMachine.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/orderStateMachineAnulado.test.js",
+      "term": "completato",
+      "count": 7
+    },
+    {
+      "file": "tests/orderStateMachineWireGuard.test.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "tests/orderStateMachineWireGuard.test.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "tests/orderStateMachineWireGuard.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/orderStateMachineWireGuard.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/orderStateMachineWireGuard.test.js",
+      "term": "ritiro",
+      "count": 4
+    },
+    {
+      "file": "tests/orderStateTransitions.test.js",
+      "term": "consegna",
+      "count": 14
+    },
+    {
+      "file": "tests/orderStateTransitions.test.js",
+      "term": "ordine",
+      "count": 5
+    },
+    {
+      "file": "tests/orderStateTransitions.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/orderStateTransitions.test.js",
+      "term": "ritiro",
+      "count": 14
+    },
+    {
+      "file": "tests/orderTerminalStateFilters.test.js",
+      "term": "archivio",
+      "count": 2
+    },
+    {
+      "file": "tests/orderTerminalStateFilters.test.js",
+      "term": "completato",
+      "count": 26
+    },
+    {
+      "file": "tests/orderTerminalStateFilters.test.js",
+      "term": "cucina",
+      "count": 3
+    },
+    {
+      "file": "tests/orderTerminalStateFilters.test.js",
+      "term": "ordini",
+      "count": 4
+    },
+    {
+      "file": "tests/orderTerminalStateFilters.test.js",
+      "term": "servizio",
+      "count": 8
+    },
+    {
+      "file": "tests/pendingActivityGuard.test.js",
+      "term": "chiudi",
+      "count": 3
+    },
+    {
+      "file": "tests/pendingActivityGuard.test.js",
+      "term": "completato",
+      "count": 2
+    },
+    {
+      "file": "tests/pendingActivityGuard.test.js",
+      "term": "servizio",
+      "count": 3
+    },
+    {
+      "file": "tests/previewOrderTiming.test.js",
+      "term": "consegna",
+      "count": 11
+    },
+    {
+      "file": "tests/previewOrderTiming.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/previewOrderTiming.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/previewOrderTiming.test.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "tests/proposeForNewOrder.test.js",
+      "term": "consegna",
+      "count": 31
+    },
+    {
+      "file": "tests/proposeForNewOrder.test.js",
+      "term": "ordine",
+      "count": 4
+    },
+    {
+      "file": "tests/proposeForNewOrder.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/readActions.test.js",
+      "term": "archivio",
+      "count": 2
+    },
+    {
+      "file": "tests/readActions.test.js",
+      "term": "completato",
+      "count": 3
+    },
+    {
+      "file": "tests/readActions.test.js",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "tests/readActions.test.js",
+      "term": "storico",
+      "count": 9
+    },
+    {
+      "file": "tests/readActions.test.js",
+      "term": "suggerimenti",
+      "count": 4
+    },
+    {
+      "file": "tests/riderReads.test.js",
+      "term": "consegna",
+      "count": 5
+    },
+    {
+      "file": "tests/riderReads.test.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "tests/riderTripRpcsMigration.test.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "tests/serviceCloseGate.test.js",
+      "term": "chiudi",
+      "count": 13
+    },
+    {
+      "file": "tests/serviceCloseGate.test.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "tests/serviceCloseGate.test.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "tests/serviceCloseGate.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/serviceCloseGate.test.js",
+      "term": "serata",
+      "count": 8
+    },
+    {
+      "file": "tests/serviceCloseGate.test.js",
+      "term": "servizio",
+      "count": 14
+    },
+    {
+      "file": "tests/serviceCloseGate.test.js",
+      "term": "storico",
+      "count": 6
+    },
+    {
+      "file": "tests/serviceCloseLiveWorkGuardMigration.test.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "tests/serviceCloseLiveWorkGuardMigration.test.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "tests/serviceCloseLiveWorkGuardMigration.test.js",
+      "term": "messa",
+      "count": 1
+    },
+    {
+      "file": "tests/serviceSchedule.test.js",
+      "term": "pranzo",
+      "count": 22
+    },
+    {
+      "file": "tests/serviceSessionIdentityMigration.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/serviceSessionIdentityMigration.test.js",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "tests/serviceSessionIdentityMigration.test.js",
+      "term": "serata",
+      "count": 3
+    },
+    {
+      "file": "tests/serviceSessionIdentityMigration.test.js",
+      "term": "storico",
+      "count": 4
+    },
+    {
+      "file": "tests/snapshotDeleteAndRetry.test.js",
+      "term": "ordine",
+      "count": 6
+    },
+    {
+      "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
+      "term": "chiudi",
+      "count": 9
+    },
+    {
+      "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
+      "term": "pranzo",
+      "count": 5
+    },
+    {
+      "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
+      "term": "servizio",
+      "count": 9
+    },
+    {
+      "file": "tests/storicoConflictIndexContract.test.js",
+      "term": "servizio",
+      "count": 3
+    },
+    {
+      "file": "tests/storicoConflictIndexContract.test.js",
+      "term": "storico",
+      "count": 25
+    },
+    {
+      "file": "tests/supabaseHelpersRegression.test.js",
+      "term": "storico",
+      "count": 2
+    },
+    {
+      "file": "tests/supabaseHelpersRegression.test.js",
+      "term": "suggerimenti",
+      "count": 1
+    },
+    {
+      "file": "tests/supabaseResourcePolicy.test.js",
+      "term": "archivio",
+      "count": 1
+    },
+    {
+      "file": "tests/supabaseResourcePolicy.test.js",
+      "term": "oggi",
+      "count": 1
+    },
+    {
+      "file": "tests/supabaseResourcePolicy.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/supabaseResourcePolicy.test.js",
+      "term": "servizio",
+      "count": 4
+    },
+    {
+      "file": "tests/supabaseTransport.test.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "tests/telemetryReconciliation.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/terminalReconciliation.test.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "tests/terminalReconciliation.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/terminalReconciliation.test.js",
+      "term": "ordini",
+      "count": 6
+    },
+    {
+      "file": "tests/test_delivery.js",
+      "term": "completato",
+      "count": 3
+    },
+    {
+      "file": "tests/test_delivery.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "tests/test_delivery.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/twoServiceMigration.test.js",
+      "term": "archivio",
+      "count": 5
+    },
+    {
+      "file": "tests/twoServiceMigration.test.js",
+      "term": "chiudi",
+      "count": 2
+    },
+    {
+      "file": "tests/twoServiceMigration.test.js",
+      "term": "pranzo",
+      "count": 6
+    },
+    {
+      "file": "tests/twoServiceMigration.test.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "tests/twoServiceMigration.test.js",
+      "term": "servizio",
+      "count": 16
+    },
+    {
+      "file": "tests/whatsappIntakePolicy.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/whatsappIntakePolicy.test.js",
+      "term": "ordine",
+      "count": 7
+    },
+    {
+      "file": "tests/whatsappIntakePolicy.test.js",
+      "term": "ritiro",
+      "count": 1
+    }
+  ]
+}
