@@ -10,7 +10,7 @@ function idsFilter(ids) {
 async function select(resource, query) {
   const response = await sbRest('GET', resource, { query });
   if (!response.ok || !Array.isArray(response.body)) {
-    throw new AuthDaoError('MESSA_DATA_READ_FAILED', `read failed: ${resource}`);
+    throw new AuthDaoError('MESA_DATA_READ_FAILED', `read failed: ${resource}`);
   }
   return response.body;
 }
@@ -20,7 +20,7 @@ async function rpc(name, body) {
   if (!response.ok) {
     const rawCode = response.body && typeof response.body.message === 'string'
       ? response.body.message.trim() : '';
-    const error = new AuthDaoError(rawCode || 'MESSA_DATA_WRITE_FAILED', 'Mesa RPC failed');
+    const error = new AuthDaoError(rawCode || 'MESA_DATA_WRITE_FAILED', 'Mesa RPC failed');
     error.status = response.status;
     throw error;
   }
@@ -29,7 +29,7 @@ async function rpc(name, body) {
 
 async function listFloorRows(workspaceId, { includeInactive = false } = {}) {
   const tables = await select('restaurant_tables',
-    `select=id,workspace_id,table_number,display_name,capacity,position_x,position_y,shape,active,updated_at`
+    `select=id,workspace_id,table_number,display_name,capacity,position_x,position_y,shape,shape_preset,active,updated_at`
     + `&workspace_id=eq.${encodeURIComponent(workspaceId)}`
     + (includeInactive ? '' : '&active=eq.true')
     + '&order=table_number.asc');
@@ -90,15 +90,20 @@ async function getOrderForSession(tableSessionId, orderId) {
   return rows[0] || null;
 }
 
-const openSession = (args) => rpc('messa_open_session_v1', {
+const openSession = (args) => rpc('mesa_open_session_v1', {
   p_workspace_id: args.workspaceId,
   p_by_actor: args.byActor,
   p_table_id: args.tableId,
   p_service_session_id: args.serviceSessionId,
-  p_covers_total: args.coversTotal,
 });
 
-const saveTable = (args) => rpc('messa_save_table_v1', {
+const releaseEmptySession = (args) => rpc('mesa_release_empty_session_v1', {
+  p_workspace_id: args.workspaceId,
+  p_by_actor: args.byActor,
+  p_table_session_id: args.tableSessionId,
+});
+
+const saveTable = (args) => rpc('mesa_save_table_v1', {
   p_workspace_id: args.workspaceId,
   p_by_actor: args.byActor,
   p_table_id: args.tableId || null,
@@ -109,9 +114,10 @@ const saveTable = (args) => rpc('messa_save_table_v1', {
   p_position_y: args.positionY,
   p_shape: args.shape,
   p_active: args.active,
+  p_shape_preset: args.shapePreset || 'standard',
 });
 
-const postPayment = (args) => rpc('messa_post_payment_v1', {
+const postPayment = (args) => rpc('mesa_post_payment_v1', {
   p_workspace_id: args.workspaceId,
   p_by_actor: args.byActor,
   p_by_sid_hash: args.bySidHash,
@@ -126,7 +132,7 @@ const postPayment = (args) => rpc('messa_post_payment_v1', {
   p_meta: args.meta || {},
 });
 
-const saveReservation = (args) => rpc('messa_save_reservation_v1', {
+const saveReservation = (args) => rpc('mesa_save_reservation_v1', {
   p_workspace_id: args.workspaceId,
   p_by_actor: args.byActor,
   p_reservation_id: args.reservationId || null,
@@ -140,7 +146,7 @@ const saveReservation = (args) => rpc('messa_save_reservation_v1', {
   p_expected_version: args.expectedVersion ?? null,
 });
 
-const setReservationStatus = (args) => rpc('messa_set_reservation_status_v1', {
+const setReservationStatus = (args) => rpc('mesa_set_reservation_status_v1', {
   p_workspace_id: args.workspaceId,
   p_by_actor: args.byActor,
   p_reservation_id: args.reservationId,
@@ -148,7 +154,7 @@ const setReservationStatus = (args) => rpc('messa_set_reservation_status_v1', {
   p_status: args.status,
 });
 
-const openReservation = (args) => rpc('messa_open_reservation_v1', {
+const openReservation = (args) => rpc('mesa_open_reservation_v1', {
   p_workspace_id: args.workspaceId,
   p_by_actor: args.byActor,
   p_reservation_id: args.reservationId,
@@ -161,6 +167,7 @@ module.exports = {
   getSession,
   getOrderForSession,
   openSession,
+  releaseEmptySession,
   saveTable,
   postPayment,
   saveReservation,

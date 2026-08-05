@@ -105,7 +105,7 @@ const reset = () => {
   reset();
   tableSessions = [{ id: "table-session-1", table_ref: "Mesa 3", status: "open" }];
   r = await chiudiServizio(true, "manual");
-  check("open Mesa -> close is refused", r.success === false && r.error === "messa_tables_not_released");
+  check("open Mesa -> close is refused", r.success === false && r.error === "mesa_tables_not_released");
   check("open Mesa -> rider gate never opens", beginCalls === 0);
   check("open Mesa -> no destructive work", deletes.length === 0 && inserts.length === 0);
 

@@ -498,7 +498,11 @@ async function creaOrdine(params) {
       // Mesa: the DB trigger validates the open session, snapshots the physical
       // table identity, assigns the next command number and expands immutable
       // settlement lines in the SAME insert transaction. Non-table orders stay null.
-      table_session_id: params.table_session_id || null
+      table_session_id: params.table_session_id || null,
+      // Ephemeral: only read by the trigger on the table's first comanda (when
+      // covers_total is still NULL); the trigger always nulls it back out before
+      // the row is written, so it never persists with a value.
+      table_covers_total_input: params.table_covers_total_input ?? null
     });
 
     // Successo: sbInsert ritorna array con il record inserito

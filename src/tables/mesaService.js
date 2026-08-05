@@ -1,16 +1,21 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const defaultDao = require('./messaDao');
+const defaultDao = require('./mesaDao');
 const { lifecycle: defaultLifecycle } = require('../serviceSessions/serviceSessionLifecycle');
 const { creaOrdine: defaultCreateOrder, cambiaStato: defaultChangeOrderState } = require('../agents/agentOrdini');
 const { nextEqualShare, aggregateByMethod } = require('./billingMath');
 const { sidHash: defaultSidHash } = require('../auth/sidHash');
 
-class MessaServiceError extends Error {
+// Error `.code` values use the MESA_ prefix, matching the mesa_*_v1 Postgres
+// functions and mesaHttpHandlers/mesaApi's exact-string classification. This
+// backend build must not be deployed until migrations/2026-08-02_v3j_mesa_
+// nomenclature_cutover.sql has been applied -- see that file's coordinated
+// deploy-order note and MIGRATION_MANIFEST.md's "V3-J cutover ordering".
+class MesaServiceError extends Error {
   constructor(code, status = 400) {
     super(code);
-    this.name = 'MessaServiceError';
+    this.name = 'MesaServiceError';
     this.code = code;
     this.status = status;
   }
@@ -25,14 +30,22 @@ const CANCELLED = new Set(['ANULADO','CANCELADO','CANCELLED','CHIUSO_FORZATO']);
 
 function requireContext(context, allowed) {
   if (!context || typeof context.actor !== 'string' || typeof context.workspaceId !== 'string') {
-    throw new MessaServiceError('MESSA_UNAUTHENTICATED', 401);
+    throw new MesaServiceError('MESA_UNAUTHENTICATED', 401);
   }
-  if (!allowed.has(context.role)) throw new MessaServiceError('MESSA_FORBIDDEN', 403);
+  if (!allowed.has(context.role)) throw new MesaServiceError('MESA_FORBIDDEN', 403);
   return context;
 }
 
 const cents = (value) => Math.round((Number(value) || 0) * 100);
 const money = (value) => Math.round(value) / 100;
+// Number(null) === 0 -- a table that was never positioned would silently
+// collapse to the literal top-left corner (0,0) and stack there with every
+// other never-positioned table, indistinguishable from a table someone
+// deliberately placed at 0,0. Preserving null through to the frontend is
+// what lets it tell "never positioned" apart from "positioned at the
+// origin" and apply a real fallback layout only to the former (same
+// null-in-null-out idiom this file already uses for session.covers_total).
+const nullableNumber = (value) => (value == null ? null : Number(value));
 
 function madridTime() {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -128,8 +141,9 @@ function buildFloor(rows) {
     const session = sessionByTable.get(String(table.id)) || null;
     if (!session) return {
       id: table.id, number: table.table_number, name: table.display_name,
-      capacity: table.capacity, x: Number(table.position_x), y: Number(table.position_y),
-      shape: table.shape, active: table.active, status: 'free', session: null,
+      capacity: table.capacity, x: nullableNumber(table.position_x), y: nullableNumber(table.position_y),
+      shape: table.shape, shapePreset: table.shape_preset || 'standard', active: table.active,
+      status: 'free', session: null,
       reservations: reservationsByTable.get(String(table.id)) || [],
     };
     const key = String(session.id);
@@ -139,22 +153,24 @@ function buildFloor(rows) {
     const paidCents = lines.reduce((sum, line) => sum + cents(line.paid), 0);
     const coversEffect = transactions.reduce((sum, tx) =>
       sum + (tx.kind === 'refund' ? -1 : 1) * Number(tx.covers_settled || 0), 0);
-    const coversRemaining = Math.max(0, Number(session.covers_total) - coversEffect);
+    // NULL until the first comanda sets it (walk-in Mesa just opened, no orders yet).
+    const coversTotal = session.covers_total == null ? null : Number(session.covers_total);
+    const coversRemaining = coversTotal == null ? 0 : Math.max(0, coversTotal - coversEffect);
     const outstanding = money(Math.max(0, totalCents - paidCents));
     const methodTotals = aggregateByMethod(transactions.map((tx) => ({
       kind: tx.kind, method: tx.payment_method, amount: tx.amount,
     })));
     return {
       id: table.id, number: table.table_number, name: table.display_name,
-      capacity: table.capacity, x: Number(table.position_x), y: Number(table.position_y),
-      shape: table.shape, active: table.active,
+      capacity: table.capacity, x: nullableNumber(table.position_x), y: nullableNumber(table.position_y),
+      shape: table.shape, shapePreset: table.shape_preset || 'standard', active: table.active,
       status: 'open',
       reservations: reservationsByTable.get(String(table.id)) || [],
       session: {
         id: session.id,
         serviceSessionId: session.service_session_id,
         assignedWaiterActor: session.assigned_waiter_actor,
-        coversTotal: Number(session.covers_total),
+        coversTotal,
         coversRemaining,
         openedAt: session.opened_at,
         settledAt: session.settled_at,
@@ -186,7 +202,7 @@ function buildFloor(rows) {
   });
 }
 
-function createMessaService({
+function createMesaService({
   dao = defaultDao,
   lifecycle = defaultLifecycle,
   createOrder = defaultCreateOrder,
@@ -199,31 +215,42 @@ function createMessaService({
       return { ok: true, tables: buildFloor(await dao.listFloorRows(ctx.workspaceId, { includeInactive })) };
     },
 
-    async open({ context, tableId, coversTotal } = {}) {
+    async open({ context, tableId } = {}) {
       const ctx = requireContext(context, OPEN_ROLES);
       const identity = await lifecycle.currentCloseout();
       if (!identity || !identity.ok || !identity.session || identity.session.status !== 'open') {
-        throw new MessaServiceError('MESSA_SERVICE_NOT_OPEN', 409);
+        throw new MesaServiceError('MESA_SERVICE_NOT_OPEN', 409);
       }
+      // Covers are unknown at open time -- real number comes from the first
+      // comanda (see addCommand below). The DAO/RPC leaves covers_total NULL.
       return dao.openSession({
         workspaceId: ctx.workspaceId, byActor: ctx.actor, tableId,
-        serviceSessionId: identity.session.id, coversTotal,
+        serviceSessionId: identity.session.id,
       });
     },
 
-    async addCommand({ context, tableSessionId, items, note, kitchenNote, time, clientRequestId } = {}) {
+    async addCommand({ context, tableSessionId, items, note, kitchenNote, time, coversTotal, clientRequestId } = {}) {
       const ctx = requireContext(context, OPEN_ROLES);
       const session = await dao.getSession(ctx.workspaceId, tableSessionId);
-      if (!session) throw new MessaServiceError('MESSA_SESSION_NOT_FOUND', 404);
-      if (session.status !== 'open') throw new MessaServiceError('MESSA_SESSION_NOT_OPEN', 409);
+      if (!session) throw new MesaServiceError('MESA_SESSION_NOT_FOUND', 404);
+      if (session.status !== 'open') throw new MesaServiceError('MESA_SESSION_NOT_OPEN', 409);
       if (ctx.role === 'waiter' && session.assigned_waiter_actor !== ctx.actor) {
-        throw new MessaServiceError('MESSA_WAITER_NOT_ASSIGNED', 403);
+        throw new MesaServiceError('MESA_WAITER_NOT_ASSIGNED', 403);
       }
-      if (!Array.isArray(items) || items.length === 0) throw new MessaServiceError('MESSA_ITEMS_REQUIRED', 400);
+      if (!Array.isArray(items) || items.length === 0) throw new MesaServiceError('MESA_ITEMS_REQUIRED', 400);
+      // First comanda on a walk-in Mesa must carry the real covers count; later
+      // ones already have session.covers_total set and never ask again. The DB
+      // trigger enforces this atomically too -- this is the friendly, common-path
+      // rejection so a missing value never surfaces as a generic DB error.
+      const coversRequired = session.covers_total == null;
+      const coversValue = Number(coversTotal);
+      if (coversRequired && (!Number.isInteger(coversValue) || coversValue < 1 || coversValue > 99)) {
+        throw new MesaServiceError('MESA_COVERS_REQUIRED', 400);
+      }
       const result = await createOrder({
         client_req_id: clientRequestId,
         nombre: session.table_ref,
-        tel: `MESSA-${String(session.id).slice(0, 8).toUpperCase()}`,
+        tel: `MESA-${String(session.id).slice(0, 8).toUpperCase()}`,
         canal: 'BANCO',
         items,
         nota: note || '',
@@ -235,41 +262,49 @@ function createMessaService({
         estado: 'EN_COCINA',
         tipo_consegna: 'RITIRO',
         table_session_id: session.id,
+        table_covers_total_input: coversRequired ? coversValue : null,
         operatorManual: true,
         actor_id: ctx.actor,
       });
       if (!result || result.success !== true) {
-        throw new MessaServiceError(result?.code || result?.error || 'MESSA_COMMAND_FAILED', 409);
+        throw new MesaServiceError(result?.code || result?.error || 'MESA_COMMAND_FAILED', 409);
       }
       return { ok: true, orderId: result.id, idempotent: result.idempotent === true };
+    },
+
+    async releaseEmptyTable({ context, tableSessionId } = {}) {
+      const ctx = requireContext(context, OPEN_ROLES);
+      return dao.releaseEmptySession({
+        workspaceId: ctx.workspaceId, byActor: ctx.actor, tableSessionId,
+      });
     },
 
     async markServed({ context, tableSessionId, orderId } = {}) {
       const ctx = requireContext(context, OPEN_ROLES);
       const session = await dao.getSession(ctx.workspaceId, tableSessionId);
-      if (!session) throw new MessaServiceError('MESSA_SESSION_NOT_FOUND', 404);
+      if (!session) throw new MesaServiceError('MESA_SESSION_NOT_FOUND', 404);
       if (ctx.role === 'waiter' && session.assigned_waiter_actor !== ctx.actor) {
-        throw new MessaServiceError('MESSA_WAITER_NOT_ASSIGNED', 403);
+        throw new MesaServiceError('MESA_WAITER_NOT_ASSIGNED', 403);
       }
       const order = await dao.getOrderForSession(tableSessionId, orderId);
-      if (!order) throw new MessaServiceError('MESSA_COMMAND_NOT_FOUND', 404);
+      if (!order) throw new MesaServiceError('MESA_COMMAND_NOT_FOUND', 404);
       if (order.estado === 'RETIRADO') return { ok: true, orderId, state: 'RETIRADO', idempotent: true };
-      if (order.estado !== 'LISTO') throw new MessaServiceError('MESSA_COMMAND_NOT_READY', 409);
+      if (order.estado !== 'LISTO') throw new MesaServiceError('MESA_COMMAND_NOT_READY', 409);
       const changed = await changeOrderState(orderId, 'RETIRADO', {
-        actor_type: 'operator', actor_id: ctx.actor, origin: 'messa_dashboard',
+        actor_type: 'operator', actor_id: ctx.actor, origin: 'mesa_dashboard',
       });
       if (!changed || changed.success !== true) {
-        throw new MessaServiceError('MESSA_COMMAND_STATE_FAILED', 409);
+        throw new MesaServiceError('MESA_COMMAND_STATE_FAILED', 409);
       }
       return { ok: true, orderId, state: 'RETIRADO', idempotent: false };
     },
 
     async pay({ context, tableSessionId, paymentMethod, mode, amount, coversSettled, lineIds, clientRequestId } = {}) {
       const ctx = requireContext(context, PAYMENT_ROLES);
-      if (typeof ctx.sid !== 'string' || !ctx.sid) throw new MessaServiceError('MESSA_RELOGIN_REQUIRED', 401);
+      if (typeof ctx.sid !== 'string' || !ctx.sid) throw new MesaServiceError('MESA_RELOGIN_REQUIRED', 401);
       const bySidHash = hashSid(ctx.sid);
       if (typeof bySidHash !== 'string' || !/^[0-9a-f]{64}$/.test(bySidHash)) {
-        throw new MessaServiceError('MESSA_RELOGIN_REQUIRED', 401);
+        throw new MesaServiceError('MESA_RELOGIN_REQUIRED', 401);
       }
       const semantic = {
         tableSessionId, paymentMethod, mode,
@@ -280,7 +315,7 @@ function createMessaService({
       return dao.postPayment({
         workspaceId: ctx.workspaceId, byActor: ctx.actor, bySidHash,
         ...semantic, clientRequestId, requestHash: canonicalHash(semantic),
-        meta: { source: 'messa_dashboard' },
+        meta: { source: 'mesa_dashboard' },
       });
     },
 
@@ -313,7 +348,7 @@ function createMessaService({
       const ctx = requireContext(context, OPEN_ROLES);
       const identity = await lifecycle.currentCloseout();
       if (!identity || !identity.ok || !identity.session || identity.session.status !== 'open') {
-        throw new MessaServiceError('MESSA_SERVICE_NOT_OPEN', 409);
+        throw new MesaServiceError('MESA_SERVICE_NOT_OPEN', 409);
       }
       return dao.openReservation({
         workspaceId: ctx.workspaceId,
@@ -326,4 +361,4 @@ function createMessaService({
   });
 }
 
-module.exports = { createMessaService, MessaServiceError, buildFloor, canonicalHash };
+module.exports = { createMesaService, MesaServiceError, buildFloor, canonicalHash };

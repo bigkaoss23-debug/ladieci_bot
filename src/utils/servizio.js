@@ -136,7 +136,7 @@ async function scanServizio() {
     if (!attiviMap[key]) attiviMap[key] = { wa_id: o.wa_id || o.tel || "", nombre: o.nombre || o.id || "", hora: o.hora || "", stato: o.estado || "" };
   });
   (Array.isArray(contiMesaAperti) ? contiMesaAperti : []).forEach(session => {
-    const key = `messa:${session.table_id || session.id}`;
+    const key = `mesa:${session.table_id || session.id}`;
     attiviMap[key] = {
       wa_id: "",
       nombre: session.table_ref || "Mesa",
@@ -497,10 +497,10 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
     );
   } catch (error) {
     console.warn(`[chiudiServizio ${source}] Mesa gate failed:`, error?.message || error);
-    return { success: false, error: "messa_table_gate_failed", deferred: true, data: oggi };
+    return { success: false, error: "mesa_table_gate_failed", deferred: true, data: oggi };
   }
   if (!Array.isArray(openTableAccounts)) {
-    return { success: false, error: "messa_table_gate_failed", deferred: true, data: oggi };
+    return { success: false, error: "mesa_table_gate_failed", deferred: true, data: oggi };
   }
   if (openTableAccounts.length > 0) {
     const detailsByTable = new Map();
@@ -511,7 +511,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
     }));
     return {
       success: false,
-      error: "messa_tables_not_released",
+      error: "mesa_tables_not_released",
       deferred: true,
       data: oggi,
       details: {

@@ -136,6 +136,9 @@ with its commit date (rows 8, 11, 29, 30) the commit date governs.
 | 47 | 2026-08-01 → **V3-H.1A MESA PAYMENT DIGEST PATH** | 2026-08-01_v3h1a_messa_payment_digest_path.sql | 58dd10c | 2026-08-01 | 97a4e11977d43313 |  <!-- APPLIED on staging 2026-08-01 (tdikhfeinufaahagmpjz). Changes only messa_post_payment_v1's pinned search_path to include Supabase's extensions schema, where pgcrypto.digest lives. No rows or function body changed. Verified with a real two-command Mesa checkout: one €13.50 payment, two allocations, two financial events, exact idempotent replay and immediate table release. -->
 | 48 | 2026-08-01 → **V3-H.2 MESA RESERVATIONS** | 2026-08-01_v3h2_messa_reservations.sql | e3e90ad | 2026-08-01 | b2d165b1d97f9c8c |  <!-- APPLIED on staging as Supabase ledger version 20260802113013 (`v3h2_messa_reservations_20260802`). Adds two-hour Mesa reservations with customer name, phone, covers and note; today bookings project as a red floor warning while the underlying table account remains independently free/open. Operator, cashier, waiter, shift-manager and owner/admin roles may create, edit, move, cancel and mark no-show; seating atomically opens a fresh table account with the reserved covers. Optimistic versions prevent lost updates, a workspace write lock prevents overlapping bookings, full payment completes a seated reservation, and future bookings prevent soft-removing the physical table. RLS is enabled and anon/authenticated access is revoked; all mutation RPCs are SECURITY INVOKER + service_role-only. -->
 | 49 | 2026-08-02 → **SERVICE CLOSE LIVE-WORK GUARD** | 2026-08-02_service_close_live_work_guard.sql | a43dbb5 | 2026-08-02 | c036a2ceab7414bc |  <!-- APPLIED on staging as Supabase ledger version 20260802101427 (`service_close_live_work_guard_20260802`). Adds a last-line BEFORE UPDATE guard on service_sessions: a transition to closed is refused while the same service still owns an open Mesa account or any non-terminal/unknown live order. Existing historical rows were not rewritten. Live transaction/rollback probes proved both order and Mesa refusal paths without leaving test residue. -->
+| 50 | 2026-08-02 → **V3-I MESA COVERS DEFERRED** | 2026-08-02_v3i_mesa_covers_deferred.sql | pending | 2026-08-02 | bdd5807446fbce55 |  <!-- DRAFT — NOT APPLIED to any database. Defers a walk-in Mesa's covers_total from open time to its first comanda: DROPs the NOT NULL, adds a monotonic guard trigger (once set, covers can only stay the same or grow), and extends messa_prepare_table_order_v1 to atomically require+lock in real covers on the first comanda via a new ephemeral ordenes.table_covers_total_input column (always nulled back out before the row is written) -- no second endpoint, no window where covers register but the comanda can still fail. messa_post_payment_v1 refuses with MESSA_COVERS_NOT_SET while covers are still NULL. messa_open_session_v1 keeps its exact 5-argument signature (covers now optional/nullable) and maps a true concurrent double-open's unique_violation to a clean MESSA_TABLE_ACCOUNT_OPEN. New messa_release_empty_session_v1 lets an accidentally-opened table (covers_total IS NULL, which by construction means zero comande) be released with no payment. messa_open_reservation_v1 is untouched -- a reservation's covers are real at seating time already. -->
+| 51 | 2026-08-02 → **V3-J MESA NOMENCLATURE CUTOVER** | 2026-08-02_v3j_mesa_nomenclature_cutover.sql | pending | 2026-08-02 | (local draft, not yet committed) |  <!-- DRAFT — NOT APPLIED to any database. Pure rename, no behavior change: every messa_*_v1 function/trigger from V3-H/V3-H.1A/V3-H.2/V3-I is recreated under mesa_*_v1 (byte-identical body logic), every MESSA_* error code becomes MESA_* (including the two service-close guards' MESA_TABLES_NOT_RELEASED, previously MESSA_TABLES_NOT_RELEASED), the idempotency-scope tag becomes 'mesa_' and the ledger meta tag becomes 'source':'mesa'. Hard-guarded on the exact V3-I predecessor (messa_release_empty_session_v1/messa_guard_covers_monotonic_v1 must already exist) since the recreated bodies are V3-I's amended versions, not V3-H's originals. Drops every old messa_* function only after all triggers are repointed at the new mesa_* names, so no window ever has a trigger referencing a dropped function. See "V3-J cutover ordering" below for the required deploy sequence. -->
+| 52 | 2026-08-02 → **V3-K MESA TABLE SHAPES** | 2026-08-02_v3k_mesa_table_shapes.sql | pending | 2026-08-02 | (local draft, not yet committed) |  <!-- DRAFT — NOT APPLIED to any database. Requires V3-J (mesa_save_table_v1 10-arg) applied first. Adds restaurant_tables.shape_preset (NOT NULL DEFAULT 'standard', backfills every existing row) with a CHECK enforcing exactly four valid (shape, shape_preset) combinations: round/standard, square/standard, rectangle/standard, rectangle/long. (An earlier draft also gave square a "rounded" preset -- five combinations -- but that was simplified out before commit per product review; round and square never needed a second look, only the rectangle's length is operationally meaningful.) Explicitly DROPs the old 10-arg mesa_save_table_v1 and CREATEs an 11-arg version (p_shape_preset text DEFAULT 'standard' appended last) -- a plain CREATE OR REPLACE would have added a second overload instead of truly replacing it. Server-side validation mirrors the DB CHECK exactly. -->
 
 > Rows 29–30: filename prefix `2026-07-24` is one day ahead of the `2026-07-23` commit date.
 > `apply_order` places **workspace_foundation (S2-7B) before account_auth_boundary (S2-7C)**,
@@ -206,3 +209,41 @@ simultaneity between Railway (backend) and Supabase (DB):
 > still work exactly as before if some caller reached it — nothing forces the cutover, so
 > there is no unsafe window analogous to the PIN-rotation one above. The only requirement is
 > ordering: never apply row 37 before step 2 has deployed and step 3 has passed.
+
+## V3-J cutover ordering (row 51) — messa_* → mesa_*, MESSA_* → MESA_*
+
+Unlike S2-7D2/S2-7D6E3 above, V3-J is **not additive-then-cleanup in two migrations** — it
+is one atomic migration that creates every `mesa_*` function/trigger and drops every
+`messa_*` one in the same transaction. What must still be staged in order is the
+**application/DB pairing**, because the moment row 51 commits, the DB no longer has
+`messa_*` at all, so the backend deployed at that instant must already call `mesa_*`.
+
+1. **Apply row 50** (`2026-08-02_v3i_mesa_covers_deferred.sql`) to staging first — V3-J
+   refuses to run without it (guard checks `messa_release_empty_session_v1` /
+   `messa_guard_covers_monotonic_v1`).
+2. **Deploy the backend commit that lands with this same slice** (mesaDao.js/mesaService.js/
+   mesaHttpHandlers.js/supabaseResourcePolicy.js already call `mesa_*` and check `MESA_*`
+   codes in this repo state) — but do **not** let it go live before step 3, since between
+   step 1 and step 3 the DB still only has `messa_*`. If a real deploy window is needed
+   between DB and backend, deploy the backend **after** row 51, not before.
+3. **Update backend env** — no new/renamed backend env var for this slice (`MESA_HTTP_ENABLED`
+   was already renamed by the S2-7D4/Mesa-staging predecessor slice; see the separate
+   "ENV VAR CUTOVER" note in the session report, not this manifest).
+4. **Apply row 51** (`2026-08-02_v3j_mesa_nomenclature_cutover.sql`) to staging.
+5. **Update frontend env** — `REACT_APP_MESA_ENABLED` is already the live name (also renamed
+   by the predecessor slice); nothing to change here for V3-J itself.
+6. **Deploy the frontend** (uses `mesaApi.js`'s `MESA_*` dictionary already in this repo state).
+7. **Smoke test**: open a Mesa, add a comanda, pay full/split/item/custom, create+seat+cancel
+   a reservation, try to close the service with a Mesa still open (expect `MESA_TABLES_NOT_RELEASED`
+   from the HTTP layer's `closeServiceOutcome.js` mapping, not the old `MESSA_` string).
+8. **Legacy entry points are already gone** — row 51 drops every `messa_*` function inside the
+   same transaction that creates `mesa_*`, so there is no separate "step 8" cleanup migration
+   the way S2-7D2/S2-7D6E3 needed. Rollback (`2026-08-02_v3j_mesa_nomenclature_cutover.ROLLBACK.sql`)
+   is the only way back to `messa_*`, and it must run before rolling the backend/frontend back.
+
+> **Transition boundary.** Between steps 1 and 4 the backend and DB are inconsistent if the
+> backend deploy in step 2 goes live before step 4's migration — a live backend calling
+> `mesa_open_session_v1` against a DB that still only has `messa_open_session_v1` gets a clean
+> `PGRST202`/function-not-found, not silent corruption, but it is a hard outage for the Mesa
+> surface until row 51 lands. Keep this window as short as possible and apply row 51
+> immediately before or immediately after the backend deploy, never hours apart.

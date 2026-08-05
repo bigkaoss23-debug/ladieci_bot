@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createMessaService, MessaServiceError, buildFloor } = require('../src/tables/messaService');
+const { createMesaService, MesaServiceError, buildFloor } = require('../src/tables/mesaService');
 
 const ctx = (overrides = {}) => ({
   actor: 'operator_primary', role: 'operator', workspaceId: 'ws-1',
@@ -71,6 +71,27 @@ test('a table without a session is free', () => {
   assert.equal(table.session, null);
 });
 
+test('a table that was never positioned exposes null coordinates, not (0,0)', () => {
+  const [table] = buildFloor({
+    tables: [{ id: 't1', table_number: 7, display_name: 'Mesa 7', position_x: null, position_y: null, shape: 'round', active: true }],
+    sessions: [], orders: [], lines: [], transactions: [], allocations: [],
+  });
+  // Number(null) === 0 would make this indistinguishable from a table
+  // genuinely, deliberately saved at the top-left corner -- the regression
+  // this test guards against.
+  assert.equal(table.x, null);
+  assert.equal(table.y, null);
+});
+
+test('a table genuinely saved at the origin keeps its real (0,0) coordinates', () => {
+  const [table] = buildFloor({
+    tables: [{ id: 't1', table_number: 8, display_name: 'Mesa 8', position_x: 0, position_y: 0, shape: 'round', active: true }],
+    sessions: [], orders: [], lines: [], transactions: [], allocations: [],
+  });
+  assert.equal(table.x, 0);
+  assert.equal(table.y, 0);
+});
+
 test('a fully paid account disappears from the floor and the table is free', () => {
   const [table] = buildFloor({
     tables: [{ id: 't1', table_number: 3, display_name: 'Mesa 3', position_x: 0, position_y: 0, shape: 'round', active: true }],
@@ -81,23 +102,23 @@ test('a fully paid account disappears from the floor and the table is free', () 
   assert.equal(table.session, null);
 });
 
-test('open derives the current service session server-side', async () => {
+test('open derives the current service session server-side and never sends covers', async () => {
   let args;
-  const service = createMessaService({
+  const service = createMesaService({
     dao: { openSession: async (value) => { args = value; return { ok: true }; } },
     lifecycle: { currentCloseout: async () => ({ ok: true, session: { id: 'service-1', status: 'open' } }) },
   });
-  await service.open({ context: ctx(), tableId: 'table-1', coversTotal: 5 });
+  await service.open({ context: ctx(), tableId: 'table-1' });
   assert.deepEqual(args, {
     workspaceId: 'ws-1', byActor: 'operator_primary', tableId: 'table-1',
-    serviceSessionId: 'service-1', coversTotal: 5,
+    serviceSessionId: 'service-1',
   });
 });
 
 test('every added course creates a new order linked to the same table session', async () => {
   const created = [];
-  const service = createMessaService({
-    dao: { getSession: async () => ({ id: 'session-1', table_ref: 'Mesa 1', status: 'open' }) },
+  const service = createMesaService({
+    dao: { getSession: async () => ({ id: 'session-1', table_ref: 'Mesa 1', status: 'open', covers_total: 4 }) },
     createOrder: async (payload) => { created.push(payload); return { success: true, id: `#00${created.length}` }; },
   });
   const base = { context: ctx(), tableSessionId: 'session-1', items: [{ n: 'Pizza', p: 10 }], clientRequestId: 'request-0001' };
@@ -109,21 +130,84 @@ test('every added course creates a new order linked to the same table session', 
   assert.ok(created.every((payload) => payload.table_session_id === 'session-1'));
   assert.ok(created.every((payload) => payload.canal === 'BANCO' && payload.tipo_consegna === 'RITIRO'));
   assert.ok(created.every((payload) => payload.estado === 'EN_COCINA'));
+  // Session already has covers -- a later comanda never needs (or forwards) them.
+  assert.ok(created.every((payload) => payload.table_covers_total_input === null));
+});
+
+test('the first comanda on a walk-in table requires real covers and forwards them atomically', async () => {
+  const created = [];
+  const service = createMesaService({
+    dao: { getSession: async () => ({ id: 'session-1', table_ref: 'Mesa 1', status: 'open', covers_total: null }) },
+    createOrder: async (payload) => { created.push(payload); return { success: true, id: '#001' }; },
+  });
+  const base = { context: ctx(), tableSessionId: 'session-1', items: [{ n: 'Pizza', p: 10 }], clientRequestId: 'request-0001' };
+  await assert.rejects(
+    service.addCommand(base),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_COVERS_REQUIRED'
+  );
+  await assert.rejects(
+    service.addCommand({ ...base, coversTotal: 0 }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_COVERS_REQUIRED'
+  );
+  await service.addCommand({ ...base, coversTotal: 4 });
+  assert.equal(created.length, 1);
+  assert.equal(created[0].table_covers_total_input, 4);
 });
 
 test('waiter cannot add a command to somebody else assigned table', async () => {
-  const service = createMessaService({
+  const service = createMesaService({
     dao: { getSession: async () => ({ id: 's1', status: 'open', assigned_waiter_actor: 'other' }) },
   });
   await assert.rejects(
     service.addCommand({ context: ctx({ actor: 'waiter-1', role: 'waiter' }), tableSessionId: 's1', items: [{}], clientRequestId: 'request-0001' }),
-    (error) => error instanceof MessaServiceError && error.code === 'MESSA_WAITER_NOT_ASSIGNED'
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_WAITER_NOT_ASSIGNED'
+  );
+});
+
+test('addCommand rejects a session that is no longer open (e.g. already settling/closed)', async () => {
+  const service = createMesaService({
+    dao: { getSession: async () => ({ id: 's1', status: 'closed' }) },
+  });
+  await assert.rejects(
+    service.addCommand({ context: ctx(), tableSessionId: 's1', items: [{ n: 'Pizza' }], clientRequestId: 'r1' }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_SESSION_NOT_OPEN' && error.status === 409
+  );
+});
+
+test('addCommand rejects an empty/missing item list before ever touching the DAO', async () => {
+  let createOrderCalled = false;
+  const service = createMesaService({
+    dao: { getSession: async () => ({ id: 's1', status: 'open', covers_total: 4 }) },
+    createOrder: async () => { createOrderCalled = true; return { success: true, id: '#1' }; },
+  });
+  await assert.rejects(
+    service.addCommand({ context: ctx(), tableSessionId: 's1', items: [], clientRequestId: 'r1' }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_ITEMS_REQUIRED' && error.status === 400
+  );
+  await assert.rejects(
+    service.addCommand({ context: ctx(), tableSessionId: 's1', clientRequestId: 'r1' }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_ITEMS_REQUIRED'
+  );
+  assert.equal(createOrderCalled, false);
+});
+
+test('addCommand and markServed both reject a session/table that does not exist, rather than falling through to a generic error', async () => {
+  const service = createMesaService({
+    dao: { getSession: async () => null },
+  });
+  await assert.rejects(
+    service.addCommand({ context: ctx(), tableSessionId: 'ghost', items: [{ n: 'Pizza' }], clientRequestId: 'r1' }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_SESSION_NOT_FOUND' && error.status === 404
+  );
+  await assert.rejects(
+    service.markServed({ context: ctx(), tableSessionId: 'ghost', orderId: '#1' }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_SESSION_NOT_FOUND' && error.status === 404
   );
 });
 
 test('a ready table command is marked served without creating a legacy payment', async () => {
   let changed = null;
-  const service = createMessaService({
+  const service = createMesaService({
     dao: {
       getSession: async () => ({ id: 's1', status: 'open' }),
       getOrderForSession: async () => ({ id: '#123', table_session_id: 's1', estado: 'LISTO' }),
@@ -139,7 +223,7 @@ test('a ready table command is marked served without creating a legacy payment',
 });
 
 test('a command cannot be served before Cocina marks it ready', async () => {
-  const service = createMessaService({
+  const service = createMesaService({
     dao: {
       getSession: async () => ({ id: 's1', status: 'open' }),
       getOrderForSession: async () => ({ id: '#123', table_session_id: 's1', estado: 'EN_COCINA' }),
@@ -147,13 +231,13 @@ test('a command cannot be served before Cocina marks it ready', async () => {
   });
   await assert.rejects(
     service.markServed({ context: ctx(), tableSessionId: 's1', orderId: '#123' }),
-    (error) => error instanceof MessaServiceError && error.code === 'MESSA_COMMAND_NOT_READY'
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_COMMAND_NOT_READY'
   );
 });
 
 test('payment hashes trusted session id and a canonical semantic request', async () => {
   let args;
-  const service = createMessaService({
+  const service = createMesaService({
     dao: { postPayment: async (value) => { args = value; return { ok: true }; } },
     hashSid: () => 'a'.repeat(64),
   });
@@ -164,20 +248,20 @@ test('payment hashes trusted session id and a canonical semantic request', async
   assert.equal(args.bySidHash, 'a'.repeat(64));
   assert.match(args.requestHash, /^[0-9a-f]{64}$/);
   assert.deepEqual(args.lineIds, ['a', 'b']);
-  assert.deepEqual(args.meta, { source: 'messa_dashboard' });
+  assert.deepEqual(args.meta, { source: 'mesa_dashboard' });
 });
 
 test('waiter cannot post money even if assigned', async () => {
-  const service = createMessaService({ dao: {} });
+  const service = createMesaService({ dao: {} });
   await assert.rejects(
     service.pay({ context: ctx({ actor: 'waiter-1', role: 'waiter' }) }),
-    (error) => error instanceof MessaServiceError && error.code === 'MESSA_FORBIDDEN'
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_FORBIDDEN'
   );
 });
 
 test('waiter can move a reservation without layout or payment authority', async () => {
   let args;
-  const service = createMessaService({
+  const service = createMesaService({
     dao: { saveReservation: async (value) => { args = value; return { ok: true }; } },
   });
   await service.saveReservation({
@@ -196,13 +280,13 @@ test('waiter can move a reservation without layout or payment authority', async 
   });
   await assert.rejects(
     service.saveTable({ context: ctx({ actor: 'waiter-1', role: 'waiter' }), table: {} }),
-    (error) => error instanceof MessaServiceError && error.code === 'MESSA_FORBIDDEN'
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_FORBIDDEN'
   );
 });
 
 test('waiter can cancel a reservation', async () => {
   let args;
-  const service = createMessaService({
+  const service = createMesaService({
     dao: { setReservationStatus: async (value) => { args = value; return { ok: true }; } },
   });
   await service.setReservationStatus({
@@ -217,7 +301,7 @@ test('waiter can cancel a reservation', async () => {
 
 test('opening a reservation derives the service and forwards its version atomically', async () => {
   let args;
-  const service = createMessaService({
+  const service = createMesaService({
     dao: { openReservation: async (value) => { args = value; return { ok: true, sessionId: 's2' }; } },
     lifecycle: { currentCloseout: async () => ({ ok: true, session: { id: 'service-2', status: 'open' } }) },
   });
@@ -233,12 +317,12 @@ test('opening a reservation derives the service and forwards its version atomica
 
 test('a reordered item after settlement opens a brand-new account id', async () => {
   let sequence = 0;
-  const service = createMessaService({
+  const service = createMesaService({
     dao: { openSession: async () => ({ ok: true, sessionId: `new-session-${++sequence}` }) },
     lifecycle: { currentCloseout: async () => ({ ok: true, session: { id: 'service-1', status: 'open' } }) },
   });
-  const first = await service.open({ context: ctx(), tableId: 'table-3', coversTotal: 2 });
-  const second = await service.open({ context: ctx(), tableId: 'table-3', coversTotal: 2 });
+  const first = await service.open({ context: ctx(), tableId: 'table-3' });
+  const second = await service.open({ context: ctx(), tableId: 'table-3' });
   assert.notEqual(first.sessionId, second.sessionId);
   assert.deepEqual([first.sessionId, second.sessionId], ['new-session-1', 'new-session-2']);
 });
@@ -264,4 +348,36 @@ test('a new account never inherits products or payments from the closed account'
   assert.equal(table.session.outstanding, 4);
   assert.deepEqual(table.session.paymentTotals, {});
   assert.deepEqual(table.session.lines.map((line) => line.description), ['Café nuevo']);
+});
+
+test('a freshly opened walk-in Mesa has no covers yet and nothing to pay', () => {
+  const [table] = buildFloor({
+    tables: [{ id: 't1', table_number: 6, display_name: 'Mesa 6', position_x: 0, position_y: 0, shape: 'square', active: true }],
+    sessions: [{ id: 's1', table_id: 't1', service_session_id: 'service', status: 'open', covers_total: null }],
+    orders: [], lines: [], transactions: [], allocations: [],
+  });
+  assert.equal(table.status, 'open');
+  assert.equal(table.session.coversTotal, null);
+  assert.equal(table.session.coversRemaining, 0);
+  assert.equal(table.session.outstanding, 0);
+  assert.equal(table.session.nextEqualShare, 0);
+});
+
+test('releasing an empty table forwards the session id through to the DAO', async () => {
+  let args;
+  const service = createMesaService({
+    dao: { releaseEmptySession: async (value) => { args = value; return { ok: true, status: 'closed' }; } },
+  });
+  const result = await service.releaseEmptyTable({ context: ctx(), tableSessionId: 's1' });
+  assert.deepEqual(args, { workspaceId: 'ws-1', byActor: 'operator_primary', tableSessionId: 's1' });
+  assert.equal(result.status, 'closed');
+});
+
+test('a waiter can release their own accidentally-opened empty table', async () => {
+  let args;
+  const service = createMesaService({
+    dao: { releaseEmptySession: async (value) => { args = value; return { ok: true }; } },
+  });
+  await service.releaseEmptyTable({ context: ctx({ actor: 'waiter-1', role: 'waiter' }), tableSessionId: 's1' });
+  assert.equal(args.byActor, 'waiter-1');
 });
