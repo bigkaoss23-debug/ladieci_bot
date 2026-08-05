@@ -162,7 +162,7 @@ function main() {
 
   if (scanned.invalidSuppressions.length > 0) {
     failed = true;
-    console.error("\n🛑 Soppressioni 'language-guard: allow-legacy' senza motivazione:");
+    console.error("\n🛑 [type: invalid-suppression] Soppressioni 'language-guard: allow-legacy' senza motivazione:");
     for (const s of scanned.invalidSuppressions) console.error(`   ${s.file}:${s.line}`);
   }
 
@@ -173,20 +173,20 @@ function main() {
   if (!cmp.ok) {
     failed = true;
     if (cmp.newEntries.length > 0) {
-      console.error("\n🛑 Nuove occorrenze di termini italiani non presenti in baseline:");
-      for (const e of cmp.newEntries) console.error(`   ${e.file} :: ${e.term} (${e.count})`);
+      console.error("\n🛑 [type: new-term] Nuove occorrenze di termini italiani non presenti in baseline:");
+      for (const e of cmp.newEntries) console.error(`   term=${e.term} file=${e.file} count=${e.count}`);
     }
     if (cmp.increasedEntries.length > 0) {
-      console.error("\n🛑 Aumento di occorrenze rispetto alla baseline:");
-      for (const e of cmp.increasedEntries) console.error(`   ${e.file} :: ${e.term} (${e.baselineCount} → ${e.count})`);
+      console.error("\n🛑 [type: baseline-increase] Aumento di occorrenze rispetto alla baseline:");
+      for (const e of cmp.increasedEntries) console.error(`   term=${e.term} file=${e.file} count=${e.baselineCount} → ${e.count}`);
     }
   }
 
   const addedCheck = checkAddedLines(scanned);
   if (!addedCheck.ok) {
     failed = true;
-    console.error("\n🛑 Righe aggiunte in questo diff contengono termini italiani vietati:");
-    for (const v of addedCheck.hits) console.error(`   ${v.file}:${v.line} :: ${v.term} (${v.chunk})`);
+    console.error("\n🛑 [type: added-line] Righe aggiunte in questo diff contengono termini italiani vietati:");
+    for (const v of addedCheck.hits) console.error(`   term=${v.term} file=${v.file}:${v.line}`);
   }
 
   if (scanned.suppressions.length > 0) {
@@ -200,6 +200,7 @@ function main() {
   }
 
   console.log(`[check-domain-language] OK — ${scanned.files.length} file controllati, nessuna nuova occorrenza.`);
+  console.log("DOMAIN_LANGUAGE_GUARD_OK");
   process.exit(0);
 }
 

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "build": "npm run check:domain-language",
     "check:domain-language": "node scripts/check-domain-language.js"
   },
   "engines": {
