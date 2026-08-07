@@ -20,6 +20,10 @@ const SPEC_ALL_57 = [
   // summary Economía consumes. Same class as getStorico/getOrdenesArchivio: admin-only,
   // fresh-auth, sensitive financial read.
   'getEconomiaLedger',
+  // LISTOS_ARCHIVADOS_V1 — getOrdenesArchivadosSesion added: session-scoped terminal-orders
+  // sibling of getOrdenes. Admin+operator, same as getOrdenes' non-rider consumers; NOT
+  // rider-enabled (getOrdenes' rider path is a separate scoped intercept this action lacks).
+  'getOrdenesArchivadosSesion',
   'getDeliveryLogs', 'getSuggerimenti', 'getConversacionesActivas', 'getClienteByTelefono',
   'getWaMessageById', 'getOrdenById', 'getConvByWaId', 'getConvChats', 'cambiaStato',
   'creaOrdine', 'modificaOrdine', 'aggiornaRispostaBot', 'setConfig', 'rispondiWA',
@@ -73,7 +77,7 @@ for (const p of ['owner', 'Admin', 'ADMIN', '', ' admin', 'operator ', null, und
 }
 
 // ── B. Canonical set integrity + module↔spec transcription ──────────────────
-assert('B: module CANONICAL_ACTIONS length 64', A.CANONICAL_ACTIONS.length === 64);
+assert('B: module CANONICAL_ACTIONS length 65', A.CANONICAL_ACTIONS.length === 65);
 assert('B: module canonical set == spec 57 (independent transcription)', setEq(A.CANONICAL_ACTIONS, SPEC_ALL_57));
 assert('B: no duplicate canonical action', new Set(A.CANONICAL_ACTIONS).size === A.CANONICAL_ACTIONS.length);
 assert('B: module ADMIN_ONLY == spec (17)', setEq(A.ADMIN_ONLY_ACTIONS, SPEC_ADMIN_ONLY) && A.ADMIN_ONLY_ACTIONS.length === 17);
@@ -82,13 +86,13 @@ assert('B: module SERVICE_ONLY == spec (1)', setEq(A.SERVICE_ONLY_ACTIONS, SPEC_
 
 // ── C. Dynamic router equality + negative controls ──────────────────────────
 const routerActions = extractRouterActions();
-assert('C: extractor found 64 router actions (anti-no-op)', routerActions.length === 64, `found ${routerActions.length}`);
+assert('C: extractor found 65 router actions (anti-no-op)', routerActions.length === 65, `found ${routerActions.length}`);
 for (const anchor of ['getOrdenes', 'triggerCloseIfNeeded', 'dissolveManualGiro', 'cambiaStato']) {
   assert(`C: extractor anti-no-op anchor present: ${anchor}`, routerActions.includes(anchor));
 }
 const cov = A.assertContractCoversRouter(routerActions);
 assert('C: router == matrix (no router-only, no matrix-only, no dup)', cov.ok, JSON.stringify(cov));
-assert('C: no duplicate router action', extractRouterActionsWithDuplicates().length === 64);
+assert('C: no duplicate router action', extractRouterActionsWithDuplicates().length === 65);
 // negative controls (synthetic sources / mutated sets)
 assert('C-neg: fake router-only action fails equality',
   A.assertContractCoversRouter([...routerActions, 'totallyNewAction']).ok === false);
@@ -120,8 +124,8 @@ assert('D: full 56x4 decision surface matches independent spec oracle', surfaceO
 // ── E. Totals (secondary sanity, not primary proof) ─────────────────────────
 const totals = { admin: 0, operator: 0, rider: 0, service: 0 };
 for (const action of SPEC_ALL_57) for (const p of ['admin', 'operator', 'rider', 'service']) if (A.isAllowed(p, action)) totals[p]++;
-assert('E: admin total 63', totals.admin === 63, `got ${totals.admin}`);
-assert('E: operator total 46', totals.operator === 46, `got ${totals.operator}`);
+assert('E: admin total 64', totals.admin === 64, `got ${totals.admin}`);
+assert('E: operator total 47', totals.operator === 47, `got ${totals.operator}`);
 assert('E: rider total 7', totals.rider === 7, `got ${totals.rider}`);
 assert('E: service total 1', totals.service === 1, `got ${totals.service}`);
 

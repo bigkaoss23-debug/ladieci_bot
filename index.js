@@ -330,6 +330,24 @@ app.get("/api", async (req, res) => {
             ),
           )
         : [];
+    } else if (action === "getOrdenesArchivadosSesion") {
+      // LISTOS_ARCHIVADOS_V1 — sibling of getOrdenes above: same session-scoping
+      // (getCurrentOperationalSession/serviceSessionQuery), same "no open session
+      // -> []" fallback, only the estado filter differs (terminal instead of
+      // active). A separate action instead of widening getOrdenes' response
+      // keeps that hot, realtime-triggered read from paying for a second query
+      // it doesn't need — this one is fetched only while Listos is open.
+      const currentService = await getCurrentOperationalSession();
+      result = currentService
+        ? await sbSelect(
+            "ordenes",
+            serviceSessionQuery(
+              currentService.id,
+              // language-guard: allow-legacy COMPLETATO is the legacy Italian terminal spelling still on disk, required alongside COMPLETADO (see orderTerminalStateFilters.test.js), not new vocabulary
+              "estado=in.(COMPLETADO,COMPLETATO,RETIRADO)&order=ts.desc&limit=200",
+            ),
+          )
+        : [];
     } else if (action === "getWaMsgs") {
       result = await sbSelect("wa_msgs", "stato=not.eq.COMPLETATO&order=ts.desc&limit=100");
     } else if (action === "getConfig") {

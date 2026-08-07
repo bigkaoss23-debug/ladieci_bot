@@ -36,6 +36,12 @@ const { ROLE_CODES } = require('./roleRegistry');
 const ACTION_POLICY_REGISTRY = Object.freeze([
   // ── shared reads ──────────────────────────────────────────────────────────
   { action: 'getOrdenes', acceptedCapabilities: ['orders.general', 'orders.table.update.assigned', 'kitchen.read_board', 'kitchen.read_operational', 'delivery.read_assigned', 'delivery.read_operational', 'service.overview.view'], legacyStatus: 'rider_allowed', v3Phase: 'V3-A' },
+  // LISTOS_ARCHIVADOS_V1 — same capability set as getOrdenes MINUS 'delivery.read_assigned',
+  // the one capability rider actually holds from that list. getOrdenes' rider reachability
+  // comes from a separate index.js intercept (riderReads.getRiderOrdenes()) that scopes
+  // results to that rider's own deliveries; this action has no such scoping and must not
+  // be rider-reachable at all (see legacyActionRoles.js RIDER_ALLOWED — deliberately absent).
+  { action: 'getOrdenesArchivadosSesion', acceptedCapabilities: ['orders.general', 'orders.table.update.assigned', 'kitchen.read_board', 'kitchen.read_operational', 'delivery.read_operational', 'service.overview.view'], legacyStatus: 'operator_shared', v3Phase: 'V3-A' },
   { action: 'getMenu', acceptedCapabilities: ['menu.read'], legacyStatus: 'shared', v3Phase: 'V3-A' },
   { action: 'getManualGiros', acceptedCapabilities: ['delivery.read_operational', 'delivery.read_assigned'], legacyStatus: 'rider_allowed', v3Phase: 'V3-A' },
   { action: 'getDriverStatus', acceptedCapabilities: ['delivery.read_operational', 'delivery.read_assigned'], legacyStatus: 'rider_allowed', v3Phase: 'V3-A' },

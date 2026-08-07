@@ -31,6 +31,11 @@ const CANONICAL_ACTIONS = Object.freeze([
   'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'debugMenuShadow', 'getManualGiros', 'getMenu', 'getCurrentServiceCloseout',
   'getDriverStatus', 'getOrdenesRecent', 'getWaMessages', 'getStorico', 'getOrdenesArchivio',
   'getEconomiaLedger',
+  // LISTOS_ARCHIVADOS_V1 — session-scoped terminal-orders sibling of getOrdenes.
+  // Same admin+operator access as getOrdenes' non-rider consumers; deliberately
+  // NOT rider-enabled (getOrdenes' rider path goes through a separate intercept
+  // -- riderReads.getRiderOrdenes() -- that this action does not have).
+  'getOrdenesArchivadosSesion',
   'getDeliveryLogs', 'getSuggerimenti', 'getConversacionesActivas', 'getClienteByTelefono',
   'getWaMessageById', 'getOrdenById', 'getConvByWaId', 'getConvChats', 'cambiaStato',
   'creaOrdine', 'modificaOrdine', 'aggiornaRispostaBot', 'setConfig', 'rispondiWA',

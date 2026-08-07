@@ -59,7 +59,7 @@ const ALL_ACTIONS = Object.freeze([
   "getOrdenes", "getWaMsgs", "getConfig", "chiudiServizio", "triggerCloseIfNeeded",
   "scanServizio", "backupSerata", "rigeneraSuggerimenti", "approvaSuggerimento",
   "getConvThread", "generaRispostaIA", "getClientes", "debugInterpreta", "debugMenuShadow",
-  "getManualGiros", "getDriverStatus", "getMenu", "getCurrentServiceCloseout", "getOrdenesRecent", "getWaMessages",
+  "getManualGiros", "getDriverStatus", "getMenu", "getCurrentServiceCloseout", "getOrdenesRecent", "getOrdenesArchivadosSesion", "getWaMessages",
   "getStorico", "getOrdenesArchivio", "getEconomiaLedger", "getDeliveryLogs", "getSuggerimenti",
   "getAuthActors",
   "getConversacionesActivas", "getClienteByTelefono", "getWaMessageById",
