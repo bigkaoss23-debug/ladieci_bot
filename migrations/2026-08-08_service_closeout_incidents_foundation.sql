@@ -501,11 +501,50 @@ ALTER TABLE public.service_closeout_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.service_incidents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.service_incident_resolutions ENABLE ROW LEVEL SECURITY;
 -- ZERO CREATE POLICY -> default-deny for anon & authenticated; service_role bypass.
+
+-- DETERMINISTIC PRIVILEGE FLOOR (Slice 1.3 — fixes a Slice-1/1.2-discovered
+-- defect): this project's ALTER DEFAULT PRIVILEGES rule grants service_role
+-- ALL table privileges automatically at CREATE TABLE time, independent of
+-- anything below. Slice 1.2's real-Postgres validation proved service_role
+-- silently inherited DELETE/TRUNCATE/REFERENCES/TRIGGER on all three tables
+-- this way — never explicitly granted, never intended. TRUNCATE in
+-- particular is NOT caught by the append-only/immutable-facts triggers
+-- (BEFORE UPDATE/DELETE triggers never fire for TRUNCATE), so an ambient
+-- default grant of TRUNCATE would let normal runtime privileges destroy
+-- immutable closeout/incident/resolution history outright. REVOKE ALL FROM
+-- service_role FIRST, then grant back only the exact privileges the three
+-- RPC bodies above actually use, so this migration — not the project's
+-- ambient defaults — is the sole source of truth for the final privilege
+-- surface. See tests/serviceCloseoutIncidentsFoundation.static.test.js §11
+-- for the check that keeps this true.
 REVOKE ALL ON public.service_closeout_snapshots, public.service_incidents, public.service_incident_resolutions
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
+
+-- service_closeout_snapshots: capture_closeout_snapshot() only ever SELECTs
+-- (session/conflict lookups) and INSERTs (ON CONFLICT DO NOTHING never
+-- requires UPDATE privilege). No RPC ever UPDATEs or DELETEs a snapshot row.
 GRANT SELECT, INSERT ON public.service_closeout_snapshots TO service_role;
-GRANT SELECT, INSERT, UPDATE ON public.service_incidents TO service_role;   -- UPDATE needed only for the resolution columns; enforced by service_incidents_facts_immutable
+
+-- service_incidents: create_service_incident() SELECTs + INSERTs (ON
+-- CONFLICT DO NOTHING); resolve_service_incident() additionally UPDATEs the
+-- resolution-summary columns (narrowed further, independently, by
+-- service_incidents_facts_immutable). No RPC ever DELETEs an incident.
+GRANT SELECT, INSERT, UPDATE ON public.service_incidents TO service_role;
+
+-- service_incident_resolutions: resolve_service_incident() INSERTs one
+-- append-only event row per call. No RPC currently SELECTs this table, but
+-- SELECT is retained — read-only, non-destructive — to match its documented
+-- purpose as the queryable source of historical resolution truth (see
+-- COMMENT ON TABLE above). UPDATE/DELETE/TRUNCATE remain withheld, enforced
+-- twice over (no grant + the append-only trigger).
 GRANT SELECT, INSERT ON public.service_incident_resolutions TO service_role;
+
+-- No sequences: every id/PK on these three tables is
+-- `uuid PRIMARY KEY DEFAULT gen_random_uuid()`, never serial/bigserial, so no
+-- sequence objects exist here and no sequence-level USAGE/SELECT grant is
+-- needed (verified in tests/serviceCloseoutIncidentsFoundation.static.test.js
+-- §11 and confirmed against pg_sequences during Slice 1.3 real-Postgres
+-- revalidation).
 
 REVOKE ALL ON FUNCTION
   public.service_closeout_snapshots_append_only(),

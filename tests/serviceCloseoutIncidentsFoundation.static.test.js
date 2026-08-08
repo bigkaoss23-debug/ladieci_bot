@@ -24,6 +24,11 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   assert('0a: migration file exists', fs.existsSync(MIGRATION_PATH));
   assert('0b: rollback file exists', fs.existsSync(ROLLBACK_PATH));
   const sql = fs.readFileSync(MIGRATION_PATH, 'utf8');
+  // Comment-stripped view — used wherever a check must scan for actual
+  // executable SQL and must not false-positive on prose that merely
+  // discusses a keyword (e.g. Slice 1.3's privilege-floor comments legitimately
+  // say "TRUNCATE" while explaining why it is withheld, not executing it).
+  const sqlWithoutComments = sql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n');
 
   console.log('\n── staging safety ──');
   assert('1a: wrapped in BEGIN/COMMIT', /^BEGIN;/m.test(sql) && /COMMIT;\s*$/m.test(sql));
@@ -39,7 +44,7 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
     /TRUNCATE/i,
   ];
   for (const re of destructivePatterns) {
-    assert('2: forward migration contains no ' + re, !re.test(sql), sql.match(re) && sql.match(re)[0]);
+    assert('2: forward migration contains no ' + re, !re.test(sqlWithoutComments), sqlWithoutComments.match(re) && sqlWithoutComments.match(re)[0]);
   }
   assert('2b: no existing table is ALTERed at all (every new column lives on new tables)', !/ALTER\s+TABLE\s+public\.(service_sessions|service_session_state|service_session_audit|order_financial_events|orden_estado_logs|ordenes|storico|table_sessions|serata_summary|backup_serata)\b/i.test(sql));
   assert('2c: no existing function is dropped', !/DROP\s+FUNCTION/i.test(sql));
@@ -92,12 +97,49 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   for (const t of ['service_closeout_snapshots', 'service_incidents', 'service_incident_resolutions']) {
     assert('7a: RLS enabled on ' + t, sql.includes('ALTER TABLE public.' + t + ' ENABLE ROW LEVEL SECURITY') || new RegExp('ENABLE ROW LEVEL SECURITY[\\s\\S]*' + t).test(sql));
   }
-  const sqlWithoutComments = sql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n');
   assert('7b: zero actual CREATE POLICY statements (default-deny for anon/authenticated, matching order_financial_events) — comment mentions of the phrase do not count', !/CREATE\s+POLICY\s+\w/i.test(sqlWithoutComments));
   assert('7c: REVOKE ALL FROM PUBLIC, anon, authenticated on the new tables', /REVOKE ALL ON public\.service_closeout_snapshots, public\.service_incidents, public\.service_incident_resolutions\s+FROM PUBLIC, anon, authenticated/.test(sql));
   assert('7d: grants are service_role only — no anon/authenticated GRANT anywhere in the file', !/GRANT[\s\S]{0,80}TO\s+(anon|authenticated)\b/i.test(sql));
   assert('7e: resolve_service_incident enforces role=\'admin\' server-side, independent of any caller-supplied claim', sql.includes("p_actor_role IS DISTINCT FROM 'admin'") && sql.includes('INCIDENT_RESOLUTION_FORBIDDEN'));
   assert('7f: every new function is SECURITY INVOKER (matches house convention, never SECURITY DEFINER)', !sql.includes('SECURITY DEFINER'));
+
+  console.log('\n── deterministic privilege floor (Slice 1.3) ──');
+  // Slice 1.2's real-Postgres validation proved this project's ambient
+  // ALTER DEFAULT PRIVILEGES rule silently grants service_role
+  // DELETE/TRUNCATE/REFERENCES/TRIGGER on every new table at CREATE TABLE
+  // time — TRUNCATE in particular bypasses the append-only/immutable-facts
+  // triggers entirely (they only fire on UPDATE/DELETE). These checks prove
+  // the migration itself, not the project's ambient defaults, is the sole
+  // source of truth for the final privilege surface, and that it can never
+  // silently regress back to the wider inherited set.
+  assert('11a: REVOKE ALL now explicitly includes service_role (not just PUBLIC/anon/authenticated) before any grant-back', /REVOKE ALL ON public\.service_closeout_snapshots, public\.service_incidents, public\.service_incident_resolutions\s+FROM PUBLIC, anon, authenticated, service_role/.test(sql));
+
+  const revokeAllIdx = sql.indexOf('REVOKE ALL ON public.service_closeout_snapshots, public.service_incidents, public.service_incident_resolutions');
+  const grantLines = {
+    service_closeout_snapshots: sql.match(/GRANT\s+([A-Z, ]+?)\s+ON\s+public\.service_closeout_snapshots\s+TO\s+service_role;/),
+    service_incidents: sql.match(/GRANT\s+([A-Z, ]+?)\s+ON\s+public\.service_incidents\s+TO\s+service_role;/),
+    service_incident_resolutions: sql.match(/GRANT\s+([A-Z, ]+?)\s+ON\s+public\.service_incident_resolutions\s+TO\s+service_role;/),
+  };
+  assert('11b-0: exactly one GRANT ... TO service_role statement exists per table (no duplicate/competing grant)', Object.values(grantLines).every((m) => !!m));
+  assert('11b-1: deterministic ordering — REVOKE ALL (including service_role) happens BEFORE any grant-back, never after', Object.values(grantLines).every((m) => revokeAllIdx !== -1 && sql.indexOf(m[0]) > revokeAllIdx));
+
+  function privSet(m) { return m[1].split(',').map((s) => s.trim()).filter(Boolean).sort(); }
+  assert('11c: service_closeout_snapshots service_role privileges are EXACTLY {INSERT, SELECT} — capture_closeout_snapshot() only ever SELECTs and INSERTs (ON CONFLICT DO NOTHING needs no UPDATE)', JSON.stringify(privSet(grantLines.service_closeout_snapshots)) === JSON.stringify(['INSERT', 'SELECT']), JSON.stringify(privSet(grantLines.service_closeout_snapshots)));
+  assert('11d: service_incidents service_role privileges are EXACTLY {INSERT, SELECT, UPDATE} — UPDATE only because resolve_service_incident() changes the resolution-summary columns', JSON.stringify(privSet(grantLines.service_incidents)) === JSON.stringify(['INSERT', 'SELECT', 'UPDATE']), JSON.stringify(privSet(grantLines.service_incidents)));
+  assert('11e: service_incident_resolutions service_role privileges are EXACTLY {INSERT, SELECT} — resolve_service_incident() only ever INSERTs an event row', JSON.stringify(privSet(grantLines.service_incident_resolutions)) === JSON.stringify(['INSERT', 'SELECT']), JSON.stringify(privSet(grantLines.service_incident_resolutions)));
+
+  // Regression guard: scan EVERY GRANT statement in the file that mentions
+  // any of the three tables and assert none of them ever include the
+  // dangerous privileges, however the statement is phrased in the future
+  // (single-table, multi-table, ALL, etc.) — this is what must fail if a
+  // future edit accidentally restores TRUNCATE to service_role.
+  const dangerousPrivileges = ['DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'ALL'];
+  const grantStatements = sqlWithoutComments.match(/GRANT\s+[^;]*?\bON\b[^;]*;/gi) || [];
+  const grantsOnOurTables = grantStatements.filter((g) => /service_closeout_snapshots|service_incidents\b|service_incident_resolutions/.test(g));
+  const offendingGrants = grantsOnOurTables.filter((g) => dangerousPrivileges.some((p) => new RegExp('\\b' + p + '\\b').test(g.slice(0, g.toUpperCase().indexOf(' ON ')))));
+  assert('11f: no GRANT statement targeting any of the three tables ever includes DELETE/TRUNCATE/REFERENCES/TRIGGER/ALL, in any phrasing', offendingGrants.length === 0, JSON.stringify(offendingGrants));
+
+  assert('11g: no sequence objects are created by this migration (all three tables use uuid PRIMARY KEY DEFAULT gen_random_uuid(), never serial/bigserial) — so no sequence-level grant is needed', !/CREATE\s+SEQUENCE/i.test(sql));
 
   console.log('\n── no wiring into live rollover behaviour (STEP 8) ──');
   // chiudiServizio is a JS function, not a SQL construct — the only place it
