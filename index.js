@@ -47,7 +47,7 @@ const { createOperatorPaymentRegistrar, PAYMENT_METHODS, buildIdemScopeKey } = r
 // be blocked by it — they keep the pre-existing legacy behaviour untouched.
 const isCollectionMethod = (m) => typeof m === "string" && PAYMENT_METHODS.has(m.trim().toLowerCase());
 // S2-1B — backend-authoritative legacy authorization + transactional rider trip primitives.
-const { legacyAuthGuardMiddleware } = require("./src/auth/legacyAuthGuard");
+const { legacyAuthGuardMiddleware, authorizeLegacyRequest } = require("./src/auth/legacyAuthGuard");
 const riderTrip = require("./src/agents/riderTrip");
 const riderReads = require("./src/agents/riderReads");
 const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceCloseout");
@@ -296,6 +296,35 @@ app.get("/api", async (req, res) => {
   const action = req.query.action;
   try {
     if (["getAuthActors"].includes(action) && (!req.authCtx || req.authCtx.role !== "admin")) {
+      return res.status(403).json({ error: "ROLE_FORBIDDEN" });
+    }
+
+    // SERVICE CLOSEOUT V2 / SLICE 4A.1 — getServiceIncidents (operational/
+    // financial exposure/audit data) must stay admin-verified REGARDLESS of
+    // whether legacyAuthGuardMiddleware happened to be mounted — it is
+    // staging-gated behind AUTH_V2_LEGACY_GUARD_ENABLED, OFF by default, and
+    // relying on it alone would leave this action protected by nothing but
+    // the SHARED DASHBOARD_API_KEY every operator/rider client already holds
+    // too, never proof of admin-ness. When the guard already ran (flag on),
+    // req.authCtx is already the verified admin decision and this is a
+    // cheap no-op re-check. When it did NOT run (flag off), this calls the
+    // EXACT SAME verified-identity primitive the guard itself uses
+    // (JWT signature + active actor + fresh session_version + role — the
+    // role check comes from legacyActionRoles' own ADMIN_ONLY entry for this
+    // action, never a body/query field) directly, so the action is
+    // unconditionally fail-closed rather than silently open.
+    if (["getServiceIncidents"].includes(action) && !req.authCtx) {
+      let decision;
+      try {
+        decision = await authorizeLegacyRequest(req);
+      } catch (e) {
+        console.error("[getServiceIncidents] inline authorization check failed:", e);
+        return res.status(500).json({ error: "internal_error" });
+      }
+      if (!decision.ok) return res.status(decision.status).json({ error: decision.code });
+      req.authCtx = decision.ctx;
+    }
+    if (["getServiceIncidents"].includes(action) && (!req.authCtx || req.authCtx.role !== "admin")) {
       return res.status(403).json({ error: "ROLE_FORBIDDEN" });
     }
     const cfg = await getConfig();
