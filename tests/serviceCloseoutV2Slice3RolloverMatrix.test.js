@@ -23,20 +23,46 @@ let pass = 0, fail = 0;
 const assert = (n, c, d = "") => { if (c) { pass++; console.log("  PASS  " + n); } else { fail++; console.log("  FAIL  " + n + (d ? "  -> " + d : "")); } };
 
 function fakeEnv({ orders = [], tableSessions = [], financialEvents = [], closeResultSpec = { success: true, service_session_id: "s1", summary: {} }, captureResultOverride = null } = {}) {
-  const env = { snapshotRows: [], incidentRows: [], closeCalls: [], reportCalls: [], releaseCalls: [], ensureCalls: [] };
+  const env = { attemptRows: [], snapshotRows: [], incidentRows: [], closeCalls: [], reportCalls: [], releaseCalls: [], ensureCalls: [], supersedeCalls: [] };
   env.select = async (table) => {
     if (table === "ordenes") return orders;
     if (table === "table_sessions") return tableSessions;
     if (table === "order_financial_events") return financialEvents;
     throw new Error("unexpected table " + table);
   };
+  env.attempts = {
+    async acquire({ serviceSessionId, actor }) {
+      const active = env.attemptRows.find((r) => r.serviceSessionId === serviceSessionId && r.status === "active");
+      if (active) return { success: true, created: false, code: "ALREADY_ACTIVE", attempt: active };
+      const row = { closeoutCorrelationId: "attempt-" + (env.attemptRows.length + 1), serviceSessionId, status: "active", startedAt: new Date().toISOString(), createdBy: actor };
+      env.attemptRows.push(row);
+      return { success: true, created: true, code: "ACQUIRED", attempt: row };
+    },
+    async supersede({ closeoutCorrelationId, actor, reason }) {
+      env.supersedeCalls.push({ closeoutCorrelationId, actor, reason });
+      const row = env.attemptRows.find((r) => r.closeoutCorrelationId === closeoutCorrelationId);
+      if (!row) return { success: false, code: "ATTEMPT_NOT_FOUND", attempt: null };
+      if (row.status === "completed") return { success: false, code: "CANNOT_SUPERSEDE_COMPLETED_ATTEMPT", attempt: null };
+      if (row.status === "superseded") return { success: true, idempotent: true, code: "ALREADY_SUPERSEDED", attempt: row };
+      row.status = "superseded"; row.supersededAt = new Date().toISOString(); row.supersessionReason = reason;
+      return { success: true, idempotent: false, code: "SUPERSEDED", attempt: row };
+    },
+    async complete({ closeoutCorrelationId, actor }) {
+      const row = env.attemptRows.find((r) => r.closeoutCorrelationId === closeoutCorrelationId);
+      if (!row) return { success: false, code: "ATTEMPT_NOT_FOUND", attempt: null };
+      if (row.status === "superseded") return { success: false, code: "CANNOT_COMPLETE_SUPERSEDED_ATTEMPT", attempt: null };
+      if (row.status === "completed") return { success: true, idempotent: true, code: "ALREADY_COMPLETED", attempt: row };
+      row.status = "completed"; row.completedAt = new Date().toISOString();
+      return { success: true, idempotent: false, code: "COMPLETED", attempt: row };
+    },
+  };
   env.snapshots = {
-    async listBySession({ serviceSessionId }) { return env.snapshotRows.filter((r) => r.serviceSessionId === serviceSessionId); },
+    async getByCorrelationId({ closeoutCorrelationId }) { return env.snapshotRows.find((r) => r.closeoutCorrelationId === closeoutCorrelationId) || null; },
     async capture(args) {
       if (captureResultOverride) return captureResultOverride;
       const existing = env.snapshotRows.find((r) => r.closeoutCorrelationId === args.closeoutCorrelationId);
       if (existing) return { success: true, created: false, code: "ALREADY_CAPTURED", snapshot: existing };
-      const row = { id: "snap-" + (env.snapshotRows.length + 1), serviceSessionId: args.serviceSessionId, closeoutCorrelationId: args.closeoutCorrelationId, payload: args.payload };
+      const row = { id: "snap-" + (env.snapshotRows.length + 1), serviceSessionId: args.serviceSessionId, closeoutCorrelationId: args.closeoutCorrelationId, payload: args.payload, payloadSha256: args.payloadSha256 };
       env.snapshotRows.push(row);
       return { success: true, created: true, code: "CAPTURED", snapshot: row };
     },
@@ -59,7 +85,7 @@ function fakeEnv({ orders = [], tableSessions = [], financialEvents = [], closeR
 }
 function makePerform(env, nowDate) {
   return createIncidentSafeRollover({
-    select: env.select, snapshots: env.snapshots, incidents: env.incidents,
+    select: env.select, snapshots: env.snapshots, attempts: env.attempts, incidents: env.incidents,
     closeSession: env.closeSession, releaseEmptyTableSession: env.releaseEmptyTableSession,
     sessionLifecycleImpl: env.sessionLifecycleImpl, now: () => nowDate, schedule: DEFAULT_SCHEDULE,
   });
@@ -150,11 +176,22 @@ const SERA_WINDOW_NOW = new Date(Date.UTC(2026, 7, 8, 18, 0)); // 20:00 Madrid, 
     assert("7c: the force=true override still exists, unchanged", /force=true/.test(manualCloseHandler));
   }
 
-  console.log("\n── 8. CLIENT RETRY: same ensure request/attempt -> no duplicate snapshot, incidents, or session ──");
+  console.log("\n── 8. CLIENT RETRY: same ensure request/attempt against a still-incomplete closeout -> no duplicate snapshot, incidents, or attempt ──");
   {
+    // The first attempt fails to actually close (e.g. a transient archive
+    // error) -> the attempt stays 'active' and a genuine retry (SAME live
+    // state, nothing corrected in between) must converge on it, per SLICE
+    // 3.1's fingerprint-match contract. (A retry issued AFTER a successful
+    // close is a different, already-covered scenario — see incidentSafeRollover.test.js
+    // "the OLD attempt is now superseded"/completed cases; performIncidentSafeRollover
+    // is never called twice for an already-closed session in production.)
     const session = { id: "s8", business_date: "2026-08-07", service_kind: "PRANZO" };
     const orders = [{ id: "o1", estado: "EN_COCINA", totale: 0 }];
-    const env = fakeEnv({ orders, closeResultSpec: { success: true, service_session_id: "s8", summary: {} } });
+    let closeAttempt = 0;
+    const env = fakeEnv({
+      orders,
+      closeResultSpec: () => { closeAttempt++; return closeAttempt === 1 ? { success: false, error: "verify_failed" } : { success: true, service_session_id: "s8", summary: {} }; },
+    });
     const perform = makePerform(env, SERA_WINDOW_NOW);
     const r1 = await perform({ session, actor: "system", source: "cron_stale_rollover" });
     const r2 = await perform({ session, actor: "system", source: "cron_stale_rollover" });
@@ -162,6 +199,7 @@ const SERA_WINDOW_NOW = new Date(Date.UTC(2026, 7, 8, 18, 0)); // 20:00 Madrid, 
     assert("8b: exactly one incident row across both attempts", env.incidentRows.length === 1);
     assert("8c: both attempts report the SAME closeoutCorrelationId", r1.closeoutCorrelationId === r2.closeoutCorrelationId);
     assert("8d: chiudiServizio was called twice (idempotent close engine handles the rest) but no duplicate session was ever established beyond what ensure() itself dedupes", env.closeCalls.length === 2);
+    assert("8e: exactly one attempt row total, now completed by the second, successful call", env.attemptRows.length === 1 && env.attemptRows[0].status === "completed");
   }
 
   console.log("\n=== RESULT: " + pass + " passed, " + fail + " failed ===");

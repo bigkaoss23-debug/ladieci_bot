@@ -51,19 +51,40 @@ const pendingOrderRow = Object.freeze({ id: '#724', estado: 'EN_ENTREGA', servic
 // A fully controllable fake incident-safe-rollover environment — same shape
 // as tests/incidentSafeRollover.test.js's fakeEnv, scoped to this scenario.
 function fakeRolloverEnv({ orders = [] } = {}) {
-  const env = { snapshotRows: [], incidentRows: [], closeCalls: [], reportCalls: [] };
+  const env = { attemptRows: [], snapshotRows: [], incidentRows: [], closeCalls: [], reportCalls: [] };
   env.select = async (table) => {
     if (table === 'ordenes') return orders;
     if (table === 'table_sessions') return [];
     if (table === 'order_financial_events') return [];
     throw new Error('unexpected table ' + table);
   };
+  env.attempts = {
+    async acquire({ serviceSessionId, actor }) {
+      const active = env.attemptRows.find((r) => r.serviceSessionId === serviceSessionId && r.status === 'active');
+      if (active) return { success: true, created: false, code: 'ALREADY_ACTIVE', attempt: active };
+      const row = { closeoutCorrelationId: 'attempt-' + (env.attemptRows.length + 1), serviceSessionId, status: 'active', startedAt: new Date().toISOString(), createdBy: actor };
+      env.attemptRows.push(row);
+      return { success: true, created: true, code: 'ACQUIRED', attempt: row };
+    },
+    async supersede({ closeoutCorrelationId, reason }) {
+      const row = env.attemptRows.find((r) => r.closeoutCorrelationId === closeoutCorrelationId);
+      if (!row) return { success: false, code: 'ATTEMPT_NOT_FOUND', attempt: null };
+      row.status = 'superseded'; row.supersededAt = new Date().toISOString(); row.supersessionReason = reason;
+      return { success: true, idempotent: false, code: 'SUPERSEDED', attempt: row };
+    },
+    async complete({ closeoutCorrelationId }) {
+      const row = env.attemptRows.find((r) => r.closeoutCorrelationId === closeoutCorrelationId);
+      if (!row) return { success: false, code: 'ATTEMPT_NOT_FOUND', attempt: null };
+      row.status = 'completed'; row.completedAt = new Date().toISOString();
+      return { success: true, idempotent: false, code: 'COMPLETED', attempt: row };
+    },
+  };
   env.snapshots = {
-    async listBySession({ serviceSessionId }) { return env.snapshotRows.filter((r) => r.serviceSessionId === serviceSessionId); },
-    async capture({ serviceSessionId, closeoutCorrelationId, capturedBy, source, payload }) {
+    async getByCorrelationId({ closeoutCorrelationId }) { return env.snapshotRows.find((r) => r.closeoutCorrelationId === closeoutCorrelationId) || null; },
+    async capture({ serviceSessionId, closeoutCorrelationId, capturedBy, source, payload, payloadSha256 }) {
       const existing = env.snapshotRows.find((r) => r.closeoutCorrelationId === closeoutCorrelationId);
       if (existing) return { success: true, created: false, code: 'ALREADY_CAPTURED', snapshot: existing };
-      const row = { id: 'snap-' + (env.snapshotRows.length + 1), serviceSessionId, closeoutCorrelationId, capturedBy, source, payload };
+      const row = { id: 'snap-' + (env.snapshotRows.length + 1), serviceSessionId, closeoutCorrelationId, capturedBy, source, payload, payloadSha256 };
       env.snapshotRows.push(row);
       return { success: true, created: true, code: 'CAPTURED', snapshot: row };
     },
@@ -80,7 +101,7 @@ function fakeRolloverEnv({ orders = [] } = {}) {
   env.releaseEmptyTableSession = async () => ({ ok: true });
   env.sessionLifecycleImpl = { async ensure() { return { ok: true, created: true, session: { id: 'today-session', service_kind: 'SERA', business_date: '2026-07-28' } }; } };
   env.performRollover = createIncidentSafeRollover({
-    select: env.select, snapshots: env.snapshots, incidents: env.incidents,
+    select: env.select, snapshots: env.snapshots, attempts: env.attempts, incidents: env.incidents,
     closeSession: env.closeSession, releaseEmptyTableSession: env.releaseEmptyTableSession,
     sessionLifecycleImpl: env.sessionLifecycleImpl, now: () => NOW,
   });

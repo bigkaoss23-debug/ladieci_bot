@@ -117,6 +117,19 @@ function createCloseoutSnapshots({ rpc = sbRpc, select = sbSelect } = {}) {
       if (!Array.isArray(rows)) return [];
       return rows.map(publicSnapshot);
     },
+
+    // SLICE 3.1 — the snapshot owned by ONE specific attempt. Used instead of
+    // listBySession() once closeout_correlation_id is known via
+    // closeoutAttempts.acquire() (service_closeout_snapshots_correlation_uq
+    // guarantees at most one row can ever match).
+    async getByCorrelationId({ closeoutCorrelationId }) {
+      const rows = await select(
+        "service_closeout_snapshots",
+        `closeout_correlation_id=eq.${encodeURIComponent(closeoutCorrelationId)}`
+      );
+      if (!Array.isArray(rows) || rows.length === 0) return null;
+      return publicSnapshot(rows[0]);
+    },
   });
 }
 

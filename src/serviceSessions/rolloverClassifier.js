@@ -35,6 +35,7 @@
 // strings used below.
 // ===============================================================
 
+const crypto = require("crypto");
 const { aggregate: aggregateCloseout } = require("../closeout/currentServiceCloseout");
 
 // Mirrors chiudiServizio's own PASSO 3 / active-order-gate terminal-state set
@@ -198,8 +199,32 @@ function classifyForIncidentSafeRollover({ session, orders, tableSessions, finan
   };
 }
 
+// computeStateFingerprint — SLICE 3.1. A cheap, deterministic-enough digest
+// of exactly the raw material classifyForIncidentSafeRollover reads (never
+// its derived output), used by incidentSafeRollover.js to answer "has live
+// state moved on since the active attempt's snapshot was captured?" without
+// relying on elapsed time (plan STEP 7 explicitly rules that out) or on any
+// field the codebase doesn't already read for this exact purpose. This is a
+// change-detection heuristic, not a cryptographic commitment — rows are
+// sorted by id first so two reads of genuinely identical state always hash
+// identically regardless of the order PostgREST happens to return them in.
+function computeStateFingerprint({ orders, tableSessions, financialEvents } = {}) {
+  const canon = (rows) => (Array.isArray(rows) ? rows : []).slice().sort((a, b) => {
+    const idA = String((a && a.id) != null ? a.id : "");
+    const idB = String((b && b.id) != null ? b.id : "");
+    return idA < idB ? -1 : idA > idB ? 1 : 0;
+  });
+  const material = JSON.stringify({
+    orders: canon(orders),
+    tableSessions: canon(tableSessions),
+    financialEvents: canon(financialEvents),
+  });
+  return crypto.createHash("sha256").update(material).digest("hex");
+}
+
 module.exports = {
   TERMINAL_ORDER_STATES,
   OPERATIONAL_INCIDENT_TYPE_BY_STATE,
   classifyForIncidentSafeRollover,
+  computeStateFingerprint,
 };
