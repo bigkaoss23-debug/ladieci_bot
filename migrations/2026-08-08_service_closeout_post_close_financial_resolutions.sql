@@ -96,6 +96,23 @@
 --    DO NOTHING is kept, unchanged, purely as a genuine-concurrent-race
 --    backstop for two callers issuing the identical correlation id at
 --    virtually the same instant.
+-- 5. IDEMPOTENCY WAS NOT PAYLOAD-BOUND (SLICE 2.2 — found by audit of item 4
+--    above, before any code was written). The SELECT-by-action_correlation_id
+--    short-circuit from item 4 returned the existing row for ANY payload
+--    sharing that correlation id — it never checked that the incoming
+--    request was actually describing the SAME command. A correlation id
+--    reused (by a caller bug, or a hostile replay) with a different amount,
+--    resolution_type, archived order/session, incident, payment method, or
+--    reversal target would have been silently handed back somebody else's
+--    recorded event instead of being rejected. Fixed: every command-defining
+--    field (service_session_id, archived_order_id, related_incident_id,
+--    resolution_type, amount_cents, payment_method, reversed_event_id) is
+--    now compared against what was actually persisted before the
+--    short-circuit may fire; a mismatch returns ACTION_CORRELATION_ID_CONFLICT
+--    (naming mirrors capture_closeout_snapshot's CLOSEOUT_CORRELATION_ID_CONFLICT
+--    from Slice 1 for the identical class of defect) instead of ALREADY_RECORDED.
+--    actor/reason/note are deliberately NOT compared — attribution/narrative
+--    metadata, not part of what the command financially does.
 BEGIN;
 
 DO $$
@@ -333,8 +350,33 @@ BEGIN
   -- same action_correlation_id returns the original event and never
   -- consumes a new lineage_sequence" unconditionally true, not just true
   -- when nothing else happened to the lineage in between.
+  --
+  -- SLICE 2.2 — the short-circuit above returned the existing row for ANY
+  -- payload sharing that correlation id, with no check that it was actually
+  -- describing the SAME command. action_correlation_id identifies one real
+  -- action; a caller (or a bug) reusing it for a genuinely different command
+  -- — a different amount, type, archived order/session, incident, payment
+  -- method, or reversal target — must never be silently handed back
+  -- somebody else's recorded event. Every command-defining field is
+  -- compared against what was actually persisted; only an exact match may
+  -- short-circuit as a true retry. actor/reason/note are NOT compared here
+  -- — they are attribution/narrative metadata, not part of what the command
+  -- financially does. Naming (ACTION_CORRELATION_ID_CONFLICT) mirrors
+  -- capture_closeout_snapshot's CLOSEOUT_CORRELATION_ID_CONFLICT (Slice 1)
+  -- for the identical class of defect (a correlation id reused for a
+  -- different command than the one it originally identified).
   SELECT * INTO v_row FROM public.archived_order_financial_resolutions WHERE action_correlation_id = p_action_correlation_id;
   IF FOUND THEN
+    IF v_row.service_session_id IS DISTINCT FROM p_service_session_id
+       OR v_row.archived_order_id IS DISTINCT FROM p_archived_order_id
+       OR v_row.related_incident_id IS DISTINCT FROM p_related_incident_id
+       OR v_row.resolution_type IS DISTINCT FROM p_resolution_type
+       OR v_row.amount_cents IS DISTINCT FROM p_amount_cents
+       OR v_row.payment_method IS DISTINCT FROM (CASE WHEN p_payment_method IS NULL THEN NULL ELSE lower(btrim(p_payment_method)) END)
+       OR v_row.reversed_event_id IS DISTINCT FROM p_reversed_event_id
+    THEN
+      RETURN jsonb_build_object('ok',false,'code','ACTION_CORRELATION_ID_CONFLICT');
+    END IF;
     RETURN jsonb_build_object('ok',true,'code','ALREADY_RECORDED','created',false,'resolution',to_jsonb(v_row));
   END IF;
 

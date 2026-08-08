@@ -32,6 +32,13 @@
 // originalExposureCents at all, so a caller trying to set it fails loudly at
 // the call site instead of having the value silently dropped.
 //
+// SLICE 2.2: actionCorrelationId reused with a payload that does not exactly
+// match the originally recorded command (different amount/type/order/
+// session/incident/paymentMethod/reversedEventId) returns
+// code:'ACTION_CORRELATION_ID_CONFLICT', success:false — handled by the
+// generic res.ok!==true branch below, no special-casing needed here. Only an
+// EXACT repeat of the same command is idempotent.
+//
 // TRUST BOUNDARY (matches Slice 1.1 exactly): role='admin' here is a
 // defense-in-depth check, NOT proof of identity — see
 // src/incidents/serviceIncidents.js's resolve() for the pattern this reuses.

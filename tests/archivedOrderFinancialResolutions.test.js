@@ -62,9 +62,24 @@ function fakeDb({ sessions = {}, incidents = {}, archivedOrders = new Set() } = 
     if (incident.category !== 'financial') return { ok: true, body: { ok: false, code: 'INCIDENT_NOT_FINANCIAL' } };
     if (incident.order_id !== args.p_archived_order_id) return { ok: true, body: { ok: false, code: 'INCIDENT_ORDER_MISMATCH' } };
 
-    // idempotency short-circuit (mirrors ON CONFLICT DO NOTHING + reselect)
+    // SLICE 2.2 — idempotency is bound to the exact command, not just the
+    // correlation id. A correlation id reused with a different amount/type/
+    // order/session/incident/paymentMethod/reversedEventId is a conflict,
+    // never a silent "already recorded" of somebody else's event.
     const existingByCorrelation = rows.find((r) => r.action_correlation_id === args.p_action_correlation_id);
-    if (existingByCorrelation) return { ok: true, body: { ok: true, code: 'ALREADY_RECORDED', created: false, resolution: existingByCorrelation } };
+    if (existingByCorrelation) {
+      const incomingMethod = args.p_payment_method == null ? null : String(args.p_payment_method).toLowerCase().trim();
+      const conflicts =
+        existingByCorrelation.service_session_id !== args.p_service_session_id ||
+        existingByCorrelation.archived_order_id !== args.p_archived_order_id ||
+        existingByCorrelation.related_incident_id !== args.p_related_incident_id ||
+        existingByCorrelation.resolution_type !== args.p_resolution_type ||
+        existingByCorrelation.amount_cents !== args.p_amount_cents ||
+        existingByCorrelation.payment_method !== incomingMethod ||
+        (existingByCorrelation.reversed_event_id || null) !== (args.p_reversed_event_id || null);
+      if (conflicts) return { ok: true, body: { ok: false, code: 'ACTION_CORRELATION_ID_CONFLICT' } };
+      return { ok: true, body: { ok: true, code: 'ALREADY_RECORDED', created: false, resolution: existingByCorrelation } };
+    }
 
     const lineage = rows
       .filter((r) => r.service_session_id === args.p_service_session_id && r.archived_order_id === args.p_archived_order_id)
@@ -164,10 +179,16 @@ function fakeDb({ sessions = {}, incidents = {}, archivedOrders = new Set() } = 
     'inc-op': { service_session_id: 's1', category: 'operational', order_id: 'ORD-OP', financial_exposure_cents: null },
     'inc-other-session': { service_session_id: 's2', category: 'financial', order_id: 'ORD-42', financial_exposure_cents: 6250 },
     'inc-wrong-order': { service_session_id: 's1', category: 'financial', order_id: 'ORD-DIFFERENT', financial_exposure_cents: 6250 },
+    // Slice 2.2 collision-test fixtures
+    'inc-14': { service_session_id: 's1', category: 'financial', order_id: 'ORD-14', financial_exposure_cents: 9000 },
+    'inc-14b': { service_session_id: 's1', category: 'financial', order_id: 'ORD-14', financial_exposure_cents: 9000 },
+    'inc-15': { service_session_id: 's1', category: 'financial', order_id: 'ORD-15', financial_exposure_cents: 9000 },
+    'inc-16': { service_session_id: 's2', category: 'financial', order_id: 'ORD-16', financial_exposure_cents: 9000 },
   };
   const ARCHIVED_ORDERS = new Set([
     's1::ORD-42', 's1::ORD-1', 's1::ORD-2', 's1::ORD-3', 's1::ORD-4', 's1::ORD-5', 's1::ORD-6', 's1::ORD-7',
     's1::ORD-8', 's1::ORD-9', 's1::ORD-10', 's1::ORD-11', 's1::ORD-12', 's1::ORD-13', 's1::ORD-OP', 's2::ORD-42',
+    's1::ORD-14', 's1::ORD-15', 's2::ORD-16',
   ]);
 
   console.log('\n── 1. first event establishes the lineage baseline — exposure DERIVED from the incident, never caller-supplied ──');
@@ -462,6 +483,80 @@ function fakeDb({ sessions = {}, incidents = {}, archivedOrders = new Set() } = 
 
     const none = await svc.getRemainingExposureCents({ serviceSessionId: 's1', archivedOrderId: 'ORD-NEVER-TOUCHED' });
     assert('13d: an order with no resolution history returns null, not zero', none === null);
+  }
+
+  console.log('\n── 14. SLICE 2.2 — idempotency is bound to the exact command, not just the correlation id ──');
+  {
+    const db = fakeDb({ sessions: SESSIONS, incidents: INCIDENTS, archivedOrders: ARCHIVED_ORDERS });
+    const svc = createArchivedOrderFinancialResolutions(db);
+
+    const originalArgs = {
+      serviceSessionId: 's1', archivedOrderId: 'ORD-14', relatedIncidentId: 'inc-14', actionCorrelationId: 'act-22-X',
+      resolutionType: 'recovered_payment', amountCents: 2500, actor: 'owner', role: 'admin',
+      reason: 'first partial payment', paymentMethod: 'efectivo',
+    };
+    const eventA = await svc.record(originalArgs);
+    assert('14 setup: event A recorded, seq 1, remaining 6500', eventA.success && eventA.resolution.lineageSequence === 1 && eventA.resolution.remainingExposureCents === 6500);
+
+    // A genuine, later event advances the lineage before any retry happens —
+    // exactly the scenario that broke a naive "return existing row" check.
+    const eventB = await svc.record({
+      serviceSessionId: 's1', archivedOrderId: 'ORD-14', relatedIncidentId: 'inc-14', actionCorrelationId: 'act-22-B',
+      resolutionType: 'write_off', amountCents: 1000, actor: 'owner', role: 'admin', reason: 'partial write-off',
+    });
+    assert('14 setup: event B recorded, seq 2, remaining 5500', eventB.success && eventB.resolution.lineageSequence === 2 && eventB.resolution.remainingExposureCents === 5500);
+
+    console.log('\n  ── 14a. TRUE RETRY after the lineage has advanced — exact same payload succeeds idempotently ──');
+    const trueRetry = await svc.record(originalArgs);
+    assert('14a: exact retry of X after event B still returns event A, created:false', trueRetry.success && trueRetry.created === false && trueRetry.resolution.id === eventA.resolution.id && trueRetry.resolution.lineageSequence === 1, JSON.stringify(trueRetry));
+    assert('14a: no new row was added and no OVER_RESOLUTION_EXCEEDS_REMAINING was raised', db.rows.filter((r) => r.archived_order_id === 'ORD-14').length === 2);
+
+    console.log('\n  ── 14b. AMOUNT COLLISION — same X, different amount -> conflict, fails closed ──');
+    const amountCollision = await svc.record({ ...originalArgs, amountCents: 3000 });
+    assert('14b: amount collision is rejected as a correlation conflict, not silently accepted or merged', amountCollision.success === false && amountCollision.code === 'ACTION_CORRELATION_ID_CONFLICT', JSON.stringify(amountCollision));
+    assert('14b: no new row was added', db.rows.filter((r) => r.archived_order_id === 'ORD-14').length === 2);
+
+    console.log('\n  ── 14c. TYPE COLLISION — same X, recovered_payment replayed as write_off -> conflict ──');
+    const typeCollision = await svc.record({ ...originalArgs, resolutionType: 'write_off', paymentMethod: undefined });
+    assert('14c: resolution-type collision is rejected', typeCollision.success === false && typeCollision.code === 'ACTION_CORRELATION_ID_CONFLICT', JSON.stringify(typeCollision));
+
+    console.log('\n  ── 14d. ORDER/SESSION COLLISION — same X against a different archived lineage -> conflict ──');
+    const orderCollision = await svc.record({ ...originalArgs, archivedOrderId: 'ORD-15', relatedIncidentId: 'inc-15' });
+    assert('14d: replaying X against a DIFFERENT archived order is rejected', orderCollision.success === false && orderCollision.code === 'ACTION_CORRELATION_ID_CONFLICT', JSON.stringify(orderCollision));
+    const sessionCollision = await svc.record({ ...originalArgs, serviceSessionId: 's2', archivedOrderId: 'ORD-16', relatedIncidentId: 'inc-16' });
+    assert('14d: replaying X against a DIFFERENT service_session_id is rejected', sessionCollision.success === false && sessionCollision.code === 'ACTION_CORRELATION_ID_CONFLICT', JSON.stringify(sessionCollision));
+
+    console.log('\n  ── 14e. INCIDENT COLLISION — same X, different (but otherwise valid) linked incident -> conflict ──');
+    const incidentCollision = await svc.record({ ...originalArgs, relatedIncidentId: 'inc-14b' });
+    assert('14e: replaying X with a different related_incident_id is rejected', incidentCollision.success === false && incidentCollision.code === 'ACTION_CORRELATION_ID_CONFLICT', JSON.stringify(incidentCollision));
+
+    console.log('\n  ── 14f. PAYMENT-METHOD COLLISION — same X, different payment method -> conflict ──');
+    const methodCollision = await svc.record({ ...originalArgs, paymentMethod: 'tarjeta' });
+    assert('14f: replaying X with a different payment method is rejected', methodCollision.success === false && methodCollision.code === 'ACTION_CORRELATION_ID_CONFLICT', JSON.stringify(methodCollision));
+
+    console.log('\n  ── 14g. REVERSAL-TARGET COLLISION — same correlation, different reversed_event_id -> conflict ──');
+    const eventC = await svc.record({
+      serviceSessionId: 's1', archivedOrderId: 'ORD-14', relatedIncidentId: 'inc-14', actionCorrelationId: 'act-22-C',
+      resolutionType: 'recovered_payment', amountCents: 500, actor: 'owner', role: 'admin', reason: 'second partial payment', paymentMethod: 'tarjeta',
+    });
+    assert('14g setup: event C recorded, seq 3', eventC.success && eventC.resolution.lineageSequence === 3);
+    const reversalArgs = {
+      serviceSessionId: 's1', archivedOrderId: 'ORD-14', relatedIncidentId: 'inc-14', actionCorrelationId: 'act-22-REV',
+      resolutionType: 'reversal', amountCents: 1000, actor: 'owner', role: 'admin', reason: 'undo the write-off',
+      reversedEventId: eventB.resolution.id,
+    };
+    const reversalOriginal = await svc.record(reversalArgs);
+    assert('14g setup: reversal of B recorded, seq 4', reversalOriginal.success && reversalOriginal.resolution.lineageSequence === 4);
+    const reversalTargetCollision = await svc.record({ ...reversalArgs, reversedEventId: eventC.resolution.id });
+    assert('14g: replaying the SAME reversal correlation against a DIFFERENT reversed_event_id is rejected', reversalTargetCollision.success === false && reversalTargetCollision.code === 'ACTION_CORRELATION_ID_CONFLICT', JSON.stringify(reversalTargetCollision));
+
+    console.log('\n  ── 14h. no collision ever consumes a lineage sequence ──');
+    const finalRows = db.rows.filter((r) => r.archived_order_id === 'ORD-14' || r.archived_order_id === 'ORD-15' || r.archived_order_id === 'ORD-16');
+    const ord14Rows = db.rows.filter((r) => r.archived_order_id === 'ORD-14');
+    assert('14h: ORD-14 lineage has exactly 4 rows (A, B, C, reversal) — every collision attempt above added nothing', ord14Rows.length === 4, String(ord14Rows.length));
+    assert('14h: no stray rows were created on ORD-15/ORD-16 by the rejected collision attempts', db.rows.filter((r) => r.archived_order_id === 'ORD-15').length === 0 && db.rows.filter((r) => r.archived_order_id === 'ORD-16').length === 0);
+    const sequences = ord14Rows.slice().sort((a, b) => a.lineage_sequence - b.lineage_sequence).map((r) => r.lineage_sequence);
+    assert('14h: sequences are exactly [1,2,3,4] — no gaps, no phantom allocations from any rejected collision', JSON.stringify(sequences) === JSON.stringify([1, 2, 3, 4]), JSON.stringify(sequences));
   }
 
   console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');

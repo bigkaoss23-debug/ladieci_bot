@@ -114,6 +114,20 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   assert('6g: the short-circuit runs BEFORE the advisory lock and BEFORE any state-dependent validation (incident/exposure/arithmetic) — a retry must never be evaluated against the CURRENT lineage state', idempotencyShortCircuitIdx !== -1 && idempotencyShortCircuitIdx < incidentLinkRequiredIdx && idempotencyShortCircuitIdx < advisoryLockIdx);
   assert('6h: ON CONFLICT DO NOTHING is retained as a genuine-concurrent-race backstop alongside the early short-circuit, not replaced by it', /ON CONFLICT \(action_correlation_id\) DO NOTHING/.test(sql));
 
+  console.log('\n── SLICE 2.2 — idempotency is bound to the exact command, not just the correlation id ──');
+  const shortCircuitBlock = sql.slice(idempotencyShortCircuitIdx, idempotencyShortCircuitIdx + 1200);
+  assert('6i: a correlation-id match is NOT unconditionally treated as ALREADY_RECORDED — a comparison gate exists first', idempotencyShortCircuitIdx !== -1 && /IF v_row\.service_session_id IS DISTINCT FROM p_service_session_id/.test(shortCircuitBlock));
+  for (const field of ['archived_order_id', 'related_incident_id', 'resolution_type', 'amount_cents', 'reversed_event_id']) {
+    assert('6j: the payload-binding comparison covers ' + field, new RegExp('v_row\\.' + field + '\\s+IS DISTINCT FROM\\s+p_' + field).test(shortCircuitBlock));
+  }
+  assert('6k: the payload-binding comparison covers payment_method (normalized the same way as storage: lower(btrim(...)))', /v_row\.payment_method IS DISTINCT FROM \(CASE WHEN p_payment_method IS NULL THEN NULL ELSE lower\(btrim\(p_payment_method\)\) END\)/.test(shortCircuitBlock));
+  assert('6l: a mismatch returns a distinct, fail-closed conflict code — never ALREADY_RECORDED for a different command', /code','ACTION_CORRELATION_ID_CONFLICT'/.test(shortCircuitBlock));
+  const conflictIdx = sql.indexOf("code','ACTION_CORRELATION_ID_CONFLICT'");
+  const alreadyRecordedInShortCircuitIdx = shortCircuitBlock.indexOf("code','ALREADY_RECORDED'");
+  assert('6m: the conflict check is placed BEFORE the ALREADY_RECORDED return, so a genuine mismatch can never fall through to it', conflictIdx !== -1 && conflictIdx < idempotencyShortCircuitIdx + alreadyRecordedInShortCircuitIdx);
+  assert('6n: naming rationale documents the repo-established precedent for this exact class of defect (capture_closeout_snapshot.CLOSEOUT_CORRELATION_ID_CONFLICT, Slice 1)', sql.includes('CLOSEOUT_CORRELATION_ID_CONFLICT'));
+  assert('6o: actor/reason/note are explicitly documented as excluded from the binding comparison (attribution/narrative, not command-defining)', /actor\/reason\/note are (deliberately )?NOT compared/.test(sql));
+
   console.log('\n── append-only enforcement ──');
   assert('7a: a BEFORE UPDATE OR DELETE trigger unconditionally blocks mutation', sql.includes('archived_order_financial_resolutions_no_update_delete') && sql.includes('BEFORE UPDATE OR DELETE ON public.archived_order_financial_resolutions'));
   assert('7b: the trigger function unconditionally raises (no allowlist — nothing on this table is ever legitimately mutable)', /archived_order_financial_resolutions_append_only[\s\S]{0,300}RAISE EXCEPTION/.test(sql));
