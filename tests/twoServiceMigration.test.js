@@ -101,7 +101,7 @@ console.log("\n══ I. close and accounting scoping ══");
 assert("I: close guard is per kind, not a flat 22:00", /closeEligibility\(kind, new Date\(\)\)/.test(INDEX));
 assert("I: the old flat 22:00 guard is gone from chiudiServizio", !/Chiusura permessa solo dopo le 22:00/.test(INDEX));
 assert("I: one periodic close tick, not a 23:50 forced close", /serviceCloseTick/.test(INDEX) && !/function schedula2350/.test(INDEX));
-assert("I: the tick reuses the single close implementation", /chiudiServizio\(true, decision\.source\)/.test(INDEX));
+assert("I: the tick reuses the single close implementation (SLICE 3: via the incident-safe rollover orchestrator, which itself always delegates archival to chiudiServizio)", /performIncidentSafeRollover\(\{\s*session, source: decision\.source, actor: "system" \}\)/.test(INDEX));
 assert("I: 04:00 escalates rather than force-closing", /ESCALATION[\s\S]{0,120}past 04:00/.test(INDEX));
 assert("I: summary is stamped with the kind", /summary\.service_kind = serviceKind/.test(SERVIZIO));
 assert("I: summary window starts at THIS session's opening", /sessionOpenedAt[\s\S]{0,120}toISOString\(\)/.test(SERVIZIO));

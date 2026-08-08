@@ -167,13 +167,30 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   // and tests for any reference to the RPC name or the JS wrapper calls.
   // Fails loudly (not silently) the day someone wires this up without also
   // updating this check and the trust-boundary comments above it.
+  //
+  // SERVICE CLOSEOUT V2 / SLICE 3 update: capture_closeout_snapshot /
+  // create_service_incident / closeoutSnapshots.capture() /
+  // serviceIncidents.report() are now INTENTIONALLY wired — this is exactly
+  // the "future lifecycle orchestrator" closeoutSnapshots.js's own header
+  // comment always pointed at (src/serviceSessions/incidentSafeRollover.js).
+  // What remains, and must still be provably true, is that resolution
+  // (resolve_service_incident / serviceIncidents.resolve()) — the
+  // admin-authenticated half of this contract — has NO public HTTP path
+  // anywhere yet; that is a separate, later piece of work.
   const ROOT = path.join(__dirname, '..');
   const EXCLUDED_DIRS = new Set(['node_modules', '.git', 'tests', 'migrations', 'docs']);
   const EXCLUDED_FILES = new Set([
     path.join(ROOT, 'src', 'closeout', 'closeoutSnapshots.js'),
     path.join(ROOT, 'src', 'incidents', 'serviceIncidents.js'),
   ]);
-  const SUSPECT_PATTERNS = [/resolve_service_incident/, /create_service_incident/, /capture_closeout_snapshot/, /serviceIncidents\.resolve\(/, /serviceIncidents\.report\(/, /closeoutSnapshots\.capture\(/];
+  // The one module this slice deliberately wires as the "future lifecycle
+  // orchestrator" — allowed to create/capture, but still checked against the
+  // RESOLUTION-only patterns below like everything else.
+  const CREATION_WIRING_ALLOWED_FILES = new Set([
+    path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'),
+  ]);
+  const CREATION_PATTERNS = [/create_service_incident/, /capture_closeout_snapshot/, /serviceIncidents\.report\(/, /closeoutSnapshots\.capture\(/];
+  const RESOLUTION_PATTERNS = [/resolve_service_incident/, /serviceIncidents\.resolve\(/];
 
   function walk(dir, out) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -192,14 +209,22 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
     path.join(ROOT, 'index.js'),
   ].filter((f) => fs.existsSync(f) && !EXCLUDED_FILES.has(f));
 
-  const wiredHits = [];
+  const unexpectedCreationHits = [];
+  const resolutionHits = [];
   for (const f of candidateFiles) {
     const text = fs.readFileSync(f, 'utf8');
-    for (const re of SUSPECT_PATTERNS) {
-      if (re.test(text)) wiredHits.push(path.relative(ROOT, f) + ' matches ' + re);
+    if (!CREATION_WIRING_ALLOWED_FILES.has(f)) {
+      for (const re of CREATION_PATTERNS) {
+        if (re.test(text)) unexpectedCreationHits.push(path.relative(ROOT, f) + ' matches ' + re);
+      }
+    }
+    for (const re of RESOLUTION_PATTERNS) {
+      if (re.test(text)) resolutionHits.push(path.relative(ROOT, f) + ' matches ' + re);
     }
   }
-  assert('10d: no HTTP action/route or any other application module (outside src/closeout, src/incidents, tests) references these RPCs/wrappers — confirms "no public resolution path yet" as a locked-in fact, not tribal knowledge', wiredHits.length === 0, JSON.stringify(wiredHits));
+  assert('10d: no application module OTHER than the Slice-3 lifecycle orchestrator references the creation/capture RPCs or wrappers', unexpectedCreationHits.length === 0, JSON.stringify(unexpectedCreationHits));
+  assert('10d2: the Slice-3 lifecycle orchestrator DOES reference them — confirms the intended wiring actually landed, not just permitted', CREATION_PATTERNS.some((re) => re.test(fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'), 'utf8'))));
+  assert('10d3: no application module anywhere references the RESOLUTION RPC/wrapper — admin resolution still has no public path', resolutionHits.length === 0, JSON.stringify(resolutionHits));
   assert('10e: the scan actually walked a non-trivial number of files (guards against a broken walk silently passing)', candidateFiles.length > 20, String(candidateFiles.length));
 
   console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');

@@ -55,7 +55,7 @@ const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/se
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
 const { resolveSchedule, closeEligibility, SCHEDULE_STATE, SERVICE_KIND } = require("./src/schedule/serviceSchedule");
 const { computeAutoCloseDecision } = require("./src/serviceSessions/autoCloseDecision");
-const { hasPendingOperationalActivity } = require("./src/serviceSessions/pendingActivityGuard");
+const { performIncidentSafeRollover } = require("./src/serviceSessions/incidentSafeRollover");
 const { getCurrentOperationalSession, serviceSessionQuery } = require("./src/serviceSessions/currentOperationalSession");
 
 const app = express();
@@ -387,10 +387,11 @@ app.get("/api", async (req, res) => {
         if (!decision.due) {
           result = { success: true, skipped: true, reason: decision.reason || "not_due" };
         } else {
-          const activity = await hasPendingOperationalActivity({ sessionId: identity.session.id });
-          result = activity.pending
-            ? { success: true, skipped: true, reason: "pending_orders" }
-            : await chiudiServizio(true, "external");
+          // SERVICE CLOSEOUT V2 / SLICE 3 — RC-2 fix: pending operational
+          // activity no longer skips a DUE rollover forever. It becomes a
+          // persisted incident instead; the session still closes via the
+          // same chiudiServizio engine performIncidentSafeRollover delegates to.
+          result = await performIncidentSafeRollover({ session: identity.session, source: "external", actor: "system" });
         }
       }
     } else if (action === "scanServizio") {
@@ -1161,16 +1162,6 @@ async function serviceCloseTick() {
   const decision = computeAutoCloseDecision({ now: new Date(), session });
   if (!decision.due) return;
 
-  // S2-7D6D — a pending non-terminal order blocks an AUTOMATIC close exactly like an
-  // active rider trip does; chiudiServizio's own trip gate is unchanged and still runs,
-  // this just stops the timer from ever reaching a force-archive of live kitchen/delivery
-  // work in the first place.
-  const activity = await hasPendingOperationalActivity({ sessionId: session.id });
-  if (activity.pending) {
-    console.log(`[close-tick] ${decision.kind} session ${session.id} has pending orders — skip (no force-close)`);
-    return;
-  }
-
   if (decision.escalate) {
     // Past 04:00 with a live service: the operator must know. We do NOT skip the
     // close attempt, but we never let it silently destroy in-flight work either
@@ -1178,9 +1169,14 @@ async function serviceCloseTick() {
     console.error(`[close-tick] ESCALATION — ${decision.kind} session ${session.id} still active past 04:00 Madrid`);
   }
 
+  // SERVICE CLOSEOUT V2 / SLICE 3 — RC-2 fix: a pending non-terminal order no
+  // longer skips this tick forever. performIncidentSafeRollover classifies it
+  // (kitchen/LISTO/delivery/unpaid -> a persisted incident) and still calls
+  // chiudiServizio; the rider-trip gate inside chiudiServizio is unchanged and
+  // still defers the close if a trip is genuinely active.
   console.log(`[close-tick] closing ${decision.kind} session ${session.id} (${decision.source})`);
   let res;
-  try { res = await chiudiServizio(true, decision.source); }
+  try { res = await performIncidentSafeRollover({ session, source: decision.source, actor: "system" }); }
   catch (e) { console.error(`[close-tick ${decision.source}] errore:`, e); return; }
   console.log(`[close-tick ${decision.source}] risultato:`, JSON.stringify(res));
 
@@ -1232,18 +1228,14 @@ async function catchUpChiusura() {
       return;
     }
 
-    const activity = await hasPendingOperationalActivity({ sessionId: session.id });
-    if (activity.pending) {
-      console.log(`[catchUp] ${decision.kind} session ${session.id} ha ordini pendenti — skip (no force-close)`);
-      return;
-    }
-
     if (decision.escalate) {
       console.error(`[catchUp] ESCALATION — ${decision.kind} session ${session.id} ancora attiva oltre le 04:00 Madrid al riavvio`);
     }
 
+    // SERVICE CLOSEOUT V2 / SLICE 3 — RC-2 fix: pending orders no longer skip
+    // boot recovery forever; they become persisted incidents instead.
     console.log(`[catchUp] chiusura mancante — chiudo ${decision.kind} session ${session.id} (boot recovery)`);
-    const res = await chiudiServizio(true, "catchUp");
+    const res = await performIncidentSafeRollover({ session, source: "catchUp", actor: "system" });
     console.log("[catchUp] risultato:", JSON.stringify(res));
 
     const plan = deferredCloseRetryPlan(res, 0);

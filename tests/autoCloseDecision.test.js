@@ -74,5 +74,33 @@ console.log("\n══ F. timezone / DST parity with serviceSchedule ══");
   assert("CET 18:00 -> due (same Madrid wall-clock, different UTC offset)", rWinter.due === true);
 }
 
+console.log("\n══ G. SERVICE CLOSEOUT V2 / Slice 3 — RC-1 fix: PRIOR_DAY_STALE is due regardless of today's window ══");
+{
+  // A PRANZO session opened YESTERDAY, evaluated at 10:00 TODAY — squarely
+  // inside PRANZO's own "too early to close" window if judged as today's
+  // lunch (closeEligibility('PRANZO', 10:00) would say not-eligible). Before
+  // this fix, a caller that (unlike this one) never separately checked
+  // business_date would see due:false and never reconcile the stale session.
+  const staleLunch = session({ service_kind: "PRANZO", business_date: "2026-07-14" });
+  const r1 = computeAutoCloseDecision({ now: summer(10, 0, 15), session: staleLunch });
+  assert("G1: yesterday's PRANZO at 10:00 today is due (RC-1 fixed)", r1.due === true, JSON.stringify(r1));
+  assert("G1: source is the stale-rollover source, not the ordinary cron_lunch", r1.source === "cron_stale_rollover");
+  assert("G1: always escalated — a stale session is inherently an anomaly worth flagging loudly", r1.escalate === true);
+  assert("G1: classification is attached and says PRIOR_DAY_STALE", r1.classification && r1.classification.type === "PRIOR_DAY_STALE");
+
+  // Same stale session at a time where PRANZO's OWN window would ALSO say
+  // eligible (20:00) — must still report the SAME due:true, via the SAME
+  // stale path, not by coincidentally agreeing with closeEligibility.
+  const r2 = computeAutoCloseDecision({ now: summer(20, 0, 15), session: staleLunch });
+  assert("G2: same stale session at a different time of day -> still due via the stale path", r2.due === true && r2.source === "cron_stale_rollover", JSON.stringify(r2));
+
+  // A session from TODAY (matching business date) must be completely
+  // unaffected by this new branch — this is the regression guard against
+  // ever widening PRIOR_DAY_STALE by accident.
+  const todaySession = session({ service_kind: "PRANZO", business_date: "2026-07-15" });
+  const r3 = computeAutoCloseDecision({ now: summer(12, 0, 15), session: todaySession });
+  assert("G3: a session dated TODAY is unaffected — ordinary not-due-yet logic still applies", r3.due === false && r3.reason === "PRANZO_CLOSE_TOO_EARLY", JSON.stringify(r3));
+}
+
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
 if (fail > 0) process.exit(1);

@@ -19,12 +19,23 @@
 const {
   DEFAULT_SCHEDULE, SERVICE_KIND, resolveSchedule, closeEligibility,
 } = require("../schedule/serviceSchedule");
+const { classifySessionForRollover, ROLLOVER_CLASSIFICATION } = require("./sessionRolloverClassification");
 
 function computeAutoCloseDecision({ now = new Date(), session = null, schedule = DEFAULT_SCHEDULE } = {}) {
   if (!session || !session.id) return { due: false, reason: "no_active_session" };
   if (!["open", "closing"].includes(session.status)) return { due: false, reason: "not_active" };
 
   const kind = session.service_kind || null;
+
+  // RC-1 fix: business-date precedence FIRST. A session from a PRIOR business
+  // date is due for rollover unconditionally — never judged against TODAY's
+  // closeEligibility window for its kind (see sessionRolloverClassification.js
+  // header for why that comparison is meaningless for a stale session).
+  const classification = classifySessionForRollover(session, now, schedule);
+  if (classification.type === ROLLOVER_CLASSIFICATION.PRIOR_DAY_STALE) {
+    return { due: true, kind, escalate: true, source: "cron_stale_rollover", classification };
+  }
+
   const when = resolveSchedule(now, schedule);
   const gate = closeEligibility(kind, now, schedule);
   if (!gate.eligible) return { due: false, reason: gate.reason, kind };
@@ -36,6 +47,7 @@ function computeAutoCloseDecision({ now = new Date(), session = null, schedule =
     kind,
     escalate: !!when.isEscalationBoundary,
     source: kind === SERVICE_KIND.PRANZO ? "cron_lunch" : "cron_dinner",
+    classification,
   };
 }
 
