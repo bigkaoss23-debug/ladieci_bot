@@ -48,7 +48,7 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   console.log('\n── identity (lineage keyed on the pair, never archived_order_id alone) ──');
   assert('3a: archived_order_id carries no REFERENCES clause (FK-less historical identity, same philosophy as order_financial_events.order_id/service_incidents.order_id)', !/archived_order_id\s+text\s+REFERENCES/.test(sql));
   assert('3b: rationale documented inline (not just tribal knowledge)', sql.includes('order numbers are reused across sessions'));
-  assert('3c: the lineage lookup index covers the composite (service_session_id, archived_order_id), not archived_order_id alone', sql.includes('aofr_lineage_idx') && /CREATE INDEX aofr_lineage_idx ON public\.archived_order_financial_resolutions\(service_session_id, archived_order_id/.test(sql));
+  assert('3c: the lineage lookup index covers the composite (service_session_id, archived_order_id), not archived_order_id alone', sql.includes('aofr_lineage_idx') && /CREATE (?:UNIQUE )?INDEX aofr_lineage_idx ON public\.archived_order_financial_resolutions\(service_session_id, archived_order_id/.test(sql));
 
   console.log('\n── amount semantics (integer cents, never float) ──');
   for (const col of ['original_exposure_cents', 'amount_cents', 'remaining_exposure_cents']) {
@@ -59,6 +59,37 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   assert('4f: created_at defaults to clock_timestamp(), never now() — now()/transaction_timestamp() is frozen for the whole transaction, which made lineage-ordering ties possible (a real defect caught by real-Postgres validation) when multiple events on one lineage are inserted in the same transaction', /created_at\s+timestamptz NOT NULL DEFAULT clock_timestamp\(\)/.test(sql) && !/created_at\s+timestamptz NOT NULL DEFAULT now\(\)/.test(sql));
   assert('4d: the RPC fails closed on over-resolution rather than clamping to zero', sql.includes('OVER_RESOLUTION_EXCEEDS_REMAINING') && sql.includes('v_remaining < 0'));
   assert('4e: reversal is full-amount-only, checked against the exact reversed event amount', sql.includes('REVERSAL_AMOUNT_MISMATCH') && sql.includes('p_amount_cents IS DISTINCT FROM v_reversed.amount_cents'));
+
+  console.log('\n── SLICE 2.1 — authoritative exposure (caller can no longer choose original_exposure_cents) ──');
+  const rpcSignature = sql.slice(
+    sql.indexOf('CREATE OR REPLACE FUNCTION public.create_archived_order_financial_resolution('),
+    sql.indexOf(') RETURNS jsonb')
+  );
+  assert('4g: p_original_exposure_cents no longer exists as an RPC parameter (checked against the signature itself, not prose comments that document its removal)', rpcSignature.length > 0 && !rpcSignature.includes('p_original_exposure_cents'));
+  assert('4g2: p_related_incident_id IS a required parameter of that same signature (no DEFAULT — Postgres would refuse a non-default param after a defaulted one, so this also proves it was moved earlier in the parameter list)', /p_related_incident_id\s+uuid,/.test(rpcSignature));
+  assert('4h: ORIGINAL_EXPOSURE_REQUIRED/ORIGINAL_EXPOSURE_MISMATCH (the old caller-trust codes) are gone — there is nothing left for a caller to supply that could mismatch', !sql.includes('ORIGINAL_EXPOSURE_REQUIRED') && !sql.includes('ORIGINAL_EXPOSURE_MISMATCH'));
+  assert('4i: the first event of a lineage derives original_exposure_cents from the linked incident immutable financial_exposure_cents, not from any p_ parameter', /v_original\s*:=\s*v_incident\.financial_exposure_cents/.test(sql));
+  assert('4j: a defensive NULL-exposure check exists even though service_incidents already forbids a financial incident with a NULL exposure', sql.includes('INCIDENT_MISSING_EXPOSURE') && /v_incident\.financial_exposure_cents IS NULL/.test(sql));
+
+  console.log('\n── SLICE 2.1 — archived order must actually exist ──');
+  assert('4k: the RPC verifies the archived order exists in storico, keyed on the same (service_session_id, orden_id) pair storico itself uses', sql.includes('ARCHIVED_ORDER_NOT_FOUND') && /FROM public\.storico\s+WHERE service_session_id = p_service_session_id AND orden_id = p_archived_order_id/.test(sql));
+
+  console.log('\n── SLICE 2.1 — mandatory, validated incident linkage ──');
+  assert('4l: related_incident_id is NOT NULL at the table level (was optional pre-2.1)', /related_incident_id\s+uuid NOT NULL REFERENCES public\.service_incidents\(id\)/.test(sql));
+  assert('4m: a NULL p_related_incident_id is rejected before any lookup', sql.includes('INCIDENT_LINK_REQUIRED') && /IF p_related_incident_id IS NULL THEN/.test(sql));
+  assert('4n: the incident must belong to the exact same service_session_id', sql.includes('INCIDENT_SERVICE_MISMATCH') && /v_incident\.service_session_id IS DISTINCT FROM p_service_session_id/.test(sql));
+  assert('4o: the incident must be category=financial', sql.includes('INCIDENT_NOT_FINANCIAL') && /v_incident\.category <> 'financial'/.test(sql));
+  assert('4p: the incident must describe the exact same archived order', sql.includes('INCIDENT_ORDER_MISMATCH') && /v_incident\.order_id IS DISTINCT FROM p_archived_order_id/.test(sql));
+  assert('4q: every later event in a lineage must reference the SAME incident as the first (frozen, exactly like original_exposure_cents)', sql.includes('INCIDENT_LINK_MISMATCH') && /p_related_incident_id IS DISTINCT FROM v_prior\.related_incident_id/.test(sql));
+
+  console.log('\n── SLICE 2.1 — lineage_sequence is the sole accounting-order primitive ──');
+  assert('4r: lineage_sequence column exists, integer, NOT NULL, strictly positive', /lineage_sequence\s+integer NOT NULL CHECK \(lineage_sequence > 0\)/.test(sql));
+  assert('4s: aofr_lineage_idx is a UNIQUE index on (service_session_id, archived_order_id, lineage_sequence) — no two events in one lineage can share a sequence number', /CREATE UNIQUE INDEX aofr_lineage_idx ON public\.archived_order_financial_resolutions\(service_session_id, archived_order_id, lineage_sequence\)/.test(sql));
+  assert('4t: the RPC current-state lookup orders by lineage_sequence DESC', /ORDER BY lineage_sequence DESC\s*$/m.test(sql));
+  assert('4u: REGRESSION GUARD — no executable ORDER BY in this file ever sorts a current-state lookup by created_at DESC (the exact Slice-2 defect this hardening fixes)', !/ORDER BY created_at DESC/.test(sqlWithoutComments));
+  assert('4v: REGRESSION GUARD — no executable ORDER BY ever adds a uuid/id tiebreak to a current-state lookup (random, not accounting order)', !/ORDER BY (created_at|lineage_sequence)[^;]*,\s*id DESC/.test(sqlWithoutComments));
+  assert('4w: the INSERT statement persists lineage_sequence explicitly (v_sequence), it is never left to a DB default', /lineage_sequence\)\s*\n?\s*VALUES/.test(sql.replace(/\s+/g, ' ')) || /remaining_exposure_cents, lineage_sequence,/.test(sql));
+  assert('4x: a retry (ON CONFLICT DO NOTHING) never allocates a fresh sequence — v_sequence is computed once, before the INSERT is even attempted, and discarded on conflict', sqlWithoutComments.indexOf('v_sequence := ') < sqlWithoutComments.indexOf('ON CONFLICT (action_correlation_id) DO NOTHING'));
 
   console.log('\n── resolution vocabulary and effects ──');
   assert('5a: resolution_type is a closed 3-value vocabulary', sql.includes("CHECK (resolution_type IN ('recovered_payment','write_off','reversal'))"));
@@ -72,8 +103,16 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   assert('6a: action_correlation_id is DB-enforced unique — real idempotency, not just app discipline', sql.includes('aofr_correlation_uq UNIQUE (action_correlation_id)'));
   assert('6b: idempotency is on action identity, ON CONFLICT DO NOTHING + reselect (same shape as capture_closeout_snapshot/create_service_incident)', /ON CONFLICT \(action_correlation_id\) DO NOTHING/.test(sql) && sql.includes('ALREADY_RECORDED'));
   assert('6c: no dedup on (archived_order_id, amount_cents) anywhere — the same amount can legitimately recur', !/UNIQUE\s*\(\s*archived_order_id\s*,\s*amount_cents/i.test(sql));
-  assert('6d: original_exposure_cents is frozen per lineage — a later event supplying a different value is rejected', sql.includes('ORIGINAL_EXPOSURE_MISMATCH'));
+  assert('6d: original_exposure_cents is frozen per lineage structurally, SLICE 2.1 — there is no p_original_exposure_cents parameter left for a later event to mismatch on; it is always carried forward from v_prior', /v_original\s*:=\s*v_prior\.original_exposure_cents/.test(sql));
   assert('6e: concurrency — an advisory lock serializes every writer on the same lineage, including the first event', /pg_advisory_xact_lock\(hashtext\(p_service_session_id::text \|\| ':' \|\| p_archived_order_id\)\)/.test(sql));
+
+  console.log('\n── SLICE 2.1 — retry idempotency is unconditional, not order-dependent (real-Postgres finding) ──');
+  const idempotencyShortCircuitIdx = sql.indexOf("SELECT * INTO v_row FROM public.archived_order_financial_resolutions WHERE action_correlation_id = p_action_correlation_id;\n  IF FOUND THEN");
+  const advisoryLockIdx = sql.indexOf('PERFORM pg_advisory_xact_lock');
+  const incidentLinkRequiredIdx = sql.indexOf("code','INCIDENT_LINK_REQUIRED'");
+  assert('6f: an early SELECT-by-action_correlation_id short-circuit exists', idempotencyShortCircuitIdx !== -1);
+  assert('6g: the short-circuit runs BEFORE the advisory lock and BEFORE any state-dependent validation (incident/exposure/arithmetic) — a retry must never be evaluated against the CURRENT lineage state', idempotencyShortCircuitIdx !== -1 && idempotencyShortCircuitIdx < incidentLinkRequiredIdx && idempotencyShortCircuitIdx < advisoryLockIdx);
+  assert('6h: ON CONFLICT DO NOTHING is retained as a genuine-concurrent-race backstop alongside the early short-circuit, not replaced by it', /ON CONFLICT \(action_correlation_id\) DO NOTHING/.test(sql));
 
   console.log('\n── append-only enforcement ──');
   assert('7a: a BEFORE UPDATE OR DELETE trigger unconditionally blocks mutation', sql.includes('archived_order_financial_resolutions_no_update_delete') && sql.includes('BEFORE UPDATE OR DELETE ON public.archived_order_financial_resolutions'));
