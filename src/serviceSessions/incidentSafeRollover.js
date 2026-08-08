@@ -39,6 +39,27 @@
 // active attempt's frozen classification or supersede it and acquire a
 // genuinely new one (fixes (b)).
 //
+// SLICE 3.2 HARDENING — one active attempt does not mean only one caller
+// ever reaches step 2's "first real work" branch for it: two callers can
+// BOTH legitimately acquire() the SAME active attempt (that is what the
+// invariant is FOR) and both still find no snapshot yet, race each other to
+// read/classify/capture. The database's UNIQUE(closeout_correlation_id)
+// still lets only one capture() actually insert a row — but Slice 3.1, as
+// first written, only checked capture().success, never .created, so the
+// LOSER would silently go on to persist incidents from its OWN locally-
+// derived classification instead of the WINNER's — the exact snapshot/
+// incident incoherence Slice 3's Critical Check 2 exists to prevent, just
+// reintroduced at the "first capture" moment instead of on a retry. Fixed by
+// treating captureResult.created === false here exactly like a same-attempt
+// retry already is: discard the local classification, use the persisted
+// winner's (getClassificationFromSnapshot below) instead. Slice 3.2 also
+// makes supersede_closeout_attempt() atomically transition a superseded
+// attempt's still-pending/acknowledged incidents to resolution_status=
+// 'superseded' (see the migration) — pure DB-side behavior, invisible to
+// this file's control flow, but why an attempt's incidents stop reading as
+// ordinary actionable alarms once it's no longer the one that will close
+// the session.
+//
 // ORDER OF OPERATIONS (deliberate — do not reorder):
 //   1. acquire() THE active attempt for this session — race-safe, DB-backed
 //      (service_closeout_attempts_active_uq). Never mints a correlation id
@@ -173,8 +194,11 @@ function createIncidentSafeRollover({
       }
 
       if (!existingSnapshot) {
-        // First real work under this (possibly freshly-acquired) attempt.
-        classification = classifyForIncidentSafeRollover({ session, ...state });
+        // First real work under this (possibly freshly-acquired) attempt —
+        // but "first" from THIS caller's point of view only. Another caller
+        // sharing the SAME active attempt may be doing the exact same thing
+        // concurrently; only one capture() can actually win the row.
+        const localClassification = classifyForIncidentSafeRollover({ session, ...state });
         const fingerprint = computeStateFingerprint(state);
 
         const captureResult = await snapshots.capture({
@@ -183,13 +207,13 @@ function createIncidentSafeRollover({
           capturedBy: actor,
           source,
           payload: {
-            ...classification.snapshotPayload,
+            ...localClassification.snapshotPayload,
             classification: {
-              hardBlockers: classification.hardBlockers,
-              informationalIncidents: classification.informationalIncidents,
-              operationalIncidents: classification.operationalIncidents,
-              financialIncidents: classification.financialIncidents,
-              safeAutoActions: classification.safeAutoActions,
+              hardBlockers: localClassification.hardBlockers,
+              informationalIncidents: localClassification.informationalIncidents,
+              operationalIncidents: localClassification.operationalIncidents,
+              financialIncidents: localClassification.financialIncidents,
+              safeAutoActions: localClassification.safeAutoActions,
             },
           },
           payloadSha256: fingerprint,
@@ -198,6 +222,20 @@ function createIncidentSafeRollover({
           return { success: false, error: "ROLLOVER_SNAPSHOT_CAPTURE_FAILED", code: captureResult.code, closeoutCorrelationId };
         }
         snapshotId = captureResult.snapshot ? captureResult.snapshot.id : null;
+
+        if (captureResult.created === false) {
+          // SLICE 3.2 — lost the capture race: another concurrent caller's
+          // capture() landed first for this SAME closeout_correlation_id.
+          // THEIR persisted snapshot is authoritative, not our local read —
+          // discard localClassification entirely and use the winner's,
+          // exactly as a same-attempt retry already does below.
+          classification = captureResult.snapshot && captureResult.snapshot.payload && captureResult.snapshot.payload.classification;
+          if (!classification) {
+            return { success: false, error: "ROLLOVER_SNAPSHOT_MISSING_CLASSIFICATION", closeoutCorrelationId, snapshotId };
+          }
+        } else {
+          classification = localClassification;
+        }
         break;
       }
 

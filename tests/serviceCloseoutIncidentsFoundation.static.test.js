@@ -63,6 +63,12 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   assert('4c: financial category requires exposure at the DB level too (not just JS)', sql.includes('service_incidents_financial_exposure_required_chk'));
   assert('4d: financial_exposure_cents cannot be negative', /financial_exposure_cents\s+integer\s+CHECK\s*\(financial_exposure_cents IS NULL OR financial_exposure_cents >= 0\)/.test(sql));
 
+  console.log('\n── SLICE 3.2 HARDENING — superseded is a system-only, non-actionable disposition ──');
+  assert('4e: resolution_status vocabulary now includes superseded', sql.includes("CHECK (resolution_status IN ('pending','acknowledged','resolved','superseded'))"));
+  assert('4f: the resolved-fields tie-in constraint covers superseded too (resolved_at/resolved_by/resolution_type populated exactly when resolved OR superseded)', sql.includes("CHECK ((resolution_status IN ('resolved','superseded')) = (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution_type IS NOT NULL))"));
+  assert('4g: resolve_service_incident (the HUMAN path) still only accepts acknowledged/resolved — superseded is never human-settable through it', /IF p_resolution_status NOT IN \('acknowledged','resolved'\) THEN/.test(sql));
+  assert('4h: the only writer of resolution_status=\'superseded\' documented is the Slice 3.1/3.2 attempt-ownership migration', sql.includes('supersede_closeout_attempt()'));
+
   console.log('\n── incident fact immutability + no-delete (STEP 6) ──');
   assert('5a: a BEFORE UPDATE trigger blocks changes to detection facts', sql.includes('service_incidents_facts_immutable') && sql.includes('BEFORE UPDATE ON public.service_incidents'));
 

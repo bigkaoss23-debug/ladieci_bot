@@ -129,7 +129,20 @@ CREATE TABLE public.service_incidents (
   detected_by                text NOT NULL CHECK (btrim(detected_by) <> ''),
 
   auto_resolved               boolean NOT NULL DEFAULT false,
-  resolution_status           text NOT NULL DEFAULT 'pending' CHECK (resolution_status IN ('pending','acknowledged','resolved')),
+  -- SLICE 3.2 HARDENING (in place — Slice 1 was never applied to any
+  -- database; same precedent as the SLICE 2.1 hardening note on the
+  -- post-close-financial-resolutions migration): 'superseded' added to the
+  -- vocabulary. Distinct from 'resolved' on purpose — it is NEVER settable
+  -- via resolve_service_incident() (that RPC's own p_resolution_status
+  -- check below still only allows 'acknowledged'/'resolved', unchanged) and
+  -- means something categorically different: not "a human addressed this"
+  -- but "the closeout attempt that detected this was superseded before
+  -- close, so this finding is no longer an actionable alarm for the
+  -- session's current/eventual close — but it is still real history and is
+  -- never deleted or rewritten." See supersede_closeout_attempt() in
+  -- migrations/2026-08-08_service_closeout_attempt_ownership.sql, the only
+  -- writer of this status value.
+  resolution_status           text NOT NULL DEFAULT 'pending' CHECK (resolution_status IN ('pending','acknowledged','resolved','superseded')),
   resolution_type             text,
   resolved_at                 timestamptz,
   resolved_by                 text,
@@ -140,8 +153,12 @@ CREATE TABLE public.service_incidents (
 
   CONSTRAINT service_incidents_financial_exposure_required_chk
     CHECK (category <> 'financial' OR financial_exposure_cents IS NOT NULL),
+  -- SLICE 3.2 HARDENING: widened from resolution_status = 'resolved' to
+  -- also cover 'superseded' — both are terminal, fields-populated
+  -- dispositions; only resolution_type ('closeout_attempt_superseded' vs
+  -- whatever a human resolution used) and who/why set them differ.
   CONSTRAINT service_incidents_resolution_resolved_fields_chk
-    CHECK ((resolution_status = 'resolved') = (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution_type IS NOT NULL)),
+    CHECK ((resolution_status IN ('resolved','superseded')) = (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution_type IS NOT NULL)),
   CONSTRAINT service_incidents_auto_resolved_status_chk
     CHECK (NOT auto_resolved OR resolution_status = 'resolved')
 );
@@ -456,6 +473,10 @@ BEGIN
   IF p_resolved_by IS NULL OR btrim(p_resolved_by) = '' THEN
     RETURN jsonb_build_object('ok',false,'code','INVALID_ACTOR');
   END IF;
+  -- SLICE 3.2 HARDENING: 'superseded' is deliberately NOT accepted here even
+  -- though the column now allows it — it is a SYSTEM-only disposition
+  -- written exclusively by supersede_closeout_attempt(), never claimable by
+  -- a human resolution call (which is what p_actor_role='admin' certifies).
   IF p_resolution_status NOT IN ('acknowledged','resolved') THEN
     RETURN jsonb_build_object('ok',false,'code','INVALID_RESOLUTION_STATUS');
   END IF;

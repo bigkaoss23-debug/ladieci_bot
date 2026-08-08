@@ -301,6 +301,60 @@ const SERA_WINDOW_NOW = new Date(Date.UTC(2026, 7, 8, 18, 0)); // 20:00 Madrid
     assert("10g: exactly one supersede call was made", env.supersedeCalls.length === 1 && env.supersedeCalls[0].closeoutCorrelationId === firstCorrelationId);
   }
 
+  console.log("\n── SLICE 3.2: concurrent FIRST-capture race — the loser must persist the WINNER's classification, not its own ──");
+  {
+    // Two callers share the SAME active attempt (exactly what the active-uq
+    // invariant is FOR) and BOTH observe no snapshot yet for it. They
+    // independently read DIFFERENT live state and derive DIFFERENT local
+    // classifications. Only one capture() call can actually win the row —
+    // this proves the LOSER discards its own classification and persists
+    // only the WINNER's facts, never a mix of the two.
+    const sharedCorrelationId = "shared-attempt-race";
+    const env = fakeEnv({});
+    env.attemptRows.push({
+      closeoutCorrelationId: sharedCorrelationId, serviceSessionId: SESSION.id,
+      status: "active", startedAt: new Date().toISOString(), createdBy: "system",
+    });
+
+    // Caller A's view: order o1 pending in the kitchen.
+    const orderStateA = [{ id: "o1", estado: "EN_COCINA", totale: 0 }];
+    const performA = createIncidentSafeRollover({
+      select: async (table) => (table === "ordenes" ? orderStateA : []),
+      snapshots: env.snapshots, attempts: env.attempts, incidents: env.incidents,
+      closeSession: env.closeSession, releaseEmptyTableSession: env.releaseEmptyTableSession,
+      sessionLifecycleImpl: env.sessionLifecycleImpl, now: () => SERA_WINDOW_NOW, schedule: DEFAULT_SCHEDULE,
+    });
+    const rA = await performA({ session: SESSION, actor: "system", source: "cron_lunch" });
+    assert("11a: caller A wins — succeeds, captures the attempt's snapshot", rA.success === true && env.snapshotRows.length === 1);
+    assert("11a2: caller A's incident (KITCHEN_WORK_PENDING_AT_CLOSE for o1) is recorded", env.incidentRows.length === 1 && env.incidentRows[0].incidentType === "KITCHEN_WORK_PENDING_AT_CLOSE" && env.incidentRows[0].orderId === "o1");
+
+    // Caller B: a DIFFERENT view (order o2, LISTO) of the SAME still-shared
+    // attempt, whose OWN pre-capture lookup happened before A's row became
+    // visible to it (getByCorrelationId forced to null) — but by the time
+    // B's OWN capture() call actually reaches the store, A has already
+    // committed, so it legitimately returns created:false with A's row
+    // (env.snapshots.capture is the REAL shared fake, unmodified).
+    const orderStateB = [{ id: "o2", estado: "LISTO", totale: 0 }];
+    const performB = createIncidentSafeRollover({
+      select: async (table) => (table === "ordenes" ? orderStateB : []),
+      snapshots: { getByCorrelationId: async () => null, capture: env.snapshots.capture },
+      attempts: {
+        acquire: async () => ({ success: true, created: false, code: "ALREADY_ACTIVE", attempt: { closeoutCorrelationId: sharedCorrelationId, serviceSessionId: SESSION.id, status: "active" } }),
+        supersede: env.attempts.supersede, complete: env.attempts.complete,
+      },
+      incidents: env.incidents,
+      closeSession: env.closeSession, releaseEmptyTableSession: env.releaseEmptyTableSession,
+      sessionLifecycleImpl: env.sessionLifecycleImpl, now: () => SERA_WINDOW_NOW, schedule: DEFAULT_SCHEDULE,
+    });
+    const rB = await performB({ session: SESSION, actor: "system", source: "cron_lunch" });
+
+    assert("11b: caller B converges on the SAME correlation id as the winner", rB.closeoutCorrelationId === sharedCorrelationId);
+    assert("11c: still exactly ONE snapshot row total — B never captured a second one", env.snapshotRows.length === 1);
+    assert("11d: B never even ATTEMPTED to report its own (LISTO/o2) incident", !env.reportCalls.some((c) => c.incidentType === "ORDER_READY_NOT_FINALIZED_AT_CLOSE" || c.orderId === "o2"));
+    assert("11e: B's incident story is the WINNER's (KITCHEN_WORK_PENDING_AT_CLOSE for o1), deduped, not duplicated", rB.incidents.length === 1 && rB.incidents[0].incidentType === "KITCHEN_WORK_PENDING_AT_CLOSE", JSON.stringify(rB.incidents));
+    assert("11f: still exactly ONE incident row total across both callers — no incoherent mix of A's and B's facts", env.incidentRows.length === 1);
+  }
+
   console.log("\n=== RESULT: " + pass + " passed, " + fail + " failed ===");
   process.exit(fail === 0 ? 0 : 1);
 })();

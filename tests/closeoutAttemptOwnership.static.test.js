@@ -60,6 +60,14 @@ const ROLLBACK_PATH = path.join(ROOT, 'migrations', '2026-08-08_service_closeout
   assert('5c: complete_closeout_attempt is idempotent on an already-completed attempt', /IF v_row\.status = 'completed' THEN\s*\n\s*RETURN jsonb_build_object\('ok',true,'code','ALREADY_COMPLETED'/.test(sql));
   assert('5d: complete_closeout_attempt refuses to touch a superseded attempt', sql.includes('CANNOT_COMPLETE_SUPERSEDED_ATTEMPT'));
 
+  console.log('\n── SLICE 3.2 — atomic superseded-incident disposition ──');
+  assert('5e: supersede_closeout_attempt atomically (same function body) disposes of the attempt\'s incidents', /UPDATE public\.service_incidents\s*\n\s*SET resolution_status = 'superseded'/.test(sql));
+  assert('5f: the disposition UPDATE is scoped to THIS attempt\'s correlation id only', /WHERE closeout_correlation_id = p_closeout_correlation_id\s*\n\s*AND resolution_status IN \('pending','acknowledged'\)/.test(sql));
+  assert('5g: already-resolved or already-superseded incidents are excluded — a real resolution is never re-litigated', sql.includes("resolution_status IN ('pending','acknowledged')") && !sql.includes("resolution_status IN ('pending','acknowledged','resolved')"));
+  assert('5h: the disposition records WHO/WHEN via the actual caller, not a hardcoded literal', /resolved_by\s*=\s*p_actor/.test(sql));
+  assert('5i: the resolution_type is the documented system-origin reason', sql.includes("resolution_type   = 'closeout_attempt_superseded'"));
+  assert('5j: this migration does not touch resolution_note or any detection-fact column of service_incidents (only the same allow-list resolve_service_incident already uses)', !/service_incidents[\s\S]{0,200}SET[\s\S]{0,200}(entity_type|entity_id|financial_exposure_cents|incident_type|detected_at|detected_by)\s*=/.test(sql));
+
   console.log('\n── access control (Slice 1.3 deterministic-privilege-floor discipline) ──');
   assert('6a: RLS enabled on the new table', sql.includes('ALTER TABLE public.service_closeout_attempts ENABLE ROW LEVEL SECURITY'));
   assert('6b: zero CREATE POLICY (default-deny for anon/authenticated)', !/CREATE POLICY/i.test(sqlWithoutComments));

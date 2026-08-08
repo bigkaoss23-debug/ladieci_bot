@@ -1,7 +1,46 @@
 -- migrations/2026-08-08_service_closeout_attempt_ownership.sql
--- SERVICE CLOSEOUT V2 / SLICE 3.1 — persistent closeout ATTEMPT ownership.
--- STAGING ONLY. Additive-only: no existing table/RPC from Slice 1 (foundation)
--- or the (unwired, JS-only) Slice 3 orchestrator is altered here.
+-- SERVICE CLOSEOUT V2 / SLICE 3.1 — persistent closeout ATTEMPT ownership,
+-- hardened in place by SLICE 3.2 (never applied to any database — same
+-- in-place-hardening precedent as SLICE 2.1 on the post-close-financial-
+-- resolutions migration).
+-- STAGING ONLY. Additive-only at the SCHEMA level: no existing table/RPC's
+-- DDL from Slice 1 (foundation) or the (unwired, JS-only) Slice 3
+-- orchestrator is altered here. SLICE 3.2's supersede_closeout_attempt DOES
+-- now also WRITE rows in the existing service_incidents table (an ordinary
+-- RPC-body UPDATE using privileges Slice 1 already granted service_role —
+-- not a DDL change) — see "SLICE 3.2" below.
+--
+-- ── SLICE 3.2 — snapshot-winner race + superseded-incident disposition ─────
+-- Two defects found auditing 3.1: (a) two callers that BOTH acquire the SAME
+-- active attempt (legitimate — that's the whole point of the active-uq
+-- invariant) can still race on their FIRST capture: both read/classify
+-- before either has captured, one wins snapshot_correlation_uq, the loser's
+-- capture() call returns created:false + the WINNER's row. The orchestrator
+-- (incidentSafeRollover.js) now checks `created` and, on a loss, discards its
+-- own locally-derived classification and uses the persisted winner's
+-- (embedded in the snapshot's payload) instead — the same discipline already
+-- applied to a same-attempt RETRY, just also applied to the very first
+-- capture. (b) an attempt's still-pending/acknowledged incidents must not
+-- keep reading as ordinary actionable alarms forever after that attempt is
+-- superseded (e.g. the operator paid the exact balance the incident was
+-- about, then a fresh attempt captured a clean state) — but the facts must
+-- never be deleted or rewritten. supersede_closeout_attempt() now
+-- ATOMICALLY (same function body = same implicit transaction as the status
+-- transition — a crash between the two statements is impossible, both
+-- commit or neither does) also transitions every still-pending/acknowledged
+-- service_incidents row for that closeout_correlation_id to the new
+-- resolution_status='superseded' (added to service_incidents' CHECK
+-- vocabulary by the SLICE 3.2 HARDENING note in
+-- 2026-08-08_service_closeout_incidents_foundation.sql), stamped
+-- resolution_type='closeout_attempt_superseded', resolved_by=the actor who
+-- triggered the supersession, resolved_at=now(). Every original detection
+-- fact (financial_exposure_cents, entity, severity, snapshot_id...) is
+-- immutable and untouched — only the resolution-summary columns move,
+-- exactly the same allow-list resolve_service_incident() already uses.
+-- 'superseded' is NEVER settable through resolve_service_incident() (that
+-- RPC's own vocabulary check is unchanged) — it means something categorically
+-- different from a human resolving something, and only this RPC ever writes
+-- it.
 --
 -- ── WHY THIS EXISTS (audit finding from Slice 3 recovery) ──────────────────
 -- Slice 3's incidentSafeRollover.js discovered "the current closeout attempt
@@ -214,6 +253,22 @@ BEGIN
      SET status = 'superseded', superseded_at = now(), supersession_reason = p_reason, updated_at = now()
    WHERE closeout_correlation_id = p_closeout_correlation_id
   RETURNING * INTO v_row;
+
+  -- SLICE 3.2 — same transaction as the status flip above (this whole
+  -- function body IS one implicit transaction; nothing between here and the
+  -- UPDATE above can partially commit). Every immutable detection fact is
+  -- untouched; only the resolution-summary columns move, via the SAME
+  -- allow-list resolve_service_incident() already uses. Rows already
+  -- 'resolved' (including auto-resolved ones) or already 'superseded' are
+  -- deliberately excluded — this never re-litigates a real resolution.
+  UPDATE public.service_incidents
+     SET resolution_status = 'superseded',
+         resolution_type   = 'closeout_attempt_superseded',
+         resolved_by       = p_actor,
+         resolved_at       = now(),
+         updated_at        = now()
+   WHERE closeout_correlation_id = p_closeout_correlation_id
+     AND resolution_status IN ('pending','acknowledged');
 
   RETURN jsonb_build_object('ok',true,'code','SUPERSEDED','idempotent',false,'attempt',to_jsonb(v_row));
 END;
