@@ -60,8 +60,25 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
 
   console.log('\n── incident fact immutability + no-delete (STEP 6) ──');
   assert('5a: a BEFORE UPDATE trigger blocks changes to detection facts', sql.includes('service_incidents_facts_immutable') && sql.includes('BEFORE UPDATE ON public.service_incidents'));
-  assert('5b: the immutable-facts function checks service_session_id/category/severity/entities/exposure/detected_at/detected_by/auto_resolved (not just one column)', ['service_session_id', 'category', 'severity', 'entity_type', 'entity_id', 'financial_exposure_cents', 'detected_at', 'detected_by', 'auto_resolved'].every((col) => sql.includes('NEW.' + col + ' ')));
-  assert('5c: resolution_status/resolution_type/resolved_at/resolved_by/resolution_note/updated_at are deliberately NOT in the immutability check (they must remain mutable)', !sql.includes('NEW.resolution_status ') && !sql.includes('NEW.resolved_at '));
+
+  console.log('\n── deny-by-default immutability (Slice 1.1) ──');
+  // The function must compare the FULL row (to_jsonb(OLD)/to_jsonb(NEW)) minus
+  // an explicit allowlist, NOT enumerate individual immutable columns. The
+  // former protects any future column automatically; the latter (Slice 1's
+  // original shape) silently stops protecting a column nobody remembered to
+  // add to a checklist. Extract the function body to scope every assertion to
+  // it specifically, so a match elsewhere in the file cannot false-positive.
+  const immFnMatch = sql.match(/CREATE OR REPLACE FUNCTION public\.service_incidents_immutable_facts\(\)[\s\S]*?\$fn\$;/);
+  assert('5b-0: service_incidents_immutable_facts() function body found', !!immFnMatch);
+  const immFn = immFnMatch ? immFnMatch[0] : '';
+  assert('5b: the comparison is a whole-row jsonb diff, not a per-column NEW.<col> IS DISTINCT FROM OLD.<col> checklist', /to_jsonb\(OLD\)\s*-\s*v_mutable_keys/.test(immFn) && /to_jsonb\(NEW\)\s*-\s*v_mutable_keys/.test(immFn) && !/NEW\.\w+\s+IS DISTINCT FROM\s+OLD\.\w+/.test(immFn));
+  assert('5b-1: no per-column fact enumeration remains (deny-by-default, not an allow-checklist)', !/NEW\.(service_session_id|category|severity|entity_type|entity_id|financial_exposure_cents|detected_at|detected_by|auto_resolved)\s/.test(immFn));
+  const mutableKeysMatch = immFn.match(/v_mutable_keys\s+text\[\]\s*:=\s*ARRAY\[([^\]]*)\]/);
+  assert('5c-0: mutable-keys allowlist array present', !!mutableKeysMatch);
+  const mutableKeys = mutableKeysMatch ? mutableKeysMatch[1].split(',').map((s) => s.trim().replace(/^'|'$/g, '')) : [];
+  assert('5c: resolution_status/resolution_type/resolved_at/resolved_by/resolution_note/updated_at are EXACTLY the mutable allowlist — nothing more, nothing less', JSON.stringify(mutableKeys.slice().sort()) === JSON.stringify(['resolution_note', 'resolution_status', 'resolution_type', 'resolved_at', 'resolved_by', 'updated_at'].slice().sort()), JSON.stringify(mutableKeys));
+  assert('5c-1: no detection-fact column name leaks into the mutable allowlist', ['service_session_id', 'business_date', 'service_kind', 'closeout_correlation_id', 'snapshot_id', 'incident_type', 'category', 'severity', 'entity_type', 'entity_id', 'order_id', 'table_session_id', 'giro_id', 'rider_id', 'financial_exposure_cents', 'detected_at', 'detected_by', 'auto_resolved', 'created_at'].every((col) => !mutableKeys.includes(col)));
+
   assert('5d: a BEFORE DELETE trigger unconditionally blocks deletion of incidents', sql.includes('service_incidents_no_delete') && sql.includes('BEFORE DELETE ON public.service_incidents'));
   assert('5e: append-only resolution EVENT table exists, separate from the incident row itself', sql.includes('CREATE TABLE public.service_incident_resolutions'));
   assert('5f: the resolution-events table is itself append-only (no update/delete)', sql.includes('service_incident_resolutions_no_update_delete') && sql.includes('BEFORE UPDATE OR DELETE ON public.service_incident_resolutions'));
@@ -97,6 +114,51 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   assert('9a: rollback drops all three new tables', ['service_closeout_snapshots', 'service_incidents', 'service_incident_resolutions'].every((t) => rollback.includes('DROP TABLE IF EXISTS public.' + t)));
   assert('9b: rollback drops all three new RPCs', ['capture_closeout_snapshot', 'create_service_incident', 'resolve_service_incident'].every((fn) => rollback.includes('DROP FUNCTION IF EXISTS public.' + fn)));
   assert('9c: rollback touches no pre-existing table', !/ALTER\s+TABLE\s+public\.(service_sessions|service_session_state|service_session_audit|order_financial_events|orden_estado_logs|ordenes)\b/i.test(rollback));
+
+  console.log('\n── authorization trust boundary (Slice 1.1) ──');
+  assert('10a: resolve_service_incident header documents p_actor_role is NOT proof by itself (defense-in-depth only)', sql.includes('is NOT proof of anything by') || sql.includes('NOT the security boundary'));
+  assert('10b: header points a future admin-resolution action at the real, existing verification pattern (verified JWT role claim)', sql.includes('src/auth/jwt.js') && sql.includes('src/auth/'));
+  assert('10c: header explicitly forbids copying role straight from a request body field', /req\.body\.role/.test(sql));
+
+  // "No public HTTP resolution endpoint yet" (plan requirement) — proven by
+  // grepping every application source file OUTSIDE this slice's own modules
+  // and tests for any reference to the RPC name or the JS wrapper calls.
+  // Fails loudly (not silently) the day someone wires this up without also
+  // updating this check and the trust-boundary comments above it.
+  const ROOT = path.join(__dirname, '..');
+  const EXCLUDED_DIRS = new Set(['node_modules', '.git', 'tests', 'migrations', 'docs']);
+  const EXCLUDED_FILES = new Set([
+    path.join(ROOT, 'src', 'closeout', 'closeoutSnapshots.js'),
+    path.join(ROOT, 'src', 'incidents', 'serviceIncidents.js'),
+  ]);
+  const SUSPECT_PATTERNS = [/resolve_service_incident/, /create_service_incident/, /capture_closeout_snapshot/, /serviceIncidents\.resolve\(/, /serviceIncidents\.report\(/, /closeoutSnapshots\.capture\(/];
+
+  function walk(dir, out) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (EXCLUDED_DIRS.has(entry.name)) continue;
+        walk(path.join(dir, entry.name), out);
+      } else if (entry.isFile() && entry.name.endsWith('.js')) {
+        out.push(path.join(dir, entry.name));
+      }
+    }
+    return out;
+  }
+
+  const candidateFiles = [
+    ...walk(path.join(ROOT, 'src'), []),
+    path.join(ROOT, 'index.js'),
+  ].filter((f) => fs.existsSync(f) && !EXCLUDED_FILES.has(f));
+
+  const wiredHits = [];
+  for (const f of candidateFiles) {
+    const text = fs.readFileSync(f, 'utf8');
+    for (const re of SUSPECT_PATTERNS) {
+      if (re.test(text)) wiredHits.push(path.relative(ROOT, f) + ' matches ' + re);
+    }
+  }
+  assert('10d: no HTTP action/route or any other application module (outside src/closeout, src/incidents, tests) references these RPCs/wrappers — confirms "no public resolution path yet" as a locked-in fact, not tribal knowledge', wiredHits.length === 0, JSON.stringify(wiredHits));
+  assert('10e: the scan actually walked a non-trivial number of files (guards against a broken walk silently passing)', candidateFiles.length > 20, String(candidateFiles.length));
 
   console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');
   process.exit(fail === 0 ? 0 : 1);

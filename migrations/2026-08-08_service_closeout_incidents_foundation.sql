@@ -169,29 +169,27 @@ COMMENT ON TABLE public.service_incidents IS
 -- resolve_service_incident(), which also appends a
 -- service_incident_resolutions row in the same transaction. See that
 -- function's header for the append-only-events-vs-overwrite trade-off.
+--
+-- DENY-BY-DEFAULT (Slice 1.1 — fixes a Slice-1 bug): a prior version of this
+-- function listed each immutable fact column explicitly (an ALLOW-list of
+-- what to protect). That is backwards for an audit table — a future column
+-- added to service_incidents and forgotten here would silently become
+-- mutable. Instead this compares the FULL row as jsonb, minus an explicit
+-- allowlist of the columns permitted to change (the resolution-summary
+-- columns). Any column NOT in v_mutable_keys — including one that does not
+-- exist yet at the time this comment is read — is immutable by construction,
+-- because to_jsonb(NEW)/to_jsonb(OLD) always reflects every column the row
+-- currently has.
 CREATE OR REPLACE FUNCTION public.service_incidents_immutable_facts()
 RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
+DECLARE
+  -- Only these columns may ever change via UPDATE, and only through
+  -- resolve_service_incident(). Every other column — present now or added to
+  -- this table in the future — is immutable by default; nothing needs to be
+  -- added here to protect a new fact column.
+  v_mutable_keys text[] := ARRAY['resolution_status','resolution_type','resolved_at','resolved_by','resolution_note','updated_at'];
 BEGIN
-  IF NEW.service_session_id      IS DISTINCT FROM OLD.service_session_id
-     OR NEW.business_date        IS DISTINCT FROM OLD.business_date
-     OR NEW.service_kind         IS DISTINCT FROM OLD.service_kind
-     OR NEW.closeout_correlation_id IS DISTINCT FROM OLD.closeout_correlation_id
-     OR NEW.snapshot_id          IS DISTINCT FROM OLD.snapshot_id
-     OR NEW.incident_type        IS DISTINCT FROM OLD.incident_type
-     OR NEW.category             IS DISTINCT FROM OLD.category
-     OR NEW.severity             IS DISTINCT FROM OLD.severity
-     OR NEW.entity_type          IS DISTINCT FROM OLD.entity_type
-     OR NEW.entity_id            IS DISTINCT FROM OLD.entity_id
-     OR NEW.order_id             IS DISTINCT FROM OLD.order_id
-     OR NEW.table_session_id     IS DISTINCT FROM OLD.table_session_id
-     OR NEW.giro_id              IS DISTINCT FROM OLD.giro_id
-     OR NEW.rider_id             IS DISTINCT FROM OLD.rider_id
-     OR NEW.financial_exposure_cents IS DISTINCT FROM OLD.financial_exposure_cents
-     OR NEW.detected_at          IS DISTINCT FROM OLD.detected_at
-     OR NEW.detected_by          IS DISTINCT FROM OLD.detected_by
-     OR NEW.auto_resolved        IS DISTINCT FROM OLD.auto_resolved
-     OR NEW.created_at           IS DISTINCT FROM OLD.created_at
-  THEN
+  IF (to_jsonb(OLD) - v_mutable_keys) IS DISTINCT FROM (to_jsonb(NEW) - v_mutable_keys) THEN
     RAISE EXCEPTION 'SERVICE_INCIDENT_FACTS_IMMUTABLE' USING ERRCODE='P0001';
   END IF;
   RETURN NEW;
@@ -414,11 +412,32 @@ BEGIN
 END;
 $fn$;
 
--- resolve_service_incident — backend-enforced: only role='admin' may call
--- this successfully. Never trusts a frontend gate. Idempotent once an
--- incident reaches 'resolved' (terminal); re-acknowledging before resolution
--- appends a new event each time (that is a real, distinct fact: "acknowledged
--- again"), only the terminal 'resolved' state short-circuits further writes.
+-- resolve_service_incident — idempotent once an incident reaches 'resolved'
+-- (terminal); re-acknowledging before resolution appends a new event each
+-- time (that is a real, distinct fact: "acknowledged again"), only the
+-- terminal 'resolved' state short-circuits further writes.
+--
+-- TRUST BOUNDARY (Slice 1.1 — makes explicit what Slice 1 left implicit):
+-- the `p_actor_role IS DISTINCT FROM 'admin'` check below is defense-in-depth,
+-- NOT the security boundary, and p_actor_role is NOT proof of anything by
+-- itself — it is caller-supplied plpgsql text, and a caller who can invoke
+-- this function at all could pass the literal string 'admin' regardless of
+-- who they actually are. The real boundary is that this function is granted
+-- to service_role ONLY (REVOKE ALL ... FROM PUBLIC, anon, authenticated
+-- below) and, as of this slice, is not invoked by any HTTP action/route —
+-- see tests/serviceCloseoutIncidentsFoundation.static.test.js
+-- ("no public HTTP resolution endpoint yet") and
+-- tests/serviceIncidents.test.js for the checks that keep that true.
+--
+-- When a future slice wires a real admin-resolution HTTP action, p_actor_role
+-- (and p_resolved_by) MUST be derived server-side from an already-verified
+-- actor identity — the SAME pattern already used everywhere else in this
+-- backend: a role claim taken from a verified JWT (src/auth/jwt.js: "role
+-- claim is SERVER-DERIVED only, never read from the request body") and
+-- checked against the action's allowed principal set (src/auth/
+-- authorizationContract.js). It must NEVER be copied straight through from a
+-- request body field (e.g. `req.body.role`) — that would let any caller who
+-- can reach the endpoint self-declare 'admin' and resolve any incident.
 CREATE OR REPLACE FUNCTION public.resolve_service_incident(
   p_incident_id       uuid,
   p_resolved_by       text,

@@ -15,8 +15,24 @@
 // already used for order_financial_events (ofe_by_role_chk /
 // ofe_actor_role_map_chk): once here in JS (fail fast, no round trip for an
 // obviously-unauthorized caller), and again inside resolve_service_incident
-// itself (the actual boundary — this JS check is a courtesy, never trust a
-// frontend/caller-side gate as the real authorization).
+// itself.
+//
+// TRUST BOUNDARY (Slice 1.1): NEITHER check is real authorization proof by
+// itself — both compare against a `role` string this module receives as a
+// plain argument. Today that is safe only because this module (a) is not
+// called from any HTTP action/route (verified in
+// tests/serviceIncidents.test.js and the static migration test) and (b) is
+// only ever invoked by trusted first-party backend/test code, which is the
+// ONLY thing that makes "caller says role='admin'" meaningful right now.
+// A caller-supplied "admin" string is NEVER, by itself, valid proof of
+// admin-ness — do not wire this module to an HTTP handler that passes
+// `role` straight from a request body/query field. When a real
+// admin-resolution action is built, `role` here must be sourced the same way
+// every other authorization decision in this backend is: a role claim
+// derived server-side from a verified JWT (src/auth/jwt.js) and checked
+// against the action's allowed principal set (src/auth/
+// authorizationContract.js) — never trust a frontend/caller-side gate as the
+// real authorization.
 // ===============================================================
 
 const { sbRpc, sbSelect } = require("../utils/supabase");

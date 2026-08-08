@@ -83,11 +83,11 @@ function fakeDb({ sessions = {} } = {}) {
     const db = fakeDb({ sessions: SESSIONS });
     const snapshots = createCloseoutSnapshots(db);
     const r = await snapshots.capture({
-      serviceSessionId: 's1', capturedBy: 'system', source: 'manual_close',
+      serviceSessionId: 's1', closeoutCorrelationId: 's1-attempt-1', capturedBy: 'system', source: 'manual_close',
       payload: { orders: [{ id: 'o1' }], anomalies: [] },
     });
     assert('1a: capture succeeds and is created:true', r.success === true && r.created === true, JSON.stringify(r));
-    assert('1b: closeoutCorrelationId defaulted to serviceSessionId', r.snapshot.closeoutCorrelationId === 's1');
+    assert('1b: closeoutCorrelationId is the caller-supplied attempt id, never defaulted to serviceSessionId', r.snapshot.closeoutCorrelationId === 's1-attempt-1');
     assert('1c: payload round-trips unchanged', JSON.stringify(r.snapshot.payload) === JSON.stringify({ orders: [{ id: 'o1' }], anomalies: [] }));
     assert('1d: business_date/service_kind derived from the session, not the caller', r.snapshot.businessDate === '2026-08-08' && r.snapshot.serviceKind === 'PRANZO');
 
@@ -95,16 +95,52 @@ function fakeDb({ sessions = {} } = {}) {
     assert('1e: queryable by service_session_id', list.length === 1 && list[0].id === r.snapshot.id, JSON.stringify(list));
   }
 
-  console.log('\n── 2. retry/idempotency — same correlation id never duplicates ──');
+  console.log('\n── 2. retry/idempotency — same attempt id never duplicates ──');
   {
     const db = fakeDb({ sessions: SESSIONS });
     const snapshots = createCloseoutSnapshots(db);
-    const first = await snapshots.capture({ serviceSessionId: 's1', capturedBy: 'system', source: 'auto_close', payload: { n: 1 } });
-    const retry = await snapshots.capture({ serviceSessionId: 's1', capturedBy: 'system', source: 'auto_close', payload: { n: 1 } });
+    const first = await snapshots.capture({ serviceSessionId: 's1', closeoutCorrelationId: 's1-attempt-1', capturedBy: 'system', source: 'auto_close', payload: { n: 1 } });
+    const retry = await snapshots.capture({ serviceSessionId: 's1', closeoutCorrelationId: 's1-attempt-1', capturedBy: 'system', source: 'auto_close', payload: { n: 1 } });
     assert('2a: first attempt created:true', first.created === true);
-    assert('2b: retry returns created:false', retry.success === true && retry.created === false && retry.code === 'ALREADY_CAPTURED', JSON.stringify(retry));
+    assert('2b: retry of the SAME attempt id returns created:false', retry.success === true && retry.created === false && retry.code === 'ALREADY_CAPTURED', JSON.stringify(retry));
     assert('2c: retry returns the SAME snapshot id, no duplicate row', retry.snapshot.id === first.snapshot.id);
     assert('2d: exactly one row exists in the store', db.rows.length === 1, String(db.rows.length));
+  }
+
+  console.log('\n── 2f. closeout attempt identity — the Slice-1.1 bug this fixes ──');
+  {
+    // Simulates the exact scenario from the Slice 1.1 brief: attempt A is
+    // captured, then (conceptually) hard-fails before the session closes;
+    // the operator fixes state; attempt B is a genuinely NEW closeout attempt
+    // against the SAME service session, later, with different facts.
+    const db = fakeDb({ sessions: SESSIONS });
+    const snapshots = createCloseoutSnapshots(db);
+    const attemptA = await snapshots.capture({
+      serviceSessionId: 's1', closeoutCorrelationId: 's1-attempt-A', capturedBy: 'system', source: 'manual_close',
+      payload: { pendingOrders: 3 },
+    });
+    const attemptB = await snapshots.capture({
+      serviceSessionId: 's1', closeoutCorrelationId: 's1-attempt-B', capturedBy: 'system', source: 'manual_close',
+      payload: { pendingOrders: 0 },
+    });
+    assert('2f-1: two distinct attempt ids for the SAME session produce two distinct snapshots', attemptA.snapshot.id !== attemptB.snapshot.id, JSON.stringify({ attemptA, attemptB }));
+    assert('2f-2: attempt B does NOT accidentally return attempt A\'s stale snapshot/payload', attemptB.snapshot.payload.pendingOrders === 0);
+    assert('2f-3: attempt A\'s original snapshot is untouched by attempt B', attemptA.snapshot.payload.pendingOrders === 3);
+    assert('2f-4: both snapshots are queryable for the session — nothing was silently discarded', db.rows.filter((r) => r.service_session_id === 's1').length === 2, String(db.rows.length));
+
+    const retryOfA = await snapshots.capture({
+      serviceSessionId: 's1', closeoutCorrelationId: 's1-attempt-A', capturedBy: 'system', source: 'manual_close',
+      payload: { pendingOrders: 3 },
+    });
+    assert('2f-5: retrying attempt A specifically still dedupes to attempt A, not attempt B', retryOfA.created === false && retryOfA.snapshot.id === attemptA.snapshot.id, JSON.stringify(retryOfA));
+  }
+
+  console.log('\n── 2g. omitting closeoutCorrelationId is now a fail-closed error, never a silent default ──');
+  {
+    const db = fakeDb({ sessions: SESSIONS });
+    const snapshots = createCloseoutSnapshots(db);
+    const r = await snapshots.capture({ serviceSessionId: 's1', capturedBy: 'system', source: 'x', payload: {} });
+    assert('2g: no closeoutCorrelationId supplied -> rejected as INVALID_ARGUMENTS (fakeDb mirrors the RPC-side NULL check), never silently keyed by serviceSessionId', r.success === false && r.code === 'INVALID_ARGUMENTS', JSON.stringify(r));
   }
 
   console.log('\n── 3. a correlation id reused across two DIFFERENT sessions is rejected, not merged ──');
@@ -120,7 +156,7 @@ function fakeDb({ sessions = {} } = {}) {
   {
     const db = fakeDb({ sessions: SESSIONS });
     const snapshots = createCloseoutSnapshots(db);
-    const r = await snapshots.capture({ serviceSessionId: 's1', capturedBy: 'system', source: 'x', payload: { totalCents: 6250 } });
+    const r = await snapshots.capture({ serviceSessionId: 's1', closeoutCorrelationId: 's1-attempt-imm', capturedBy: 'system', source: 'x', payload: { totalCents: 6250 } });
     let threw = false;
     try { r.snapshot.payload = { totalCents: 0 }; } catch (_) { threw = true; }
     // publicSnapshot() returns a fresh object per call — mutating the returned
@@ -133,9 +169,9 @@ function fakeDb({ sessions = {} } = {}) {
   {
     const db = fakeDb({ sessions: SESSIONS });
     const snapshots = createCloseoutSnapshots(db);
-    const missing = await snapshots.capture({ serviceSessionId: 'does-not-exist', capturedBy: 'system', source: 'x', payload: {} });
+    const missing = await snapshots.capture({ serviceSessionId: 'does-not-exist', closeoutCorrelationId: 'attempt-missing', capturedBy: 'system', source: 'x', payload: {} });
     assert('5a: unknown session -> SERVICE_SESSION_NOT_FOUND', missing.success === false && missing.code === 'SERVICE_SESSION_NOT_FOUND');
-    const noKind = await snapshots.capture({ serviceSessionId: 's3-no-kind', capturedBy: 'system', source: 'x', payload: {} });
+    const noKind = await snapshots.capture({ serviceSessionId: 's3-no-kind', closeoutCorrelationId: 'attempt-no-kind', capturedBy: 'system', source: 'x', payload: {} });
     assert('5b: session without a kind -> SERVICE_SESSION_MISSING_KIND', noKind.success === false && noKind.code === 'SERVICE_SESSION_MISSING_KIND');
   }
 

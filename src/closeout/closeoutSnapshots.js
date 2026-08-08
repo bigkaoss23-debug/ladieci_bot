@@ -13,13 +13,31 @@
 // proves the storage/idempotency contract, it does not define what a
 // real closeout payload contains (that is later-slice wiring work).
 //
-// closeoutCorrelationId defaults to serviceSessionId when the caller doesn't
-// supply one. A service session's close is a one-time terminal event in the
-// happy path (docs/SERVICE_SESSION_IDENTITY.md: reopening always mints a new
-// UUID), so the session's own id is already a stable, naturally-unique
-// per-attempt key — retries of the SAME closeout attempt against the SAME
-// session id then dedupe for free via the DB unique constraint, with no
-// extra caller-side bookkeeping required.
+// closeoutCorrelationId identity contract (Slice 1.1 — fixes a Slice-1 bug):
+// serviceSessionId != closeoutCorrelationId. A service session can be the
+// subject of more than one real closeout ATTEMPT (attempt 1 captures a
+// snapshot, then hard-fails before the session closes; the operator fixes
+// state; attempt 2 at a later time is a genuinely new attempt against the
+// SAME session). closeoutCorrelationId is REQUIRED here and is never
+// defaulted to serviceSessionId — a prior Slice-1 default did exactly that,
+// which meant attempt 2 would silently reuse attempt 1's stale snapshot
+// (same session id -> same correlation id -> DB unique constraint treats it
+// as a retry of attempt 1, not a new attempt).
+//
+// This module never mints closeoutCorrelationId itself. It is the future
+// lifecycle orchestrator's job to create exactly one UUID per genuine
+// closeout attempt and pass it consistently to capture(), to
+// serviceIncidents.report(), and to every other closeout-related call for
+// that attempt:
+//   - same technical retry of the SAME attempt (network blip, re-invoked
+//     handler, etc.) -> orchestrator reuses the SAME UUID -> this module's
+//     idempotent ON CONFLICT DO NOTHING returns the existing snapshot.
+//   - a NEW attempt, because the previous one was abandoned/failed and state
+//     may have changed -> orchestrator mints a NEW UUID -> a new, separate,
+//     authoritative snapshot is captured.
+// Never a timestamp, never generated independently inside this or any other
+// RPC/module — a single owned identity per attempt is what makes retries
+// idempotent and distinct attempts distinct.
 // ===============================================================
 
 const { sbRpc, sbSelect } = require("../utils/supabase");
@@ -50,12 +68,16 @@ function publicSnapshot(row) {
 
 function createCloseoutSnapshots({ rpc = sbRpc, select = sbSelect } = {}) {
   return Object.freeze({
-    // Idempotent: a retry with the same closeoutCorrelationId (default:
-    // serviceSessionId) returns the existing snapshot, created:false, never
-    // a duplicate row and never an overwrite of the original payload.
+    // Idempotent: a retry with the same closeoutCorrelationId returns the
+    // existing snapshot, created:false, never a duplicate row and never an
+    // overwrite of the original payload. closeoutCorrelationId is REQUIRED
+    // and is never derived from serviceSessionId here (see header) — an
+    // omitted/undefined value is rejected server-side (p_closeout_correlation_id
+    // IS NULL -> INVALID_ARGUMENTS), the same fail-closed contract
+    // serviceIncidents.report() already uses.
     async capture({
       serviceSessionId,
-      closeoutCorrelationId = serviceSessionId,
+      closeoutCorrelationId,
       capturedBy,
       source,
       payload,
