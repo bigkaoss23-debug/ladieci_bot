@@ -107,6 +107,12 @@ const ACTION_POLICY_REGISTRY = Object.freeze([
   { action: 'getStorico', acceptedCapabilities: ['economy.view'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },
   { action: 'getOrdenesArchivio', acceptedCapabilities: ['economy.view'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },
   { action: 'getEconomiaLedger', acceptedCapabilities: ['economy.view'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },
+  // SERVICE CLOSEOUT V2 / SLICE 4A — audit.view (not economy.view): incidents
+  // span informational/operational/financial/integrity/security categories,
+  // not purely financial history, and audit.view is the capability already
+  // reserved for exactly this class of sensitive audit-trail read (owner
+  // only among today's ROLE_CAPABILITIES entries).
+  { action: 'getServiceIncidents', acceptedCapabilities: ['audit.view'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },
   { action: 'getDeliveryLogs', acceptedCapabilities: ['economy.view'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },
   { action: 'getSuggerimenti', acceptedCapabilities: ['settings.structural'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },
   { action: 'rigeneraSuggerimenti', acceptedCapabilities: ['settings.structural'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },

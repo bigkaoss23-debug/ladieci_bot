@@ -79,6 +79,44 @@ async function expectParamError(fn, label) {
   check("getConversacionesActivas → conv, stato_ordine=confermata",
     last().table === "conv" && /stato_ordine=eq\.confermata/.test(last().query));
 
+  console.log("\n── SERVICE CLOSEOUT V2 / SLICE 4A — getServiceIncidents (Admin backlog) ──");
+  await R.getServiceIncidents();
+  check("getServiceIncidents default → service_incidents, actionable-only (pending,acknowledged), no other filter",
+    last().table === "service_incidents"
+    && /resolution_status=in\.\(pending,acknowledged\)/.test(last().query)
+    && !/category=in/.test(last().query) && !/business_date=eq/.test(last().query) && !/service_session_id=eq/.test(last().query)
+    && /order=detected_at\.desc/.test(last().query) && /limit=100/.test(last().query),
+    last().query);
+
+  await R.getServiceIncidents({ resolutionStatus: "resolved,superseded" });
+  check("getServiceIncidents explicit historical filter → resolved,superseded (deduped, validated)",
+    /resolution_status=in\.\(resolved,superseded\)/.test(last().query), last().query);
+  await expectParamError(() => R.getServiceIncidents({ resolutionStatus: "bogus" }), "getServiceIncidents bad resolutionStatus");
+
+  await R.getServiceIncidents({ category: "financial,operational" });
+  check("getServiceIncidents category filter applied",
+    /category=in\.\(financial,operational\)/.test(last().query), last().query);
+  await expectParamError(() => R.getServiceIncidents({ category: "bogus" }), "getServiceIncidents bad category");
+
+  await R.getServiceIncidents({ businessDate: "2026-08-08" });
+  check("getServiceIncidents businessDate filter applied", /business_date=eq\.2026-08-08/.test(last().query), last().query);
+  await expectParamError(() => R.getServiceIncidents({ businessDate: "not-a-date" }), "getServiceIncidents bad businessDate");
+
+  const SID = "11111111-1111-4111-8111-111111111111";
+  await R.getServiceIncidents({ serviceSessionId: SID });
+  check("getServiceIncidents serviceSessionId filter applied", new RegExp(`service_session_id=eq\\.${SID}`).test(last().query), last().query);
+  await expectParamError(() => R.getServiceIncidents({ serviceSessionId: "not-a-uuid" }), "getServiceIncidents bad serviceSessionId");
+
+  await R.getServiceIncidents({ limit: 99999 });
+  check("getServiceIncidents limit clamped to 500 max", /limit=500/.test(last().query), last().query);
+
+  const IID = "22222222-2222-4222-8222-222222222222";
+  await R.getServiceIncidents({ incidentId: IID });
+  check("getServiceIncidents incidentId → single-row detail lookup, ignores other filters, no resolution_status filter",
+    last().table === "service_incidents" && new RegExp(`id=eq\\.${IID}`).test(last().query)
+    && /limit=1/.test(last().query) && !/resolution_status=in/.test(last().query), last().query);
+  await expectParamError(() => R.getServiceIncidents({ incidentId: "not-a-uuid" }), "getServiceIncidents bad incidentId");
+
   console.log("\n── Single-row lookups + param validation ──");
   const c = await R.getClienteByTelefono({ telefono: "+34600111222" });
   check("getClienteByTelefono → clientes tel=eq (stripped +)",

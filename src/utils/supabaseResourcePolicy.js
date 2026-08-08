@@ -92,6 +92,17 @@ const REGISTRY = Object.freeze([
     'serviceSessions/orderIntakePolicy.js reads the current service pointer before every new order'),
   entry('service_sessions', KIND.TABLE, ['GET'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'serviceSessions/orderIntakePolicy.js validates the active service kind/date/status before every new order'),
+  // SERVICE CLOSEOUT V2 / SLICE 4A — only readActions.js's getServiceIncidents
+  // hits these two literally as "safeSelect(...)" (the scanner this registry
+  // feeds only sees the literal sbSelect/safeSelect/sbRpc call-site pattern —
+  // src/closeout/closeoutSnapshots.js, closeoutAttempts.js, incidents/
+  // serviceIncidents.js and previousCloseoutIncidentSummary.js all reach the
+  // same tables through an injected `select`/`rpc` parameter, invisible to
+  // that literal-string scan, exactly like every other DI-based module here).
+  entry('service_incidents', KIND.TABLE, ['GET'], SENSITIVITY.AUDIT,
+    'readActions.js getServiceIncidents (Admin "Incidencias" backlog, admin-only, read-only)'),
+  entry('service_closeout_attempts', KIND.TABLE, ['GET'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'readActions.js getServiceIncidents attempt-status enrichment (read-only)'),
 
   // ── menu catalogue — src/menu/menuRepository.js, read-only ──
   entry('menu_categorias', KIND.TABLE, ['GET'], SENSITIVITY.PUBLIC_OPERATIONAL, 'menuRepository.js readMenuTables'),

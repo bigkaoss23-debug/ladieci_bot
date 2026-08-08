@@ -31,6 +31,12 @@ const CANONICAL_ACTIONS = Object.freeze([
   'getConvThread', 'generaRispostaIA', 'getClientes', 'debugInterpreta', 'debugMenuShadow', 'getManualGiros', 'getMenu', 'getCurrentServiceCloseout',
   'getDriverStatus', 'getOrdenesRecent', 'getWaMessages', 'getStorico', 'getOrdenesArchivio',
   'getEconomiaLedger',
+  // SERVICE CLOSEOUT V2 / SLICE 4A — getServiceIncidents added: the Admin
+  // "Incidencias" backlog read (filterable list + single-incident detail).
+  // Same class as getStorico/getEconomiaLedger: admin-only, fresh-auth,
+  // sensitive financial/operational history. Read-only — no incident
+  // resolution/acknowledge/defer mutation route exists anywhere.
+  'getServiceIncidents',
   // LISTOS_ARCHIVADOS_V1 — session-scoped terminal-orders sibling of getOrdenes.
   // Same admin+operator access as getOrdenes' non-rider consumers; deliberately
   // NOT rider-enabled (getOrdenes' rider path goes through a separate intercept
@@ -64,6 +70,7 @@ const SERVICE_ONLY_SET = Object.freeze(new Set(SERVICE_ONLY_ACTIONS));
 const ADMIN_ONLY_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes',
   'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getEconomiaLedger',
+  'getServiceIncidents',
   'getDeliveryLogs', 'getSuggerimenti',
   'setConfig', 'eliminaOrdine', 'eliminaConversazione',
   'getAuthActors', 'setActorPin', 'verifyOwnPin',
@@ -82,7 +89,7 @@ const RIDER_ENABLED_SET = Object.freeze(new Set(RIDER_ENABLED_ACTIONS));
 // action name, mutation/read class, or substrings.
 const FRESH_AUTH_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes', 'getStorico',
-  'getOrdenesArchivio', 'getEconomiaLedger', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine',
+  'getOrdenesArchivio', 'getEconomiaLedger', 'getServiceIncidents', 'getDeliveryLogs', 'setConfig', 'eliminaOrdine',
   'eliminaConversazione', 'getSuggerimenti',
   'getAuthActors', 'setActorPin', 'verifyOwnPin', 'getCurrentServiceCloseout', 'openServiceSession',
   // S2-7D6B — the automatic ensure runs on every Servicio entry, so it must NOT be

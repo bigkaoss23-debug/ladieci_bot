@@ -25,6 +25,16 @@
 const { sbSelect } = require("./supabase");
 const { getEconomiaLedgerAggregate } = require("../closeout/economiaLedgerAggregate");
 
+// SERVICE CLOSEOUT V2 / SLICE 4A vocabulary — mirrors the DB CHECK constraints
+// on service_incidents exactly (migrations/2026-08-08_service_closeout_
+// incidents_foundation.sql, hardened by SLICE 3.2). Kept here (not imported
+// from a shared module) the same way every other fixed-contract validator in
+// this file is self-contained — this is a transport-layer allow-list, not a
+// second source of truth for the schema.
+const INCIDENT_RESOLUTION_STATUSES = ["pending", "acknowledged", "resolved", "superseded"];
+const INCIDENT_CATEGORIES = ["informational", "operational", "financial", "integrity", "security"];
+const INCIDENT_ACTIONABLE_STATUSES = ["pending", "acknowledged"];
+
 class ReadParamError extends Error {
   constructor(msg) { super(msg); this.name = "ReadParamError"; this.httpStatus = 400; }
 }
@@ -57,6 +67,26 @@ function validFecha(v) {
   const s = String(v).trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new ReadParamError("fecha inválida (YYYY-MM-DD)");
   return s;
+}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function validUuid(v, label = "id") {
+  const s = String(v == null ? "" : v).trim();
+  if (!UUID_RE.test(s)) throw new ReadParamError(`${label} inválido`);
+  return s;
+}
+// Accepts a single value or a CSV string, validates every member against the
+// fixed vocabulary, dedupes. Empty/undefined input returns null (caller
+// decides the default), never an empty-but-present filter.
+function validCsvEnum(v, allowed, label) {
+  if (v === undefined || v === null || v === "") return null;
+  const raw = String(v).split(",").map((s) => s.trim()).filter(Boolean);
+  if (raw.length === 0) return null;
+  const seen = new Set();
+  for (const x of raw) {
+    if (!allowed.includes(x)) throw new ReadParamError(`${label} inválido: ${x}`);
+    seen.add(x);
+  }
+  return [...seen];
 }
 const MAX_WA_IDS = 200;
 function validWaIds(input) {
@@ -133,6 +163,68 @@ async function getEconomiaLedger({ desde, hasta } = {}) {
   }
 }
 
+// SERVICE CLOSEOUT V2 / SLICE 4A — the Admin "Incidencias" backlog. Default
+// (resolutionStatus omitted) returns ONLY actionable findings (pending +
+// acknowledged) — resolved/superseded are historical, never the default
+// view. No snapshot payload is ever returned here (service_incidents itself
+// carries no such column; a future dedicated detail endpoint may expose
+// service_closeout_snapshots.payload deliberately, this one never does).
+// incidentId, when given, short-circuits to a single-row detail lookup
+// (returns the row or null) and ignores every other filter.
+const SERVICE_INCIDENT_SELECT = [
+  "id", "service_session_id", "business_date", "service_kind", "closeout_correlation_id", "snapshot_id",
+  "incident_type", "category", "severity", "entity_type", "entity_id", "order_id", "table_session_id", "giro_id", "rider_id",
+  "financial_exposure_cents", "detected_at", "detected_by", "auto_resolved",
+  "resolution_status", "resolution_type", "resolved_at", "resolved_by", "resolution_note",
+  "created_at", "updated_at",
+].join(",");
+
+// Best-effort enrichment: attaches each incident's owning attempt's current
+// status ('active'/'completed'/'superseded'). A failure here never fails the
+// underlying incident list — it just omits the enrichment.
+async function attachAttemptStatus(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+  const ids = [...new Set(rows.map((r) => r.closeout_correlation_id).filter(Boolean))];
+  if (ids.length === 0) return rows.map((r) => ({ ...r, attempt_status: null }));
+  try {
+    const list = ids.map((id) => `"${id}"`).join(",");
+    const attempts = await safeSelect(
+      "service_closeout_attempts",
+      `closeout_correlation_id=in.(${list})&select=closeout_correlation_id,status`,
+    );
+    const byId = new Map(attempts.map((a) => [a.closeout_correlation_id, a.status]));
+    return rows.map((r) => ({ ...r, attempt_status: byId.get(r.closeout_correlation_id) || null }));
+  } catch (e) {
+    console.warn("[readActions] getServiceIncidents attempt-status enrichment failed (non-fatal):", e?.message || e);
+    return rows.map((r) => ({ ...r, attempt_status: null }));
+  }
+}
+
+async function getServiceIncidents({ resolutionStatus, category, businessDate, serviceSessionId, incidentId, limit } = {}) {
+  if (incidentId !== undefined && incidentId !== null && incidentId !== "") {
+    const id = validUuid(incidentId, "incidentId");
+    const rows = await safeSelect("service_incidents", `id=eq.${encodeURIComponent(id)}&select=${SERVICE_INCIDENT_SELECT}&limit=1`);
+    if (!rows[0]) return null;
+    const [enriched] = await attachAttemptStatus(rows);
+    return enriched;
+  }
+
+  const statuses = validCsvEnum(resolutionStatus, INCIDENT_RESOLUTION_STATUSES, "resolutionStatus") || INCIDENT_ACTIONABLE_STATUSES;
+  const categories = validCsvEnum(category, INCIDENT_CATEGORIES, "category");
+  const bdate = validFecha(businessDate);
+  const sid = serviceSessionId ? validUuid(serviceSessionId, "serviceSessionId") : null;
+  const lim = clampLimit(limit, 100, 500);
+
+  let filter = `resolution_status=in.(${statuses.join(",")})`;
+  if (categories) filter += `&category=in.(${categories.join(",")})`;
+  if (bdate) filter += `&business_date=eq.${bdate}`;
+  if (sid) filter += `&service_session_id=eq.${encodeURIComponent(sid)}`;
+  filter += `&select=${SERVICE_INCIDENT_SELECT}&order=detected_at.desc&limit=${lim}`;
+
+  const rows = await safeSelect("service_incidents", filter);
+  return attachAttemptStatus(rows);
+}
+
 // Log dei giri di consegna (Economía). order partito_alle.desc, limit cap 500.
 async function getDeliveryLogs({ limit } = {}) {
   const lim = clampLimit(limit, 500);
@@ -193,6 +285,7 @@ module.exports = {
   getStorico,
   getOrdenesArchivio,
   getEconomiaLedger,
+  getServiceIncidents,
   getDeliveryLogs,
   getSuggerimenti,
   getConversacionesActivas,

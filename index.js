@@ -57,6 +57,7 @@ const { resolveSchedule, closeEligibility, SCHEDULE_STATE, SERVICE_KIND } = requ
 const { computeAutoCloseDecision } = require("./src/serviceSessions/autoCloseDecision");
 const { performIncidentSafeRollover } = require("./src/serviceSessions/incidentSafeRollover");
 const { getCurrentOperationalSession, serviceSessionQuery } = require("./src/serviceSessions/currentOperationalSession");
+const { getPreviousCloseoutIncidentSummary } = require("./src/closeout/previousCloseoutIncidentSummary");
 
 const app = express();
 app.use(express.json());
@@ -489,6 +490,20 @@ app.get("/api", async (req, res) => {
       // S2-7D6E3 — Economía's cash-by-payment-method figures. Ledger-derived (same
       // aggregate() as the live closeout/serata_summary), never metodo_pago-bucketed.
       result = await readActions.getEconomiaLedger({ desde: req.query.desde, hasta: req.query.hasta });
+    } else if (action === "getServiceIncidents") {
+      // SERVICE CLOSEOUT V2 / SLICE 4A — the Admin "Incidencias" backlog.
+      // Admin-only (see legacyActionRoles.js ADMIN_ONLY / authorizationContract.js
+      // ADMIN_ONLY_ACTIONS), same class as getStorico/getEconomiaLedger:
+      // sensitive financial/operational history, fresh-auth. Read-only — no
+      // resolve/acknowledge/defer mutation exists on this or any route.
+      result = await readActions.getServiceIncidents({
+        resolutionStatus: req.query.resolutionStatus,
+        category: req.query.category,
+        businessDate: req.query.businessDate,
+        serviceSessionId: req.query.serviceSessionId,
+        incidentId: req.query.incidentId,
+        limit: req.query.limit,
+      });
     } else if (action === "getOrdenesArchivio") {
       result = await readActions.getOrdenesArchivio({ limit: req.query.limit });
     } else if (action === "getDeliveryLogs") {
@@ -549,7 +564,25 @@ app.post("/api", async (req, res) => {
       // A non-success here is almost never a crash: "we are in the 17:30-18:00
       // buffer" and "lunch is still open" are legitimate answers the UI renders
       // differently. 200 carries them; only a genuine failure is a 5xx.
-      if (ensured.success) return res.json(ensured);
+      if (ensured.success) {
+        // SERVICE CLOSEOUT V2 / SLICE 4A — non-blocking, read-only carryover
+        // warning. Lifecycle reconciliation above is ALREADY fully decided by
+        // this point (ensured.success is true, ensured.session is the real
+        // current session) — this can NEVER change whether the service opens
+        // or which session is current. A failure here degrades to simply
+        // omitting the field; it must never turn into a 5xx for this action,
+        // never reopen/reclose the session, and never block order intake.
+        try {
+          if (ensured.session && ensured.session.id) {
+            ensured.previousCloseoutIncidents = await getPreviousCloseoutIncidentSummary({
+              currentServiceSessionId: ensured.session.id,
+            });
+          }
+        } catch (e) {
+          console.warn("[ensureCurrentServiceSession] previous-closeout incident summary unavailable (non-fatal):", e && e.message || e);
+        }
+        return res.json(ensured);
+      }
       const conflict = ensured.code === "LUNCH_SESSION_STILL_ACTIVE"
         || ensured.code === "OTHER_SERVICE_STILL_ACTIVE"
         || ensured.code === "SERVICE_SESSION_CLOSING";
