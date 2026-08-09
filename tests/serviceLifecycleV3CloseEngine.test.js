@@ -96,6 +96,14 @@ function fakeEnv({
       row.status = 'completed';
       return { success: true, idempotent: false, code: 'COMPLETED', attempt: row };
     },
+    // SLICE 3.2.1 — read-only lineage lookup, mirrors closeoutAttempts.js's
+    // real getByCorrelationId() exactly (Map-keyed on closeoutCorrelationId,
+    // same as the real PRIMARY KEY).
+    async getByCorrelationId({ closeoutCorrelationId }) {
+      env.calls.getAttemptByCorr = env.calls.getAttemptByCorr || [];
+      env.calls.getAttemptByCorr.push({ closeoutCorrelationId });
+      return env.attemptsByCorr.get(closeoutCorrelationId) || null;
+    },
   };
 
   env.snapshots = {
@@ -169,6 +177,17 @@ function fakeEnv({
     },
   };
 
+  // SLICE 3.2.1 — read-only lineage lookup, mirrors serviceCloseouts.js's real
+  // getBySessionId() exactly (Map-keyed on serviceSessionId, same as the real
+  // service_closeouts_session_uq constraint).
+  env.closeouts = {
+    async getBySessionId({ serviceSessionId }) {
+      env.calls.getCloseoutBySession = env.calls.getCloseoutBySession || [];
+      env.calls.getCloseoutBySession.push({ serviceSessionId });
+      return env.closeoutsBySession.get(serviceSessionId) || null;
+    },
+  };
+
   env.transition = {
     async close({ serviceSessionId, closeoutCorrelationId, actor, source }) {
       env.calls.close.push({ serviceSessionId, closeoutCorrelationId, actor, source });
@@ -198,6 +217,7 @@ function engineFrom(env) {
     attempts: env.attempts,
     snapshots: env.snapshots,
     closeoutCreation: env.closeoutCreation,
+    closeouts: env.closeouts,
     transition: env.transition,
   });
 }
@@ -276,9 +296,16 @@ function engineFrom(env) {
     const second = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test-retry' });
     assert('D3: second call is a no-op success, same correlation id resumed', second.success === true && second.closeoutCorrelationId === first.closeoutCorrelationId, JSON.stringify(second));
     assert('D4: STILL exactly one closeout — retry did not create a second', env.closeoutsByCorr.size === 1);
-    assert('D5: create() was called twice but only created:true once', env.calls.create.length === 2 && env.calls.create.filter((c) => false).length === 0);
+    // SLICE 3.2.1 — the retry now resumes via explicit lineage (CASE D: closed
+    // + closeout exists + attempt still active) BEFORE ever reaching Phase A/D
+    // again, so create() is called exactly ONCE total (first call only) and
+    // acquire() is never called a second time either — the old design re-ran
+    // the whole pipeline on every retry and relied on create_service_closeout's
+    // OWN idempotency to no-op; this is stronger: the retry never even asks.
+    assert('D5: create() was called only ONCE — the retry short-circuits via lineage detection, never reaching Phase D again', env.calls.create.length === 1, String(env.calls.create.length));
     assert('D6: transition.close() second call was idempotent (ALREADY_CLOSED)', env.calls.close.length === 2);
     assert('D7: attempt eventually completed once the retry succeeded', env.attemptsByCorr.get(first.closeoutCorrelationId).status === 'completed');
+    assert('D8: attempts.acquire() was called only ONCE (first call) — the retry never mints/touches a new attempt', env.calls.acquire.length === 1, String(env.calls.acquire.length));
   }
 
   console.log('\n── Scenario E: two concurrent callers converge on ONE authoritative closeout ──');

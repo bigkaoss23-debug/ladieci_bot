@@ -305,6 +305,30 @@ global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
     assert('24b. a made-up closeout RPC is rejected by the transport', err && err.code === transport.ERROR_CODES.RESOURCE_NOT_ALLOWED);
   }
 
+  // ── 27) SERVICE LIFECYCLE V3 / SLICE 3.2.1 — service_closeouts is now a
+  //       registered GET-only table (serviceCloseouts.js getBySessionId(),
+  //       called for real by serviceLifecycleEngine.js's retry-lineage check)
+  //       and service_closeout_attempts (already registered) still allows
+  //       GET only — closeoutAttempts.js getByCorrelationId() adds a new
+  //       caller, not a new method. ─────────────────────────────────────────
+  {
+    assert('27. service_closeouts is registered', policy.getResourcePolicy('service_closeouts') !== null);
+    assert('27. service_closeouts allows GET', policy.isMethodAllowed('service_closeouts', 'GET'));
+    assert('27. service_closeouts denies POST (append-only via the create_service_closeout RPC, never a direct table write)', !policy.isMethodAllowed('service_closeouts', 'POST'));
+    assert('27. service_closeouts denies PATCH', !policy.isMethodAllowed('service_closeouts', 'PATCH'));
+    assert('27. service_closeouts denies DELETE', !policy.isMethodAllowed('service_closeouts', 'DELETE'));
+    const r = await transport.supabaseRequest({ resource: 'service_closeouts', method: 'GET', operation: 'test' });
+    assert('27b. GET reaches the transport', r.ok === true);
+    const err = await captureErr(() => transport.supabaseRequest({ resource: 'service_closeouts', method: 'POST', operation: 'test' }));
+    assert('27c. POST is rejected by the transport', err && err.code === transport.ERROR_CODES.METHOD_NOT_ALLOWED);
+  }
+  {
+    assert('28. service_closeout_attempts still denies POST/PATCH/DELETE directly (writes stay RPC-only: acquire/supersede/complete_closeout_attempt)',
+      !policy.isMethodAllowed('service_closeout_attempts', 'POST')
+      && !policy.isMethodAllowed('service_closeout_attempts', 'PATCH')
+      && !policy.isMethodAllowed('service_closeout_attempts', 'DELETE'));
+  }
+
   // ── 26) SERVICE LIFECYCLE V3 / SLICE 3.2 — the 2 new close-engine RPCs
   //       (serviceCloseoutCreation.js / serviceLifecycleV3Transition.js,
   //       called by src/serviceSessions/serviceLifecycleEngine.js) are

@@ -101,8 +101,13 @@ const REGISTRY = Object.freeze([
   // that literal-string scan, exactly like every other DI-based module here).
   entry('service_incidents', KIND.TABLE, ['GET'], SENSITIVITY.AUDIT,
     'readActions.js getServiceIncidents (Admin "Incidencias" backlog, admin-only, read-only)'),
+  // SLICE 3.2.1 — closeoutAttempts.js's getByCorrelationId() (plain SELECT,
+  // same DI-invisible pattern as the snapshot/closeout readers below) is now
+  // also called by serviceLifecycleEngine.js's retry-lineage check. GET was
+  // already granted for readActions.js; no method change needed.
   entry('service_closeout_attempts', KIND.TABLE, ['GET'], SENSITIVITY.INTERNAL_OPERATIONAL,
-    'readActions.js getServiceIncidents attempt-status enrichment (read-only)'),
+    'readActions.js getServiceIncidents attempt-status enrichment (read-only); '
+    + 'closeoutAttempts.js getByCorrelationId(), called by serviceLifecycleEngine.js\'s retry-lineage check (SLICE 3.2.1)'),
   // SLICE 4C.2A — closeoutSnapshots.js's getByCorrelationId()/listBySession()
   // (both plain SELECTs) are exercised by performIncidentSafeRollover on
   // EVERY invocation, including the very first — it checks "does this attempt
@@ -221,6 +226,17 @@ const REGISTRY = Object.freeze([
     'serviceCloseoutCreation.js create(), called by serviceLifecycleEngine.js — the only writer of service_closeouts'),
   entry('rpc/close_service_session_v3', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'serviceLifecycleV3Transition.js close(), called by serviceLifecycleEngine.js — the V3-native terminal transition'),
+  // SLICE 3.2.1 — serviceCloseouts.js's getBySessionId() (plain SELECT, same
+  // DI-invisible pattern as service_closeout_snapshots/service_closeout_
+  // attempts above) existed since V3.1 as a read-only DAO for reports/tests
+  // but had no real runtime caller until now: serviceLifecycleEngine.js's
+  // retry-lineage check reads it on every close attempt, BEFORE deciding
+  // whether to acquire a new closeout attempt, to prove V3 ownership without
+  // ever inferring it from order count. GET only — service_closeouts has no
+  // UPDATE/DELETE path at all (append-only, enforced by create_service_
+  // closeout being its sole writer).
+  entry('service_closeouts', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
+    'serviceCloseouts.js getBySessionId(), called by serviceLifecycleEngine.js\'s retry-lineage check (SLICE 3.2.1)'),
 
   // ── auth RPCs — src/auth/audit.js sbRest consumers ──
   entry('rpc/auth_bump_session_version', KIND.RPC, ['POST'], SENSITIVITY.AUTH_SECURITY, 'dao.js incrementSessionVersion'),

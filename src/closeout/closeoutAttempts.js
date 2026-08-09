@@ -18,7 +18,7 @@
 // or its caller — see the migration header.
 // ===============================================================
 
-const { sbRpc } = require("../utils/supabase");
+const { sbRpc, sbSelect } = require("../utils/supabase");
 
 function normalize(rpcResult, transportCode) {
   if (!rpcResult || rpcResult.ok !== true || !rpcResult.body || typeof rpcResult.body !== "object") {
@@ -41,7 +41,7 @@ function publicAttempt(row) {
   };
 }
 
-function createCloseoutAttempts({ rpc = sbRpc } = {}) {
+function createCloseoutAttempts({ rpc = sbRpc, select = sbSelect } = {}) {
   return Object.freeze({
     // Race-safe get-or-create of THE active attempt for a session.
     // created:true only the first time; every later call (this process or a
@@ -86,6 +86,23 @@ function createCloseoutAttempts({ rpc = sbRpc } = {}) {
         return { success: false, code: res.code || "COMPLETE_CLOSEOUT_ATTEMPT_FAILED", attempt: null };
       }
       return { success: true, idempotent: res.idempotent === true, code: res.code, attempt: publicAttempt(res.attempt) };
+    },
+
+    // SLICE 3.2.1 — read-only lineage lookup: THE attempt that owns a known
+    // closeout_correlation_id (closeout_correlation_id is this table's PRIMARY
+    // KEY, so at most one row can ever match). Mirrors closeoutSnapshots.js /
+    // serviceCloseouts.js's own getByCorrelationId() exactly — a plain SELECT,
+    // no idempotency contract needed for a read. Used by
+    // serviceLifecycleEngine.js to determine an existing V3 closeout's owning
+    // attempt status (active/completed/superseded) before ever deciding
+    // whether to acquire a new attempt — see that file's retry state machine.
+    async getByCorrelationId({ closeoutCorrelationId }) {
+      const rows = await select(
+        "service_closeout_attempts",
+        `closeout_correlation_id=eq.${encodeURIComponent(closeoutCorrelationId)}`
+      );
+      if (!Array.isArray(rows) || rows.length === 0) return null;
+      return publicAttempt(rows[0]);
     },
   });
 }

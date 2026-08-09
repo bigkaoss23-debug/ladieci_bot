@@ -29,6 +29,7 @@ const { sbSelect } = require("../utils/supabase");
 const { closeoutAttempts } = require("../closeout/closeoutAttempts");
 const { closeoutSnapshots } = require("../closeout/closeoutSnapshots");
 const { serviceCloseoutCreation } = require("../closeout/serviceCloseoutCreation");
+const { serviceCloseouts } = require("../closeout/serviceCloseouts");
 const { serviceLifecycleV3Transition } = require("./serviceLifecycleV3Transition");
 const { aggregate } = require("../closeout/currentServiceCloseout");
 
@@ -54,6 +55,7 @@ function createServiceLifecycleEngine({
   attempts = closeoutAttempts,
   snapshots = closeoutSnapshots,
   closeoutCreation = serviceCloseoutCreation,
+  closeouts = serviceCloseouts,
   transition = serviceLifecycleV3Transition,
   aggregateCloseout = aggregate,
 } = {}) {
@@ -74,13 +76,148 @@ function createServiceLifecycleEngine({
     // succeeded, only Phase F — marking the attempt completed — crashed).
     // Genuinely invalid callers (any other status) are still rejected now;
     // the "closed but not recoverable" case (closed by something other than
-    // this engine) is caught below, once canonical orders are actually read.
+    // this engine) is decided below by explicit V3 lineage, never by order
+    // count (SLICE 3.2.1 — see the lineage block immediately below).
     const alreadyClosed = session.status === "closed";
     if (!alreadyClosed && !["open", "closing"].includes(session.status)) {
       return { success: false, code: "V3_CLOSE_SESSION_NOT_OPEN", sessionStatus: session.status };
     }
 
-    // Phase A — acquire/resume the closeout attempt. Idempotent: a retry for
+    // ── SLICE 3.2.1 — explicit V3 ownership/retry lineage, BEFORE Phase A ──
+    // Ownership of a session's close is proven ONLY by matching, linked rows
+    // in service_closeouts / service_closeout_attempts — NEVER by how many
+    // canonical orders the session has (a legitimate service can have zero).
+    // This MUST run before attempts.acquire(): acquire() mints a BRAND NEW
+    // attempt (new correlation id) whenever no ACTIVE attempt exists for the
+    // session — including when the only prior attempt is already 'completed'
+    // — so calling it unconditionally on a retry of an already-finished V3
+    // close would orphan the new attempt from the existing closeout and, in
+    // the real schema, collide with service_closeouts_session_uq on Phase D.
+    let existingCloseout;
+    try {
+      existingCloseout = await closeouts.getBySessionId({ serviceSessionId });
+    } catch (e) {
+      return { success: false, code: "V3_CLOSE_LINEAGE_READ_FAILED", detail: String((e && e.message) || e) };
+    }
+
+    if (existingCloseout) {
+      // The closeout's own service_session_id must match (service_closeouts_
+      // session_uq means getBySessionId can only ever return a row that
+      // already agrees, but this is never assumed — see "never rely on
+      // incidental business data").
+      if (existingCloseout.serviceSessionId !== session.id) {
+        return { success: false, code: "V3_CLOSE_LINEAGE_INVALID" };
+      }
+
+      let existingAttempt;
+      try {
+        existingAttempt = await attempts.getByCorrelationId({
+          closeoutCorrelationId: existingCloseout.closeoutCorrelationId,
+        });
+      } catch (e) {
+        return {
+          success: false, code: "V3_CLOSE_LINEAGE_READ_FAILED",
+          closeoutCorrelationId: existingCloseout.closeoutCorrelationId, detail: String((e && e.message) || e),
+        };
+      }
+      // service_closeouts.closeout_correlation_id REFERENCES service_closeout_
+      // attempts(closeout_correlation_id) — a dangling reference cannot exist
+      // in the real schema. A missing or session-mismatched attempt here is a
+      // genuine data inconsistency, not a business outcome: fail closed
+      // rather than guess which session actually owns it.
+      if (!existingAttempt || existingAttempt.serviceSessionId !== session.id) {
+        return {
+          success: false, code: "V3_CLOSE_LINEAGE_INVALID",
+          closeoutCorrelationId: existingCloseout.closeoutCorrelationId,
+        };
+      }
+
+      if (existingAttempt.status === "completed") {
+        // CASE C — exact idempotent success. This exact (session, attempt,
+        // closeout) triple already reached its V3 terminal state; the session
+        // MUST already be closed (create_service_closeout only ever runs
+        // under an attempt that close_service_session_v3 later completes
+        // against — a completed attempt with a still-open session is exactly
+        // the same "impossible" lineage as above). No RPC call, no mutation.
+        if (!alreadyClosed) {
+          return {
+            success: false, code: "V3_CLOSE_LINEAGE_INVALID",
+            closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
+          };
+        }
+        return {
+          success: true, code: "V3_CLOSED", idempotent: true,
+          closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
+          closeout: existingCloseout,
+          occupiedTablesAtClose: existingCloseout.operational.occupiedTablesAtClose,
+        };
+      }
+
+      if (existingAttempt.status === "active") {
+        // CASES B and D converge here. CASE B: service still open/closing —
+        // crash happened after Phase D (closeout persisted) but before Phase
+        // E (terminal transition). CASE D: service already closed — crash
+        // happened after Phase E succeeded but before Phase F (attempt
+        // bookkeeping). transition.close() is idempotent (its real RPC
+        // returns ALREADY_CLOSED when the session is already closed under
+        // this exact identity — see close_service_session_v3), so the SAME
+        // two calls safely finish whichever of B/D actually happened, and
+        // NEVER create a second closeout (Phase D is never reached here).
+        const transitionResult = await transition.close({
+          serviceSessionId, closeoutCorrelationId: existingAttempt.closeoutCorrelationId, actor, source,
+        });
+        if (!transitionResult.success) {
+          return {
+            success: false, code: transitionResult.code || "V3_CLOSE_TRANSITION_FAILED",
+            closeoutCorrelationId: existingAttempt.closeoutCorrelationId, closeout: existingCloseout,
+          };
+        }
+        // Non-fatal if this fails: the session is already closed and the
+        // closeout already persisted, so a failed completion is never
+        // retried into a duplicate — same discipline as Phase F below.
+        try {
+          await attempts.complete({ closeoutCorrelationId: existingAttempt.closeoutCorrelationId, actor });
+        } catch (e) {
+          console.warn(
+            "[serviceLifecycleEngine] resume: marking the attempt completed failed (non-fatal — the session is already closed and the closeout already persisted):",
+            (e && e.message) || e
+          );
+        }
+        return {
+          success: true, code: "V3_CLOSED", idempotent: true,
+          closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
+          closeout: existingCloseout,
+          session: transitionResult.session,
+          occupiedTablesAtClose: existingCloseout.operational.occupiedTablesAtClose,
+        };
+      }
+
+      // existingAttempt.status === "superseded" — a V3 closeout exists but
+      // its OWN owning attempt was later superseded. create_service_closeout
+      // requires an ACTIVE attempt at INSERT time (ATTEMPT_NOT_ACTIVE
+      // otherwise) and nothing in this engine ever supersedes an attempt
+      // after that point, so this should be unreachable. Refuse rather than
+      // guess — never fabricate ownership over an inconsistent lineage.
+      return {
+        success: false, code: "V3_CLOSE_LINEAGE_INVALID",
+        closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
+      };
+    }
+
+    if (alreadyClosed) {
+      // CASE E — closed, with no provable V3 lineage at all: some other
+      // mechanism closed this session (legacy engine, manual intervention,
+      // or unknown). Never fabricate a closeout for a session this engine
+      // did not itself close — regardless of order count. A zero-order
+      // session is CASE F, not this: it falls through below like any other
+      // happy-path close because no closeout exists YET for it.
+      return { success: false, code: "V3_CLOSE_SESSION_ALREADY_CLOSED_NOT_RECOVERABLE" };
+    }
+
+    // CASE A (and CASE F, which is CASE A with zero orders — no special
+    // handling: happy-path reconciliation below treats an empty service
+    // exactly like any other). Phase A — acquire/resume the closeout
+    // attempt. Idempotent: a retry for
     // the same session resumes the SAME active attempt (ALREADY_ACTIVE),
     // never mints a second one (service_closeout_attempts_active_uq).
     let acquireResult;
@@ -111,16 +248,11 @@ function createServiceLifecycleEngine({
     if (!Array.isArray(orders) || !Array.isArray(tableSessions) || !Array.isArray(financialEvents)) {
       return { success: false, code: "V3_CLOSE_LIVE_STATE_SHAPE_INVALID", closeoutCorrelationId };
     }
-    // The "closed by something other than this engine" case: this engine
-    // never deletes/archives orders (NEW ENGINE, NO LEGACY CLOSEOUT), so a
-    // session it genuinely closed always still has its real orders in
-    // `ordenes`. A closed session with zero orders here was closed by a
-    // different mechanism entirely (e.g. the legacy engine, which archives
-    // them elsewhere) — reconciling that as an empty happy-path service would
-    // fabricate a wrong closeout, so this refuses instead.
-    if (alreadyClosed && orders.length === 0) {
-      return { success: false, code: "V3_CLOSE_SESSION_ALREADY_CLOSED_NOT_RECOVERABLE", closeoutCorrelationId };
-    }
+    // No order-count ownership check here (removed, SLICE 3.2.1): by this
+    // point the lineage block above already proved there is no existing V3
+    // closeout for this session AND the session is not already closed (CASE
+    // E returns before Phase A is ever reached) — so `alreadyClosed` is
+    // always false here, whether orders.length is 0 (CASE F) or not (CASE A).
 
     const captureResult = await snapshots.capture({
       serviceSessionId,
