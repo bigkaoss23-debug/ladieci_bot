@@ -423,7 +423,21 @@ function madridStartOfDayIso(businessDate) {
 //   { success: true, summary: {...}, data: "YYYY-MM-DD" }
 //   { skipped: true, reason: "already_closed_today" | "race_lost", data }
 //   { success: false, error: "verify_failed" | "...", details: {...} }
-async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "system") {
+// closeContext — SERVICE CLOSEOUT V2 / SLICE 4C.1. Server-internal only: never
+// derived from req.query/req.body anywhere (see the manual "chiudiServizio"
+// HTTP action in index.js, which always calls this with exactly 3
+// arguments). The single recognized key today:
+//   allowOpenTablesAcrossBoundary — a table_session's lifecycle is allowed to
+//     span a service-session boundary (accepted cross-service Mesa contract:
+//     table_session.service_session_id is historical "where it was opened"
+//     metadata, never rewritten at close; a NEW order on that same table
+//     after rollover attributes to service_session_state.current_session_id,
+//     unchanged code elsewhere). Only performIncidentSafeRollover's own call
+//     sets this true, for the AUTOMATIC/REQUIRED rollover path specifically —
+//     manual close (index.js "chiudiServizio" action) and the S2-1G deferred-
+//     close retry both omit it and keep the historical conservative gate.
+async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "system", closeContext = {}) {
+  const allowOpenTablesAcrossBoundary = !!closeContext && closeContext.allowOpenTablesAcrossBoundary === true;
   // Session identity is established by the authoritative lifecycle pointer, never
   // by today's date or by selecting the newest summary.
   const currentIdentity = await serviceSessionLifecycle.currentCloseout();
@@ -502,7 +516,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   if (!Array.isArray(openTableAccounts)) {
     return { success: false, error: "mesa_table_gate_failed", deferred: true, data: oggi };
   }
-  if (openTableAccounts.length > 0) {
+  if (openTableAccounts.length > 0 && !allowOpenTablesAcrossBoundary) {
     const detailsByTable = new Map();
     openTableAccounts.forEach((row) => detailsByTable.set(String(row.table_id || row.id), {
       id: row.table_id || row.id,
@@ -520,6 +534,16 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
       },
     };
   }
+  // SLICE 4C.1 — allowOpenTablesAcrossBoundary=true (automatic rollover only):
+  // an occupied table is a legitimate operational entity spanning the
+  // service-session boundary, not a blocker. Nothing below this point ever
+  // reads or writes table_sessions again — the row(s) in openTableAccounts
+  // are left exactly as they are: same id, same status='open', same historical
+  // service_session_id. The genuinely-empty case (covers_total IS NULL) is
+  // handled entirely elsewhere, BEFORE this function is even called, by
+  // rolloverClassifier.js's safe-auto-action + incidentSafeRollover.js's
+  // releaseEmptyTableSession — this gate never distinguishes empty from
+  // occupied, it simply stops blocking on open table_sessions at all.
 
   // ─── PASSO 1b (S2-1F): ACTIVE-TRIP GATE ───────────────────────
   // A service close must NEVER run destructively over an active rider trip (PASSO 6/10

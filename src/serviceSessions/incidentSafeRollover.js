@@ -344,8 +344,17 @@ function createIncidentSafeRollover({
       }
     }
 
-    // ── delegate to the EXISTING, unmodified close engine ───────────────────
-    const closeResult = await closeSession(true, source, actor);
+    // ── delegate to the EXISTING close engine ───────────────────────────────
+    // SLICE 4C.1 — allowOpenTablesAcrossBoundary:true is set ONLY here, never
+    // by the manual "chiudiServizio" HTTP action or the S2-1G deferred-close
+    // retry. Accepted cross-service Mesa contract: a table_session may
+    // legitimately span PRANZO -> SERA (or a date boundary); its
+    // service_session_id is historical "where it was opened" metadata, never
+    // rewritten at close, and an occupied table is therefore not itself a
+    // reason to keep the OLD session open. chiudiServizio never reads or
+    // writes table_sessions again once this flag lets it past the gate — see
+    // its own comment at the mesa_tables_not_released check.
+    const closeResult = await closeSession(true, source, actor, { allowOpenTablesAcrossBoundary: true });
 
     // ── on success: mark this attempt terminal, then try the next session ──
     let newSession = null;

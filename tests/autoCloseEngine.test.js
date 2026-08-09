@@ -62,7 +62,9 @@ console.log("\n══ D. triggerCloseIfNeeded (external backup) is no longer an 
 console.log("\n══ F. the incident-safe rollover orchestrator itself always delegates archival to chiudiServizio ══");
 {
   const ROLLOVER = read("src/serviceSessions/incidentSafeRollover.js");
-  assert("F: performIncidentSafeRollover calls chiudiServizio (via its injectable closeSession, defaulted to the real one) with deleteAttivi=true — the SAME single close implementation every automatic path always used", /closeSession\(true, source, actor\)/.test(ROLLOVER) && /const \{ chiudiServizio \} = require\("\.\.\/utils\/servizio"\);/.test(ROLLOVER));
+  // SLICE 4C.1 — the call now also passes closeContext.allowOpenTablesAcrossBoundary:true
+  // (accepted cross-service Mesa contract); deleteAttivi=true is unchanged.
+  assert("F: performIncidentSafeRollover calls chiudiServizio (via its injectable closeSession, defaulted to the real one) with deleteAttivi=true — the SAME single close implementation every automatic path always used", /closeSession\(true, source, actor, \{ allowOpenTablesAcrossBoundary: true \}\)/.test(ROLLOVER) && /const \{ chiudiServizio \} = require\("\.\.\/utils\/servizio"\);/.test(ROLLOVER));
 }
 
 console.log("\n══ E. testability — the audit's flagged gap is closed ══");

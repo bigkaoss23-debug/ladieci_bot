@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-09T10:31:08.083Z",
+  "generatedAt": "2026-08-09T11:17:12.348Z",
   "entries": [
     {
       "file": "index.js",
@@ -1304,12 +1304,17 @@
     {
       "file": "src/serviceSessions/incidentSafeRollover.js",
       "term": "chiudi",
-      "count": 10
+      "count": 12
+    },
+    {
+      "file": "src/serviceSessions/incidentSafeRollover.js",
+      "term": "pranzo",
+      "count": 1
     },
     {
       "file": "src/serviceSessions/incidentSafeRollover.js",
       "term": "servizio",
-      "count": 12
+      "count": 14
     },
     {
       "file": "src/serviceSessions/orderIntakePolicy.js",
@@ -1624,7 +1629,7 @@
     {
       "file": "src/utils/servizio.js",
       "term": "chiudi",
-      "count": 15
+      "count": 17
     },
     {
       "file": "src/utils/servizio.js",
@@ -1689,7 +1694,7 @@
     {
       "file": "src/utils/servizio.js",
       "term": "servizio",
-      "count": 21
+      "count": 23
     },
     {
       "file": "src/utils/servizio.js",
@@ -1990,6 +1995,16 @@
       "file": "tests/createOrdenAuthoritative.test.js",
       "term": "ordini",
       "count": 3
+    },
+    {
+      "file": "tests/crossServiceTableBypassSecurity.static.test.js",
+      "term": "chiudi",
+      "count": 9
+    },
+    {
+      "file": "tests/crossServiceTableBypassSecurity.static.test.js",
+      "term": "servizio",
+      "count": 16
     },
     {
       "file": "tests/currentServiceCloseout.test.js",
@@ -2659,17 +2674,17 @@
     {
       "file": "tests/incidentSafeRollover.test.js",
       "term": "chiudi",
-      "count": 4
+      "count": 5
     },
     {
       "file": "tests/incidentSafeRollover.test.js",
       "term": "pranzo",
-      "count": 1
+      "count": 2
     },
     {
       "file": "tests/incidentSafeRollover.test.js",
       "term": "servizio",
-      "count": 4
+      "count": 5
     },
     {
       "file": "tests/legacyActionRoleMapCompleteness.test.js",
@@ -3009,7 +3024,7 @@
     {
       "file": "tests/serviceCloseGate.test.js",
       "term": "chiudi",
-      "count": 13
+      "count": 17
     },
     {
       "file": "tests/serviceCloseGate.test.js",
@@ -3029,12 +3044,12 @@
     {
       "file": "tests/serviceCloseGate.test.js",
       "term": "serata",
-      "count": 8
+      "count": 9
     },
     {
       "file": "tests/serviceCloseGate.test.js",
       "term": "servizio",
-      "count": 14
+      "count": 18
     },
     {
       "file": "tests/serviceCloseGate.test.js",

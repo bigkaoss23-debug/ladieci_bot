@@ -106,8 +106,8 @@ function fakeEnv({
       return { success: true, created: true, code: "RECORDED", incident: row };
     },
   };
-  env.closeSession = async (deleteAttivi, source, actor) => {
-    env.closeCalls.push({ deleteAttivi, source, actor });
+  env.closeSession = async (deleteAttivi, source, actor, closeContext) => {
+    env.closeCalls.push({ deleteAttivi, source, actor, closeContext });
     return typeof closeResultSpec === "function" ? closeResultSpec() : closeResultSpec;
   };
   env.releaseEmptyTableSession = async (args) => { env.releaseCalls.push(args); return { ok: true }; };
@@ -138,6 +138,7 @@ const SERA_WINDOW_NOW = new Date(Date.UTC(2026, 7, 8, 18, 0)); // 20:00 Madrid
     const r = await perform({ session: SESSION, actor: "system", source: "cron_lunch" });
     assert("1a: success, code ROLLED_OVER (no incidents)", r.success === true && r.code === "ROLLED_OVER", JSON.stringify(r));
     assert("1b: chiudiServizio called exactly once, deleteAttivi=true", env.closeCalls.length === 1 && env.closeCalls[0].deleteAttivi === true);
+    assert("1b2: SLICE 4C.1 — allowOpenTablesAcrossBoundary:true is always passed by the automatic orchestrator", env.closeCalls[0].closeContext && env.closeCalls[0].closeContext.allowOpenTablesAcrossBoundary === true, JSON.stringify(env.closeCalls[0].closeContext));
     assert("1c: a snapshot was captured", env.snapshotRows.length === 1);
     assert("1d: zero incidents persisted", r.incidents.length === 0);
     assert("1e: the next session was established", r.newSession && r.newSession.id === "next-session");
@@ -170,6 +171,26 @@ const SERA_WINDOW_NOW = new Date(Date.UTC(2026, 7, 8, 18, 0)); // 20:00 Madrid
     assert("3b: the mesa release RPC was called for that exact table", env.releaseCalls.length === 1 && env.releaseCalls[0].tableSessionId === "t1" && env.releaseCalls[0].workspaceId === "ws1");
     // Ordering: the incident report call must appear before the release call in the trace.
     assert("3c: incident persistence happened before the auto-release (report call recorded, then release)", env.reportCalls.length === 1);
+  }
+
+  console.log("\n── SLICE 4C.1: occupied tables span the boundary — automatic rollover succeeds, table_sessions are never touched by this module ──");
+  {
+    // Mirrors real staging (2026-08-07 stale PRANZO): two occupied tables with
+    // real covers, one genuinely empty, all orders terminal.
+    const tableSessions = [
+      { id: "occupied-1", status: "open", covers_total: 4, workspace_id: "ws1" },
+      { id: "occupied-2", status: "open", covers_total: 2, workspace_id: "ws1" },
+      { id: "empty-1", status: "open", covers_total: null, workspace_id: "ws1" },
+    ];
+    const orders = [{ id: "o1", estado: "RETIRADO", totale: 16 }];
+    const env = fakeEnv({ tableSessions, orders });
+    const perform = makeOrchestrator(env, SERA_WINDOW_NOW);
+    const r = await perform({ session: SESSION, actor: "system", source: "cron_lunch" });
+    assert("mix-a: rollover succeeds despite two occupied open tables", r.success === true, JSON.stringify(r));
+    assert("mix-b: chiudiServizio called with allowOpenTablesAcrossBoundary:true", env.closeCalls.length === 1 && env.closeCalls[0].closeContext?.allowOpenTablesAcrossBoundary === true);
+    assert("mix-c: only the truly-empty table was auto-released", env.releaseCalls.length === 1 && env.releaseCalls[0].tableSessionId === "empty-1");
+    assert("mix-d: the occupied tables were never passed to the release RPC", !env.releaseCalls.some((c) => c.tableSessionId === "occupied-1" || c.tableSessionId === "occupied-2"));
+    assert("mix-e: exactly one informational incident (the empty table), occupied tables produce none", r.incidents.filter((i) => i.category === "informational").length === 1);
   }
 
   console.log("\n── Step 12 case: snapshot persisted, incident persistence fails -> no unsafe close, retry converges on the SAME attempt ──");

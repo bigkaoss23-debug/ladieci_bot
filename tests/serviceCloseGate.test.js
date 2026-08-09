@@ -109,6 +109,36 @@ const reset = () => {
   check("open Mesa -> rider gate never opens", beginCalls === 0);
   check("open Mesa -> no destructive work", deletes.length === 0 && inserts.length === 0);
 
+  // ── SLICE 4C.1 — open Mesa + no closeContext (manual/default) -> STILL refused ──
+  reset();
+  tableSessions = [{ id: "table-session-1", table_ref: "Mesa 3", status: "open" }];
+  r = await chiudiServizio(true, "manual", "system", {});
+  check("4C.1: explicit empty closeContext -> still refused (conservative by default)", r.success === false && r.error === "mesa_tables_not_released");
+
+  // ── SLICE 4C.1 — a truthy-but-not-strictly-true value must NOT bypass the gate ──
+  reset();
+  tableSessions = [{ id: "table-session-1", table_ref: "Mesa 3", status: "open" }];
+  r = await chiudiServizio(true, "manual", "system", { allowOpenTablesAcrossBoundary: "true" });
+  check("4C.1: string 'true' does not bypass (strict === true only)", r.success === false && r.error === "mesa_tables_not_released");
+  reset();
+  tableSessions = [{ id: "table-session-1", table_ref: "Mesa 3", status: "open" }];
+  r = await chiudiServizio(true, "manual", "system", { allowOpenTablesAcrossBoundary: 1 });
+  check("4C.1: numeric 1 does not bypass (strict === true only)", r.success === false && r.error === "mesa_tables_not_released");
+
+  // ── SLICE 4C.1 — allowOpenTablesAcrossBoundary:true (automatic rollover only) ──
+  // Mirrors real staging: two occupied tables with real covers, all orders terminal.
+  reset();
+  tableSessions = [
+    { id: "occupied-1", table_ref: "Mesa 1", status: "open", covers_total: 4 },
+    { id: "occupied-2", table_ref: "Mesa 2", status: "open", covers_total: 2 },
+  ];
+  RESET = { status: 200, payload: { ok: true, code: "OK", close_id: "cross-boundary-ok", marker: { close_id: "cross-boundary-ok" }, resumed: false } };
+  r = await chiudiServizio(true, "cron_lunch", "system", { allowOpenTablesAcrossBoundary: true });
+  check("4C.1: occupied tables no longer block automatic rollover", r.success === true, JSON.stringify(r));
+  check("4C.1: table_sessions is never read/written beyond the gate's own initial select", !deletes.some(([t]) => t === "table_sessions"));
+  check("4C.1: the old service still fully closes (reaches cleanup)", deletes.some(([t]) => t === "ordenes"));
+  check("4C.1: rider gate and archive still run normally (nothing else skipped)", beginCalls === 1 && inserts.includes("serata_summary"));
+
   // ── Active trip -> DEFERRED, no destructive work ──
   reset();
   RESET = { status: 409, payload: { ok: false, error: "ACTIVE_TRIP_CONFLICT" } };
