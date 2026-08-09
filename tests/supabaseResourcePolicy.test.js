@@ -305,6 +305,25 @@ global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
     assert('24b. a made-up closeout RPC is rejected by the transport', err && err.code === transport.ERROR_CODES.RESOURCE_NOT_ALLOWED);
   }
 
+  // ── 26) SERVICE LIFECYCLE V3 / SLICE 3.2 — the 2 new close-engine RPCs
+  //       (serviceCloseoutCreation.js / serviceLifecycleV3Transition.js,
+  //       called by src/serviceSessions/serviceLifecycleEngine.js) are
+  //       registered, POST-only, own block, separate from the SERVICE
+  //       CLOSEOUT V2 entries above — see
+  //       tests/serviceLifecycleV3CloseEngineResourcePolicyIntegration.test.js
+  //       for the real-wrapper (non-DI) end-to-end proof. ──────────────────
+  {
+    const NEW_V3_2_RPCS = ['rpc/create_service_closeout', 'rpc/close_service_session_v3'];
+    for (const resource of NEW_V3_2_RPCS) {
+      assert(`26. ${resource} is registered`, policy.getResourcePolicy(resource) !== null);
+      assert(`26. ${resource} allows POST`, policy.isMethodAllowed(resource, 'POST'));
+      assert(`26. ${resource} denies GET`, !policy.isMethodAllowed(resource, 'GET'));
+      assert(`26. ${resource} denies DELETE`, !policy.isMethodAllowed(resource, 'DELETE'));
+      const r = await transport.supabaseRequest({ resource, method: 'POST', operation: 'test' });
+      assert(`26b. ${resource} POST reaches the transport`, r.ok === true);
+    }
+  }
+
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   delete global.fetch;
   process.exit(fail === 0 ? 0 : 1);

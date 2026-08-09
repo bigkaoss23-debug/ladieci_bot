@@ -148,10 +148,22 @@ const LIVE_TRIGGER_SOURCE_PATH = path.join(ROOT, 'migrations', '2026-08-02_v3j_m
   assert('16b: rollback restores mesa_prepare_table_order_v1 to the exact pre-fix body (the removed line is back)', rollback.includes('NEW.service_session_id := v_session.service_session_id;'));
   assert('16c: rollback touches no other pre-existing table', !/ALTER\s+TABLE\s+public\.(service_sessions|service_closeout_attempts|service_closeout_snapshots|service_incidents|table_sessions)\b/i.test(rollback));
 
-  console.log('\n── application wiring — no engine caller yet ──');
+  console.log('\n── application wiring — V3.2 is now the sanctioned engine caller ──');
   const EXCLUDED_DIRS = new Set(['node_modules', '.git', 'tests', 'migrations', 'docs']);
+  // SLICE 3.2 (2026-08-09_service_lifecycle_v3_close_engine.sql) is the first
+  // real caller this row 57 comment itself predicted ("V3.2's close engine is
+  // the first thing that will INSERT a row") — this allowlist was widened
+  // from just the read-only serviceCloseouts.js to also include the V3.2
+  // write path (serviceCloseoutCreation.js, the sole INSERT-or-fetch DAO;
+  // serviceLifecycleEngine.js, the orchestrator that calls it) and its
+  // resource-policy registration. See tests/serviceLifecycleV3Foundation.
+  // static.test.js's own V3.2 sibling — tests/serviceLifecycleV3CloseEngine
+  // Migration.static.test.js — for that engine's own dedicated proof.
   const CALLER_ALLOWED_FILES = new Set([
     path.join(ROOT, 'src', 'closeout', 'serviceCloseouts.js'),
+    path.join(ROOT, 'src', 'closeout', 'serviceCloseoutCreation.js'),
+    path.join(ROOT, 'src', 'serviceSessions', 'serviceLifecycleEngine.js'),
+    path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js'),
   ]);
   function walk(dir, out) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -171,7 +183,7 @@ const LIVE_TRIGGER_SOURCE_PATH = path.join(ROOT, 'migrations', '2026-08-02_v3j_m
     const text = fs.readFileSync(f, 'utf8');
     if (/service_closeouts\b/.test(text)) unexpectedHits.push(path.relative(ROOT, f));
   }
-  assert('17a: no application module other than serviceCloseouts.js (the read-only wrapper) references the table', unexpectedHits.length === 0, JSON.stringify(unexpectedHits));
+  assert('17a: no application module outside the sanctioned V3.1 read path + V3.2 write path references the table', unexpectedHits.length === 0, JSON.stringify(unexpectedHits));
   assert('17b: index.js has no new HTTP route referencing service_closeouts', !/service_closeouts/.test(fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8')));
   // language-guard: allow-legacy chiudiServizio is the existing JS close function, named here for audit context (this test proves it is NOT called), not new vocabulary
   assert('17c: no module calls chiudiServizio from this slice\'s new files (schema-first, no engine)', !/chiudiServizio/.test(fs.readFileSync(path.join(ROOT, 'src', 'closeout', 'serviceCloseouts.js'), 'utf8')));

@@ -208,6 +208,20 @@ const REGISTRY = Object.freeze([
   entry('rpc/mesa_release_empty_session_auto_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'mesaDao.js releaseEmptySessionAuto(), called by incidentSafeRollover.js'),
 
+  // ── SERVICE LIFECYCLE V3 / SLICE 3.2 — the NEW close engine. Deliberately
+  // its own block, not merged into the SERVICE CLOSEOUT V2 block above: this
+  // is a separate engine (src/serviceSessions/serviceLifecycleEngine.js),
+  // reusing the V2 attempt/snapshot foundation above but never calling
+  // language-guard: allow-legacy chiudiServizio/begin_service_session_close are named here only to state what this new engine does NOT call, not new vocabulary
+  // chiudiServizio/begin_service_session_close. Invisible to the literal-
+  // string scanner (check #17) — reached only via closeoutCreation.js /
+  // serviceLifecycleV3Transition.js's `rpc` DI default (sbRpc), same as every
+  // other closeout-lifecycle RPC above.
+  entry('rpc/create_service_closeout', KIND.RPC, ['POST'], SENSITIVITY.AUDIT,
+    'serviceCloseoutCreation.js create(), called by serviceLifecycleEngine.js — the only writer of service_closeouts'),
+  entry('rpc/close_service_session_v3', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'serviceLifecycleV3Transition.js close(), called by serviceLifecycleEngine.js — the V3-native terminal transition'),
+
   // ── auth RPCs — src/auth/audit.js sbRest consumers ──
   entry('rpc/auth_bump_session_version', KIND.RPC, ['POST'], SENSITIVITY.AUTH_SECURITY, 'dao.js incrementSessionVersion'),
   entry('rpc/auth_record_failed_attempt', KIND.RPC, ['POST'], SENSITIVITY.AUTH_SECURITY, 'dao.js recordFailedAttempt'),
