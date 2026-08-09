@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-09T11:17:12.348Z",
+  "generatedAt": "2026-08-09T11:54:05.347Z",
   "entries": [
     {
       "file": "index.js",
@@ -1920,6 +1920,11 @@
       "file": "tests/closeoutAttemptOwnership.static.test.js",
       "term": "storico",
       "count": 1
+    },
+    {
+      "file": "tests/closeoutLifecycleResourcePolicyIntegration.test.js",
+      "term": "pranzo",
+      "count": 2
     },
     {
       "file": "tests/closeoutSnapshots.test.js",

@@ -103,6 +103,13 @@ const REGISTRY = Object.freeze([
     'readActions.js getServiceIncidents (Admin "Incidencias" backlog, admin-only, read-only)'),
   entry('service_closeout_attempts', KIND.TABLE, ['GET'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'readActions.js getServiceIncidents attempt-status enrichment (read-only)'),
+  // SLICE 4C.2A — closeoutSnapshots.js's getByCorrelationId()/listBySession()
+  // (both plain SELECTs) are exercised by performIncidentSafeRollover on
+  // EVERY invocation, including the very first — it checks "does this attempt
+  // already own a snapshot" before deciding whether to capture one. GET only:
+  // this module never mutates the table directly, only via the RPC below.
+  entry('service_closeout_snapshots', KIND.TABLE, ['GET'], SENSITIVITY.AUDIT,
+    'closeoutSnapshots.js getByCorrelationId/listBySession, read-only, called from incidentSafeRollover.js'),
 
   // ── menu catalogue — src/menu/menuRepository.js, read-only ──
   entry('menu_categorias', KIND.TABLE, ['GET'], SENSITIVITY.PUBLIC_OPERATIONAL, 'menuRepository.js readMenuTables'),
@@ -151,6 +158,37 @@ const REGISTRY = Object.freeze([
   entry('rpc/begin_service_session_close', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/serviceSessionLifecycle.js'),
   entry('rpc/complete_service_session_close', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/serviceSessionLifecycle.js'),
   entry('rpc/get_current_service_closeout_session', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'serviceSessions/serviceSessionLifecycle.js'),
+
+  // ── SERVICE CLOSEOUT V2 lifecycle RPCs — SLICE 4C.2A. Minimal set actually
+  // exercised by performIncidentSafeRollover (src/serviceSessions/
+  // incidentSafeRollover.js) via closeoutAttempts.js/closeoutSnapshots.js/
+  // serviceIncidents.js's `rpc` DI parameter (sbRpc default — invisible to a
+  // literal-string scan, exactly like service_incidents/service_closeout_attempts
+  // above). Deliberately excludes the admin incident-resolution RPC and the
+  // post-close financial-resolution RPC from the SAME two migrations (see
+  // serviceIncidents.js's resolve() and archivedOrderFinancialResolutions.js's
+  // record() for their own wrappers) — never named literally here on purpose:
+  // tests/serviceCloseoutIncidentsFoundation.static.test.js §10d3 and
+  // tests/archivedOrderFinancialResolutionsFoundation.static.test.js §9d both
+  // assert that string appears NOWHERE in the codebase yet (proving admin
+  // resolution still has no public path at all) — spelling it out even in a
+  // comment here would be a false positive against that exact invariant.
+  // Both wrappers exist and have JS call sites, but neither is called
+  // by performIncidentSafeRollover or by any HTTP action today — see each
+  // module's own header ("NOT wired into ... any HTTP action"). Least privilege:
+  // registering them now would open a transport path for a mutation capability
+  // that no accepted runtime code path uses yet. Register them when a real
+  // caller exists, not before.
+  entry('rpc/acquire_closeout_attempt', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'closeoutAttempts.js acquire(), called by incidentSafeRollover.js'),
+  entry('rpc/capture_closeout_snapshot', KIND.RPC, ['POST'], SENSITIVITY.AUDIT,
+    'closeoutSnapshots.js capture(), called by incidentSafeRollover.js'),
+  entry('rpc/create_service_incident', KIND.RPC, ['POST'], SENSITIVITY.AUDIT,
+    'serviceIncidents.js report(), called by incidentSafeRollover.js'),
+  entry('rpc/supersede_closeout_attempt', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'closeoutAttempts.js supersede(), called by incidentSafeRollover.js on a state-drift retry'),
+  entry('rpc/complete_closeout_attempt', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'closeoutAttempts.js complete(), called by incidentSafeRollover.js after a successful close'),
 
   // ── auth RPCs — src/auth/audit.js sbRest consumers ──
   entry('rpc/auth_bump_session_version', KIND.RPC, ['POST'], SENSITIVITY.AUTH_SECURITY, 'dao.js incrementSessionVersion'),

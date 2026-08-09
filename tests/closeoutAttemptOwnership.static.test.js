@@ -90,6 +90,10 @@ const ROLLBACK_PATH = path.join(ROOT, 'migrations', '2026-08-08_service_closeout
   ]);
   const CALLER_ALLOWED_FILES = new Set([
     path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'),
+    // SLICE 4C.2A — the H1B transport allowlist registers these RPC names by
+    // string (never calls them) so the real sbRpc default can reach them at
+    // all; see supabaseResourcePolicy.js's own comment at this entry.
+    path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js'),
   ]);
   const RPC_PATTERNS = [/acquire_closeout_attempt/, /supersede_closeout_attempt/, /complete_closeout_attempt/];
 

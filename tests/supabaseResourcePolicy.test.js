@@ -225,6 +225,64 @@ global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
     assert('20. allowlist del ratchet raw-fetch è vuota dopo H1B', nonCommentEntries.length === 0, nonCommentEntries.join(' | '));
   }
 
+  // ── 21) SLICE 4C.2A — the 5 closeout-lifecycle RPCs performIncidentSafeRollover
+  //       actually calls are registered, POST-only ─────────────────────────
+  {
+    const REQUIRED_ROLLOVER_RPCS = [
+      'rpc/acquire_closeout_attempt',
+      'rpc/capture_closeout_snapshot',
+      'rpc/create_service_incident',
+      'rpc/supersede_closeout_attempt',
+      'rpc/complete_closeout_attempt',
+    ];
+    for (const resource of REQUIRED_ROLLOVER_RPCS) {
+      assert(`21. ${resource} is registered`, policy.getResourcePolicy(resource) !== null);
+      assert(`21. ${resource} allows POST`, policy.isMethodAllowed(resource, 'POST'));
+      assert(`21. ${resource} denies GET`, !policy.isMethodAllowed(resource, 'GET'));
+      assert(`21. ${resource} denies DELETE`, !policy.isMethodAllowed(resource, 'DELETE'));
+    }
+    for (const resource of REQUIRED_ROLLOVER_RPCS) {
+      const r = await transport.supabaseRequest({ resource, method: 'POST', operation: 'test' });
+      assert(`21b. ${resource} POST reaches the transport`, r.ok === true);
+      const err = await captureErr(() => transport.supabaseRequest({ resource, method: 'GET', operation: 'test' }));
+      assert(`21c. ${resource} GET is rejected by the transport`, err && err.code === transport.ERROR_CODES.METHOD_NOT_ALLOWED);
+    }
+  }
+
+  // ── 22) service_closeout_snapshots — GET only (getByCorrelationId/listBySession) ──
+  {
+    assert('22. service_closeout_snapshots is registered', policy.getResourcePolicy('service_closeout_snapshots') !== null);
+    assert('22. service_closeout_snapshots allows GET', policy.isMethodAllowed('service_closeout_snapshots', 'GET'));
+    assert('22. service_closeout_snapshots denies POST', !policy.isMethodAllowed('service_closeout_snapshots', 'POST'));
+    assert('22. service_closeout_snapshots denies PATCH', !policy.isMethodAllowed('service_closeout_snapshots', 'PATCH'));
+    assert('22. service_closeout_snapshots denies DELETE', !policy.isMethodAllowed('service_closeout_snapshots', 'DELETE'));
+    const r = await transport.supabaseRequest({ resource: 'service_closeout_snapshots', method: 'GET', operation: 'test' });
+    assert('22b. GET reaches the transport', r.ok === true);
+  }
+
+  // ── 23) least privilege — resources with NO accepted runtime caller today
+  //       remain deliberately denied, even though the DB objects exist ──────
+  {
+    const STILL_DENIED = [
+      'rpc/resolve_service_incident',
+      'rpc/create_archived_order_financial_resolution',
+      'archived_order_financial_resolutions',
+      'service_incident_resolutions',
+    ];
+    for (const resource of STILL_DENIED) {
+      assert(`23. ${resource} remains unregistered (no accepted runtime caller)`, policy.getResourcePolicy(resource) === null);
+      const err = await captureErr(() => transport.supabaseRequest({ resource, method: 'POST', operation: 'test' }));
+      assert(`23b. ${resource} POST is rejected by the transport`, err && err.code === transport.ERROR_CODES.RESOURCE_NOT_ALLOWED);
+    }
+  }
+
+  // ── 24) an unknown/invented Service Closeout RPC never passes the allowlist ──
+  {
+    assert('24. a made-up closeout RPC name is not registered', policy.getResourcePolicy('rpc/delete_closeout_attempt') === null);
+    const err = await captureErr(() => transport.supabaseRequest({ resource: 'rpc/delete_closeout_attempt', method: 'POST', operation: 'test' }));
+    assert('24b. a made-up closeout RPC is rejected by the transport', err && err.code === transport.ERROR_CODES.RESOURCE_NOT_ALLOWED);
+  }
+
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   delete global.fetch;
   process.exit(fail === 0 ? 0 : 1);

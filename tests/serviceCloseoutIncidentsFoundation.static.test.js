@@ -194,6 +194,10 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   // RESOLUTION-only patterns below like everything else.
   const CREATION_WIRING_ALLOWED_FILES = new Set([
     path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'),
+    // SLICE 4C.2A — the H1B transport allowlist registers these RPC names by
+    // string (never calls them) so the real sbRpc default can reach them at
+    // all; see supabaseResourcePolicy.js's own comment at this entry.
+    path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js'),
   ]);
   const CREATION_PATTERNS = [/create_service_incident/, /capture_closeout_snapshot/, /serviceIncidents\.report\(/, /closeoutSnapshots\.capture\(/];
   const RESOLUTION_PATTERNS = [/resolve_service_incident/, /serviceIncidents\.resolve\(/];
