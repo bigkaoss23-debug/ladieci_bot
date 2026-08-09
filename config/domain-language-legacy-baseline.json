@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-05T18:33:20.476Z",
+  "generatedAt": "2026-08-09T10:31:08.083Z",
   "entries": [
     {
       "file": "index.js",
@@ -9,7 +9,7 @@
     {
       "file": "index.js",
       "term": "chiudi",
-      "count": 20
+      "count": 19
     },
     {
       "file": "index.js",
@@ -34,7 +34,7 @@
     {
       "file": "index.js",
       "term": "ordini",
-      "count": 14
+      "count": 13
     },
     {
       "file": "index.js",
@@ -59,12 +59,12 @@
     {
       "file": "index.js",
       "term": "servizio",
-      "count": 21
+      "count": 20
     },
     {
       "file": "index.js",
       "term": "storico",
-      "count": 8
+      "count": 9
     },
     {
       "file": "index.js",
@@ -370,6 +370,56 @@
       "file": "migrations/2026-08-02_service_close_live_work_guard.sql",
       "term": "messa",
       "count": 1
+    },
+    {
+      "file": "migrations/2026-08-08_service_closeout_attempt_ownership.sql",
+      "term": "chiudi",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-08-08_service_closeout_attempt_ownership.sql",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-08-08_service_closeout_incidents_foundation.sql",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-08_service_closeout_incidents_foundation.sql",
+      "term": "pranzo",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-08-08_service_closeout_incidents_foundation.sql",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-08_service_closeout_post_close_financial_resolutions.sql",
+      "term": "chiudi",
+      "count": 3
+    },
+    {
+      "file": "migrations/2026-08-08_service_closeout_post_close_financial_resolutions.sql",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-08_service_closeout_post_close_financial_resolutions.sql",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-08-08_service_closeout_post_close_financial_resolutions.sql",
+      "term": "servizio",
+      "count": 3
+    },
+    {
+      "file": "migrations/2026-08-08_service_closeout_post_close_financial_resolutions.sql",
+      "term": "storico",
+      "count": 16
     },
     {
       "file": "ops/backup/b7a2_e2e_b_restore_2026-07-22.sql",
@@ -814,7 +864,7 @@
     {
       "file": "src/auth/authorizationContract.js",
       "term": "storico",
-      "count": 3
+      "count": 4
     },
     {
       "file": "src/auth/authorizationContract.js",
@@ -880,6 +930,46 @@
       "file": "src/auth/legacyActionRoles.js",
       "term": "suggerimento",
       "count": 2
+    },
+    {
+      "file": "src/closeout/archivedOrderFinancialResolutions.js",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/archivedOrderFinancialResolutions.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/archivedOrderFinancialResolutions.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/archivedOrderFinancialResolutions.js",
+      "term": "storico",
+      "count": 3
+    },
+    {
+      "file": "src/closeout/closeoutAttempts.js",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/closeoutAttempts.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/closeoutSnapshots.js",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/closeoutSnapshots.js",
+      "term": "servizio",
+      "count": 1
     },
     {
       "file": "src/closeout/currentServiceCloseout.js",
@@ -1072,6 +1162,16 @@
       "count": 1
     },
     {
+      "file": "src/incidents/serviceIncidents.js",
+      "term": "chiudi",
+      "count": 1
+    },
+    {
+      "file": "src/incidents/serviceIncidents.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
       "file": "src/menu/__tests__/agentWhatsappShadowIntegration.test.js",
       "term": "consegna",
       "count": 1
@@ -1194,12 +1294,22 @@
     {
       "file": "src/serviceSessions/ensureServiceSession.js",
       "term": "chiudi",
-      "count": 6
+      "count": 4
     },
     {
       "file": "src/serviceSessions/ensureServiceSession.js",
       "term": "servizio",
-      "count": 7
+      "count": 4
+    },
+    {
+      "file": "src/serviceSessions/incidentSafeRollover.js",
+      "term": "chiudi",
+      "count": 10
+    },
+    {
+      "file": "src/serviceSessions/incidentSafeRollover.js",
+      "term": "servizio",
+      "count": 12
     },
     {
       "file": "src/serviceSessions/orderIntakePolicy.js",
@@ -1224,6 +1334,36 @@
     {
       "file": "src/serviceSessions/pendingActivityGuard.js",
       "term": "servizio",
+      "count": 3
+    },
+    {
+      "file": "src/serviceSessions/rolloverClassifier.js",
+      "term": "chiudi",
+      "count": 2
+    },
+    {
+      "file": "src/serviceSessions/rolloverClassifier.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/rolloverClassifier.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/rolloverClassifier.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "src/serviceSessions/rolloverClassifier.js",
+      "term": "servizio",
+      "count": 3
+    },
+    {
+      "file": "src/serviceSessions/sessionRolloverClassification.js",
+      "term": "pranzo",
       "count": 3
     },
     {
@@ -1682,6 +1822,36 @@
       "count": 2
     },
     {
+      "file": "tests/archivedOrderFinancialResolutions.test.js",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "tests/archivedOrderFinancialResolutions.test.js",
+      "term": "storico",
+      "count": 2
+    },
+    {
+      "file": "tests/archivedOrderFinancialResolutionsFoundation.static.test.js",
+      "term": "chiudi",
+      "count": 2
+    },
+    {
+      "file": "tests/archivedOrderFinancialResolutionsFoundation.static.test.js",
+      "term": "serata",
+      "count": 7
+    },
+    {
+      "file": "tests/archivedOrderFinancialResolutionsFoundation.static.test.js",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "tests/archivedOrderFinancialResolutionsFoundation.static.test.js",
+      "term": "storico",
+      "count": 10
+    },
+    {
       "file": "tests/authorizationContract.test.js",
       "term": "archivio",
       "count": 4
@@ -1714,7 +1884,7 @@
     {
       "file": "tests/authorizationContract.test.js",
       "term": "storico",
-      "count": 4
+      "count": 5
     },
     {
       "file": "tests/authorizationContract.test.js",
@@ -1729,17 +1899,27 @@
     {
       "file": "tests/autoCloseDecision.test.js",
       "term": "pranzo",
-      "count": 14
+      "count": 22
     },
     {
       "file": "tests/autoCloseEngine.test.js",
       "term": "chiudi",
-      "count": 5
+      "count": 7
     },
     {
       "file": "tests/autoCloseEngine.test.js",
       "term": "servizio",
-      "count": 6
+      "count": 9
+    },
+    {
+      "file": "tests/closeoutAttemptOwnership.static.test.js",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "tests/closeoutSnapshots.test.js",
+      "term": "pranzo",
+      "count": 2
     },
     {
       "file": "tests/closeoutSummaryAccountingParity.test.js",
@@ -2248,18 +2428,8 @@
     },
     {
       "file": "tests/ensureCurrentSessionRecovery.test.js",
-      "term": "chiudi",
-      "count": 1
-    },
-    {
-      "file": "tests/ensureCurrentSessionRecovery.test.js",
       "term": "pranzo",
-      "count": 10
-    },
-    {
-      "file": "tests/ensureCurrentSessionRecovery.test.js",
-      "term": "servizio",
-      "count": 1
+      "count": 14
     },
     {
       "file": "tests/ensureServiceSession.test.js",
@@ -2485,6 +2655,21 @@
       "file": "tests/geoResolverEnrich.test.js",
       "term": "ordini",
       "count": 1
+    },
+    {
+      "file": "tests/incidentSafeRollover.test.js",
+      "term": "chiudi",
+      "count": 4
+    },
+    {
+      "file": "tests/incidentSafeRollover.test.js",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "tests/incidentSafeRollover.test.js",
+      "term": "servizio",
+      "count": 4
     },
     {
       "file": "tests/legacyActionRoleMapCompleteness.test.js",
@@ -2757,6 +2942,11 @@
       "count": 2
     },
     {
+      "file": "tests/previousCloseoutIncidentSummary.test.js",
+      "term": "pranzo",
+      "count": 3
+    },
+    {
       "file": "tests/proposeForNewOrder.test.js",
       "term": "consegna",
       "count": 31
@@ -2812,6 +3002,11 @@
       "count": 1
     },
     {
+      "file": "tests/rolloverClassifier.test.js",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
       "file": "tests/serviceCloseGate.test.js",
       "term": "chiudi",
       "count": 13
@@ -2862,6 +3057,51 @@
       "count": 1
     },
     {
+      "file": "tests/serviceCloseoutIncidentsFoundation.static.test.js",
+      "term": "chiudi",
+      "count": 3
+    },
+    {
+      "file": "tests/serviceCloseoutIncidentsFoundation.static.test.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "tests/serviceCloseoutIncidentsFoundation.static.test.js",
+      "term": "servizio",
+      "count": 3
+    },
+    {
+      "file": "tests/serviceCloseoutIncidentsFoundation.static.test.js",
+      "term": "storico",
+      "count": 3
+    },
+    {
+      "file": "tests/serviceCloseoutV2Slice3RolloverMatrix.test.js",
+      "term": "chiudi",
+      "count": 6
+    },
+    {
+      "file": "tests/serviceCloseoutV2Slice3RolloverMatrix.test.js",
+      "term": "pranzo",
+      "count": 12
+    },
+    {
+      "file": "tests/serviceCloseoutV2Slice3RolloverMatrix.test.js",
+      "term": "servizio",
+      "count": 6
+    },
+    {
+      "file": "tests/serviceIncidents.test.js",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "tests/serviceIncidentsAdminBacklog.test.js",
+      "term": "pranzo",
+      "count": 3
+    },
+    {
       "file": "tests/serviceSchedule.test.js",
       "term": "pranzo",
       "count": 22
@@ -2887,6 +3127,11 @@
       "count": 4
     },
     {
+      "file": "tests/sessionRolloverClassification.test.js",
+      "term": "pranzo",
+      "count": 15
+    },
+    {
       "file": "tests/snapshotDeleteAndRetry.test.js",
       "term": "ordine",
       "count": 6
@@ -2894,22 +3139,17 @@
     {
       "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
       "term": "chiudi",
-      "count": 9
-    },
-    {
-      "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
-      "term": "completato",
-      "count": 1
+      "count": 3
     },
     {
       "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
       "term": "pranzo",
-      "count": 5
+      "count": 6
     },
     {
       "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
       "term": "servizio",
-      "count": 9
+      "count": 3
     },
     {
       "file": "tests/storicoConflictIndexContract.test.js",
