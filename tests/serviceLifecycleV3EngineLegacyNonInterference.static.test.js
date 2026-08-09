@@ -53,6 +53,8 @@ const ENGINE_FILES = [
   path.join(ROOT, 'src', 'serviceSessions', 'serviceLifecycleEngine.js'),
   path.join(ROOT, 'src', 'serviceSessions', 'serviceLifecycleV3Transition.js'),
   path.join(ROOT, 'src', 'closeout', 'serviceCloseoutCreation.js'),
+  // SLICE 3.4
+  path.join(ROOT, 'src', 'serviceSessions', 'v3NextServiceIdentity.js'),
 ];
 
 // language-guard: allow-legacy chiudiServizio/storico/serata_summary are the exact forbidden-term identifiers this test asserts are ABSENT from the new engine, not new vocabulary being introduced
@@ -68,12 +70,23 @@ const FORBIDDEN_PATTERNS = [
   // language-guard: allow-legacy serata_summary is the exact forbidden identifier this entry checks for the ABSENCE of, not new vocabulary
   { name: 'serata_summary (legacy archive table)', re: /serata_summary/ },
   { name: 'scheduleDeferredCloseRetry (legacy retry mechanism)', re: /scheduleDeferredCloseRetry/ },
+  // SLICE 3.4 — "no legacy scheduler dependency", "does not enable automatic
+  // scheduling", "does not call legacy close machinery": the engine derives
+  // next-service identity itself (v3NextServiceIdentity.js) and must never
+  // reach for the legacy ensure/auto-close machinery to do it.
+  { name: 'ensure_service_session (legacy next-service RPC)', re: /ensure_service_session\(/ },
+  { name: 'ensureCurrentServiceSession / ensureServiceSession.js (legacy S2-7D6B ensure orchestrator)', re: /ensureServiceSession|ensureCurrentServiceSession/ },
+  { name: 'incidentSafeRollover / performIncidentSafeRollover (legacy V2 rollover orchestrator)', re: /incidentSafeRollover|performIncidentSafeRollover/ },
+  { name: 'rolloverClassifier / classifySessionForRollover (legacy V2 classifier)', re: /rolloverClassifier|classifySessionForRollover|sessionRolloverClassification/ },
+  { name: 'autoCloseEngine / autoCloseDecision (legacy automatic-close scheduler)', re: /autoCloseEngine|autoCloseDecision/ },
+  { name: 'LEGACY_AUTOMATIC_LIFECYCLE_ENABLED (legacy scheduler feature flag)', re: /LEGACY_AUTOMATIC_LIFECYCLE_ENABLED/ },
+  { name: 'mesa_release_empty_session_auto_v1 called directly by name (must go through mesaDao.js only, unchanged since V3.3)', re: /rpc\(\s*['"]mesa_release_empty_session_auto_v1['"]/ },
 ];
 
 (async () => {
   console.log('\n== V3.2 close engine — legacy non-interference guard ==\n');
 
-  assert('0: the engine file set is non-trivial (guards against a typo silently checking nothing)', ENGINE_FILES.length === 3);
+  assert('0: the engine file set is non-trivial (guards against a typo silently checking nothing)', ENGINE_FILES.length === 4);
 
   for (const file of ENGINE_FILES) {
     const rel = path.relative(ROOT, file);

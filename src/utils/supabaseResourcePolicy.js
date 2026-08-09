@@ -226,6 +226,11 @@ const REGISTRY = Object.freeze([
     'serviceCloseoutCreation.js create(), called by serviceLifecycleEngine.js — the only writer of service_closeouts'),
   entry('rpc/close_service_session_v3', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'serviceLifecycleV3Transition.js close(), called by serviceLifecycleEngine.js — the V3-native terminal transition'),
+  // SLICE 3.4 — the next-service-opening primitive. Same DI-invisible pattern
+  // (rpc/... string only, reached via serviceLifecycleV3Transition.js's
+  // ensureNext(), never a literal RPC-name string in the engine itself).
+  entry('rpc/ensure_next_service_session_v3', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'serviceLifecycleV3Transition.js ensureNext(), called by serviceLifecycleEngine.js — opens/reuses the V3 rollover continuation of a just-closed session'),
   // SLICE 3.2.1 — serviceCloseouts.js's getBySessionId() (plain SELECT, same
   // DI-invisible pattern as service_closeout_snapshots/service_closeout_
   // attempts above) existed since V3.1 as a read-only DAO for reports/tests

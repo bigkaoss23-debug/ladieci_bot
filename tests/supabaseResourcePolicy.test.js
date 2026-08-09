@@ -348,6 +348,20 @@ global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
     }
   }
 
+  // ── 28) SERVICE LIFECYCLE V3 / SLICE 3.4 — the next-service-opening RPC
+  //       (serviceLifecycleV3Transition.js ensureNext(), called by
+  //       serviceLifecycleEngine.js). Same posture as check 26: POST-only,
+  //       service_role internal, no HTTP action anywhere calls it. ─────────
+  {
+    const resource = 'rpc/ensure_next_service_session_v3';
+    assert(`28. ${resource} is registered`, policy.getResourcePolicy(resource) !== null);
+    assert(`28. ${resource} allows POST`, policy.isMethodAllowed(resource, 'POST'));
+    assert(`28. ${resource} denies GET`, !policy.isMethodAllowed(resource, 'GET'));
+    assert(`28. ${resource} denies DELETE`, !policy.isMethodAllowed(resource, 'DELETE'));
+    const r = await transport.supabaseRequest({ resource, method: 'POST', operation: 'test' });
+    assert(`28b. ${resource} POST reaches the transport`, r.ok === true);
+  }
+
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   delete global.fetch;
   process.exit(fail === 0 ? 0 : 1);

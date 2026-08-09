@@ -6,6 +6,23 @@
 -- guard_service_session_closed_v1 at all (Slice 3.3 does not touch close
 -- mechanics, only what happens to a non-hard anomaly before Phase D).
 --
+-- ── V3.4 SESSION FIX — the mesa_release_empty_session_auto_v1 dependency ───
+-- This guard originally pointed at row 56 (2026-08-09_service_closeout_
+-- cross_service_table_policy.sql) for mesa_release_empty_session_auto_v1.
+-- Row 56 is retired — "UNAPPLIED — V2 legacy-policy migration; do not deploy
+-- pending V3 replacement" (MIGRATION_MANIFEST.md) — and the V3.4 session
+-- proved empirically (staging tdikhfeinufaahagmpjz, real Postgres, BEGIN/
+-- ROLLBACK, zero residue) that applying rows 57→58→59 cleanly and then this
+-- migration, with row 56 correctly excluded, fails at exactly this guard.
+-- The dependency itself was never wrong (this migration's engine caller,
+-- src/tables/mesaDao.js releaseEmptySessionAuto(), really does need this
+-- exact RPC) — only the SOURCE was: 2026-08-09_service_lifecycle_v3_table_
+-- release.sql now supplies the identical function (same name/signature/
+-- body/grants) under V3's own ownership, with zero dependency on row 56's
+-- other, V2-orchestrator-specific content. This guard's check below is
+-- unchanged (still a plain to_regprocedure existence check, satisfied by
+-- either source) — only its error message is corrected.
+--
 -- ── WHY THIS EXISTS ──────────────────────────────────────────────────────
 -- service_closeouts (row 57) has always had five aggregate incident-fact
 -- columns — kitchen_pending_count, listo_count, delivery_pending_count,
@@ -82,7 +99,7 @@ BEGIN
   THEN RAISE EXCEPTION 'service lifecycle v3 incident policy refused: create_service_incident missing — apply 2026-08-08_service_closeout_incidents_foundation first'; END IF;
 
   IF to_regprocedure('public.mesa_release_empty_session_auto_v1(uuid,uuid)') IS NULL
-  THEN RAISE EXCEPTION 'service lifecycle v3 incident policy refused: mesa_release_empty_session_auto_v1 missing — apply 2026-08-09_service_closeout_cross_service_table_policy first'; END IF;
+  THEN RAISE EXCEPTION 'service lifecycle v3 incident policy refused: mesa_release_empty_session_auto_v1 missing — apply 2026-08-09_service_lifecycle_v3_table_release first'; END IF;
 END $$;
 
 -- ── PREDECESSOR-BODY GUARD — refuse to apply over drift or a double-patch ──

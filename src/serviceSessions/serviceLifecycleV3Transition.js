@@ -34,6 +34,10 @@ function publicSession(row) {
     openSource: row.open_source,
     closeSource: row.close_source,
     closeReason: row.close_reason || null,
+    // SLICE 3.4 — set only on a session opened as the V3 rollover
+    // continuation of another (see ensureNext() below); null for close()'s
+    // own results (A never has this set on itself).
+    rolloverSourceSessionId: row.rollover_source_session_id || null,
   };
 }
 
@@ -56,6 +60,32 @@ function createServiceLifecycleV3Transition({ rpc = sbRpc } = {}) {
       return {
         success: true,
         idempotent: res.idempotent === true,
+        code: res.code,
+        session: publicSession(res.session),
+      };
+    },
+
+    // SLICE 3.4 — thin wrapper over ensure_next_service_session_v3 (see
+    // migrations/2026-08-09_service_lifecycle_v3_rollover.sql). Idempotent on
+    // (rollover_source_session_id): a retry for the SAME sourceSessionId
+    // always returns the SAME session, `created:false`, regardless of what
+    // the clock says by the time the retry runs — the caller (the engine)
+    // never needs to re-derive serviceKind/businessDate on a retry once B
+    // already exists.
+    async ensureNext({ sourceSessionId, serviceKind, businessDate, actor, source }) {
+      const res = normalize(await rpc("ensure_next_service_session_v3", {
+        p_source_session_id: sourceSessionId,
+        p_service_kind: serviceKind,
+        p_business_date: businessDate,
+        p_opened_by: actor,
+        p_source: source,
+      }));
+      if (res.ok !== true) {
+        return { success: false, code: res.code || "SERVICE_LIFECYCLE_V3_ENSURE_NEXT_FAILED", session: null };
+      }
+      return {
+        success: true,
+        created: res.created === true,
         code: res.code,
         session: publicSession(res.session),
       };
