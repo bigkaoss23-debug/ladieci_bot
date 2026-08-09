@@ -46,6 +46,14 @@ function createServiceCloseoutCreation({ rpc = sbRpc } = {}) {
       otherAmountCents = 0,
       openOrdersAtClose = 0,
       occupiedTablesAtClose = 0,
+      // SLICE 3.3 — incident aggregates. Default 0 preserves Slice 3.2's own
+      // happy-path call shape (no incidents ever existed then) without
+      // requiring every existing caller/test to pass them.
+      kitchenPendingCount = 0,
+      listoCount = 0,
+      deliveryPendingCount = 0,
+      incidentCount = 0,
+      criticalIncidentCount = 0,
     }) {
       const res = normalize(await rpc("create_service_closeout", {
         p_service_session_id: serviceSessionId,
@@ -66,6 +74,11 @@ function createServiceCloseoutCreation({ rpc = sbRpc } = {}) {
         p_other_amount_cents: otherAmountCents,
         p_open_orders_at_close: openOrdersAtClose,
         p_occupied_tables_at_close: occupiedTablesAtClose,
+        p_kitchen_pending_count: kitchenPendingCount,
+        p_listo_count: listoCount,
+        p_delivery_pending_count: deliveryPendingCount,
+        p_incident_count: incidentCount,
+        p_critical_incident_count: criticalIncidentCount,
       }));
       if (res.ok !== true) {
         return { success: false, created: false, code: res.code || "SERVICE_CLOSEOUT_CREATE_FAILED", closeout: null };

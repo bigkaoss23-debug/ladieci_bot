@@ -2,7 +2,7 @@
 // ===============================================================
 // serviceLifecycleEngine.js — SERVICE LIFECYCLE V3 / Slice 3.2
 //
-// The authoritative V3 close engine — HAPPY PATH ONLY. NEW ENGINE, NO LEGACY
+// The authoritative V3 close engine. NEW ENGINE, NO LEGACY
 // language-guard: allow-legacy chiudiServizio/servizio.js/storico/serata_summary are named here only to state what this file does NOT reference, not new vocabulary
 // CLOSEOUT: this file never requires src/utils/servizio.js (chiudiServizio),
 // language-guard: allow-legacy storico/serata_summary are named here only to state what this file does NOT reference, not new vocabulary
@@ -14,15 +14,21 @@
 // style — DI factory, discriminated {success,code,...} results — but is a
 // SEPARATE engine, not an extension of it):
 //   acquire/resume close attempt -> capture immutable snapshot -> reconcile
-//   deterministic close facts from CANONICAL live data -> persist the
+//   deterministic close facts from CANONICAL live data -> classify non-hard
+//   anomalies into incidents -> persist every required incident -> apply safe
+//   auto-actions (only after every incident is durable) -> persist the
 //   authoritative service_closeout -> mark the service closed -> mark the
 //   attempt completed.
 //
-// Any anomaly (a non-terminal order, any unpaid exposure) stops the engine
-// BEFORE any mutation and returns V3_CLOSE_UNSUPPORTED_NON_HAPPY_PATH — no
-// incident classification, no auto-resolution, no fallback to the legacy
-// engine. That is V3.3's job. Opening the next service is also out of scope
-// for this slice; the engine ends once the current service is closed.
+// SLICE 3.3 — a non-terminal order or unpaid exposure no longer stops the
+// engine (the old V3_CLOSE_UNSUPPORTED_NON_HAPPY_PATH gate is gone): each
+// becomes a persisted service_incidents row via v3IncidentPolicy.js's single
+// classification/policy authority, and the service still closes. ONLY a true
+// integrity failure remains a hard blocker: a reconciliation mismatch
+// (unchanged from Slice 3.2), an invalid lineage (unchanged from Slice
+// 3.2.1), or a failure to durably persist a REQUIRED incident (new this
+// slice — see Phase C.2 below). Opening the next service remains out of
+// scope; the engine still ends once the current service is closed.
 // ===============================================================
 
 const { sbSelect } = require("../utils/supabase");
@@ -32,6 +38,9 @@ const { serviceCloseoutCreation } = require("../closeout/serviceCloseoutCreation
 const { serviceCloseouts } = require("../closeout/serviceCloseouts");
 const { serviceLifecycleV3Transition } = require("./serviceLifecycleV3Transition");
 const { aggregate } = require("../closeout/currentServiceCloseout");
+const { serviceIncidents } = require("../incidents/serviceIncidents");
+const { classifyForV3Close } = require("./v3IncidentPolicy");
+const mesaDao = require("../tables/mesaDao");
 
 // language-guard: allow-legacy servizio.js is named here only as a cross-reference to where the same literal terminal-state set also lives, not new vocabulary
 // Identical set to guard_service_session_closed_v1 (SQL) / servizio.js /
@@ -58,6 +67,9 @@ function createServiceLifecycleEngine({
   closeouts = serviceCloseouts,
   transition = serviceLifecycleV3Transition,
   aggregateCloseout = aggregate,
+  incidents = serviceIncidents,
+  releaseEmptyTable = mesaDao.releaseEmptySessionAuto,
+  classify = classifyForV3Close,
 } = {}) {
   return async function closeServiceV3({ serviceSessionId, source = "v3_engine", actor = "system" } = {}) {
     if (!serviceSessionId) {
@@ -278,20 +290,6 @@ function createServiceLifecycleEngine({
     ).length;
     const unpaidExposureCents = toCents(closeout.totals.unpaid);
 
-    // HAPPY PATH ONLY — no incident classification, no auto-resolution, no
-    // fallback to the legacy engine. Stops here, before any mutation; the
-    // attempt stays 'active' and recoverable for a future retry.
-    if (nonTerminalCount > 0 || unpaidExposureCents !== 0) {
-      return {
-        success: false,
-        code: "V3_CLOSE_UNSUPPORTED_NON_HAPPY_PATH",
-        reason: nonTerminalCount > 0 ? "NON_TERMINAL_ORDERS" : "UNPAID_EXPOSURE",
-        nonTerminalCount,
-        unpaidExposureCents,
-        closeoutCorrelationId,
-      };
-    }
-
     const grossSalesCents = toCents(closeout.totals.gross);
     const refundedCents = toCents(closeout.totals.refunded);
     const cashAmountCents = toCents(closeout.paymentTotals.efectivo);
@@ -315,6 +313,124 @@ function createServiceLifecycleEngine({
     const netSalesCents = Math.max(0, grossSalesCents - refundedCents);
     const occupiedTablesAtClose = tableSessions.filter((t) => t.status === "open").length;
 
+    // Phase C.2 — SLICE 3.3: classify every non-hard anomaly (a non-terminal
+    // order, an unpaid balance, a truly-empty open table) into an incident,
+    // via the ONE classification/policy authority (v3IncidentPolicy.js).
+    // Every classified incident here is, by construction, non-blocking — a
+    // TRUE integrity failure never reaches this point (the reconciliation
+    // mismatch above, and Slice 3.2.1's own lineage checks earlier, already
+    // stop the engine before any mutation, including before this
+    // classification step, for exactly that reason).
+    // classify() throws only on its own internal fail-closed guard (an
+    // incident type with no policy entry — a programming defect, never a
+    // real business scenario; see v3IncidentPolicy.js's policyFor()). Caught
+    // here so that defect still surfaces as this engine's normal
+    // discriminated-result contract (Convention A) — a controlled hard
+    // block, no mutation yet attempted — rather than an unhandled rejection.
+    let classification;
+    try {
+      classification = classify({ orders, tableSessions, tickets: closeout.tickets });
+    } catch (e) {
+      return {
+        success: false, code: "V3_CLOSE_CLASSIFICATION_FAILED",
+        closeoutCorrelationId, detail: String((e && e.message) || e),
+      };
+    }
+    const detectedSnapshotId = captureResult.snapshot ? captureResult.snapshot.id : null;
+
+    // Persist EVERY classified incident BEFORE anything else is mutated.
+    // Idempotent on (closeoutCorrelationId, incidentType, entityType,
+    // entityId) — service_incidents_dedupe_uq — so a retry under the SAME
+    // active attempt never duplicates an incident already durably recorded.
+    // A failure to persist a REQUIRED incident is itself a hard blocker: V3
+    // must never proceed to a successful closeout while a known anomaly
+    // could not be durably recorded — the attempt stays active/recoverable,
+    // and a retry re-persists only whatever did not already land.
+    const persistedIncidents = [];
+    for (const descriptor of classification.incidents) {
+      let reportResult;
+      try {
+        reportResult = await incidents.report({
+          serviceSessionId,
+          closeoutCorrelationId,
+          snapshotId: detectedSnapshotId,
+          detectedBy: actor,
+          incidentType: descriptor.incidentType,
+          category: descriptor.category,
+          severity: descriptor.severity,
+          entityType: descriptor.entityType,
+          entityId: descriptor.entityId,
+          orderId: descriptor.orderId || null,
+          tableSessionId: descriptor.tableSessionId || null,
+          financialExposureCents: descriptor.financialExposureCents ?? null,
+          // Always created pending, even for an incident this same pass will
+          // go on to auto-resolve below — never persist a "resolved" fact
+          // before the corresponding safe action has actually confirmed
+          // success. Same discipline incidentSafeRollover.js's SLICE 4C.2C
+          // already established, after a real staging run proved the
+          // alternative (auto_resolve:true at creation time) unsafe: a
+          // release RPC failure right after would leave a permanently false
+          // "successfully released" record against a table still open.
+          autoResolve: false,
+          autoResolutionType: null,
+          autoResolutionNote: null,
+        });
+      } catch (e) {
+        return {
+          success: false, code: "V3_CLOSE_INCIDENT_PERSISTENCE_FAILED",
+          closeoutCorrelationId, detail: String((e && e.message) || e),
+        };
+      }
+      if (!reportResult.success) {
+        return {
+          success: false, code: "V3_CLOSE_INCIDENT_PERSISTENCE_FAILED",
+          closeoutCorrelationId, incidentCode: reportResult.code,
+        };
+      }
+      persistedIncidents.push(reportResult.incident);
+    }
+
+    // Safe auto-actions — ONLY once every incident above is durable. Best
+    // effort and non-fatal per action: a failed release leaves that table
+    // harmlessly open (its incident stays pending/actionable, never falsely
+    // resolved) — this never risks data integrity, so it is never itself a
+    // reason to block the close.
+    for (const action of classification.safeAutoActions) {
+      if (action.type !== "RELEASE_EMPTY_TABLE") continue;
+      const matchingIncident = persistedIncidents.find(
+        (inc) => inc && inc.entityType === action.incidentEntityType && inc.entityId === action.incidentEntityId
+      );
+      try {
+        await releaseEmptyTable({ workspaceId: action.workspaceId, tableSessionId: action.tableSessionId });
+        if (matchingIncident) {
+          const resolveResult = await incidents.resolve({
+            incidentId: matchingIncident.id,
+            resolvedBy: actor,
+            role: "admin",
+            resolutionType: "auto_released_empty_table",
+            resolutionNote: "Table session had zero activity (covers_total IS NULL) at service close; automatically released.",
+          });
+          if (resolveResult.success && resolveResult.incident) {
+            matchingIncident.resolutionStatus = resolveResult.incident.resolutionStatus;
+            matchingIncident.resolutionType = resolveResult.incident.resolutionType;
+          } else {
+            console.warn(
+              "[serviceLifecycleEngine] empty table released but marking its incident resolved failed (non-fatal — it stays visible as pending/actionable):",
+              resolveResult.code
+            );
+          }
+        }
+      } catch (e) {
+        console.warn(
+          "[serviceLifecycleEngine] empty-table auto-release failed (non-fatal — the incident stays pending/actionable, the table stays harmlessly open):",
+          (e && e.message) || e
+        );
+      }
+    }
+
+    const incidentCount = persistedIncidents.length;
+    const criticalIncidentCount = persistedIncidents.filter((i) => i && i.severity === "critical").length;
+
     // Phase D — persist the ONE authoritative service_closeouts row.
     const createResult = await closeoutCreation.create({
       serviceSessionId,
@@ -326,14 +442,19 @@ function createServiceLifecycleEngine({
       totalRefundsCents: refundedCents,
       totalVoidCents: voidCents,
       paidAmountCents,
-      unpaidExposureCents: 0,
+      unpaidExposureCents,
       orderCount: closeout.counts.tickets,
       cashAmountCents,
       cardAmountCents,
       bizumAmountCents,
       otherAmountCents,
-      openOrdersAtClose: 0,
+      openOrdersAtClose: nonTerminalCount,
       occupiedTablesAtClose,
+      kitchenPendingCount: classification.kitchenPendingCount,
+      listoCount: classification.listoCount,
+      deliveryPendingCount: classification.deliveryPendingCount,
+      incidentCount,
+      criticalIncidentCount,
     });
     if (!createResult.success) {
       return { success: false, code: createResult.code || "V3_CLOSE_CLOSEOUT_PERSIST_FAILED", closeoutCorrelationId };
@@ -372,6 +493,7 @@ function createServiceLifecycleEngine({
       closeout: createResult.closeout,
       session: transitionResult.session,
       occupiedTablesAtClose,
+      incidents: persistedIncidents,
     };
   };
 }

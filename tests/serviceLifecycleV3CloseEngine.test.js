@@ -6,6 +6,17 @@
 // static.test.js). Fakes mirror the REAL RPC contracts' idempotency shape
 // (ON CONFLICT DO NOTHING + re-fetch, active-attempt uniqueness) exactly, the
 // same style as tests/incidentSafeRollover.test.js's fakeEnv().
+//
+// SLICE 3.3 note: Scenarios F/F2 originally proved the Slice-3.2-only
+// "happy path only, anomaly -> V3_CLOSE_UNSUPPORTED_NON_HAPPY_PATH" refusal.
+// That gate is gone (see serviceLifecycleEngine.js's own header) — an
+// anomaly now classifies into a persisted incident and the close still
+// succeeds. F/F2 below are updated to prove exactly that for THIS file's own
+// scope (structural close behaviour); the full incident-policy contract
+// (financial/operational/informational classification, persistence
+// ordering, idempotent retry, safe-action success/failure) is proven
+// separately in tests/v3IncidentPolicy.test.js and
+// tests/serviceLifecycleV3IncidentPolicyEngine.test.js.
 
 const { createServiceLifecycleEngine } = require('../src/serviceSessions/serviceLifecycleEngine');
 
@@ -208,6 +219,25 @@ function fakeEnv({
     },
   };
 
+  // SLICE 3.3 — minimal idempotent fakes for the engine's incident-policy
+  // dependencies. Full contract coverage (idempotent dedupe, safe-action
+  // success/failure ordering) lives in
+  // tests/serviceLifecycleV3IncidentPolicyEngine.test.js; this file only
+  // needs these two NOT to hit the real network, so Scenario A-E/G's
+  // zero-incident happy paths keep proving exactly what they always did.
+  env.incidents = {
+    calls: { report: [], resolve: [] },
+    async report(fields) {
+      env.incidents.calls.report.push(fields);
+      return { success: true, created: true, code: 'RECORDED', incident: { id: 'inc-' + (env.incidents.calls.report.length), ...fields, resolutionStatus: 'pending' } };
+    },
+    async resolve({ incidentId, resolutionType }) {
+      env.incidents.calls.resolve.push({ incidentId, resolutionType });
+      return { success: true, incident: { id: incidentId, resolutionStatus: 'resolved', resolutionType } };
+    },
+  };
+  env.releaseEmptyTable = async () => ({ ok: true });
+
   return env;
 }
 
@@ -219,6 +249,8 @@ function engineFrom(env) {
     closeoutCreation: env.closeoutCreation,
     closeouts: env.closeouts,
     transition: env.transition,
+    incidents: env.incidents,
+    releaseEmptyTable: env.releaseEmptyTable,
   });
 }
 
@@ -332,32 +364,32 @@ function engineFrom(env) {
     assert('E4: exactly one attempt row exists', env.attemptsByCorr.size === 1);
   }
 
-  console.log('\n── Scenario F: anomaly (unpaid order) — controlled refusal, no mutation ──');
+  console.log('\n── Scenario F: anomaly (unpaid order) — SLICE 3.3: classifies + closes, never refuses ──');
   {
     const orders = [order({ totale: 10 })]; // no payment event -> unpaid
     const env = fakeEnv({ allOrders: orders, financialEvents: [] });
     const closeServiceV3 = engineFrom(env);
     const result = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('F1: success is false', result.success === false, JSON.stringify(result));
-    assert('F2: code is V3_CLOSE_UNSUPPORTED_NON_HAPPY_PATH', result.code === 'V3_CLOSE_UNSUPPORTED_NON_HAPPY_PATH');
-    assert('F3: reason is UNPAID_EXPOSURE', result.reason === 'UNPAID_EXPOSURE');
-    assert('F4: NO closeout was created', env.closeoutsByCorr.size === 0);
-    assert('F5: transition.close() was NEVER called — no status mutation attempted', env.calls.close.length === 0);
-    assert('F6: the attempt stays active (recoverable for a future retry), never completed', env.attemptsByCorr.get(result.closeoutCorrelationId).status === 'active');
-    assert('F7: session itself is untouched', env.sessions.get(SESSION_ID).status === 'open');
+    assert('F1: success is true — an unpaid balance no longer blocks the close', result.success === true, JSON.stringify(result));
+    assert('F2: code is V3_CLOSED', result.code === 'V3_CLOSED');
+    assert('F3: exactly 1 financial incident, exposure 1000 cents', result.incidents.length === 1 && result.incidents[0].incidentType === 'UNPAID_BALANCE_AT_CLOSE');
+    assert('F4: a closeout WAS created, unpaidExposureCents is 1000 (frozen, not zeroed)', env.closeoutsByCorr.size === 1 && result.closeout.financial.unpaidExposureCents === 1000);
+    assert('F5: transition.close() WAS called — the close proceeds', env.calls.close.length === 1);
+    assert('F6: attempt reaches completed', env.attemptsByCorr.get(result.closeoutCorrelationId).status === 'completed');
+    assert('F7: session transitions to closed', env.sessions.get(SESSION_ID).status === 'closed');
   }
 
-  console.log('\n── Scenario F2: anomaly (non-terminal order) — same controlled refusal ──');
+  console.log('\n── Scenario F2: anomaly (non-terminal order) — SLICE 3.3: same, classifies + closes ──');
   {
     const orders = [order({ totale: 10, estado: 'EN_COCINA' })];
     const events = [paymentEvent({ amount: 10 })];
     const env = fakeEnv({ allOrders: orders, financialEvents: events });
     const closeServiceV3 = engineFrom(env);
     const result = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('F2a: success is false', result.success === false);
-    assert('F2b: code is V3_CLOSE_UNSUPPORTED_NON_HAPPY_PATH', result.code === 'V3_CLOSE_UNSUPPORTED_NON_HAPPY_PATH');
-    assert('F2c: reason is NON_TERMINAL_ORDERS', result.reason === 'NON_TERMINAL_ORDERS');
-    assert('F2d: NO closeout was created', env.closeoutsByCorr.size === 0);
+    assert('F2a: success is true', result.success === true, JSON.stringify(result));
+    assert('F2b: code is V3_CLOSED', result.code === 'V3_CLOSED');
+    assert('F2c: exactly 1 operational (kitchen) incident', result.incidents.length === 1 && result.incidents[0].incidentType === 'KITCHEN_WORK_PENDING_AT_CLOSE');
+    assert('F2d: a closeout WAS created', env.closeoutsByCorr.size === 1);
   }
 
   console.log('\n── Order-attribution regression (V3.1, commit 4252241) — engine scopes by CURRENT service, not table origin ──');
