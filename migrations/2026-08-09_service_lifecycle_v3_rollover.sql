@@ -1,8 +1,16 @@
 -- migrations/2026-08-09_service_lifecycle_v3_rollover.sql
 -- SERVICE LIFECYCLE V3 / SLICE 3.4 — next-service opening + carryover
--- completion. STAGING ONLY. Requires row 61 (V3-owned table release) and row
--- 60 (incident policy) applied first — this migration is the last link in
--- the chain 57→58→59→61→60→62 (Gate 0, this session's own report).
+-- completion. STAGING ONLY. Guard-checked: requires only row 58 (close
+-- engine) and row 59 (close ownership hardening marker) applied first — this
+-- migration does NOT depend on row 60 (table release) or row 61 (incident
+-- policy) at all (verified: its own guard below never references either).
+-- V3.4.1 SESSION — corrected from an earlier, inaccurate header claim that
+-- this migration required rows 60/61 "as the last link in the chain
+-- 57→58→59→61→60→62"; the ACTUAL guard code below never checked either, so
+-- that claim was always wrong. Real chain, corrected numbering (this
+-- session's own Gate-0.1 finding — see MIGRATION_MANIFEST.md): 57→58→59→
+-- 60(table release)→61(incident policy)→62(this file) — but 62 itself only
+-- needs 58/59 to be present; it merely happens to apply last in practice.
 --
 -- ── WHY A NEW COLUMN, NOT JUST A NEW RPC ────────────────────────────────────
 -- The V3.4 engine (src/serviceSessions/serviceLifecycleEngine.js) must be

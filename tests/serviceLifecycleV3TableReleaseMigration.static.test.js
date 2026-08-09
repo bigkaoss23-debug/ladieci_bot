@@ -1,9 +1,13 @@
 'use strict';
 // SERVICE LIFECYCLE V3 / Slice 3.4 — static test over the new table-release
-// migration, the Gate-0 fix for row 60's proven dependency on retired row 56.
-// Real-Postgres validation (rows 57->58->59->this->60 applying cleanly end to
+// migration, the Gate-0 fix for row 61's proven dependency on retired row 56.
+// Real-Postgres validation (rows 57->58->59->this->61 applying cleanly end to
 // end, with zero residue after ROLLBACK) is documented in this session's own
 // report, not repeated here — this file only proves the SQL text's shape.
+// V3.4.1 SESSION — this migration was renumbered from row 61 to row 60 (must
+// apply before the incident-policy migration that depends on it); "row 61"
+// throughout this file's comments/assertions now refers to incident policy,
+// not this file itself — see MIGRATION_MANIFEST.md's corrected numbering.
 
 const fs = require('fs');
 const path = require('path');
@@ -15,7 +19,7 @@ const ROOT = path.join(__dirname, '..');
 const MIGRATION_PATH = path.join(ROOT, 'migrations', '2026-08-09_service_lifecycle_v3_table_release.sql');
 const ROLLBACK_PATH = path.join(ROOT, 'migrations', '2026-08-09_service_lifecycle_v3_table_release.ROLLBACK.sql');
 const ROW56_PATH = path.join(ROOT, 'migrations', '2026-08-09_service_closeout_cross_service_table_policy.sql');
-const ROW60_PATH = path.join(ROOT, 'migrations', '2026-08-09_service_lifecycle_v3_incident_policy.sql');
+const ROW61_PATH = path.join(ROOT, 'migrations', '2026-08-09_service_lifecycle_v3_incident_policy.sql');
 
 (async () => {
   console.log('\n== service lifecycle v3 table release (Slice 3.4 Gate-0 fix) — static migration checks ==\n');
@@ -25,7 +29,7 @@ const ROW60_PATH = path.join(ROOT, 'migrations', '2026-08-09_service_lifecycle_v
   const sql = fs.readFileSync(MIGRATION_PATH, 'utf8');
   const rollback = fs.readFileSync(ROLLBACK_PATH, 'utf8');
   const row56 = fs.readFileSync(ROW56_PATH, 'utf8');
-  const row60 = fs.readFileSync(ROW60_PATH, 'utf8');
+  const row61 = fs.readFileSync(ROW61_PATH, 'utf8');
   const sqlWithoutComments = sql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n');
 
   console.log('\n── staging safety ──');
@@ -74,10 +78,10 @@ const ROW60_PATH = path.join(ROOT, 'migrations', '2026-08-09_service_lifecycle_v
     assert('6c: rollback contains no ' + re + ' either', !re.test(rollback.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')));
   }
 
-  console.log('\n── row 60 now points here instead of row 56 ──');
-  assert('7a: row 60 guard error message references this migration\'s filename', row60.includes('apply 2026-08-09_service_lifecycle_v3_table_release first'));
-  assert('7b: row 60 guard no longer tells the operator to apply the retired row-56 migration', !row60.includes('apply 2026-08-09_service_closeout_cross_service_table_policy first'));
-  assert('7c: row 60\'s dependency check itself is unchanged (still a plain to_regprocedure existence check)', row60.includes("to_regprocedure('public.mesa_release_empty_session_auto_v1(uuid,uuid)') IS NULL"));
+  console.log('\n── row 61 now points here instead of row 56 ──');
+  assert('7a: row 61 guard error message references this migration\'s filename', row61.includes('apply 2026-08-09_service_lifecycle_v3_table_release first'));
+  assert('7b: row 61 guard no longer tells the operator to apply the retired row-56 migration', !row61.includes('apply 2026-08-09_service_closeout_cross_service_table_policy first'));
+  assert('7c: row 61\'s dependency check itself is unchanged (still a plain to_regprocedure existence check)', row61.includes("to_regprocedure('public.mesa_release_empty_session_auto_v1(uuid,uuid)') IS NULL"));
 
   console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');
   process.exit(fail === 0 ? 0 : 1);

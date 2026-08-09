@@ -33,11 +33,15 @@
 -- auto_v1 itself — verbatim (identical body, identical signature, identical
 -- grants) into its own V3-owned migration that depends on nothing from row
 -- 56. Same name, so no JS-side caller (mesaDao.js) needs to change at all.
--- Row 60's own dependency check (`to_regprocedure(...) IS NULL`) is
+-- Row 61's own dependency check (`to_regprocedure(...) IS NULL`) is
 -- signature-based, not migration-based — it is satisfied by this migration
--- exactly as it would have been by row 56, so row 60 itself needs no logic
+-- exactly as it would have been by row 56, so row 61 itself needs no logic
 -- change, only its guard's error-message text corrected to point here
 -- instead of at row 56 (see that migration's own diff, same commit).
+-- V3.4.1 SESSION — renumbered from row 61 to row 60 (this file must apply
+-- BEFORE the incident-policy migration that depends on it, and the manifest
+-- itself is the replay authority — see MIGRATION_MANIFEST.md's own header;
+-- filenames are deliberately NOT relied on for ordering).
 BEGIN;
 
 DO $$
