@@ -159,26 +159,36 @@ const REGISTRY = Object.freeze([
   entry('rpc/complete_service_session_close', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/serviceSessionLifecycle.js'),
   entry('rpc/get_current_service_closeout_session', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'serviceSessions/serviceSessionLifecycle.js'),
 
-  // ── SERVICE CLOSEOUT V2 lifecycle RPCs — SLICE 4C.2A. Minimal set actually
-  // exercised by performIncidentSafeRollover (src/serviceSessions/
-  // incidentSafeRollover.js) via closeoutAttempts.js/closeoutSnapshots.js/
-  // serviceIncidents.js's `rpc` DI parameter (sbRpc default — invisible to a
-  // literal-string scan, exactly like service_incidents/service_closeout_attempts
-  // above). Deliberately excludes the admin incident-resolution RPC and the
-  // post-close financial-resolution RPC from the SAME two migrations (see
-  // serviceIncidents.js's resolve() and archivedOrderFinancialResolutions.js's
-  // record() for their own wrappers) — never named literally here on purpose:
-  // tests/serviceCloseoutIncidentsFoundation.static.test.js §10d3 and
-  // tests/archivedOrderFinancialResolutionsFoundation.static.test.js §9d both
-  // assert that string appears NOWHERE in the codebase yet (proving admin
-  // resolution still has no public path at all) — spelling it out even in a
-  // comment here would be a false positive against that exact invariant.
-  // Both wrappers exist and have JS call sites, but neither is called
-  // by performIncidentSafeRollover or by any HTTP action today — see each
-  // module's own header ("NOT wired into ... any HTTP action"). Least privilege:
-  // registering them now would open a transport path for a mutation capability
-  // that no accepted runtime code path uses yet. Register them when a real
-  // caller exists, not before.
+  // ── SERVICE CLOSEOUT V2 lifecycle RPCs — SLICE 4C.2A, extended 4C.2C.
+  // Minimal set actually exercised by performIncidentSafeRollover
+  // (src/serviceSessions/incidentSafeRollover.js) via closeoutAttempts.js/
+  // closeoutSnapshots.js/serviceIncidents.js's `rpc` DI parameter (sbRpc
+  // default — invisible to a literal-string scan, exactly like
+  // service_incidents/service_closeout_attempts above).
+  //
+  // SLICE 4C.2C added rpc/resolve_service_incident: a real staging run proved
+  // create_service_incident recording an auto-release incident as
+  // "resolved" BEFORE the release RPC call even ran was a genuine
+  // data-integrity bug (see incidentSafeRollover.js's safe-auto-actions
+  // loop). The fix moved resolution to AFTER confirmed success, via
+  // serviceIncidents.js's resolve() — the SAME RPC an eventual admin HTTP
+  // resolution action would use, but today called ONLY by this internal
+  // orchestrator, with a hardcoded role:'admin' literal (never a caller
+  // field — see serviceIncidents.js's own trust-boundary header) and no
+  // HTTP route anywhere (tests/serviceCloseoutIncidentsFoundation.static.
+  // test.js §10d3-10d5 assert index.js is not, and never becomes, part of
+  // the allowed-caller set for this pattern).
+  //
+  // The post-close financial-resolution RPC from the same two migrations
+  // (see archivedOrderFinancialResolutions.js's own wrapper) remains
+  // deliberately excluded — never named literally here on purpose:
+  // tests/archivedOrderFinancialResolutionsFoundation.static.test.js §9d
+  // asserts that RPC's name appears NOWHERE in the codebase yet (proving
+  // post-close financial resolution still has no caller at all); spelling it
+  // out even in a comment here would be a false positive against that exact
+  // invariant. Its wrapper exists but is called by nothing — see its own
+  // header ("NOT wired into ... any HTTP action"). Least privilege: register
+  // it when a real caller exists, not before.
   entry('rpc/acquire_closeout_attempt', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'closeoutAttempts.js acquire(), called by incidentSafeRollover.js'),
   entry('rpc/capture_closeout_snapshot', KIND.RPC, ['POST'], SENSITIVITY.AUDIT,
@@ -189,6 +199,14 @@ const REGISTRY = Object.freeze([
     'closeoutAttempts.js supersede(), called by incidentSafeRollover.js on a state-drift retry'),
   entry('rpc/complete_closeout_attempt', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'closeoutAttempts.js complete(), called by incidentSafeRollover.js after a successful close'),
+  entry('rpc/resolve_service_incident', KIND.RPC, ['POST'], SENSITIVITY.AUDIT,
+    'serviceIncidents.js resolve(), called by incidentSafeRollover.js ONLY after a safe auto-action (empty-table release) confirms success — never before, never from any HTTP action'),
+  // SLICE 4C.2C — trusted-system counterpart to rpc/mesa_release_empty_session_v1
+  // (below, unchanged, still the real human/Mesa-UI path). No p_by_actor: the
+  // automatic orchestrator has no human actor and must not impersonate one —
+  // see migrations/2026-08-09_service_closeout_cross_service_table_policy.sql.
+  entry('rpc/mesa_release_empty_session_auto_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'mesaDao.js releaseEmptySessionAuto(), called by incidentSafeRollover.js'),
 
   // ── auth RPCs — src/auth/audit.js sbRest consumers ──
   entry('rpc/auth_bump_session_version', KIND.RPC, ['POST'], SENSITIVITY.AUTH_SECURITY, 'dao.js incrementSessionVersion'),

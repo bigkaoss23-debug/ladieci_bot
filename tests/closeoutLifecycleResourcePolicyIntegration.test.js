@@ -30,10 +30,12 @@ delete require.cache[require.resolve('../src/utils/supabase')];
 delete require.cache[require.resolve('../src/closeout/closeoutAttempts')];
 delete require.cache[require.resolve('../src/closeout/closeoutSnapshots')];
 delete require.cache[require.resolve('../src/incidents/serviceIncidents')];
+delete require.cache[require.resolve('../src/tables/mesaDao')];
 
 const { closeoutAttempts } = require('../src/closeout/closeoutAttempts');
 const { closeoutSnapshots } = require('../src/closeout/closeoutSnapshots');
 const { serviceIncidents } = require('../src/incidents/serviceIncidents');
+const mesaDao = require('../src/tables/mesaDao');
 
 // Minimal, realistic per-RPC/table response bodies — shape-matched to the
 // actual SQL functions in migrations/2026-08-08_service_closeout_*.sql, just
@@ -79,6 +81,16 @@ global.fetch = async (url, opts) => {
   if (url.includes('/service_closeout_snapshots')) {
     return jsonResponse(200, []); // GET — no existing snapshot for this correlation id
   }
+  if (url.includes('/rpc/resolve_service_incident')) {
+    return jsonResponse(200, {
+      ok: true, code: 'RESOLVED',
+      // language-guard: allow-legacy PRANZO is the existing service_kind enum value already used elsewhere in this fixture file, not new vocabulary
+      incident: { id: 'inc-1', service_session_id: 'sess-1', business_date: '2026-08-09', service_kind: 'PRANZO', closeout_correlation_id: 'attempt-1', incident_type: 'EMPTY_TABLE_LEFT_OPEN', category: 'informational', severity: 'info', detected_at: new Date().toISOString(), detected_by: 'system', resolution_status: 'resolved', resolution_type: 'auto_released_empty_table', resolved_at: new Date().toISOString(), resolved_by: 'system' },
+    });
+  }
+  if (url.includes('/rpc/mesa_release_empty_session_auto_v1')) {
+    return jsonResponse(200, { ok: true, tableId: 'table-1', status: 'closed' });
+  }
   // Any resource not mocked above (e.g. a resolve_service_incident call this
   // suite never expects to make) surfaces as a loud fetch-shape failure
   // rather than a silent false-positive pass.
@@ -119,6 +131,22 @@ global.fetch = async (url, opts) => {
     const completeResult = await closeoutAttempts.complete({ closeoutCorrelationId: 'attempt-1', actor: 'system' });
     assert('6a: closeoutAttempts.complete() (real sbRpc) succeeds', completeResult.success === true, JSON.stringify(completeResult));
   }
+  {
+    // SLICE 4C.2C — resolve() is now registered too: incidentSafeRollover.js
+    // calls it (via serviceIncidents.js's real sbRpc default) ONLY after a
+    // safe auto-action confirms success. Prove it reaches the network here;
+    // the ordering guarantee itself (never called before confirmation) is a
+    // JS-level property proven in tests/incidentSafeRollover.test.js.
+    const resolveResult = await serviceIncidents.resolve({
+      incidentId: 'inc-1', resolvedBy: 'system', role: 'admin', resolutionType: 'auto_released_empty_table',
+    });
+    assert('6b: serviceIncidents.resolve() (real sbRpc) succeeds — was unregistered before 4C.2C, now has a real internal caller', resolveResult.success === true, JSON.stringify(resolveResult));
+  }
+  {
+    // SLICE 4C.2C — the trusted-system empty-table release, no human actor.
+    const releaseResult = await mesaDao.releaseEmptySessionAuto({ workspaceId: 'ws-1', tableSessionId: 'table-session-1' });
+    assert('6c: mesaDao.releaseEmptySessionAuto() (real sbRest, no p_by_actor) succeeds', releaseResult.ok === true, JSON.stringify(releaseResult));
+  }
 
   console.log('\n── resources deliberately left unregistered still fail, even through the real wrapper ──');
   // Neither wrapper catches the transport's thrown SupabaseTransportError
@@ -127,14 +155,6 @@ global.fetch = async (url, opts) => {
   // performIncidentSafeRollover's own try/catch is written to convert into
   // its ROLLOVER_*_FAILED results. This mirrors the real failure observed on
   // staging, not a hypothetical one.
-  {
-    const { serviceIncidents: si } = require('../src/incidents/serviceIncidents');
-    let threw = null;
-    try { await si.resolve({ incidentId: 'inc-1', resolvedBy: 'admin', role: 'admin', resolutionType: 'manual_review' }); }
-    catch (e) { threw = e; }
-    assert('7a: serviceIncidents.resolve() (rpc/resolve_service_incident, not registered) throws resource-not-registered, never silently succeeds',
-      threw && threw.code === 'SUPABASE_RESOURCE_NOT_ALLOWED', String(threw));
-  }
   {
     const { archivedOrderFinancialResolutions } = require('../src/closeout/archivedOrderFinancialResolutions');
     let threw = null;

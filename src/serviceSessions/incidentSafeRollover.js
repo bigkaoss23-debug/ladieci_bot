@@ -140,7 +140,7 @@ function createIncidentSafeRollover({
   attempts = closeoutAttempts,
   incidents = serviceIncidents,
   closeSession = chiudiServizio,
-  releaseEmptyTableSession = mesaDao.releaseEmptySession,
+  releaseEmptyTableSession = mesaDao.releaseEmptySessionAuto,
   sessionLifecycleImpl = sessionLifecycle,
   now = () => new Date(),
   schedule = DEFAULT_SCHEDULE,
@@ -303,9 +303,20 @@ function createIncidentSafeRollover({
         orderId: descriptor.orderId || null,
         tableSessionId: descriptor.tableSessionId || null,
         financialExposureCents: descriptor.financialExposureCents ?? null,
-        autoResolve: descriptor.autoResolve === true,
-        autoResolutionType: descriptor.autoResolutionType || null,
-        autoResolutionNote: descriptor.autoResolutionNote || null,
+        // SLICE 4C.2C — never persist a "resolved" fact before the
+        // corresponding safe auto-action has actually confirmed success (see
+        // the safe-auto-actions loop below). A staging run proved this isn't
+        // hypothetical: create_service_incident recorded EMPTY_TABLE_LEFT_OPEN
+        // as resolution_status='resolved'/'auto_released_empty_table' while
+        // the release RPC call right after it failed, leaving a permanently
+        // false "successfully released" record against a table that was
+        // still open. Every incident is now always created pending; only a
+        // CONFIRMED action success transitions it, via resolve_service_incident,
+        // through the same append-only resolution architecture a human
+        // resolution would use.
+        autoResolve: false,
+        autoResolutionType: null,
+        autoResolutionNote: null,
       });
       if (!res.success) {
         // Hard blocker: the close must not proceed while a required incident
@@ -327,15 +338,42 @@ function createIncidentSafeRollover({
     }
 
     // ── safe auto-actions, only after every incident is durable ────────────
+    // SLICE 4C.2C — releaseEmptyTableSession now calls the trusted-system RPC
+    // (mesa_release_empty_session_auto_v1, no human actor required — see its
+    // migration header for why "system" was never a valid auth_actors row for
+    // the original human-facing mesa_release_empty_session_v1). The matching
+    // incident is only transitioned to resolved AFTER this call confirms
+    // success; a failure leaves it pending/actionable, never falsely resolved.
     for (const action of classification.safeAutoActions) {
       if (action.type === "RELEASE_EMPTY_TABLE") {
+        const matchingIncident = persistedIncidents.find((inc) =>
+          inc && inc.incidentType === "EMPTY_TABLE_LEFT_OPEN" && inc.tableSessionId === action.tableSessionId);
         try {
           await releaseEmptyTableSession({
             workspaceId: action.workspaceId,
-            byActor: actor,
             tableSessionId: action.tableSessionId,
           });
+          if (matchingIncident) {
+            const resolveResult = await incidents.resolve({
+              incidentId: matchingIncident.id,
+              resolvedBy: actor,
+              role: "admin",
+              resolutionType: "auto_released_empty_table",
+              resolutionNote: "Table session had zero activity (covers_total IS NULL) at service close; automatically released.",
+            });
+            if (resolveResult.success && resolveResult.incident) {
+              matchingIncident.resolutionStatus = resolveResult.incident.resolutionStatus;
+              matchingIncident.resolutionType = resolveResult.incident.resolutionType;
+              matchingIncident.resolvedAt = resolveResult.incident.resolvedAt;
+              matchingIncident.resolvedBy = resolveResult.incident.resolvedBy;
+            } else {
+              console.warn("[incidentSafeRollover] empty table released but marking its incident resolved failed (non-fatal — it stays visible as pending/actionable):", resolveResult.code);
+            }
+          }
         } catch (e) {
+          // Release failed: the incident (persisted above as pending, never
+          // auto-resolved) correctly stays actionable — no reconciliation
+          // needed here, unlike the pre-4C.2C behavior this replaces.
           console.warn(
             "[incidentSafeRollover] empty-table auto-release failed (non-fatal — the existing mesa gate will still catch it if truly needed):",
             e && e.message || e,

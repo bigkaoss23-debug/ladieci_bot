@@ -103,6 +103,20 @@ const releaseEmptySession = (args) => rpc('mesa_release_empty_session_v1', {
   p_table_session_id: args.tableSessionId,
 });
 
+// SLICE 4C.2C — trusted-system counterpart for performIncidentSafeRollover.
+// mesa_release_empty_session_v1 requires p_by_actor to resolve to a real,
+// active auth_actors row (correct for its real caller: mesaService.js's
+// releaseEmptyTable(), a human operator/admin action through the Mesa UI).
+// The automatic orchestrator has no such actor — "system" was never a valid
+// auth_actors row, which is exactly why the very first live attempt at this
+// silently failed. This RPC (migrations/2026-08-09_service_closeout_cross_
+// service_table_policy.sql) is service_role-only, never HTTP-exposed, and
+// performs the identical session/covers checks minus human authorization.
+const releaseEmptySessionAuto = (args) => rpc('mesa_release_empty_session_auto_v1', {
+  p_workspace_id: args.workspaceId,
+  p_table_session_id: args.tableSessionId,
+});
+
 const saveTable = (args) => rpc('mesa_save_table_v1', {
   p_workspace_id: args.workspaceId,
   p_by_actor: args.byActor,
@@ -168,6 +182,7 @@ module.exports = {
   getOrderForSession,
   openSession,
   releaseEmptySession,
+  releaseEmptySessionAuto,
   saveTable,
   postPayment,
   saveReservation,

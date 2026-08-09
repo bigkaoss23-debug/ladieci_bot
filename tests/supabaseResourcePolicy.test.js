@@ -264,7 +264,6 @@ global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
   //       remain deliberately denied, even though the DB objects exist ──────
   {
     const STILL_DENIED = [
-      'rpc/resolve_service_incident',
       'rpc/create_archived_order_financial_resolution',
       'archived_order_financial_resolutions',
       'service_incident_resolutions',
@@ -274,6 +273,29 @@ global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
       const err = await captureErr(() => transport.supabaseRequest({ resource, method: 'POST', operation: 'test' }));
       assert(`23b. ${resource} POST is rejected by the transport`, err && err.code === transport.ERROR_CODES.RESOURCE_NOT_ALLOWED);
     }
+  }
+
+  // ── 25) SLICE 4C.2C — resolve_service_incident is NOW registered (a real,
+  //       internal-only caller exists: incidentSafeRollover.js's confirmed-
+  //       success resolution step), POST-only, and mesa_release_empty_session_
+  //       auto_v1 (the trusted-system table release) is registered the same
+  //       way. Neither has any HTTP action — see
+  //       tests/serviceCloseoutIncidentsFoundation.static.test.js §10d3-10d5
+  //       for the exhaustive cross-file proof of that; here we only prove the
+  //       transport-level shape is correct and minimal. ────────────────────
+  {
+    const NEW_INTERNAL_RPCS = ['rpc/resolve_service_incident', 'rpc/mesa_release_empty_session_auto_v1'];
+    for (const resource of NEW_INTERNAL_RPCS) {
+      assert(`25. ${resource} is registered`, policy.getResourcePolicy(resource) !== null);
+      assert(`25. ${resource} allows POST`, policy.isMethodAllowed(resource, 'POST'));
+      assert(`25. ${resource} denies GET`, !policy.isMethodAllowed(resource, 'GET'));
+      assert(`25. ${resource} denies DELETE`, !policy.isMethodAllowed(resource, 'DELETE'));
+      const r = await transport.supabaseRequest({ resource, method: 'POST', operation: 'test' });
+      assert(`25b. ${resource} POST reaches the transport`, r.ok === true);
+    }
+    // The original human-facing release RPC must be completely untouched —
+    // 4C.2C adds a sibling, it does not modify or replace this one.
+    assert('25c. mesa_release_empty_session_v1 (the human/Mesa-UI path) is unchanged and still registered', policy.getResourcePolicy('rpc/mesa_release_empty_session_v1') !== null);
   }
 
   // ── 24) an unknown/invented Service Closeout RPC never passes the allowlist ──
