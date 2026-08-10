@@ -80,6 +80,18 @@ const make = (db, when) => createEnsureCurrentServiceSession({
   performRollover: db.performRollover,
 });
 
+// P0-C1 — same wiring as make(), plus an explicit automaticLifecycleEnabled
+// override, for the "silent page-load must not mutate lifecycle while frozen"
+// tests below. The production default (process.env.LEGACY_AUTOMATIC_LIFECYCLE_
+// ENABLED !== "false") is exercised by every OTHER test in this file via
+// make()'s omission of the parameter — proving the new gate is opt-in-to-skip,
+// never opt-in-to-run, and that all 13 pre-existing scenarios above are
+// unaffected by its introduction.
+const makeGated = (db, when, automaticLifecycleEnabled) => createEnsureCurrentServiceSession({
+  sessionLifecycle: db.lifecycle, schedule: DEFAULT_SCHEDULE, now: () => when,
+  performRollover: db.performRollover, automaticLifecycleEnabled,
+});
+
 (async () => {
   console.log("\n══ 1. PRANZO open + due (past 17:30) at 17:45 (BETWEEN_SERVICES window) -> rollover attempted, then window refusal ══");
   {
@@ -223,6 +235,67 @@ const make = (db, when) => createEnsureCurrentServiceSession({
     const r = await make(db, summer(12, 0))({ actor: "operator" });
     assert("13: REUSED, the SAME session", r.success && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-lunch6", JSON.stringify(r));
     assert("13: no rollover attempted — the session is not due yet", db.rolloverCalls.length === 0);
+  }
+
+  console.log("\n══ P0-C1: 14-18. automatic lifecycle frozen — the silent page-load path must not mutate ══");
+  {
+    // 14: the exact live scenario — PRANZO past 17:30, automatic lifecycle
+    // frozen (LEGACY_AUTOMATIC_LIFECYCLE_ENABLED=false in production terms).
+    // Before P0-C1 this called performRollover unconditionally (test 1 above,
+    // still true for the DEFAULT/enabled case). Frozen, it must not.
+    const db = fakeRecoveryDb({ current: { id: "uuid-frozen1", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } });
+    const r = await makeGated(db, summer(17, 45), () => false)({ actor: "owner" });
+    assert("14: performRollover was NEVER called while frozen", db.rolloverCalls.length === 0, JSON.stringify(db.rolloverCalls));
+    assert("14: the operator still gets full access to the SAME still-open session", r.success === true && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-frozen1", JSON.stringify(r));
+    assert("14: no session was closed or created", db.inserts === 0 && db.current && db.current.status === "open");
+  }
+  {
+    // 15: no actor misattribution — since performRollover is never invoked,
+    // no attempt/incident row of any kind gets created under this actor's
+    // name. Asserting rolloverCalls stays empty IS the proof: the actor
+    // parameter never reaches performRollover (and therefore never reaches
+    // attempts.acquire({actor})) at all while frozen.
+    const db = fakeRecoveryDb({ current: { id: "uuid-frozen2", service_kind: "SERA", business_date: "2026-07-15", status: "open", opened_at: "x" } });
+    const r = await makeGated(db, summer(1, 0, 16), () => false)({ actor: "owner" });
+    assert("15: no rollover call exists to have recorded any actor", db.rolloverCalls.length === 0);
+    assert("15: 'owner' never reaches performRollover while frozen", !db.rolloverCalls.some((c) => c.actor === "owner"));
+    assert("15: still full access to the still-open session", r.success === true && r.session.id === "uuid-frozen2");
+  }
+  {
+    // 16: idempotent under repeated page loads/reloads — simulates an
+    // operator reloading Servicio several times in a row past the boundary
+    // while frozen. Must never call performRollover, never insert, on ANY
+    // call, not just the first.
+    const db = fakeRecoveryDb({ current: { id: "uuid-frozen3", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } });
+    const ensure = makeGated(db, summer(17, 45), () => false);
+    const r1 = await ensure({ actor: "owner" });
+    const r2 = await ensure({ actor: "owner" });
+    const r3 = await ensure({ actor: "owner" });
+    assert("16: three repeated page loads, zero rollover calls", db.rolloverCalls.length === 0);
+    assert("16: zero inserts across all three", db.inserts === 0);
+    assert("16: every call is the identical REUSED session", [r1, r2, r3].every((r) => r.success && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-frozen3"));
+  }
+  {
+    // 17: a session ALREADY status='closing' (the stuck-attempt shape itself)
+    // must still be reported as SERVICE_SESSION_CLOSING regardless of the
+    // flag — that pre-check (line ~112) runs unconditionally, before the
+    // rollover-due branch the flag gates, and is a different, always-on
+    // safety check (nothing should treat an already-closing session as
+    // freely reusable). Proves the P0-C1 gate is scoped to exactly the
+    // "open + due" branch, not a blanket bypass of every check in this file.
+    const db = fakeRecoveryDb({ current: { id: "uuid-frozen4", service_kind: "SERA", business_date: "2026-07-15", status: "closing", opened_at: "x" } });
+    const r = await makeGated(db, summer(20, 0), () => false)({ actor: "owner" });
+    assert("17: SERVICE_SESSION_CLOSING regardless of the automatic-lifecycle flag", r.success === false && r.code === ENSURE_CODE.SERVICE_SESSION_CLOSING, JSON.stringify(r));
+    assert("17: no rollover attempted for an already-closing session either way", db.rolloverCalls.length === 0);
+  }
+  {
+    // 18: the gate genuinely toggles both ways — explicitly ENABLED still
+    // attempts the rollover exactly like the default (unspecified) case in
+    // test 1, proving this isn't accidentally always-off.
+    const db = fakeRecoveryDb({ current: { id: "uuid-enabled1", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } });
+    const r = await makeGated(db, summer(17, 45), () => true)({ actor: "owner" });
+    assert("18: explicitly enabled -> rollover WAS attempted", db.rolloverCalls.length === 1 && db.rolloverCalls[0].source === "ensure_reconcile", JSON.stringify(db.rolloverCalls));
+    assert("18: same BETWEEN_SERVICES outcome as the default-enabled test 1", r.success === false && r.code === ENSURE_CODE.BETWEEN_SERVICES);
   }
 
   console.log("");

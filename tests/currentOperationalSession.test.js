@@ -15,13 +15,35 @@ test("returns only the lifecycle-authoritative open service", async () => {
   assert.equal(result, session);
 });
 
-test("a recent closed or closing service is not operational", async () => {
-  for (const status of ["closed", "closing"]) {
-    const result = await getCurrentOperationalSession({
-      currentCloseout: async () => ({ ok: true, session: { id: "old", status } }),
-    });
-    assert.equal(result, null);
-  }
+test("a closed service is not operational", async () => {
+  const result = await getCurrentOperationalSession({
+    currentCloseout: async () => ({ ok: true, session: { id: "old", status: "closed" } }),
+  });
+  assert.equal(result, null);
+});
+
+// P0-C1 — a session mid-close still owns real, unresolved operational facts
+// (orders, tables) until it actually reaches 'closed'. Before P0-C1 this
+// returned null, which is exactly why Cocina/Listos/Mesa went dark for as
+// long as a close attempt was in progress or stuck — see
+// SERVICE_LIFECYCLE_ECONOMIC_BOUNDARY_AUDIT_REPORT.md §4/§7.6.
+test("a session mid-close ('closing') IS still operational", async () => {
+  const session = { id: "mid-close", status: "closing", opened_at: "2026-08-10T08:07:41Z" };
+  const result = await getCurrentOperationalSession({
+    currentCloseout: async () => ({ ok: true, session }),
+  });
+  assert.equal(result, session);
+});
+
+test("still scoped to THIS session's own id — closing does not widen to any other session", async () => {
+  // The fix widens WHICH statuses count as operational, never which session
+  // id is used. A 'closed' session (today's or any prior day's) stays
+  // excluded no matter what — this is what proves a stale multi-day-old
+  // ticket cannot be resurrected by this change.
+  const result = await getCurrentOperationalSession({
+    currentCloseout: async () => ({ ok: true, session: { id: "yesterday", status: "closed" } }),
+  });
+  assert.equal(result, null);
 });
 
 test("transport/lifecycle errors fail closed instead of broadening the read", async () => {

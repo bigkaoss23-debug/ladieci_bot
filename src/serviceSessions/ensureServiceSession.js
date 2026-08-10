@@ -80,11 +80,33 @@ function publicSession(row) {
   };
 }
 
+// P0-C1 — RUNTIME LIFECYCLE AUTHORITY + AVAILABILITY CONTAINMENT.
+// ensureCurrentServiceSession runs on every Servicio page load
+// (useSilentServiceEnsure.js, zero user action) and was the one reachable
+// trigger of performIncidentSafeRollover NOT gated by index.js's
+// LEGACY_AUTOMATIC_LIFECYCLE_ENABLED (the other three — close-tick, boot
+// catch-up, triggerCloseIfNeeded — are gated in index.js itself). A session
+// crossing its own close-eligibility boundary while any authenticated
+// operator's browser had Servicio open would silently fire a real, mutating
+// rollover attempt with that operator recorded as its initiator — this is
+// exactly what produced the stuck PRANZO of 2026-08-10 15:37 UTC (see
+// SERVICE_LIFECYCLE_ECONOMIC_BOUNDARY_AUDIT_REPORT.md §7).
+// automaticLifecycleEnabled() mirrors index.js's own flag (same env var, same
+// default-true semantics) so the rollover call below becomes the FOURTH path
+// under the SAME single safety switch, never a new mechanism. When disabled,
+// "due for rollover" degrades to the SAME safe fallback already used for a
+// deferred rollover: hand back the still-open, still-usable session. Only an
+// explicit, human-initiated close (index.js action "chiudiServizio") remains
+// reachable while automatic lifecycle is frozen. Safe/idempotent session
+// creation (the ensure() call further below, for when NO session exists at
+// all yet) is untouched — that was never an implicit close/rollover and stays
+// available regardless of this flag.
 function createEnsureCurrentServiceSession({
   sessionLifecycle = lifecycle,
   schedule = DEFAULT_SCHEDULE,
   now = () => new Date(),
   performRollover = performIncidentSafeRollover,
+  automaticLifecycleEnabled = () => process.env.LEGACY_AUTOMATIC_LIFECYCLE_ENABLED !== "false",
 } = {}) {
   return async function ensureCurrentServiceSession({ actor, source = "auto_entry" } = {}) {
     if (!actor || typeof actor !== "string" || !actor.trim()) {
@@ -116,9 +138,13 @@ function createEnsureCurrentServiceSession({
         };
       }
 
-      // status === "open" — steps 2/3/4 of the contract.
+      // status === "open" — steps 2/3/4 of the contract. P0-C1: the rollover
+      // attempt itself is gated by automaticLifecycleEnabled() — see this
+      // file's header. A due-but-ungated session falls through to "grant
+      // access to the still-open session" below, exactly like a deferred
+      // rollover already does — never a silent mutation from a page load.
       const classification = classifySessionForRollover(current, nowDate, schedule);
-      if (isRolloverDue(classification)) {
+      if (isRolloverDue(classification) && automaticLifecycleEnabled()) {
         let rolloverResult;
         try { rolloverResult = await performRollover({ session: current, actor, source: "ensure_reconcile" }); }
         catch (e) { rolloverResult = { success: false, error: String((e && e.message) || e) }; }
