@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-10T13:01:45.707Z",
+  "generatedAt": "2026-08-10T17:43:17.792Z",
   "entries": [
     {
       "file": "index.js",
@@ -1342,14 +1342,34 @@
       "count": 1
     },
     {
+      "file": "src/serviceSessions/currentOperationalSession.js",
+      "term": "cucina",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/currentOperationalSession.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/currentOperationalSession.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
       "file": "src/serviceSessions/ensureServiceSession.js",
       "term": "chiudi",
-      "count": 4
+      "count": 5
+    },
+    {
+      "file": "src/serviceSessions/ensureServiceSession.js",
+      "term": "pranzo",
+      "count": 1
     },
     {
       "file": "src/serviceSessions/ensureServiceSession.js",
       "term": "servizio",
-      "count": 4
+      "count": 5
     },
     {
       "file": "src/serviceSessions/incidentSafeRollover.js",
@@ -2499,7 +2519,7 @@
     {
       "file": "tests/ensureCurrentSessionRecovery.test.js",
       "term": "pranzo",
-      "count": 14
+      "count": 18
     },
     {
       "file": "tests/ensureServiceSession.test.js",
@@ -2765,6 +2785,11 @@
       "file": "tests/lifecycleReset.test.js",
       "term": "servizio",
       "count": 13
+    },
+    {
+      "file": "tests/lifecycleRuntimeAuthorityP0C1.static.test.js",
+      "term": "servizio",
+      "count": 1
     },
     {
       "file": "tests/liveSafetyGuards.stress.test.js",
