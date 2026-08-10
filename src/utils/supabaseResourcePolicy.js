@@ -231,6 +231,17 @@ const REGISTRY = Object.freeze([
   // ensureNext(), never a literal RPC-name string in the engine itself).
   entry('rpc/ensure_next_service_session_v3', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'serviceLifecycleV3Transition.js ensureNext(), called by serviceLifecycleEngine.js — opens/reuses the V3 rollover continuation of a just-closed session'),
+
+  // ── P0-C2 — the non-destructive intraday economic-boundary primitive.
+  // Deliberately its own entry, not merged into the V3 block above: reuses
+  // the V3 closeout-attempt/snapshot/creation foundation but never calls
+  // close_service_session_v3 (see the migration's own header for why —
+  // guard_service_session_closed_v1's SERVICE_ACTIVE_ORDERS_NOT_RESOLVED
+  // check would hard-block an ordinary intraday close with real non-terminal
+  // orders). Reached only via economicBoundaryEngine.js's `rpc` DI default
+  // (sbRpc), same pattern as every other closeout-lifecycle RPC above.
+  entry('rpc/roll_service_session_economic_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'economicBoundaryEngine.js rollEconomicPeriod() — atomically settles A (status->rolled_over, never touches ordenes/table_sessions) and opens B, the non-destructive intraday PRANZO->SERA transition'),
   // SLICE 3.2.1 — serviceCloseouts.js's getBySessionId() (plain SELECT, same
   // DI-invisible pattern as service_closeout_snapshots/service_closeout_
   // attempts above) existed since V3.1 as a read-only DAO for reports/tests
