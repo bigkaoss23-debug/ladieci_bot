@@ -23,8 +23,9 @@ function safeError(error) {
     'MESA_RESERVATION_NOT_BOOKED','MESA_RESERVATION_CAPACITY_EXCEEDED',
     'MESA_TABLE_HAS_RESERVATIONS',
     'MESA_COVERS_NOT_SET','MESA_COVERS_IMMUTABLE','MESA_TABLE_HAS_ORDERS',
+    'MESA_TABLE_NOT_SETTLED','MESA_TABLE_HAS_ACTIVE_ORDERS',
   ]);
-  const denied = new Set(['MESA_PAYMENT_FORBIDDEN','MESA_OPEN_FORBIDDEN','MESA_LAYOUT_FORBIDDEN','MESA_RESERVATION_FORBIDDEN']);
+  const denied = new Set(['MESA_PAYMENT_FORBIDDEN','MESA_OPEN_FORBIDDEN','MESA_LAYOUT_FORBIDDEN','MESA_RESERVATION_FORBIDDEN','MESA_CLOSE_FORBIDDEN']);
   const missing = new Set(['MESA_SESSION_NOT_FOUND','MESA_TABLE_NOT_FOUND','MESA_WORKSPACE_NOT_FOUND','MESA_COMMAND_NOT_FOUND','MESA_RESERVATION_NOT_FOUND']);
   return {
     status: conflict.has(code) ? 409 : denied.has(code) ? 403 : missing.has(code) ? 404 : code === 'MESA_INTERNAL_ERROR' ? 500 : 400,
@@ -112,6 +113,11 @@ function createMesaHandlers({ service = createMesaService(), logger = console } 
       context: req.mesaContext,
       tableSessionId: requireId(req.params.sessionId),
     })),
+    closeTable: run('close_table', (req) => service.closeTable({
+      context: req.mesaContext,
+      tableSessionId: requireId(req.params.sessionId),
+      force: req.body?.force === true,
+    })),
     markServed: run('mark_served', (req) => service.markServed({
       context: req.mesaContext,
       tableSessionId: requireId(req.params.sessionId),
@@ -190,6 +196,7 @@ function registerMesaRoutes(router, deps = {}) {
   router.post('/tables/:tableId/open', auth, handlers.open);
   router.put('/tables/:tableId', auth, handlers.saveTable);
   router.post('/sessions/:sessionId/release', auth, handlers.releaseEmptyTable);
+  router.post('/sessions/:sessionId/close', auth, handlers.closeTable);
   router.post('/sessions/:sessionId/commands', auth, handlers.addCommand);
   router.post('/sessions/:sessionId/commands/:orderId/served', auth, handlers.markServed);
   router.post('/sessions/:sessionId/payments', auth, handlers.pay);
@@ -197,7 +204,7 @@ function registerMesaRoutes(router, deps = {}) {
   router.put('/reservations/:reservationId', auth, handlers.updateReservation);
   router.post('/reservations/:reservationId/status', auth, handlers.setReservationStatus);
   router.post('/reservations/:reservationId/open', auth, handlers.openReservation);
-  return Object.freeze({ routes: 11 });
+  return Object.freeze({ routes: 12 });
 }
 
 module.exports = {

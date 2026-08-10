@@ -103,6 +103,17 @@ const releaseEmptySession = (args) => rpc('mesa_release_empty_session_v1', {
   p_table_session_id: args.tableSessionId,
 });
 
+// P0-B.1 — the first real explicit close for an OCCUPIED table session.
+// Distinct from releaseEmptySession above (which stays scoped to the
+// never-ordered, covers_total IS NULL case). p_force only ever affects
+// kitchen/order completeness, never the financial-settlement precondition.
+const closeSession = (args) => rpc('mesa_close_session_v1', {
+  p_workspace_id: args.workspaceId,
+  p_by_actor: args.byActor,
+  p_table_session_id: args.tableSessionId,
+  p_force: args.force === true,
+});
+
 // SLICE 4C.2C — trusted-system counterpart for performIncidentSafeRollover.
 // mesa_release_empty_session_v1 requires p_by_actor to resolve to a real,
 // active auth_actors row (correct for its real caller: mesaService.js's
@@ -182,6 +193,7 @@ module.exports = {
   getOrderForSession,
   openSession,
   releaseEmptySession,
+  closeSession,
   releaseEmptySessionAuto,
   saveTable,
   postPayment,

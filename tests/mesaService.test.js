@@ -381,3 +381,46 @@ test('a waiter can release their own accidentally-opened empty table', async () 
   await service.releaseEmptyTable({ context: ctx({ actor: 'waiter-1', role: 'waiter' }), tableSessionId: 's1' });
   assert.equal(args.byActor, 'waiter-1');
 });
+
+// P0-B.1 — closeTable is the distinct, explicit "Cerrar mesa" action for an
+// OCCUPIED table (releaseEmptyTable above stays scoped to the never-ordered
+// case). These tests only prove the service layer forwards intent correctly
+// -- the financial/kitchen-completeness decision itself lives in
+// mesa_close_session_v1 and is covered by the migration's own static test.
+test('closing a table forwards the session id through to the DAO, force defaulted false', async () => {
+  let args;
+  const service = createMesaService({
+    dao: { closeSession: async (value) => { args = value; return { ok: true, status: 'closed', forced: false }; } },
+  });
+  const result = await service.closeTable({ context: ctx(), tableSessionId: 's1' });
+  assert.deepEqual(args, { workspaceId: 'ws-1', byActor: 'operator_primary', tableSessionId: 's1', force: false });
+  assert.equal(result.status, 'closed');
+});
+
+test('closeTable only forwards force=true when explicitly requested', async () => {
+  let args;
+  const service = createMesaService({
+    dao: { closeSession: async (value) => { args = value; return { ok: true }; } },
+  });
+  await service.closeTable({ context: ctx(), tableSessionId: 's1', force: true });
+  assert.equal(args.force, true);
+});
+
+test('a waiter can close a table they have been serving', async () => {
+  let args;
+  const service = createMesaService({
+    dao: { closeSession: async (value) => { args = value; return { ok: true }; } },
+  });
+  await service.closeTable({ context: ctx({ actor: 'waiter-1', role: 'waiter' }), tableSessionId: 's1' });
+  assert.equal(args.byActor, 'waiter-1');
+});
+
+test('closeTable propagates the RPC error code untouched (e.g. genuine pending kitchen work)', async () => {
+  const service = createMesaService({
+    dao: { closeSession: async () => { const e = new Error('MESA_TABLE_HAS_ACTIVE_ORDERS'); e.code = 'MESA_TABLE_HAS_ACTIVE_ORDERS'; throw e; } },
+  });
+  await assert.rejects(
+    service.closeTable({ context: ctx(), tableSessionId: 's1' }),
+    (error) => error.code === 'MESA_TABLE_HAS_ACTIVE_ORDERS'
+  );
+});

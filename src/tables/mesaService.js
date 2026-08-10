@@ -279,6 +279,19 @@ function createMesaService({
       });
     },
 
+    // P0-B.1 — the explicit "Cerrar mesa" action for an OCCUPIED table.
+    // Same role set as releaseEmptyTable above: closing a table (financial
+    // safety aside) is an operational floor action, not a financial one.
+    // force is accepted end-to-end (RPC-level support is real and audited)
+    // but no frontend UI calls it with force=true yet -- see mesaService.js
+    // deploy-order note and the P0-B.1 migration's own header comment.
+    async closeTable({ context, tableSessionId, force } = {}) {
+      const ctx = requireContext(context, OPEN_ROLES);
+      return dao.closeSession({
+        workspaceId: ctx.workspaceId, byActor: ctx.actor, tableSessionId, force: force === true,
+      });
+    },
+
     async markServed({ context, tableSessionId, orderId } = {}) {
       const ctx = requireContext(context, OPEN_ROLES);
       const session = await dao.getSession(ctx.workspaceId, tableSessionId);

@@ -18,7 +18,7 @@ test('disabled integration mounts zero routes', () => {
   assert.deepEqual(result, { enabled: false, prefix: PREFIX, routes: 0 });
 });
 
-test('enabled integration mounts exactly eleven static routes', () => {
+test('enabled integration mounts exactly twelve static routes', () => {
   const app = express();
   const service = {
     floor: async () => ({ ok: true, tables: [] }),
@@ -28,6 +28,7 @@ test('enabled integration mounts exactly eleven static routes', () => {
     markServed: async () => ({ ok: true }),
     pay: async () => ({ ok: true }),
     releaseEmptyTable: async () => ({ ok: true }),
+    closeTable: async () => ({ ok: true }),
     saveReservation: async () => ({ ok: true }),
     setReservationStatus: async () => ({ ok: true }),
     openReservation: async () => ({ ok: true }),
@@ -38,5 +39,5 @@ test('enabled integration mounts exactly eleven static routes', () => {
     verifyToken: () => ({ sub: 'operator_primary', role: 'operator', sv: 1, sid: 'sid' }),
     getActor: async () => ({ actor: 'operator_primary', role: 'operator', active: true, session_version: 1, workspace_id: 'ws' }),
   });
-  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 11 });
+  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 12 });
 });
