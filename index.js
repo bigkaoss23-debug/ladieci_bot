@@ -196,6 +196,17 @@ async function routeRiderTripAction(action, body) {
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || "ladieci_webhook_2026";
 const PORT = process.env.PORT || 3000;
 
+// SAFETY FREEZE (2026-08-09, ported from safety/legacy-lifecycle-freeze-2026-08-09
+// commit 8f44493 — that branch diverged from this one at the commit currently
+// deployed to staging; V3.5 reconciles the same protection here rather than
+// merging that branch) — kill switch for every automatic (no-human)
+// service-close/rollover path: the internal close-tick timer, boot-time
+// catch-up (which may itself chain into a deferred-close retry), and the
+// external-cron "triggerCloseIfNeeded" HTTP action. Defaults to "on" so any
+// env where it's unset (prod) is byte-for-byte unaffected; staging sets it
+// false while Service Lifecycle V3 is developed against the same shared DB.
+const LEGACY_AUTOMATIC_LIFECYCLE_ENABLED = process.env.LEGACY_AUTOMATIC_LIFECYCLE_ENABLED !== "false";
+
 function trustedClientIp(req) {
   if (req && typeof req.ip === "string" && req.ip) return req.ip;
   return req && req.socket && typeof req.socket.remoteAddress === "string"
@@ -409,8 +420,13 @@ app.get("/api", async (req, res) => {
       // Endpoint per cron esterno (es. cron-job.org) — backup del cron interno.
       // S2-7D6D — passa dallo STESSO motore di decisione del tick/boot: mai un
       // force-close implicito se pingato fuori finestra (es. a metà pranzo).
-      const identity = await serviceSessionLifecycle.currentCloseout();
-      if (!identity?.ok || identity.code === "NO_SERVICE_SESSION" || !identity.session || identity.session.status === "closed") {
+      // SAFETY FREEZE (2026-08-09) — this is reachable by an external cron with
+      // no human pressing anything, same as the internal tick/boot catch-up, so
+      // it shares the same LEGACY_AUTOMATIC_LIFECYCLE_ENABLED gate.
+      const identity = LEGACY_AUTOMATIC_LIFECYCLE_ENABLED ? await serviceSessionLifecycle.currentCloseout() : null;
+      if (!LEGACY_AUTOMATIC_LIFECYCLE_ENABLED) {
+        result = { success: true, skipped: true, reason: "legacy_automatic_lifecycle_frozen" };
+      } else if (!identity?.ok || identity.code === "NO_SERVICE_SESSION" || !identity.session || identity.session.status === "closed") {
         result = { success: true, skipped: true, reason: "no_active_session" };
       } else {
         const decision = computeAutoCloseDecision({ now: new Date(), session: identity.session });
@@ -1316,8 +1332,12 @@ async function catchUpChiusura() {
 if (require.main === module) {
   schedula2340();          // 23:40 preventive backup — kept: useful, and it never
                            // touches session identity or closes the cash session.
-  schedulaCloseTick();     // S2-7D6B — replaces the single 23:50 forced close.
-  catchUpChiusura();
+  if (LEGACY_AUTOMATIC_LIFECYCLE_ENABLED) {
+    schedulaCloseTick();     // S2-7D6B — replaces the single 23:50 forced close.
+    catchUpChiusura();
+  } else {
+    console.log("[lifecycle-freeze] LEGACY_AUTOMATIC_LIFECYCLE_ENABLED=false — close-tick and boot catch-up frozen");
+  }
 }
 
 module.exports = { app };
