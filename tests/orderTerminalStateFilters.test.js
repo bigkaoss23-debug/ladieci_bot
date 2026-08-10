@@ -116,11 +116,20 @@ for (const file of PROD_FILES) {
 // cannot leak into the live board.
 {
   const src = read('index.js');
-  const m = src.match(/getOrdenes[\s\S]{0,700}?estado=in\.\(([^)]*)\)/);
+  // Anchored on the exact action-branch guard (unique — unlike the bare
+  // substring "getOrdenes", which also matches inside
+  // "getOrdenesArchivadosSesion"/"getOrdenesRecent" and, past a large enough
+  // explanatory comment block, could silently start matching one of THOSE
+  // branches' own filter instead). Window widened (P0-C2) to comfortably fit
+  // a real explanatory comment ahead of the query call, not just the bare code.
+  const m = src.match(/action === "getOrdenes"\)[\s\S]{0,1200}?estado=in\.\(([^)]*)\)/);
   assert('[P4.1] index.js getOrdenes includes only live operational states',
     !!m && m[1] === 'POR_CONFIRMAR,NUEVO,EN_COCINA,LISTO,EN_ENTREGA', m ? m[1] : 'getOrdenes filter not found');
-  assert('[P4.1b] index.js getOrdenes is scoped to the current service session',
-    /getOrdenes[\s\S]{0,700}?serviceSessionQuery\(/.test(src));
+  // P0-C2 — getOrdenes now scopes via the multi-id getOperationalSessionIds/
+  // serviceSessionsQuery pair (intraday carryover visibility), not the
+  // single-session getCurrentOperationalSession/serviceSessionQuery pair.
+  assert('[P4.1b] index.js getOrdenes is scoped to the current service session (P0-C2: multi-id carryover-aware)',
+    /action === "getOrdenes"\)[\s\S]{0,1200}?serviceSessionsQuery\(/.test(src));
 }
 // 4.2 service-close COMPLETED selections (scan + close read + close delete) → both.
 {

@@ -164,6 +164,17 @@ const LIVE_TRIGGER_SOURCE_PATH = path.join(ROOT, 'migrations', '2026-08-02_v3j_m
     path.join(ROOT, 'src', 'closeout', 'serviceCloseoutCreation.js'),
     path.join(ROOT, 'src', 'serviceSessions', 'serviceLifecycleEngine.js'),
     path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js'),
+    // P0-C2 (2026-08-10_service_lifecycle_economic_boundary_v1.sql) — a second
+    // sanctioned orchestrator, same relationship to service_closeouts as
+    // serviceLifecycleEngine.js above: calls serviceCloseoutCreation.create()
+    // (the sole INSERT-or-fetch DAO, unmodified), never references the table
+    // name in executable code — the one hit here is a comment explaining why
+    // Phase D exists. Reuses create_service_closeout as-is; does not touch
+    // close_service_session_v3, using roll_service_session_economic_v1
+    // instead (see that migration's own header for why: guard_service_
+    // session_closed_v1's SERVICE_ACTIVE_ORDERS_NOT_RESOLVED check would hard-
+    // block an ordinary intraday close with real non-terminal orders).
+    path.join(ROOT, 'src', 'serviceSessions', 'economicBoundaryEngine.js'),
   ]);
   function walk(dir, out) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

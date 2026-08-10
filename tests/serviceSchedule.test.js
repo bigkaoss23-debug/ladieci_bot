@@ -1,6 +1,7 @@
 "use strict";
 // S2-7D6B — the schedule resolver. Pure, so every boundary and both DST sides
 // are provable without a clock, a database or a deploy.
+// language-guard: allow-legacy PRANZO is the existing service_kind enum value / SCHEDULE_STATE literal already defined by serviceSchedule.js, exercised here verbatim throughout (including P0-C2's resolveEconomicPeriod section), not new vocabulary
 const S = require("../src/schedule/serviceSchedule");
 
 let pass = 0, fail = 0;
@@ -102,6 +103,40 @@ const custom = { ...S.DEFAULT_SCHEDULE, lunchEnsureStartMin: S.HM(11) };
 assert("a custom schedule is honoured (future restaurant_profile)", S.resolveSchedule(summer(9), custom).state === S.SCHEDULE_STATE.OUTSIDE_WINDOWS);
 assert("same input twice → same output", JSON.stringify(S.resolveSchedule(summer(12))) === JSON.stringify(S.resolveSchedule(summer(12))));
 assert("result is frozen", Object.isFrozen(S.resolveSchedule(summer(12))));
+
+console.log("\n══ J. resolveEconomicPeriod (P0-C2) — always defined, no buffer, no gap ══");
+{
+  const econ = (d) => S.resolveEconomicPeriod(d);
+  // The exact BETWEEN_SERVICES buffer (17:30-18:00) that resolveSchedule
+  // treats as "nothing may be ensured" must NOT exist for economic
+  // ownership — this is the whole point of the split (audit report §4/§6,
+  // brief's own "IMPORTANT — NO DEAD ZONE").
+  assert("17:29 economic PRANZO", econ(summer(17, 29)).serviceKind === "PRANZO");
+  assert("17:30 economic SERA (the cutoff itself, no buffer)", econ(summer(17, 30)).serviceKind === "SERA");
+  assert("17:45 (old BETWEEN_SERVICES) economic SERA, not undefined/null", econ(summer(17, 45)).serviceKind === "SERA");
+  assert("17:59 economic SERA", econ(summer(17, 59)).serviceKind === "SERA");
+  assert("18:00 economic SERA", econ(summer(18, 0)).serviceKind === "SERA");
+  assert("04:00 economic PRANZO (the day's own rollover instant)", econ(summer(4, 0, 16)).serviceKind === "PRANZO");
+  assert("03:59 economic SERA (still last night, before rollover)", econ(summer(3, 59, 16)).serviceKind === "SERA");
+  assert("00:00 economic SERA (old AFTER_ORDER_CUTOFF, still well-defined here)", econ(summer(0, 0, 16)).serviceKind === "SERA");
+  assert("06:00 economic PRANZO (old OUTSIDE_WINDOWS, still well-defined here)", econ(summer(6, 0, 16)).serviceKind === "PRANZO");
+  assert("noon economic PRANZO", econ(summer(12)).serviceKind === "PRANZO");
+  assert("20:00 economic SERA", econ(summer(20)).serviceKind === "SERA");
+
+  // business date always matches businessDateFor exactly — one clock, one
+  // day-rollover rule, never a second independent one for economics.
+  assert("business date matches businessDateFor at noon", econ(summer(12, 0, 15)).businessDate === S.businessDateFor(summer(12, 0, 15)));
+  assert("business date matches businessDateFor at 01:00 (still yesterday)", econ(summer(1, 0, 16)).businessDate === S.businessDateFor(summer(1, 0, 16)));
+
+  // never null, never undefined, at any clock reading — the "always defined" claim itself.
+  for (const h of [0, 3, 4, 8, 12, 17, 18, 20, 23]) {
+    assert(`hour ${h} economic period is always a real kind, never null`,
+      econ(summer(h, 0, 16)).serviceKind === "PRANZO" || econ(summer(h, 0, 16)).serviceKind === "SERA");
+  }
+
+  assert("result is frozen", Object.isFrozen(econ(summer(12))));
+  assert("winter (CET) still resolves correctly", econ(winter(12)).serviceKind === "PRANZO" && econ(winter(20)).serviceKind === "SERA");
+}
 
 console.log("");
 console.log("=== RESULT: " + pass + " passed, " + fail + " failed ===");

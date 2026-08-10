@@ -1,4 +1,5 @@
 "use strict";
+// language-guard: allow-legacy PRANZO is the existing service_kind enum value, named in this file's own comments to describe the P0-C2 boundary, not new vocabulary
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
@@ -10,8 +11,15 @@ const read = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8")
 test("operator order board is lifecycle-scoped and uses an active allowlist", () => {
   const source = read("index.js");
   const block = source.slice(source.indexOf('if (action === "getOrdenes")'), source.indexOf('} else if (action === "getWaMsgs")'));
-  assert.match(block, /getCurrentOperationalSession\(\)/);
-  assert.match(block, /serviceSessionQuery\(/);
+  // P0-C2 — widened from the single-session getCurrentOperationalSession/
+  // serviceSessionQuery to the (still lifecycle-authoritative, still
+  // fail-closed) multi-id getOperationalSessionIds/serviceSessionsQuery,
+  // language-guard: allow-legacy PRANZO is the existing service_kind enum value, named here only to describe the boundary, not new vocabulary
+  // so an intraday-carried table's orders stay visible across a PRANZO->SERA
+  // rollover — see SERVICE_LIFECYCLE_ECONOMIC_BOUNDARY_AUDIT_REPORT.md and
+  // P0_C2_INTRADAY_ECONOMIC_BOUNDARY_REPORT.md.
+  assert.match(block, /getOperationalSessionIds\(/);
+  assert.match(block, /serviceSessionsQuery\(/);
   assert.match(block, /estado=in\.\(POR_CONFIRMAR,NUEVO,EN_COCINA,LISTO,EN_ENTREGA\)/);
   assert.doesNotMatch(block, /estado=not\.in/);
 });

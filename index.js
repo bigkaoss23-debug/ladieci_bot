@@ -53,10 +53,11 @@ const riderReads = require("./src/agents/riderReads");
 const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceCloseout");
 const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/serviceSessionLifecycle");
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
+const { rollEconomicPeriod } = require("./src/serviceSessions/economicBoundaryEngine");
 const { resolveSchedule, closeEligibility, SCHEDULE_STATE, SERVICE_KIND } = require("./src/schedule/serviceSchedule");
 const { computeAutoCloseDecision } = require("./src/serviceSessions/autoCloseDecision");
 const { performIncidentSafeRollover } = require("./src/serviceSessions/incidentSafeRollover");
-const { getCurrentOperationalSession, serviceSessionQuery } = require("./src/serviceSessions/currentOperationalSession");
+const { getCurrentOperationalSession, serviceSessionQuery, getOperationalSessionIds, serviceSessionsQuery } = require("./src/serviceSessions/currentOperationalSession");
 const { getPreviousCloseoutIncidentSummary } = require("./src/closeout/previousCloseoutIncidentSummary");
 
 const app = express();
@@ -361,29 +362,39 @@ app.get("/api", async (req, res) => {
     }
 
     if (action === "getOrdenes") {
-      const currentService = await getCurrentOperationalSession();
-      result = currentService
+      // P0-C2 — scoped to the current session PLUS its immediate rollover
+      // source, when that source is still a live, non-destructively-settled
+      // 'rolled_over' session (see getOperationalSessionIds' own header) —
+      // this is what keeps a table/kitchen ticket that carried across an
+      // language-guard: allow-legacy PRANZO is the existing service_kind enum value, named here only to describe the boundary, not new vocabulary
+      // intraday PRANZO->SERA boundary visible here, exactly like it was
+      // before the boundary. The extra lookup only ever runs when a
+      // rollover_source_session_id is actually present on the current
+      // session (the common case, no carryover pending, pays nothing extra).
+      const sessionIds = await getOperationalSessionIds({ select: sbSelect });
+      result = sessionIds.length > 0
         ? await sbSelect(
             "ordenes",
-            serviceSessionQuery(
-              currentService.id,
+            serviceSessionsQuery(
+              sessionIds,
               "estado=in.(POR_CONFIRMAR,NUEVO,EN_COCINA,LISTO,EN_ENTREGA)&order=ts.asc",
             ),
           )
         : [];
     } else if (action === "getOrdenesArchivadosSesion") {
       // LISTOS_ARCHIVADOS_V1 — sibling of getOrdenes above: same session-scoping
-      // (getCurrentOperationalSession/serviceSessionQuery), same "no open session
-      // -> []" fallback, only the estado filter differs (terminal instead of
-      // active). A separate action instead of widening getOrdenes' response
-      // keeps that hot, realtime-triggered read from paying for a second query
-      // it doesn't need — this one is fetched only while Listos is open.
-      const currentService = await getCurrentOperationalSession();
-      result = currentService
+      // (getOperationalSessionIds/serviceSessionsQuery, P0-C2), same "no open
+      // session -> []" fallback, only the estado filter differs (terminal
+      // instead of active). A separate action instead of widening getOrdenes'
+      // response keeps that hot, realtime-triggered read from paying for a
+      // second query it doesn't need — this one is fetched only while Listos
+      // is open.
+      const sessionIds = await getOperationalSessionIds({ select: sbSelect });
+      result = sessionIds.length > 0
         ? await sbSelect(
             "ordenes",
-            serviceSessionQuery(
-              currentService.id,
+            serviceSessionsQuery(
+              sessionIds,
               // language-guard: allow-legacy COMPLETATO is the legacy Italian terminal spelling still on disk, required alongside COMPLETADO (see orderTerminalStateFilters.test.js), not new vocabulary
               "estado=in.(COMPLETADO,COMPLETATO,RETIRADO)&order=ts.desc&limit=200",
             ),
@@ -643,6 +654,20 @@ app.post("/api", async (req, res) => {
       const ensured = await ensureCurrentServiceSession({ actor: actorId, source: "manual_recovery" });
       if (!ensured.success) return res.status(409).json({ error: ensured.code || "SERVICE_SESSION_OPEN_FAILED", detail: ensured });
       result = { ok: true, ...ensured };
+    } else if (action === "rollEconomicPeriod") {
+      // P0-C2 — explicit, deliberate, non-silent trigger of the non-destructive
+      // intraday economic boundary (roll_service_session_economic_v1). Never
+      // called automatically — no scheduler/timer wires this anywhere; see
+      // economicBoundaryEngine.js's own header for why that stays a separate,
+      // future decision (matching P0-C1's "build the primitive, prove it
+      // independently" precedent). Idempotent: NO_ROLLOVER_DUE is a normal,
+      // non-error success when the current session's kind/date already match
+      // what the clock says should be current.
+      const actorId = req.authCtx?.actor;
+      if (!actorId) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
+      const rolled = await rollEconomicPeriod({ actor: actorId, source: "operator" });
+      if (!rolled.success) return res.status(409).json({ error: rolled.code || "ECONOMIC_BOUNDARY_ROLL_FAILED", detail: rolled });
+      result = rolled;
     } else if (req.authCtx && req.authCtx.rule && req.authCtx.rule.tripPrimitive) {
       // The verified identity travels under a reserved key the client cannot forge:
       // req.authCtx is built by legacyAuthGuard from the Bearer token and is spread LAST,

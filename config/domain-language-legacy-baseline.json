@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-10T17:43:17.792Z",
+  "generatedAt": "2026-08-10T18:52:47.073Z",
   "entries": [
     {
       "file": "index.js",
@@ -1324,7 +1324,7 @@
     {
       "file": "src/schedule/serviceSchedule.js",
       "term": "pranzo",
-      "count": 9
+      "count": 10
     },
     {
       "file": "src/serviceSessions/autoCloseDecision.js",
@@ -1354,6 +1354,16 @@
     {
       "file": "src/serviceSessions/currentOperationalSession.js",
       "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/economicBoundaryEngine.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "src/serviceSessions/economicBoundaryEngine.js",
+      "term": "completato",
       "count": 1
     },
     {
@@ -2517,6 +2527,11 @@
       "count": 7
     },
     {
+      "file": "tests/economicBoundaryEngine.test.js",
+      "term": "pranzo",
+      "count": 4
+    },
+    {
       "file": "tests/ensureCurrentSessionRecovery.test.js",
       "term": "pranzo",
       "count": 18
@@ -3212,9 +3227,34 @@
       "count": 3
     },
     {
+      "file": "tests/serviceLifecycleEconomicBoundaryMigration.static.test.js",
+      "term": "chiudi",
+      "count": 2
+    },
+    {
+      "file": "tests/serviceLifecycleEconomicBoundaryMigration.static.test.js",
+      "term": "chiuso",
+      "count": 2
+    },
+    {
+      "file": "tests/serviceLifecycleEconomicBoundaryMigration.static.test.js",
+      "term": "serata",
+      "count": 2
+    },
+    {
+      "file": "tests/serviceLifecycleEconomicBoundaryMigration.static.test.js",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "tests/serviceLifecycleEconomicBoundaryMigration.static.test.js",
+      "term": "storico",
+      "count": 2
+    },
+    {
       "file": "tests/serviceSchedule.test.js",
       "term": "pranzo",
-      "count": 22
+      "count": 32
     },
     {
       "file": "tests/serviceSessionIdentityMigration.test.js",

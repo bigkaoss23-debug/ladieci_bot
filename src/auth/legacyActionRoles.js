@@ -74,6 +74,7 @@ const ALL_ACTIONS = Object.freeze([
   "upsertCliente", "parseOrdineDaRisposta", "createManualGiro", "addOrderToManualGiro",
   "removeOrderFromManualGiro", "dissolveManualGiro",
   "setActorPin", "verifyOwnPin", "openServiceSession", "ensureCurrentServiceSession",
+  "rollEconomicPeriod",
   // ── special REST path ──
   "shadowPreview",
 ]);

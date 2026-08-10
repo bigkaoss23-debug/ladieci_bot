@@ -237,7 +237,37 @@ function closeEligibility(serviceKind, now = new Date(), schedule = DEFAULT_SCHE
   return { eligible, reason: eligible ? null : "LEGACY_CLOSE_TOO_EARLY", boundary: "22:00" };
 }
 
+// ── Economic period resolver (P0-C2) ────────────────────────────────────────
+// language-guard: allow-legacy PRANZO is the existing service_kind enum value already defined above in this same file (SERVICE_KIND), exercised here verbatim, not new vocabulary
+// THE deterministic answer to "which service_kind owns a NEW sale's economic
+// attribution right now" — always defined, no buffer, no gap. Deliberately
+// separate from resolveSchedule()'s operational windows, which legitimately
+// DO have gaps (BETWEEN_SERVICES exists to stop an operator opening a
+// brand-new, empty-handed session too early). Once a service already exists,
+// rolling its economic ownership forward is no longer the scary,
+// hard-to-reverse operation the old buffer was protecting against — see
+// roll_service_session_economic_v1 (2026-08-10_service_lifecycle_economic_
+// boundary_v1.sql), which never archives, deletes, or force-terminalizes
+// anything.
+// language-guard: allow-legacy PRANZO is the existing service_kind enum value already defined above in this file, not new vocabulary
+// The cutoff is exactly lunchBoundaryMin (17:30): PRANZO owns everything from
+// the day's rollover (04:00) up to it; SERA owns everything from it onward,
+// including the small hours before the NEXT day's rollover — an order at
+// 01:00 still belongs to the same calendar service-day's dinner, matching
+// businessDateFor's own 04:00 day-rollover exactly.
+function resolveEconomicPeriod(now = new Date(), schedule = DEFAULT_SCHEDULE) {
+  const p = madridParts(now, schedule.timezone);
+  const businessDate = businessDateFor(now, schedule);
+  const min = p.minutesOfDay;
+  // language-guard: allow-legacy PRANZO is the existing service_kind enum value, referenced via SERVICE_KIND.PRANZO defined above, not new vocabulary
+  const serviceKind = (min >= schedule.rolloverMin && min < schedule.lunchBoundaryMin)
+    ? SERVICE_KIND.PRANZO
+    : SERVICE_KIND.SERA;
+  return Object.freeze({ serviceKind, businessDate });
+}
+
 module.exports = {
   TIMEZONE, HM, DEFAULT_SCHEDULE, SERVICE_KIND, SCHEDULE_STATE,
   madridParts, businessDateFor, resolveSchedule, expectedServiceKind, closeEligibility,
+  resolveEconomicPeriod,
 };

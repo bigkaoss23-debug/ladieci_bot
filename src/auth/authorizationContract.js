@@ -51,6 +51,7 @@ const CANONICAL_ACTIONS = Object.freeze([
   'eliminaConversazione', 'upsertCliente', 'parseOrdineDaRisposta', 'createManualGiro',
   'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro',
   'getAuthActors', 'setActorPin', 'verifyOwnPin', 'openServiceSession', 'ensureCurrentServiceSession',
+  'rollEconomicPeriod',
 ]);
 const CANONICAL_SET = Object.freeze(new Set(CANONICAL_ACTIONS));
 
@@ -94,6 +95,10 @@ const FRESH_AUTH_ACTIONS = Object.freeze([
   'getAuthActors', 'setActorPin', 'verifyOwnPin', 'getCurrentServiceCloseout', 'openServiceSession',
   // S2-7D6B — the automatic ensure runs on every Servicio entry, so it must NOT be
   // fresh-auth: it is the silent path, not a privileged one-off.
+  // P0-C2 — rollEconomicPeriod mutates service-session lifecycle state (same
+  // sensitivity class as openServiceSession, which is already fresh-auth
+  // here) and, unlike ensureCurrentServiceSession, is never called silently.
+  'rollEconomicPeriod',
 ]);
 const FRESH_AUTH_SET = Object.freeze(new Set(FRESH_AUTH_ACTIONS));
 
