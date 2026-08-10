@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-09T11:54:05.347Z",
+  "generatedAt": "2026-08-10T13:01:45.707Z",
   "entries": [
     {
       "file": "index.js",
@@ -420,6 +420,56 @@
       "file": "migrations/2026-08-08_service_closeout_post_close_financial_resolutions.sql",
       "term": "storico",
       "count": 16
+    },
+    {
+      "file": "migrations/2026-08-10_mesa_close_forces_orphaned_orders.ROLLBACK.sql",
+      "term": "chiuso",
+      "count": 5
+    },
+    {
+      "file": "migrations/2026-08-10_mesa_close_forces_orphaned_orders.sql",
+      "term": "chiuso",
+      "count": 12
+    },
+    {
+      "file": "migrations/2026-08-10_mesa_close_forces_orphaned_orders.sql",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-10_mesa_close_forces_orphaned_orders.sql",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-10_mesa_decouple_payment_from_close.ROLLBACK.sql",
+      "term": "chiuso",
+      "count": 8
+    },
+    {
+      "file": "migrations/2026-08-10_mesa_decouple_payment_from_close.ROLLBACK.sql",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-10_mesa_decouple_payment_from_close.ROLLBACK.sql",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-10_mesa_decouple_payment_from_close.sql",
+      "term": "chiuso",
+      "count": 14
+    },
+    {
+      "file": "migrations/2026-08-10_mesa_decouple_payment_from_close.sql",
+      "term": "completato",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-08-10_mesa_decouple_payment_from_close.sql",
+      "term": "ordine",
+      "count": 1
     },
     {
       "file": "ops/backup/b7a2_e2e_b_restore_2026-07-22.sql",
@@ -2780,6 +2830,21 @@
       "file": "tests/manualOrderTime.test.js",
       "term": "ritiro",
       "count": 3
+    },
+    {
+      "file": "tests/mesaCloseForcesOrphanedOrders.static.test.js",
+      "term": "chiuso",
+      "count": 7
+    },
+    {
+      "file": "tests/mesaCloseForcesOrphanedOrders.static.test.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "tests/mesaDecouplePaymentFromClose.static.test.js",
+      "term": "chiuso",
+      "count": 4
     },
     {
       "file": "tests/mesaService.test.js",
