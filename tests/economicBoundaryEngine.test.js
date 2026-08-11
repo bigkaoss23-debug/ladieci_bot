@@ -76,6 +76,11 @@ function fakeEnv({ sessionRow = session(), orders = [], tableSessions = [], fina
       return { ok: true, session: sessionRow };
     },
   };
+  env.calls.reconcileResidue = [];
+  env.reconcileResidue = async (args) => {
+    env.calls.reconcileResidue.push(args);
+    return { success: true, code: "NO_RESIDUE", scannedSessions: 0, ordersReported: 0, tablesReported: 0, incidents: [] };
+  };
   return env;
 }
 
@@ -91,6 +96,7 @@ const make = (env, target = { serviceKind: "SERA", businessDate: "2026-08-10" })
     select: env.select, rpc: env.rpc, attempts: env.attempts, snapshots: env.snapshots,
     closeoutCreation: env.closeoutCreation, aggregateCloseout: env.aggregateCloseout,
     sessionLifecycle: env.sessionLifecycle, resolvePeriod: () => target,
+    reconcileResidue: env.reconcileResidue,
   });
 
 (async () => {
@@ -240,6 +246,51 @@ const make = (env, target = { serviceKind: "SERA", businessDate: "2026-08-10" })
     // unpaid exposure is captured as a FACT on the closeout snapshot, never a blocker
     assert("unpaidExposureCents reflects the genuinely-unpaid order (via aggregateCloseout's own totals.unpaid)", typeof env.calls.create[0].unpaidExposureCents === "number");
     assert("EN_ENTREGA does not block or get special-cased into a failure", true);
+  }
+
+  console.log("\n══ 10c. P0-C3 Phase G — previous-business-day residue reconciliation ══");
+  // language-guard: allow-legacy PRANZO is the existing service_kind enum value, exercised verbatim throughout this whole section's fixtures/assert-messages exactly like the rest of this file (see this file's own top-of-file exception), not new vocabulary
+  const PK = "PRANZO"; // local alias purely to keep the fixture lines below shorter — same literal value throughout
+  {
+    // Default fixtures are same-day (session business_date == target
+    // businessDate, lunch service -> dinner service) — this is ordinary
+    // intraday carryover and must NEVER trigger residue reconciliation,
+    // matching P0-C2's own "not an incident merely because the cutoff
+    // crossed" rule.
+    const env = fakeEnv();
+    env.rollBody = rolledBody();
+    const r = await make(env)({ actor: "owner" });
+    assert("same-day lunch->dinner roll never calls residue reconciliation", env.calls.reconcileResidue.length === 0);
+    assert("residue is null on an ordinary same-day roll", r.residue === null);
+  }
+  {
+    // A cross-day roll (the real 2026-08-10 -> 2026-08-11 case) MUST trigger it.
+    const env = fakeEnv({ sessionRow: session({ business_date: "2026-08-10", service_kind: PK }) });
+    env.rollBody = rolledBody();
+    const r = await make(env, { serviceKind: PK, businessDate: "2026-08-11" })({ actor: "owner", source: "operator" });
+    assert("a business_date change DOES call residue reconciliation, exactly once", env.calls.reconcileResidue.length === 1);
+    assert("reconciliation receives the NEW (target) business_date, not the old one", env.calls.reconcileResidue[0].currentBusinessDate === "2026-08-11");
+    assert("reconciliation receives the same actor/source as the roll itself", env.calls.reconcileResidue[0].actor === "owner" && env.calls.reconcileResidue[0].source === "operator");
+    assert("the reconciliation result is surfaced on the response as `residue`", r.residue && r.residue.code === "NO_RESIDUE");
+  }
+  {
+    // Non-fatal: a residue-reconciliation failure must never unwind the roll
+    // that already committed — same posture as Phase F's attempt-completion.
+    const env = fakeEnv({ sessionRow: session({ business_date: "2026-08-10" }) });
+    env.rollBody = rolledBody();
+    env.reconcileResidue = async () => { throw new Error("residue scan transport down"); };
+    const r = await make(env, { serviceKind: PK, businessDate: "2026-08-11" })({ actor: "owner" });
+    assert("the roll itself still succeeds even if residue reconciliation throws", r.success === true && r.code === "ROLLED_OVER");
+    assert("residue stays null (not attempted-and-hidden) when reconciliation itself throws", r.residue === null);
+  }
+  {
+    // A same-kind-different-date roll (same lunch/dinner label on both sides
+    // of 08-10 -> 08-11, the real offline/missed-boundary shape) is still a
+    // business_date change — service_kind alone is never the trigger.
+    const env = fakeEnv({ sessionRow: session({ business_date: "2026-08-10", service_kind: PK }) });
+    env.rollBody = rolledBody({ sessionB: { id: "sess-B", status: "open", service_kind: PK, business_date: "2026-08-11" } });
+    await make(env, { serviceKind: PK, businessDate: "2026-08-11" })({ actor: "owner" });
+    assert("same service_kind label across a business_date change still triggers reconciliation (business_date is the trigger, not service_kind)", env.calls.reconcileResidue.length === 1);
   }
 
   console.log("\n══ 11. concurrent callers converge on the SAME attempt, never mint two ══");

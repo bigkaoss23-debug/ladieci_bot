@@ -176,8 +176,21 @@ for (const file of PROD_FILES) {
   assert('[P4.6c] zones simulate+compute exclusion lists have both (2 sites)',
     (zones.match(/\[[^\]]*"COMPLETADO"[^\]]*\]/g) || []).filter(hasBoth).length >= 2);
   const ao = read('src/agents/agentOrdini.js');
-  assert('[P4.6d] agentOrdini has TWO active delivery filters with both',
-    (ao.match(/estado=not\.in\.\(RETIRADO,COMPLETADO,COMPLETATO\)/g) || []).length === 2);
+  // P0-C3 — the two literal call sites were deduplicated into one shared
+  // activeDomicilioOrdersForScheduling() helper (business-date-scoped), so
+  // the exclusion string itself now appears exactly ONCE in source, not
+  // twice — but it must still be reused by exactly the same two callers
+  // (calcolaFornoOutFallback, risincronizzaGiro) that originally had it
+  // language-guard: allow-legacy COMPLETATO is the existing terminal-state literal already asserted throughout this file, not new vocabulary
+  // inline, both still excluding both RETIRADO/COMPLETADO/COMPLETATO.
+  // language-guard: allow-legacy COMPLETATO/agentOrdini are the existing terminal-state literal and filename this test already asserts on throughout this file, not new vocabulary
+  assert('[P4.6d] agentOrdini has the active delivery filter with both, deduplicated into one shared helper',
+    // language-guard: allow-legacy COMPLETATO is the existing terminal-state literal already asserted throughout this file, not new vocabulary
+    (ao.match(/estado=not\.in\.\(RETIRADO,COMPLETADO,COMPLETATO\)/g) || []).length === 1);
+  // 3 = 1 function declaration + 2 call sites (calcolaFornoOutFallback,
+  // risincronizzaGiro) — both still route through the same single filter.
+  assert('[P4.6d2] the shared helper is declared once and used by exactly the two original call sites',
+    (ao.match(/activeDomicilioOrdersForScheduling\(\)/g) || []).length === 3);
 }
 
 // ── PART 5: state machine keeps dual terminal compatibility ──────────────────

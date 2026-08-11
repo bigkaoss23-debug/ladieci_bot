@@ -6,10 +6,12 @@
 // migrations/2026-08-08_service_closeout_incidents_foundation.sql), mirroring
 // ../serviceSessions/serviceSessionLifecycle.js's style.
 //
-// NOT wired into chiudiServizio/ensureServiceSession/any HTTP action, and NOT
-// a classifier — nothing here decides WHEN an incident exists (that is a
-// later slice's automatic-close classifier). This module only records and
-// resolves incidents a caller has already decided to report.
+// report() is NOT a classifier — nothing here decides WHEN an incident
+// exists (economicBoundaryEngine.js's own Phase C explicitly does NOT call
+// it for ordinary intraday carryover; previousBusinessDayResidue.js, P0-C3,
+// is the first real caller, for cross-business-date residue only). This
+// module only records and resolves incidents a caller has already decided
+// to report.
 //
 // Authorization is enforced twice, deliberately, matching the house pattern
 // already used for order_financial_events (ofe_by_role_chk /
@@ -17,22 +19,16 @@
 // obviously-unauthorized caller), and again inside resolve_service_incident
 // itself.
 //
-// TRUST BOUNDARY (Slice 1.1): NEITHER check is real authorization proof by
-// itself — both compare against a `role` string this module receives as a
-// plain argument. Today that is safe only because this module (a) is not
-// called from any HTTP action/route (verified in
-// tests/serviceIncidents.test.js and the static migration test) and (b) is
-// only ever invoked by trusted first-party backend/test code, which is the
-// ONLY thing that makes "caller says role='admin'" meaningful right now.
-// A caller-supplied "admin" string is NEVER, by itself, valid proof of
-// admin-ness — do not wire this module to an HTTP handler that passes
-// `role` straight from a request body/query field. When a real
-// admin-resolution action is built, `role` here must be sourced the same way
-// every other authorization decision in this backend is: a role claim
-// derived server-side from a verified JWT (src/auth/jwt.js) and checked
-// against the action's allowed principal set (src/auth/
-// authorizationContract.js) — never trust a frontend/caller-side gate as the
-// real authorization.
+// TRUST BOUNDARY (Slice 1.1, resolved P0-C3): NEITHER check is real
+// authorization proof by itself — both compare against a `role` string this
+// module receives as a plain argument. A caller-supplied "admin" string is
+// NEVER, by itself, valid proof of admin-ness. index.js's "resolveServiceIncident"
+// action (P0-C3, the only live HTTP caller of resolve()) follows exactly the
+// rule this comment always required: `role` is `req.authCtx.role`, a role
+// claim derived server-side from the verified actor identity (src/auth/jwt.js)
+// via the action's own entry in authorizationContract.js/legacyActionRoles.js
+// — never read from `req.body`/`req.query`. Any future caller of resolve()
+// MUST follow the same rule.
 // ===============================================================
 
 const { sbRpc, sbSelect } = require("../utils/supabase");

@@ -175,6 +175,12 @@ const LIVE_TRIGGER_SOURCE_PATH = path.join(ROOT, 'migrations', '2026-08-02_v3j_m
     // session_closed_v1's SERVICE_ACTIVE_ORDERS_NOT_RESOLVED check would hard-
     // block an ordinary intraday close with real non-terminal orders).
     path.join(ROOT, 'src', 'serviceSessions', 'economicBoundaryEngine.js'),
+    // P0-C3 — previousBusinessDayResidue.js: read-only lookup of a stale
+    // session's OWN service_closeouts row (to reuse its closeout_correlation_
+    // id as the dedupe key for a residue incident — see that file's own
+    // header). Never INSERTs/UPDATEs the table; the only hits here are that
+    // same explanation in comments plus the one SELECT-only query string.
+    path.join(ROOT, 'src', 'serviceSessions', 'previousBusinessDayResidue.js'),
   ]);
   function walk(dir, out) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

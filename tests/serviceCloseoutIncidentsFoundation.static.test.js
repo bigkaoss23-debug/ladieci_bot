@@ -168,11 +168,13 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   assert('10b: header points a future admin-resolution action at the real, existing verification pattern (verified JWT role claim)', sql.includes('src/auth/jwt.js') && sql.includes('src/auth/'));
   assert('10c: header explicitly forbids copying role straight from a request body field', /req\.body\.role/.test(sql));
 
-  // "No public HTTP resolution endpoint yet" (plan requirement) — proven by
-  // grepping every application source file OUTSIDE this slice's own modules
-  // and tests for any reference to the RPC name or the JS wrapper calls.
-  // Fails loudly (not silently) the day someone wires this up without also
-  // updating this check and the trust-boundary comments above it.
+  // "No UNEXPECTED HTTP creation/resolution wiring" (plan requirement,
+  // evolved by P0-C3 — see below) — proven by grepping every application
+  // source file OUTSIDE this slice's own modules and tests for any reference
+  // to the RPC name or the JS wrapper calls, and asserting only the
+  // explicitly-allowlisted callers match. Fails loudly (not silently) the
+  // day someone wires either up from a NEW, unreviewed location without also
+  // updating this allowlist and the trust-boundary comments above it.
   //
   // SERVICE CLOSEOUT V2 / SLICE 3 update: capture_closeout_snapshot /
   // create_service_incident / closeoutSnapshots.capture() /
@@ -202,15 +204,32 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
     // string (never calls them) so the real sbRpc default can reach them at
     // all; see supabaseResourcePolicy.js's own comment at this entry.
     path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js'),
+    // P0-C3 — the second real caller of serviceIncidents.report(): previous-
+    // business-day residue detection (a DIFFERENT classification decision
+    // than incidentSafeRollover.js's own auto-close anomalies), reached only
+    // from economicBoundaryEngine.js's Phase G on an actual business_date
+    // change, never from a read/page-load path — see that file's own header.
+    path.join(ROOT, 'src', 'serviceSessions', 'previousBusinessDayResidue.js'),
   ]);
-  // SLICE 4C.2C — same orchestrator, now ALSO the sole accepted resolution
+  // SLICE 4C.2C — same orchestrator, was ALSO the sole accepted resolution
   // caller (after a confirmed safe auto-action succeeds); the resource-policy
-  // registry now legitimately names the RPC too, for the same registration
-  // reason as CREATION_WIRING_ALLOWED_FILES above. index.js is deliberately
-  // NOT in this set — its absence is exactly what proves no HTTP route exists.
+  // registry legitimately names the RPC too, for the same registration
+  // reason as CREATION_WIRING_ALLOWED_FILES above.
+  //
+  // P0-C3 — index.js is NOW deliberately in this set: "resolveServiceIncident"
+  // is the first real, reviewed, admin-only, fresh-auth HTTP action wired to
+  // resolve_service_incident. This is exactly the "future admin-resolution
+  // action" the trust-boundary comment (10a-10c above, SQL migration header)
+  // always anticipated and always required to follow one rule: `role` must
+  // be server-derived from the verified actor identity, never read from the
+  // request body — see index.js's own "resolveServiceIncident" handler
+  // comment and serviceIncidents.js's updated header. This allowlist's job
+  // is now "prove ONLY this reviewed action calls resolve(), nothing else
+  // does it uncontrolled" rather than "prove nothing calls it at all".
   const RESOLUTION_WIRING_ALLOWED_FILES = new Set([
     path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'),
     path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js'),
+    path.join(ROOT, 'index.js'),
   ]);
   const CREATION_PATTERNS = [/create_service_incident/, /capture_closeout_snapshot/, /serviceIncidents\.report\(/, /closeoutSnapshots\.capture\(/];
   const RESOLUTION_PATTERNS = [/resolve_service_incident/, /serviceIncidents\.resolve\(/];
@@ -247,11 +266,20 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
       }
     }
   }
-  assert('10d: no application module OTHER than the Slice-3 lifecycle orchestrator references the creation/capture RPCs or wrappers', unexpectedCreationHits.length === 0, JSON.stringify(unexpectedCreationHits));
+  assert('10d: no application module OTHER than the explicitly-allowlisted creators references the creation/capture RPCs or wrappers', unexpectedCreationHits.length === 0, JSON.stringify(unexpectedCreationHits));
   assert('10d2: the Slice-3 lifecycle orchestrator DOES reference them — confirms the intended wiring actually landed, not just permitted', CREATION_PATTERNS.some((re) => re.test(fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'), 'utf8'))));
-  assert('10d3: no application module OTHER than the internal orchestrator (and its own resource-policy registration) references the RESOLUTION RPC/wrapper — still zero public HTTP path', resolutionHits.length === 0, JSON.stringify(resolutionHits));
+  assert('10d1b: previousBusinessDayResidue.js (P0-C3) DOES reference the creation wrapper too — confirms that wiring landed, not just permitted', CREATION_PATTERNS.some((re) => re.test(fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'previousBusinessDayResidue.js'), 'utf8'))));
+  assert('10d3: no application module OTHER than the explicitly-allowlisted resolvers references the RESOLUTION RPC/wrapper — zero UNREVIEWED HTTP path', resolutionHits.length === 0, JSON.stringify(resolutionHits));
   assert('10d4: the orchestrator DOES reference resolution now (SLICE 4C.2C) — confirms the intended post-confirmation wiring actually landed, not just permitted', RESOLUTION_PATTERNS.some((re) => re.test(fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'), 'utf8'))));
-  assert('10d5: index.js (the only HTTP surface) is NOT in the resolution-allowed set — no accidental admin-resolution HTTP route was added', !RESOLUTION_WIRING_ALLOWED_FILES.has(path.join(ROOT, 'index.js')));
+  assert('10d5: index.js IS in the resolution-allowed set (P0-C3, deliberate) AND does reference resolve() — exactly one reviewed HTTP route exists, not an accidental one', RESOLUTION_WIRING_ALLOWED_FILES.has(path.join(ROOT, 'index.js')) && RESOLUTION_PATTERNS.some((re) => re.test(fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8'))));
+  assert('10d6: that index.js reference is scoped to the resolveServiceIncident action block, not some other handler', (() => {
+    const text = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8');
+    const start = text.indexOf('action === "resolveServiceIncident"');
+    if (start === -1) return false;
+    const end = text.indexOf('} else if (', start + 1);
+    const block = text.slice(start, end === -1 ? text.length : end);
+    return /serviceIncidents\.resolve\(/.test(block);
+  })());
   assert('10e: the scan actually walked a non-trivial number of files (guards against a broken walk silently passing)', candidateFiles.length > 20, String(candidateFiles.length));
 
   console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');

@@ -17,6 +17,7 @@ const CAPABILITIES = Object.freeze([
   'settings.structural',
   // audit
   'audit.view',
+  'audit.resolve',
   // orders
   'orders.general',
   'orders.general.delete',
@@ -60,7 +61,7 @@ const CAPABILITY_SET = Object.freeze(new Set(CAPABILITIES));
 // depend on for their completeness tests).
 const ROLE_CAPABILITIES = Object.freeze({
   owner: Object.freeze([
-    'access.management', 'economy.view', 'settings.structural', 'audit.view',
+    'access.management', 'economy.view', 'settings.structural', 'audit.view', 'audit.resolve',
     'orders.general', 'orders.general.delete', 'orders.table.create',
     'orders.table.update.assigned', 'orders.table.update.general', 'tables.assign',
     'kitchen.read_operational', 'kitchen.read_board', 'kitchen.status.transition',

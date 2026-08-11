@@ -114,6 +114,11 @@ const ACTION_POLICY_REGISTRY = Object.freeze([
   // reserved for exactly this class of sensitive audit-trail read (owner
   // only among today's ROLE_CAPABILITIES entries).
   { action: 'getServiceIncidents', acceptedCapabilities: ['audit.view'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },
+  // P0-C3 — the first live mutation route for service_incidents. A distinct
+  // audit.resolve capability (not audit.view) on purpose: viewing sensitive
+  // audit history and being allowed to mutate/close it out are different
+  // privilege levels, even though today only owner holds either.
+  { action: 'resolveServiceIncident', acceptedCapabilities: ['audit.resolve'], legacyStatus: 'admin_only', v3Phase: 'V3-A', note: 'Thin wrapper over the already-built, already admin-gated (DB layer, 2026-08-08) incident-resolution primitive. Resolves the incident record only — never touches the underlying order/table_session.' },
   { action: 'getDeliveryLogs', acceptedCapabilities: ['economy.view'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },
   { action: 'getSuggerimenti', acceptedCapabilities: ['settings.structural'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },
   { action: 'rigeneraSuggerimenti', acceptedCapabilities: ['settings.structural'], legacyStatus: 'admin_only', v3Phase: 'V3-A' },

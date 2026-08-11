@@ -59,6 +59,7 @@ const { computeAutoCloseDecision } = require("./src/serviceSessions/autoCloseDec
 const { performIncidentSafeRollover } = require("./src/serviceSessions/incidentSafeRollover");
 const { getCurrentOperationalSession, serviceSessionQuery, getOperationalSessionIds, serviceSessionsQuery } = require("./src/serviceSessions/currentOperationalSession");
 const { getPreviousCloseoutIncidentSummary } = require("./src/closeout/previousCloseoutIncidentSummary");
+const { serviceIncidents } = require("./src/incidents/serviceIncidents");
 
 const app = express();
 app.use(express.json());
@@ -349,7 +350,7 @@ app.get("/api", async (req, res) => {
     // router-action literals that the authorization-contract coverage test counts.
     if (req.authCtx && req.authCtx.role === "rider" &&
         ["getOrdenes", "getManualGiros"].includes(action)) {
-      const deps = { sbSelect };
+      const deps = { sbSelect, getOperationalSessionIds, serviceSessionsQuery };
       const riderResult = action.endsWith("Ordenes")
         ? await riderReads.getRiderOrdenes(deps)
         : await riderReads.getRiderManualGiros(deps);
@@ -550,8 +551,9 @@ app.get("/api", async (req, res) => {
       // SERVICE CLOSEOUT V2 / SLICE 4A — the Admin "Incidencias" backlog.
       // Admin-only (see legacyActionRoles.js ADMIN_ONLY / authorizationContract.js
       // ADMIN_ONLY_ACTIONS), same class as getStorico/getEconomiaLedger:
-      // sensitive financial/operational history, fresh-auth. Read-only — no
-      // resolve/acknowledge/defer mutation exists on this or any route.
+      // sensitive financial/operational history, fresh-auth. Read-only itself
+      // — resolution is the separate "resolveServiceIncident" action (P0-C3)
+      // below, so a filterable list is enough to find a given incident's id.
       result = await readActions.getServiceIncidents({
         resolutionStatus: req.query.resolutionStatus,
         category: req.query.category,
@@ -668,6 +670,43 @@ app.post("/api", async (req, res) => {
       const rolled = await rollEconomicPeriod({ actor: actorId, source: "operator" });
       if (!rolled.success) return res.status(409).json({ error: rolled.code || "ECONOMIC_BOUNDARY_ROLL_FAILED", detail: rolled });
       result = rolled;
+    } else if (action === "resolveServiceIncident") {
+      // P0-C3 — Phase 5 explicit resolution primitive. Thin wrapper over the
+      // already-built, already-idempotent, already-admin-gated (DB-level)
+      // serviceIncidents.resolve() (2026-08-08_service_closeout_incidents_
+      // foundation.sql) — this action is the first thing that ever calls it
+      // from a live route. Resolves the INCIDENT record only: never touches
+      // the underlying order/table_session (canonical state, financial
+      // truth, and estado are all untouched by this action — resolve_
+      // service_incident's own body writes exclusively to
+      // service_incidents). A previous-business-day residue order does NOT
+      // language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal, named here only to state what this action does NOT do, not new vocabulary
+      // become CHIUSO_FORZATO by being acknowledged/resolved here — that
+      // remains a deliberate, separate, order-level decision this action
+      // does not make (see P0_C3 report §16).
+      // resolvedBy/role are SERVER-DERIVED from the verified actor identity,
+      // exactly like every other admin action in this file — never read from
+      // req.body (see serviceIncidents.js's own trust-boundary comment).
+      const actorId = req.authCtx?.actor;
+      const actorRole = req.authCtx?.role;
+      if (!actorId || !actorRole) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
+      const { incidentId, resolutionType, resolutionStatus, resolutionNote } = req.body || {};
+      if (!incidentId || typeof incidentId !== "string") {
+        return res.status(400).json({ error: "INCIDENT_ID_REQUIRED" });
+      }
+      if (!resolutionType || typeof resolutionType !== "string" || !resolutionType.trim()) {
+        return res.status(400).json({ error: "RESOLUTION_TYPE_REQUIRED" });
+      }
+      const resolved = await serviceIncidents.resolve({
+        incidentId, resolvedBy: actorId, role: actorRole,
+        resolutionType, resolutionStatus: resolutionStatus || "resolved",
+        resolutionNote: resolutionNote || null,
+      });
+      if (!resolved.success) {
+        const status = resolved.code === "INCIDENT_RESOLUTION_FORBIDDEN" ? 403 : 409;
+        return res.status(status).json({ error: resolved.code || "SERVICE_INCIDENT_RESOLVE_FAILED", detail: resolved });
+      }
+      result = resolved;
     } else if (req.authCtx && req.authCtx.rule && req.authCtx.rule.tripPrimitive) {
       // The verified identity travels under a reserved key the client cannot forge:
       // req.authCtx is built by legacyAuthGuard from the Bearer token and is spread LAST,

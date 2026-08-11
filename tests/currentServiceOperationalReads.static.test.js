@@ -41,9 +41,18 @@ test("service backup is scoped and the close passes its immutable session id", (
   assert.doesNotMatch(source, /sbSelect\("ordenes", "select=\*"\)/);
 });
 
-test("oven and delivery capacity ignore orders from closed services", () => {
+// P0-C3 — widened from the single-session getCurrentOperationalSession()/
+// serviceSessionQuery() to the business-date-scoped getOperationalSessionIds()/
+// serviceSessionsQuery(), same primitives getOrdenes itself now uses: real
+// oven/delivery capacity must include a same-business-date carried session's
+// still-active orders, or capacity checks under-count and over-promise new
+// language-guard: allow-legacy PRANZO is the existing service_kind enum value, named here only to describe the boundary, not new vocabulary
+// slots the moment an intraday PRANZO->SERA rollover happens. Still correctly
+// excludes anything outside the current business_date (P0_C3 report §4/§5).
+test("oven and delivery capacity ignore orders from closed services or a previous business_date", () => {
   const source = read("src/agents/agentCucina.js");
-  assert.match(source, /getCurrentOperationalSession\(\)/);
-  assert.match(source, /serviceSessionQuery\(currentService\.id, "estado=eq\.EN_COCINA"\)/);
-  assert.match(source, /serviceSessionQuery\([\s\S]*tipo_consegna=eq\.DOMICILIO/);
+  assert.match(source, /getOperationalSessionIds\(\{ select: sbSelect \}\)/);
+  assert.match(source, /serviceSessionsQuery\(sessionIds, "estado=eq\.EN_COCINA"\)/);
+  // language-guard: allow-legacy tipo_consegna is the existing column name this test already asserts on elsewhere, not new vocabulary
+  assert.match(source, /serviceSessionsQuery\([\s\S]*tipo_consegna=eq\.DOMICILIO/);
 });

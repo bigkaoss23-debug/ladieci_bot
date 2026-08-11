@@ -75,10 +75,33 @@ async function readActiveTrip(deps) {
 }
 
 // getRiderOrdenes — rider-scoped, snapshot-aware, fail-closed order list.
+//
+// P0-C3 — the pre-trip candidate scan used to fetch EVERY row in `ordenes`
+// (no session/date scope at all, "order=ts.asc" only) and filter client-side.
+// A stale multi-day-old DOMICILIO order stuck in LISTO/EN_ENTREGA would have
+// resurfaced to a rider indefinitely — proven the same class of gap as
+// Cocina/Listos, just never fixed for this surface. Now scoped the same way:
+// current-business-date session set (getOperationalSessionIds), same fail-
+// closed posture (a read error here still yields [], never a broadened list
+// -- see the try/catch below). In-trip mode is untouched: it was already
+// precisely bounded by the trip's own order_ids, never a broad scan.
 async function getRiderOrdenes(deps) {
   const m = await resolveTripMode(deps);
   if (m.mode === "fail-closed") return { error: "rider_read_unavailable", reason: m.reason };
-  const rows = (await deps.sbSelect("ordenes", "order=ts.asc")) || [];
+  let rows;
+  if (m.mode === "in-trip") {
+    rows = (await deps.sbSelect("ordenes", "order=ts.asc")) || [];
+  } else {
+    let sessionIds = [];
+    try {
+      sessionIds = await deps.getOperationalSessionIds({ select: deps.sbSelect });
+    } catch (_) {
+      sessionIds = []; // fail closed to an empty candidate list, never an unscoped scan
+    }
+    rows = sessionIds.length > 0
+      ? (await deps.sbSelect("ordenes", deps.serviceSessionsQuery(sessionIds, "order=ts.asc"))) || []
+      : [];
+  }
   let filtered;
   if (m.mode === "in-trip") {
     const ids = new Set(m.trip.order_ids.map(String));

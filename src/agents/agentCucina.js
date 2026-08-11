@@ -5,7 +5,7 @@
 const { sbSelect } = require("../utils/supabase");
 const { isBevanda, isDesert, getConversazione } = require("../utils/helpers");
 const { ZONE_DELIVERY, calcolaTempoGiro, simulateDriverSchedule, BUFFER_OPS_DRIVER_MIN, calcolaFornoOut } = require("../utils/zones");
-const { getCurrentOperationalSession, serviceSessionQuery } = require("../serviceSessions/currentOperationalSession");
+const { getCurrentOperationalSession, getOperationalSessionIds, serviceSessionsQuery } = require("../serviceSessions/currentOperationalSession");
 
 function pad(n) { return n < 10 ? "0" + n : "" + n; }
 
@@ -36,10 +36,15 @@ function tuttiSlotValidi() {
 
 async function getStatoCliente(waId) {
   if (!waId) return { haOrdine: false };
-  const currentService = await getCurrentOperationalSession();
-  if (!currentService) return { haOrdine: false };
-  const rows = await sbSelect("ordenes", serviceSessionQuery(
-    currentService.id,
+  // P0-C3 — business-date-scoped (not single-session): a customer's order
+  // language-guard: allow-legacy PRANZO is the existing service_kind enum value, named here only to describe the boundary, not new vocabulary
+  // that carried from PRANZO into SERA the SAME day still counts as "you
+  // already have a pending order" (P0-B.1/P0-C2 carryover contract).
+  const sessionIds = await getOperationalSessionIds({ select: sbSelect });
+  // language-guard: allow-legacy haOrdine is this file's own pre-existing return-field name (see the line above, unchanged), not new vocabulary
+  if (sessionIds.length === 0) return { haOrdine: false };
+  const rows = await sbSelect("ordenes", serviceSessionsQuery(
+    sessionIds,
     `wa_id=eq.${encodeURIComponent(waId)}&estado=in.(EN_COCINA,LISTO)&order=ts.desc&limit=1`,
   ));
   if (!rows || !Array.isArray(rows) || rows.length === 0) return { haOrdine: false };
@@ -49,9 +54,13 @@ async function getStatoCliente(waId) {
 
 async function getCaricoForno(oraRichiesta) {
   const MAX_PIZZE_SLOT = 4;
+  // P0-C3 — business-date-scoped: real oven load must include a same-day
+  // carried session's still-cooking EN_COCINA orders, or this under-counts
+  // capacity and over-promises new slots the moment a rollover happens.
   const currentService = await getCurrentOperationalSession();
-  const rows = currentService
-    ? await sbSelect("ordenes", serviceSessionQuery(currentService.id, "estado=eq.EN_COCINA")) || []
+  const sessionIds = await getOperationalSessionIds({ select: sbSelect });
+  const rows = sessionIds.length > 0
+    ? await sbSelect("ordenes", serviceSessionsQuery(sessionIds, "estado=eq.EN_COCINA")) || []
     : [];
   const openedAtMs = currentService ? new Date(currentService.opened_at).getTime() : NaN;
   const convRows = currentService && Number.isFinite(openedAtMs)
@@ -115,10 +124,11 @@ async function getCaricoDelivery(zonaId, oraRichiesta, tempoGiroRichiesto = null
   const driverInGiro = !!(driverStato?.stato === "IN_GIRO" && driverStato?.zona === zonaId && driverStato?.partito_alle);
 
   // Ordini delivery attivi (per consolidazione zonale + simulazione cascade)
-  const currentService = await getCurrentOperationalSession();
-  const rows = currentService
-    ? await sbSelect("ordenes", serviceSessionQuery(
-        currentService.id,
+  // P0-C3 — business-date-scoped, same reasoning as getCaricoForno above.
+  const sessionIds = await getOperationalSessionIds({ select: sbSelect });
+  const rows = sessionIds.length > 0
+    ? await sbSelect("ordenes", serviceSessionsQuery(
+        sessionIds,
         "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)",
       )) || []
     : [];

@@ -18,20 +18,28 @@
 // SERVICE_LIFECYCLE_ECONOMIC_BOUNDARY_AUDIT_REPORT.md and
 // P0_C2_INTRADAY_ECONOMIC_BOUNDARY_REPORT.md §2/§4 for the full audit).
 //
-// INCIDENT SEMANTICS — deliberately minimal, per the clarified product
-// contract: a non-terminal order, an open table, an unpaid balance, or an
-// in-progress delivery crossing an intraday boundary is NORMAL CARRYOVER, not
-// an anomaly. None of it is persisted as a service_incidents row here —
-// v3IncidentPolicy.js's classification exists for V3's own (still
-// unreachable) close path and is deliberately NOT reused in this file:
-// reusing it would incorrectly turn ordinary carryover into noise ("These
-// are NOT incidents merely because they cross the cutoff" — brief, verbatim).
-// The one thing this engine still treats as a hard integrity failure is a
-// reconciliation mismatch (paid amount vs. the ledger's own collected
-// total) — the same check serviceLifecycleEngine.js already performs before
-// ever persisting a closeout. Non-terminal/occupied-table counts are still
-// recorded on the closeout row itself (openOrdersAtClose/
-// occupiedTablesAtClose) for reporting — captured as fact, never as alarm.
+// INCIDENT SEMANTICS — deliberately minimal for the ROLL ITSELF, per the
+// clarified product contract: a non-terminal order, an open table, an unpaid
+// balance, or an in-progress delivery crossing an intraday (SAME business_
+// date) boundary is NORMAL CARRYOVER, not an anomaly, and Phases A-F never
+// persist a service_incidents row for it — v3IncidentPolicy.js's
+// classification exists for V3's own (still unreachable) close path and is
+// deliberately NOT reused here: reusing it would incorrectly turn ordinary
+// carryover into noise ("These are NOT incidents merely because they cross
+// the cutoff" — P0-C2 brief, verbatim). The one thing Phases A-F still treat
+// as a hard integrity failure is a reconciliation mismatch (paid amount vs.
+// the ledger's own collected total) — the same check serviceLifecycleEngine.
+// js already performs before ever persisting a closeout. Non-terminal/
+// occupied-table counts are still recorded on the closeout row itself
+// (openOrdersAtClose/occupiedTablesAtClose) for reporting — captured as
+// fact, never as alarm.
+//
+// P0-C3 ADDS Phase G — the SAME non-terminal-order/open-table facts DO
+// become an incident once they cross a business_date, never merely a same-
+// day service_kind change (see previousBusinessDayResidue.js): "ordinary
+// intraday carryover" and "previous-business-day operational residue" are
+// deliberately different classifications for the same underlying data,
+// selected purely by which boundary was actually crossed.
 //
 // NO SCHEDULER WIRED HERE. This engine is a pure, callable, idempotent
 // primitive — see index.js's "rollEconomicPeriod" HTTP action (admin-only,
@@ -48,6 +56,7 @@ const { serviceCloseoutCreation } = require("../closeout/serviceCloseoutCreation
 const { aggregate } = require("../closeout/currentServiceCloseout");
 const { resolveEconomicPeriod, DEFAULT_SCHEDULE } = require("../schedule/serviceSchedule");
 const { lifecycle } = require("./serviceSessionLifecycle");
+const { reconcilePreviousBusinessDayResidue } = require("./previousBusinessDayResidue");
 
 // Identical literal to serviceLifecycleEngine.js's own TERMINAL_ORDER_STATES /
 // v3IncidentPolicy.js / guard_service_session_closed_v1 (SQL). Kept as its
@@ -74,6 +83,7 @@ function createEconomicBoundaryEngine({
   now = () => new Date(),
   schedule = DEFAULT_SCHEDULE,
   resolvePeriod = resolveEconomicPeriod,
+  reconcileResidue = reconcilePreviousBusinessDayResidue,
 } = {}) {
   return async function rollEconomicPeriod({ actor, source = "economic_boundary" } = {}) {
     if (!actor || typeof actor !== "string" || !actor.trim()) {
@@ -249,6 +259,28 @@ function createEconomicBoundaryEngine({
       );
     }
 
+    // Phase G — P0-C3 previous-business-day residue reconciliation. Fires
+    // ONLY when this roll actually crossed a business_date (never on a
+    // language-guard: allow-legacy PRANZO is the existing service_kind enum value, named here only to describe the boundary, not new vocabulary
+    // same-day PRANZO->SERA rollover, which stays silent/ordinary carryover
+    // per P0-C2). Scans every session strictly older than the NEW current
+    // business_date, not just the one just settled here, so a reconciliation
+    // that was missed for several days still catches up in one call — see
+    // previousBusinessDayResidue.js's own header. Non-fatal: a failure here
+    // never unwinds the roll that already committed (same "already true,
+    // don't retry into a duplicate" posture as Phase F above).
+    let residue = null;
+    if (target.businessDate !== session.business_date) {
+      try {
+        residue = await reconcileResidue({ actor, source, currentBusinessDate: target.businessDate });
+      } catch (e) {
+        console.warn(
+          "[economicBoundaryEngine] previous-business-day residue reconciliation failed (non-fatal — the roll itself already committed):",
+          (e && e.message) || e
+        );
+      }
+    }
+
     return {
       success: true,
       code: body.code,
@@ -258,6 +290,7 @@ function createEconomicBoundaryEngine({
       sessionA: body.sessionA,
       sessionB: body.sessionB,
       carryover: { nonTerminalOrders: nonTerminalCount, occupiedTables: occupiedTablesAtClose },
+      residue,
     };
   };
 }

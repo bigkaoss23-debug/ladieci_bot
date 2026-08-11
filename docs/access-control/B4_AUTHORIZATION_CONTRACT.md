@@ -77,7 +77,7 @@ targets, and be added here + to the module + to the tests explicitly.
 
 | Principal | Allowed actions |
 |---|---|
-| `admin` | 66 (every routed action except `triggerCloseIfNeeded`) |
+| `admin` | 67 (every routed action except `triggerCloseIfNeeded`) |
 | `operator` | 48 (every action except `triggerCloseIfNeeded` + the admin-only set) |
 | `rider` | 7 (the rider-enabled actions) |
 | `service` | 1 (`triggerCloseIfNeeded`) |
@@ -111,11 +111,11 @@ change B3 JWT/login/PIN behavior.
 
 ```
 PRINCIPALS: admin, operator, rider, service
-CANONICAL_COUNT: 67
+CANONICAL_COUNT: 68
 SERVICE_ONLY: triggerCloseIfNeeded
-ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, debugMenuShadow, getStorico, getOrdenesArchivio, getEconomiaLedger, getServiceIncidents, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione, getAuthActors, setActorPin, verifyOwnPin
+ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, debugMenuShadow, getStorico, getOrdenesArchivio, getEconomiaLedger, getServiceIncidents, resolveServiceIncident, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione, getAuthActors, setActorPin, verifyOwnPin
 RIDER_ENABLED: getDriverStatus, updateEstado, marcarEnEntrega, marcarEntregado, registrarSalidaDriver, chiudiGiro, marcarLlegado
-FRESH_AUTH: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, getStorico, getOrdenesArchivio, getEconomiaLedger, getServiceIncidents, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione, getAuthActors, setActorPin, verifyOwnPin, getCurrentServiceCloseout, openServiceSession, rollEconomicPeriod
+FRESH_AUTH: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, getStorico, getOrdenesArchivio, getEconomiaLedger, getServiceIncidents, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione, getAuthActors, setActorPin, verifyOwnPin, getCurrentServiceCloseout, openServiceSession, rollEconomicPeriod, resolveServiceIncident
 PREDICATE getDriverStatus: RIDER_OWN_DRIVER_STATUS
 PREDICATE updateEstado: RIDER_UPDATE_ESTADO_SCOPE
 PREDICATE marcarEnEntrega: RIDER_MARK_EN_ENTREGA_SCOPE
@@ -124,7 +124,7 @@ PREDICATE registrarSalidaDriver: RIDER_REGISTER_SALIDA_SCOPE
 PREDICATE chiudiGiro: RIDER_CLOSE_GIRO_SCOPE
 PREDICATE marcarLlegado: RIDER_MARK_LLEGADO_SCOPE
 ALIAS_MAP: EMPTY
-TOTAL admin: 66
+TOTAL admin: 67
 TOTAL operator: 48
 TOTAL rider: 7
 TOTAL service: 1

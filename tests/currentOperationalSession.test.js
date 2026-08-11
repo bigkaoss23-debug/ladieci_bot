@@ -63,40 +63,77 @@ test("PostgREST scope always pins service_session_id first", () => {
   assert.throws(() => serviceSessionQuery(null, "estado=eq.EN_COCINA"), /SERVICE_SESSION_ID_REQUIRED/);
 });
 
-// ── P0-C2 — intraday carryover visibility ──────────────────────────────────
+// ── P0-C2 → P0-C3 — intraday carryover visibility, business-date-scoped ────
+//
+// P0-C2's original design bounded this to "one rollover-chain hop back" —
+// these tests used to assert exactly that. P0-C3 proved (live, on the real
+// stuck session, before touching any code — P0_C3 report §2) that the hop-
+// count rule kept showing a PREVIOUS business_date's residue as if it were
+// ordinary same-day carryover, because 'rolled_over' alone can't tell
+// "this morning" from "yesterday". The correct dimension was always
+// business_date. Rewritten below for the new query shape; the OLD "never
+// widens beyond one hop" case is replaced by the NEW, actually-correct
+// "never widens beyond the current business_date" case.
 
-test("getOperationalSessionIds: no rollover source -> just the current session", async () => {
+test("getOperationalSessionIds: select not provided -> just the current session", async () => {
   const ids = await getOperationalSessionIds({
-    currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", rollover_source_session_id: null } }),
-    select: async () => { throw new Error("should never be called with no rollover_source_session_id"); },
+    currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", business_date: "2026-08-11" } }),
   });
   assert.deepEqual(ids, ["B"]);
 });
 
-test("getOperationalSessionIds: rollover source that IS still 'rolled_over' -> both ids", async () => {
+// language-guard: allow-legacy PRANZO is the existing service_kind enum value, exercised throughout this file's own fixtures, not new vocabulary
+test("getOperationalSessionIds: same business_date, current + its rolled_over PRANZO source -> both ids", async () => {
   const ids = await getOperationalSessionIds({
-    currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", rollover_source_session_id: "A" } }),
+    currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", business_date: "2026-08-11" } }),
     select: async (table, query) => {
       assert.equal(table, "service_sessions");
-      assert.match(query, /id=eq\.A/);
-      assert.match(query, /status=eq\.rolled_over/);
-      return [{ id: "A" }];
+      assert.match(query, /business_date=eq\.2026-08-11/);
+      assert.match(query, /status=in\.\(open,closing,rolled_over\)/);
+      return [{ id: "A" }, { id: "B" }];
     },
   });
-  assert.deepEqual(ids, ["B", "A"]);
+  assert.deepEqual(ids, ["A", "B"]);
 });
 
-test("getOperationalSessionIds: rollover source that is NOT 'rolled_over' (e.g. a destructive V2/V3 close) -> excluded", async () => {
+test("getOperationalSessionIds: a PREVIOUS business_date's rolled_over session is NEVER included, even though it would have been under the old one-hop rule — the exact live bug this fix closes", async () => {
   const ids = await getOperationalSessionIds({
-    currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", rollover_source_session_id: "A" } }),
-    select: async () => [], // the status=eq.rolled_over filter found nothing — A is 'closed', not carried
+    // A (2026-08-10, rolled_over) is B's rollover_source_session_id, exactly
+    // like the real 9746dfdd->421f93e1 case — but the query below (the real
+    // implementation) never even looks at rollover_source_session_id, only
+    // business_date, so A structurally cannot leak in regardless.
+    currentCloseout: async () => ({
+      ok: true,
+      session: { id: "B", status: "open", business_date: "2026-08-11", rollover_source_session_id: "A" },
+    }),
+    select: async (table, query) => {
+      assert.match(query, /business_date=eq\.2026-08-11/);
+      return [{ id: "B" }]; // the real DB would never return A here — different business_date
+    },
   });
-  assert.deepEqual(ids, ["B"], "A's orders are already archived/gone under V2/V3 close — nothing to widen for");
+  assert.deepEqual(ids, ["B"]);
+  assert.ok(!ids.includes("A"), "yesterday's session must never appear in today's operational set");
 });
 
-test("getOperationalSessionIds: a read error on the source lookup fails closed to just the current session", async () => {
+test("getOperationalSessionIds: empty result set -> falls back to just the current session", async () => {
   const ids = await getOperationalSessionIds({
-    currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", rollover_source_session_id: "A" } }),
+    currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", business_date: "2026-08-11" } }),
+    select: async () => [],
+  });
+  assert.deepEqual(ids, ["B"]);
+});
+
+test("getOperationalSessionIds: current is always included even if the read races and omits it", async () => {
+  const ids = await getOperationalSessionIds({
+    currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", business_date: "2026-08-11" } }),
+    select: async () => [{ id: "A" }], // hypothetical stale/partial read, missing B itself
+  });
+  assert.deepEqual(ids, ["A", "B"]);
+});
+
+test("getOperationalSessionIds: a read error fails closed to just the current session", async () => {
+  const ids = await getOperationalSessionIds({
+    currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", business_date: "2026-08-11" } }),
     select: async () => { throw new Error("transport down"); },
   });
   assert.deepEqual(ids, ["B"], "never widen scope on an error — fail closed, not open");
@@ -110,18 +147,20 @@ test("getOperationalSessionIds: no current session at all -> empty array", async
   assert.deepEqual(ids, []);
 });
 
-test("getOperationalSessionIds: never widens beyond one hop even if the source itself has a further source", async () => {
-  // A's own rollover_source_session_id (if any) is never consulted — only
-  // B's. This is what keeps the scope structurally bounded to exactly one
-  // intraday boundary, never a multi-day chain.
-  const ids = await getOperationalSessionIds({
-    currentCloseout: async () => ({ ok: true, session: { id: "C", status: "open", rollover_source_session_id: "B" } }),
-    select: async (table, query) => {
-      assert.match(query, /id=eq\.B/);
-      return [{ id: "B" }]; // does NOT also return B's own source "A" — never asked for it
-    },
+test("getCurrentOperationalBusinessDate: returns the current session's own business_date", async () => {
+  const { getCurrentOperationalBusinessDate } = require("../src/serviceSessions/currentOperationalSession");
+  const date = await getCurrentOperationalBusinessDate({
+    currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", business_date: "2026-08-11" } }),
   });
-  assert.deepEqual(ids, ["C", "B"]);
+  assert.equal(date, "2026-08-11");
+});
+
+test("getCurrentOperationalBusinessDate: no current session -> null, never the wall clock/calendar date", async () => {
+  const { getCurrentOperationalBusinessDate } = require("../src/serviceSessions/currentOperationalSession");
+  const date = await getCurrentOperationalBusinessDate({
+    currentCloseout: async () => ({ ok: true, session: null }),
+  });
+  assert.equal(date, null);
 });
 
 test("serviceSessionsQuery: a single id produces the byte-identical eq. format serviceSessionQuery already did", () => {

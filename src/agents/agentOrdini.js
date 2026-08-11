@@ -5,6 +5,28 @@
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
 const { normalizeOrderItem, OrderItemValidationError } = require("../menu/menuSnapshot");
+const { getOperationalSessionIds, serviceSessionsQuery } = require("../serviceSessions/currentOperationalSession");
+
+// P0-C3 — shared helper for the two driver-schedule-simulation call sites
+// below (calcolaFornoOutFallback, risincronizzaGiro). Both used to scan
+// EVERY non-terminal DOMICILIO order with no session/date scope at all —
+// a multi-day-old stranded delivery order would silently inflate the
+// simulated driver schedule forever, distorting ETA predictions for real
+// current deliveries. Fail-closed to an empty candidate set on a read
+// error, same posture as every other P0-C3 caller of this helper.
+async function activeDomicilioOrdersForScheduling() {
+  let sessionIds = [];
+  try {
+    sessionIds = await getOperationalSessionIds({ select: sbSelect });
+  } catch (_) {
+    sessionIds = [];
+  }
+  if (sessionIds.length === 0) return [];
+  return (await sbSelect("ordenes", serviceSessionsQuery(
+    // language-guard: allow-legacy tipo_consegna/COMPLETATO are the existing column name and terminal-state literal, identical to the query this consolidates, not new vocabulary
+    sessionIds, "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)",
+  ))) || [];
+}
 
 // S2-7D4C (Phase A, ported from the dynamic-menu adapter lineage eabea33/4a1dbd1/6fd8899).
 // Canonical immutable order-item snapshot at the WRITE boundary. Filters the delivery-fee
@@ -75,7 +97,7 @@ async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zo
   if (tipoConsegna !== "DOMICILIO" || !zona || !durataAndataMin) {
     return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin });
   }
-  const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)") || [];
+  const rows = await activeDomicilioOrdersForScheduling();
   const sim = simulateDriverSchedule(rows);
 
   // Aggregazione stesso giro: se il nuovo ordine cade nello stesso slot+zona di un
@@ -163,7 +185,7 @@ function planDriverScheduleSync(rows) {
 async function risincronizzaGiro(zona, hora) {
   if (!zona || !hora) return;
   try {
-    const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)") || [];
+    const rows = await activeDomicilioOrdersForScheduling();
     for (const u of planDriverScheduleSync(rows)) {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(u.id)}`, u.patch);
     }

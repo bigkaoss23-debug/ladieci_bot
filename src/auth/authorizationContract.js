@@ -34,9 +34,14 @@ const CANONICAL_ACTIONS = Object.freeze([
   // SERVICE CLOSEOUT V2 / SLICE 4A — getServiceIncidents added: the Admin
   // "Incidencias" backlog read (filterable list + single-incident detail).
   // Same class as getStorico/getEconomiaLedger: admin-only, fresh-auth,
-  // sensitive financial/operational history. Read-only — no incident
-  // resolution/acknowledge/defer mutation route exists anywhere.
+  // sensitive financial/operational history.
   'getServiceIncidents',
+  // P0-C3 — resolveServiceIncident added: the first live mutation route for
+  // service_incidents (getServiceIncidents above stays read-only). Thin
+  // wrapper over the already-built incident-resolution primitive (already
+  // admin-gated at the DB layer since 2026-08-08) — same class, same
+  // sensitivity, same fresh-auth requirement as getServiceIncidents.
+  'resolveServiceIncident',
   // LISTOS_ARCHIVADOS_V1 — session-scoped terminal-orders sibling of getOrdenes.
   // Same admin+operator access as getOrdenes' non-rider consumers; deliberately
   // NOT rider-enabled (getOrdenes' rider path goes through a separate intercept
@@ -71,7 +76,7 @@ const SERVICE_ONLY_SET = Object.freeze(new Set(SERVICE_ONLY_ACTIONS));
 const ADMIN_ONLY_ACTIONS = Object.freeze([
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes',
   'debugInterpreta', 'debugMenuShadow', 'getStorico', 'getOrdenesArchivio', 'getEconomiaLedger',
-  'getServiceIncidents',
+  'getServiceIncidents', 'resolveServiceIncident',
   'getDeliveryLogs', 'getSuggerimenti',
   'setConfig', 'eliminaOrdine', 'eliminaConversazione',
   'getAuthActors', 'setActorPin', 'verifyOwnPin',
@@ -99,6 +104,11 @@ const FRESH_AUTH_ACTIONS = Object.freeze([
   // sensitivity class as openServiceSession, which is already fresh-auth
   // here) and, unlike ensureCurrentServiceSession, is never called silently.
   'rollEconomicPeriod',
+  // P0-C3 — resolveServiceIncident mutates an audit/incident record; same
+  // language-guard: allow-legacy eliminaOrdine is the existing action name, named here only for a sensitivity-class comparison, not new vocabulary
+  // sensitivity class as eliminaOrdine/setActorPin, always an explicit,
+  // one-off admin decision, never called silently.
+  'resolveServiceIncident',
 ]);
 const FRESH_AUTH_SET = Object.freeze(new Set(FRESH_AUTH_ACTIONS));
 

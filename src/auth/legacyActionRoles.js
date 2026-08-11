@@ -38,6 +38,7 @@ const ADMIN_ONLY = Object.freeze([
   "getOrdenesArchivio",
   "getEconomiaLedger",
   "getServiceIncidents",
+  "resolveServiceIncident",
   "getDeliveryLogs",
   "getSuggerimenti",
   "rigeneraSuggerimenti",
@@ -74,7 +75,7 @@ const ALL_ACTIONS = Object.freeze([
   "upsertCliente", "parseOrdineDaRisposta", "createManualGiro", "addOrderToManualGiro",
   "removeOrderFromManualGiro", "dissolveManualGiro",
   "setActorPin", "verifyOwnPin", "openServiceSession", "ensureCurrentServiceSession",
-  "rollEconomicPeriod",
+  "rollEconomicPeriod", "resolveServiceIncident",
   // ── special REST path ──
   "shadowPreview",
 ]);

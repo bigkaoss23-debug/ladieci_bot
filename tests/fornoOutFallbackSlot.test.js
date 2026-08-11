@@ -24,6 +24,20 @@ require(supaPath); // forza il caricamento in cache
 let STUB_ROWS = [];
 require.cache[supaPath].exports.sbSelect = async () => STUB_ROWS;
 
+// P0-C3 — calcolaFornoOutFallback ora passa attraverso
+// activeDomicilioOrdersForScheduling() (business-date-scoped), che chiama
+// PRIMA getOperationalSessionIds() (currentOperationalSession.js — dipende
+// da lifecycle.currentCloseout()/sbRpc, non da sbSelect) e SOLO DOPO
+// sbSelect("ordenes", ...) per le righe vere e proprie. Senza questo stub
+// aggiuntivo, la vera chiamata RPC fallirebbe/non risponderebbe in questo
+// ambiente di test offline e il fail-closed (per design, mai allargare lo
+// scope su errore) restituirebbe sessionIds=[], svuotando STUB_ROWS a
+// prescindere dal suo contenuto. L'id esatto restituito qui non conta:
+// sbSelect sopra ignora comunque la query e risponde sempre con STUB_ROWS.
+const cosPath = require.resolve("../src/serviceSessions/currentOperationalSession");
+require(cosPath);
+require.cache[cosPath].exports.getOperationalSessionIds = async () => ["stub-session"];
+
 const { calcolaFornoOutFallback } = require("../src/agents/agentOrdini");
 
 let passed = 0, failed = 0;
