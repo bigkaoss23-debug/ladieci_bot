@@ -241,6 +241,7 @@ const REGISTRY = Object.freeze([
   // orders). Reached only via economicBoundaryEngine.js's `rpc` DI default
   // (sbRpc), same pattern as every other closeout-lifecycle RPC above.
   entry('rpc/roll_service_session_economic_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    // language-guard: allow-legacy PRANZO is the existing service_kind enum value, named here only to describe this RPC's purpose, not new vocabulary
     'economicBoundaryEngine.js rollEconomicPeriod() — atomically settles A (status->rolled_over, never touches ordenes/table_sessions) and opens B, the non-destructive intraday PRANZO->SERA transition'),
   // SLICE 3.2.1 — serviceCloseouts.js's getBySessionId() (plain SELECT, same
   // DI-invisible pattern as service_closeout_snapshots/service_closeout_
