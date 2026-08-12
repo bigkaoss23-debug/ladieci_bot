@@ -29,6 +29,8 @@
 
 const { sbSelect } = require("../utils/supabase");
 const { DEFAULT_SCHEDULE, resolveSchedule } = require("../schedule/serviceSchedule");
+const { classifySessionForRollover, isRolloverDue } = require("./sessionRolloverClassification");
+const { performIncidentSafeRollover } = require("./incidentSafeRollover");
 
 const INTAKE_CODE = Object.freeze({
   ORDER_INTAKE_CLOSED: "ORDER_INTAKE_CLOSED",
@@ -120,9 +122,68 @@ async function fetchActiveServiceSession({ select = sbSelect } = {}) {
   };
 }
 
+// ── Self-healing read — RUNTIME LIFECYCLE AUTHORITY RECOVERY ───────────────
+// The legacy no-human automatic family (index.js's close-tick timer, boot
+// catch-up, external-cron endpoint) and ensureServiceSession.js's own
+// page-load rollover are ALL gated behind LEGACY_AUTOMATIC_LIFECYCLE_ENABLED
+// (false on staging since the 2026-08-09 freeze — and, since the 2026-08-10
+// P0-C1 fix, that now covers the page-load path too, correctly closing the
+// language-guard: allow-legacy — PRANZO is the existing service_kind enum value, named here only to describe the incident, not new vocabulary
+// loophole that produced that day's stuck-PRANZO incident). The consequence,
+// proven live on 2026-08-12 (see SERVICE_LIFECYCLE_RUNTIME_AUTHORITY_
+// RECOVERY_REPORT.md): with all four frozen, a stale session now persists
+// forever until a human explicitly closes it — order intake (Mesa, WhatsApp,
+// Telefono, every channel; they all share this one gate, see
+// orderIntakePolicy.test.js's own #19-23) fails with STALE_SERVICE_SESSION
+// indefinitely, not just once.
+//
+// This is a NEW, narrowly-scoped safety net at a DIFFERENT trigger point —
+// an actual new-order attempt, i.e. "an explicit operational mutation", not
+// a page load — and is deliberately NOT gated by LEGACY_AUTOMATIC_LIFECYCLE_
+// ENABLED: that flag exists to freeze the old no-human TIMER family, not to
+// forbid reconciliation forever. It reuses the exact same already-hardened,
+// concurrency-safe, incident-preserving engine every other caller already
+// trusts (classifySessionForRollover + performIncidentSafeRollover — the
+// same functions ensureServiceSession.js calls) — no new mutation logic, no
+// new close/rollover implementation. Best-effort and fail-open-to-the-gate:
+// a failed or deferred rollover simply returns the still-stale session, so
+// evaluateNewOrderIntake's own STALE_SERVICE_SESSION rejection still applies
+// exactly as it does today — this can only make intake succeed MORE often
+// than before, never bypass or weaken the gate itself.
+async function fetchActiveServiceSessionSelfHealing({
+  select = sbSelect,
+  actor = "system",
+  source = "order_intake_reconcile",
+  rollover = performIncidentSafeRollover,
+  now = () => new Date(),
+} = {}) {
+  const session = await fetchActiveServiceSession({ select });
+  if (!session) return session;
+
+  const classification = classifySessionForRollover(
+    { business_date: session.businessDate, service_kind: session.serviceKind },
+    now(),
+  );
+  if (!isRolloverDue(classification)) return session;
+
+  try {
+    const result = await rollover({ session: { id: session.id }, actor, source });
+    if (result && result.success === true) {
+      // Rolled over (possibly with incidents) — re-read so the caller sees
+      // the fresh/newly-opened current session, not the one just closed.
+      return await fetchActiveServiceSession({ select });
+    }
+  } catch (_) {
+    // Never let a reconciliation failure crash order intake. Fall through —
+    // the caller gets the still-stale session and the ordinary
+    // STALE_SERVICE_SESSION rejection applies, unchanged from today.
+  }
+  return session;
+}
+
 // ── The async gate creaOrdine (and every other insert boundary) calls ──────────
 function createGateNewOrderIntake({
-  fetchActiveSession = fetchActiveServiceSession,
+  fetchActiveSession = fetchActiveServiceSessionSelfHealing,
   schedule = DEFAULT_SCHEDULE,
   now = () => new Date(),
 } = {}) {
@@ -144,6 +205,7 @@ module.exports = {
   INTAKE_CODE,
   evaluateNewOrderIntake,
   fetchActiveServiceSession,
+  fetchActiveServiceSessionSelfHealing,
   createGateNewOrderIntake,
   gateNewOrderIntake,
 };

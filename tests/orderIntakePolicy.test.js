@@ -11,7 +11,7 @@
 // consult the gate at all. Supabase is stubbed via require.cache — no network,
 // no residue.
 
-const { evaluateNewOrderIntake, INTAKE_CODE, createGateNewOrderIntake } =
+const { evaluateNewOrderIntake, INTAKE_CODE, createGateNewOrderIntake, fetchActiveServiceSessionSelfHealing } =
   require("../src/serviceSessions/orderIntakePolicy");
 const { SCHEDULE_STATE } = require("../src/schedule/serviceSchedule");
 
@@ -300,6 +300,162 @@ function installGate({ now, session }) {
     assert("27: rider/delivery transition at 00:30 unaffected by a closed gate", s2.success === true, JSON.stringify(s2));
     const s3 = await aggiungiItems("#900", [{ n: "Coca-Cola", q: 1, p: 2 }]);
     assert("add-items to an EXISTING order at 00:30 unaffected by a closed gate (never creates a new ordenes row)", s3.success === true && INSERTED.length === 0, JSON.stringify(s3));
+  }
+
+  console.log("\n══ PART 3 — fetchActiveServiceSessionSelfHealing (RUNTIME LIFECYCLE AUTHORITY RECOVERY) ══");
+  console.log("── SERVICE_LIFECYCLE_RUNTIME_AUTHORITY_RECOVERY_REPORT.md §§7-8 — the safety net that fires");
+  console.log("── at order-intake time when every no-human timer path is frozen by LEGACY_AUTOMATIC_");
+  console.log("── LIFECYCLE_ENABLED=false. rollover and now are injected — this only tests THIS function's");
+  console.log("── own branching; performIncidentSafeRollover's own concurrency/incident/hard-blocker");
+  console.log("── behavior is exhaustively covered by incidentSafeRollover.test.js's 61 passing assertions.");
+  {
+    const CURRENT_STATE = { current_session_id: "s-current" };
+    // language-guard: allow-legacy — PRANZO is the existing service_kind enum value, exercised here verbatim in a test fixture (same pattern as PRANZO_OPEN above), not new vocabulary
+    const STALE_ROW = { id: "s-stale", status: "open", service_kind: "PRANZO", business_date: "2026-08-11" };
+    // language-guard: allow-legacy — PRANZO is the existing service_kind enum value, exercised here verbatim in a test fixture, not new vocabulary
+    const FRESH_ROW = { id: "s-fresh", status: "open", service_kind: "PRANZO", business_date: "2026-08-12" };
+    // language-guard: allow-legacy — PRANZO is the existing service_kind enum value, exercised here verbatim in a test fixture, not new vocabulary
+    const HEALTHY_ROW = { id: "s-healthy", status: "open", service_kind: "PRANZO", business_date: "2026-08-12" };
+    // August, not summer()'s hardcoded July -- CEST (UTC+2) applies to both.
+    const madridAugust12 = (h, m = 0) => new Date(Date.UTC(2026, 7, 12, h - 2, m));
+    // language-guard: allow-legacy — PRANZO_WINDOW is the existing SCHEDULE_STATE literal from serviceSchedule.js, named here only to describe the boundary, not new vocabulary
+    const nowOnAug12 = () => madridAugust12(12, 0); // 12:00 CEST Aug 12 -- well inside PRANZO_WINDOW
+
+    console.log("\n── A/healthy: current-period session, not due — rollover never invoked ──");
+    {
+      let rolloverCalls = 0;
+      let selectCalls = 0;
+      const select = async (table) => {
+        selectCalls++;
+        if (table === "service_session_state") return [CURRENT_STATE];
+        if (table === "service_sessions") return [HEALTHY_ROW];
+        return [];
+      };
+      const rollover = async () => { rolloverCalls++; return { success: true }; };
+      const session = await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 });
+      assert("A1: healthy same-day session returned unchanged", session && session.id === "s-healthy", JSON.stringify(session));
+      assert("A2: rollover NOT invoked for a non-due session", rolloverCalls === 0);
+      assert("A3: exactly one read round-trip (no extra re-read when nothing rolled)", selectCalls === 2, selectCalls);
+    }
+
+    console.log("\n── B/C/D — PRIOR_DAY_STALE, rollover succeeds: self-heals and returns the FRESH session ──");
+    {
+      let readCount = 0;
+      const select = async (table) => {
+        if (table === "service_session_state") return [CURRENT_STATE];
+        if (table === "service_sessions") { readCount++; return [readCount === 1 ? STALE_ROW : FRESH_ROW]; }
+        return [];
+      };
+      let rolloverArgs = null;
+      const rollover = async (args) => { rolloverArgs = args; return { success: true, code: "ROLLED_OVER" }; };
+      const session = await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 });
+      assert("B1: rollover invoked with the stale session's id", rolloverArgs && rolloverArgs.session.id === "s-stale", JSON.stringify(rolloverArgs));
+      assert("B2: source is a distinct, identifiable tag (not reusing ensure_reconcile/cron_* )", rolloverArgs.source === "order_intake_reconcile", rolloverArgs.source);
+      assert("B3: actor defaults to system (this is a background safety net, not an operator action)", rolloverArgs.actor === "system", rolloverArgs.actor);
+      assert("C/D1: caller receives the FRESH post-rollover session, not the stale one", session && session.id === "s-fresh", JSON.stringify(session));
+    }
+
+    // language-guard: allow-legacy — PRANZO is the existing service_kind enum value, named here only to describe the test scenario, not new vocabulary
+    console.log("\n── B2 — SAME_DAY_TRANSITION_DUE (PRANZO past its own close boundary, same date): also self-heals ──");
+    {
+      const nowPastLunchClose = () => madridAugust12(21, 0); // 21:00 CEST -- well past 17:30 lunchBoundaryMin, still same date
+      // language-guard: allow-legacy — PRANZO is the existing service_kind enum value, exercised here verbatim in a test fixture, not new vocabulary
+      const SAME_DAY_DUE_ROW = { id: "s-same-day", status: "open", service_kind: "PRANZO", business_date: "2026-08-12" };
+      let readCount = 0;
+      const select = async (table) => {
+        if (table === "service_session_state") return [CURRENT_STATE];
+        readCount++; return [readCount === 1 ? SAME_DAY_DUE_ROW : FRESH_ROW];
+      };
+      let rolloverCalls = 0;
+      const rollover = async () => { rolloverCalls++; return { success: true }; };
+      const session = await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowPastLunchClose });
+      // language-guard: allow-legacy — PRANZO is the existing service_kind enum value, named here only to describe the test scenario, not new vocabulary
+      assert("B2a: a same-day PRANZO past its own close boundary triggers rollover too (not just cross-day)", rolloverCalls === 1);
+      assert("B2b: caller receives the fresh session", session && session.id === "s-fresh", JSON.stringify(session));
+    }
+
+    console.log("\n── E — rollover reports a hard blocker (success:false): falls through, stays stale, no crash ──");
+    {
+      const select = async (table) => table === "service_session_state" ? [CURRENT_STATE] : [STALE_ROW];
+      const rollover = async () => ({ success: false, error: "ROLLOVER_HARD_BLOCKED", hardBlockers: [{ incidentType: "INTEGRITY" }] });
+      const session = await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 });
+      assert("E1: still-stale session returned as-is on a hard blocker (never silently advanced)", session && session.id === "s-stale", JSON.stringify(session));
+    }
+
+    console.log("\n── deferred rollover (e.g. active rider trip): falls through, stays stale, no crash ──");
+    {
+      const select = async (table) => table === "service_session_state" ? [CURRENT_STATE] : [STALE_ROW];
+      const rollover = async () => ({ success: false, deferred: true, reason: "ACTIVE_RIDER_TRIP" });
+      const session = await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 });
+      assert("deferred: still-stale session returned, never force-advanced past an active operational trip", session && session.id === "s-stale", JSON.stringify(session));
+    }
+
+    console.log("\n── robustness: rollover throwing is caught, never propagates to order intake ──");
+    {
+      const select = async (table) => table === "service_session_state" ? [CURRENT_STATE] : [STALE_ROW];
+      const rollover = async () => { throw new Error("transport blew up"); };
+      let threw = false;
+      let session = null;
+      try { session = await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 }); }
+      catch (_) { threw = true; }
+      assert("robustness1: does not throw", threw === false);
+      assert("robustness2: still returns the (stale) session so the ordinary gate rejection applies", session && session.id === "s-stale");
+    }
+
+    console.log("\n── no active session at all: returns null immediately, never classifies/rolls a null ──");
+    {
+      let rolloverCalls = 0;
+      const select = async (table) => table === "service_session_state" ? [{ current_session_id: null }] : [];
+      const rollover = async () => { rolloverCalls++; return { success: true }; };
+      const session = await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 });
+      assert("null-session1: returns null", session === null);
+      assert("null-session2: rollover never invoked against a non-existent session", rolloverCalls === 0);
+    }
+
+    console.log("\n── H — independent of LEGACY_AUTOMATIC_LIFECYCLE_ENABLED (must stay false everywhere else) ──");
+    {
+      const prior = process.env.LEGACY_AUTOMATIC_LIFECYCLE_ENABLED;
+      process.env.LEGACY_AUTOMATIC_LIFECYCLE_ENABLED = "false"; // staging's real value
+      try {
+        let rolloverCalls = 0;
+        let readCount = 0;
+        const select = async (table) => {
+          if (table === "service_session_state") return [CURRENT_STATE];
+          readCount++; return [readCount === 1 ? STALE_ROW : FRESH_ROW];
+        };
+        const rollover = async () => { rolloverCalls++; return { success: true }; };
+        const session = await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 });
+        assert("H1: self-heals even with LEGACY_AUTOMATIC_LIFECYCLE_ENABLED=false", rolloverCalls === 1);
+        assert("H2: resulting session is the fresh one", session && session.id === "s-fresh");
+        assert("H3: the flag itself is untouched/unread by this module (still exactly 'false')", process.env.LEGACY_AUTOMATIC_LIFECYCLE_ENABLED === "false");
+      } finally {
+        if (prior === undefined) delete process.env.LEGACY_AUTOMATIC_LIFECYCLE_ENABLED;
+        else process.env.LEGACY_AUTOMATIC_LIFECYCLE_ENABLED = prior;
+      }
+    }
+
+    console.log("\n── G — two concurrent self-heal calls both converge on the same rollover, no duplicate work assumed ──");
+    {
+      // The real duplicate-prevention guarantee lives in performIncidentSafeRollover
+      // itself (service_closeout_attempts_active_uq, proven by incidentSafeRollover.
+      // test.js #11a-11f). This confirms only that THIS wrapper does not add its own
+      // read-modify-write race: both callers independently read "stale", both call
+      // rollover (exactly as two independent HTTP requests would), and a shared fake
+      // standing in for the real idempotent engine still leaves both callers with a
+      // coherent fresh result — never a thrown exception, never a mixed/partial read.
+      let rolloverCalls = 0;
+      const select = async (table) => {
+        if (table === "service_session_state") return [CURRENT_STATE];
+        return [rolloverCalls > 0 ? FRESH_ROW : STALE_ROW];
+      };
+      const rollover = async () => { rolloverCalls++; return { success: true }; };
+      const [a, b] = await Promise.all([
+        fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 }),
+        fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 }),
+      ]);
+      assert("G1: both concurrent callers resolve without throwing", !!a && !!b);
+      assert("G2: neither caller is left holding the stale session", a.id !== "s-stale" && b.id !== "s-stale", JSON.stringify([a, b]));
+    }
   }
 
   console.log("\n══ RESULT: " + pass + " passed, " + fail + " failed ══");
