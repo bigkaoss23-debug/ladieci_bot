@@ -62,9 +62,19 @@ console.log("\n══ D. triggerCloseIfNeeded (external backup) is no longer an 
 console.log("\n══ F. the incident-safe rollover orchestrator itself always delegates archival to chiudiServizio ══");
 {
   const ROLLOVER = read("src/serviceSessions/incidentSafeRollover.js");
-  // SLICE 4C.1 — the call now also passes closeContext.allowOpenTablesAcrossBoundary:true
+  // SLICE 4C.1 — the call also passes closeContext.allowOpenTablesAcrossBoundary:true
   // (accepted cross-service Mesa contract); deleteAttivi=true is unchanged.
-  assert("F: performIncidentSafeRollover calls chiudiServizio (via its injectable closeSession, defaulted to the real one) with deleteAttivi=true — the SAME single close implementation every automatic path always used", /closeSession\(true, source, actor, \{ allowOpenTablesAcrossBoundary: true \}\)/.test(ROLLOVER) && /const \{ chiudiServizio \} = require\("\.\.\/utils\/servizio"\);/.test(ROLLOVER));
+  // SERVICE LIFECYCLE RUNTIME AUTHORITY RECOVERY — the same call now also
+  // passes closeContext.preserveActiveOrders:true, so the call spans
+  // multiple lines; match tolerantly but still require both flags inside
+  // the one closeSession(true, source, actor, {...}) call.
+  const closeSessionCallMatch = ROLLOVER.match(/closeSession\(true, source, actor, \{([\s\S]*?)\}\);/);
+  assert("F: performIncidentSafeRollover delegates to the shared close engine (via its injectable closeSession, defaulted to the real implementation) with deleteAttivi=true — the SAME single close implementation every automatic path always used",
+    !!closeSessionCallMatch
+    && /allowOpenTablesAcrossBoundary:\s*true/.test(closeSessionCallMatch[1])
+    && /preserveActiveOrders:\s*true/.test(closeSessionCallMatch[1])
+    // language-guard: allow-legacy chiudiServizio/servizio.js are the exact identifiers this regex asserts are still required(), not new vocabulary
+    && /const \{ chiudiServizio \} = require\("\.\.\/utils\/servizio"\);/.test(ROLLOVER));
 }
 
 console.log("\n══ E. testability — the audit's flagged gap is closed ══");

@@ -56,7 +56,20 @@ const ROLLOVER = read('src/serviceSessions/incidentSafeRollover.js');
   }
 
   console.log('\n── the bypass is wired EXACTLY once, from the automatic orchestrator ──');
-  assert('4a: incidentSafeRollover.js sets allowOpenTablesAcrossBoundary:true on its own closeSession() call', /closeSession\(true, source, actor, \{ allowOpenTablesAcrossBoundary: true \}\)/.test(ROLLOVER));
+  // SERVICE LIFECYCLE RUNTIME AUTHORITY RECOVERY — the call site now also
+  // carries closeContext.preserveActiveOrders:true (a residual non-terminal
+  // order must never be archived/force-terminalized by the automatic path,
+  // only by an explicit human force-close — see the close engine's own
+  // header comment for the full contract), so the call spans multiple
+  // lines. The pattern below tolerates that formatting/ordering while still
+  // requiring both flags to appear inside the SAME
+  // closeSession(true, source, actor, {...}) call, not merely somewhere in
+  // the file.
+  const closeSessionCallMatch = ROLLOVER.match(/closeSession\(true, source, actor, \{([\s\S]*?)\}\);/);
+  assert('4a: incidentSafeRollover.js sets allowOpenTablesAcrossBoundary:true on its own closeSession() call',
+    !!closeSessionCallMatch && /allowOpenTablesAcrossBoundary:\s*true/.test(closeSessionCallMatch[1]));
+  assert('4a-2: the same call also sets preserveActiveOrders:true (residual orders survive an automatic close untouched)',
+    !!closeSessionCallMatch && /preserveActiveOrders:\s*true/.test(closeSessionCallMatch[1]));
   const occurrences = (SERVIZIO.match(/allowOpenTablesAcrossBoundary/g) || []).length;
   assert('4b: servizio.js references the flag a small, fixed number of times (destructure + comments + gate check) — no second/hidden code path', occurrences >= 2 && occurrences <= 8, String(occurrences));
 

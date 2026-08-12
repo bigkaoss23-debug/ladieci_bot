@@ -436,8 +436,35 @@ function madridStartOfDayIso(businessDate) {
 //     sets this true, for the AUTOMATIC/REQUIRED rollover path specifically —
 //     manual close (index.js "chiudiServizio" action) and the S2-1G deferred-
 //     close retry both omit it and keep the historical conservative gate.
+// SERVICE LIFECYCLE RUNTIME AUTHORITY RECOVERY — preserveActiveOrders.
+//
+// deleteAttivi=true used to bundle two decisions into one boolean: (1) let a
+// residual non-terminal order pass through without blocking the close, and
+// (2) permanently archive+remove that order as force-closed. Every automatic
+// caller only ever wanted (1) -- (2) is meant for an explicit, human-
+// initiated force-close only (the manual HTTP action's own operator-supplied
+// flag). The automatic rollover orchestrator inherited (2) unintentionally,
+// proven live: a deliberately-preserved synthetic test record (explicitly
+// marked "never remove") was force-archived and folded into a real
+// accounting total the moment a stale session finally advanced.
+//
+// preserveActiveOrders=true keeps (1) and drops (2): a non-terminal order is
+// left completely untouched -- same row, same status, still fully workable
+// downstream -- instead of being archived/force-terminalized. The incident
+// records already written before this function runs remain the truthful,
+// persisted account of the residue; this flag only stops the archive step
+// from also erasing the evidence those incidents describe.
+//
+// Purely additive and scoped to one caller (the automatic orchestrator). The
+// manual force-close action and the frozen legacy automatic path never set
+// it, so deleteAttivi=true's existing behavior for both is unchanged.
 async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "system", closeContext = {}) {
   const allowOpenTablesAcrossBoundary = !!closeContext && closeContext.allowOpenTablesAcrossBoundary === true;
+  const preserveActiveOrders = !!closeContext && closeContext.preserveActiveOrders === true;
+  // Never block on a residual order (deleteAttivi OR preserveActiveOrders).
+  const skipActiveOrderBlock = deleteAttivi || preserveActiveOrders;
+  // Whether non-terminal orders actually get archived+removed this call.
+  const archiveActiveOrders = deleteAttivi && !preserveActiveOrders;
   // Session identity is established by the authoritative lifecycle pointer, never
   // by today's date or by selecting the newest summary.
   const currentIdentity = await serviceSessionLifecycle.currentCloseout();
@@ -458,7 +485,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   // never close the accounting container around a live order. That was the hole
   // that allowed a closed service to retain an EN_COCINA row. Refuse before any
   // rider lock, summary write, archive, or delete so the failure is read-only.
-  if (!deleteAttivi) {
+  if (!skipActiveOrderBlock) {
     let serviceOrders;
     try {
       serviceOrders = await sbSelect(
@@ -609,7 +636,8 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
 
   // ─── PASSO 3: leggi tutti gli ordini target ───────────────────
   const ordCompletati = await sbSelect("ordenes", `${sessionFilter}&estado=in.(RETIRADO,COMPLETADO,COMPLETATO)`) || [];
-  const ordAttivi     = deleteAttivi ? (await sbSelect("ordenes", `${sessionFilter}&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)`) || []) : [];
+  // language-guard: allow-legacy — COMPLETATO is the pre-existing estado enum literal in this filter string; only the ternary condition (archiveActiveOrders) changed on this line.
+  const ordAttivi     = archiveActiveOrders ? (await sbSelect("ordenes", `${sessionFilter}&estado=not.in.(RETIRADO,COMPLETADO,COMPLETATO)`) || []) : [];
   const ordiniDaArch  = [
     ...(Array.isArray(ordCompletati) ? ordCompletati : []),
     ...(Array.isArray(ordAttivi)     ? ordAttivi.map(o => ({ ...o, estado: "CHIUSO_FORZATO" })) : [])
@@ -649,7 +677,8 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   const erroriStorico = [];
   let storicoOk = 0;
   for (const o of ordiniDaArch) {
-    const isAttivo = deleteAttivi && o.estado === "CHIUSO_FORZATO";
+    // language-guard: allow-legacy — CHIUSO_FORZATO is the pre-existing terminal-estado literal; only the condition (archiveActiveOrders) changed on this line.
+    const isAttivo = archiveActiveOrders && o.estado === "CHIUSO_FORZATO";
     if (String(o.service_session_id || "") !== String(serviceSessionId)) {
       erroriStorico.push(o.id || "?");
       continue;
@@ -667,7 +696,8 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
 
   // ─── PASSO 7: writeArchivioConv ───────────────────────────────
   const convCompletate = await sbSelect("conv", "stato_ordine=in.(ritirata,confermata,chiusa)") || [];
-  const convAttive     = deleteAttivi ? (await sbSelect("conv", "stato_ordine=not.in.(ritirata,confermata,chiusa)") || []) : [];
+  // language-guard: allow-legacy — stato_ordine is the pre-existing column/filter name; only the ternary condition (archiveActiveOrders) changed on this line.
+  const convAttive     = archiveActiveOrders ? (await sbSelect("conv", "stato_ordine=not.in.(ritirata,confermata,chiusa)") || []) : [];
   const convDaArch     = [
     ...(Array.isArray(convCompletate) ? convCompletate : []),
     ...(Array.isArray(convAttive)     ? convAttive.map(c => ({ ...c, _forzata: true })) : [])
@@ -779,7 +809,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   const delTerminali = await sbDeleteVerified("ordenes", `${sessionFilter}&estado=in.(RETIRADO,COMPLETADO,COMPLETATO)`);
   if (!delTerminali.ok) deleteFailures.push({ scope: "terminali", ...delTerminali });
 
-  if (deleteAttivi) {
+  if (archiveActiveOrders) {
     if (!isLunchClose) {
       await sbDelete("conv",    "stato_ordine=not.in.(ritirata,confermata,chiusa)");
       await sbDelete("wa_msgs", "stato=neq.COMPLETATO");
