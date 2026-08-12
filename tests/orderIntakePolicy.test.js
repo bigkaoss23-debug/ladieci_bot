@@ -350,6 +350,18 @@ function installGate({ now, session }) {
       const rollover = async (args) => { rolloverArgs = args; return { success: true, code: "ROLLED_OVER" }; };
       const session = await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 });
       assert("B1: rollover invoked with the stale session's id", rolloverArgs && rolloverArgs.session.id === "s-stale", JSON.stringify(rolloverArgs));
+      // B1b/c — LIVE BUG, caught only by this assertion: the first shipped version
+      // passed {id} alone. performIncidentSafeRollover forwards `session` straight
+      // into rolloverClassifier.js's classifyForIncidentSafeRollover, which requires
+      // business_date/service_kind (snake_case) or hard-blocks with
+      // SESSION_IDENTITY_INVALID before ever persisting an incident or closing
+      // anything -- proven against the real 2026-08-11 stale session on staging
+      // (captured_by:"system", source:"order_intake_reconcile" in
+      // service_closeout_snapshots). B1 alone (checking only .id) would not have
+      // caught this; these two assertions exist specifically because it didn't.
+      assert("B1b: rollover receives business_date (snake_case, not businessDate)", rolloverArgs.session.business_date === "2026-08-11", JSON.stringify(rolloverArgs));
+      // language-guard: allow-legacy — PRANZO is the existing service_kind enum value, exercised here verbatim in a test fixture, not new vocabulary
+      assert("B1c: rollover receives service_kind (snake_case, not serviceKind)", rolloverArgs.session.service_kind === "PRANZO", JSON.stringify(rolloverArgs));
       assert("B2: source is a distinct, identifiable tag (not reusing ensure_reconcile/cron_* )", rolloverArgs.source === "order_intake_reconcile", rolloverArgs.source);
       assert("B3: actor defaults to system (this is a background safety net, not an operator action)", rolloverArgs.actor === "system", rolloverArgs.actor);
       assert("C/D1: caller receives the FRESH post-rollover session, not the stale one", session && session.id === "s-fresh", JSON.stringify(session));

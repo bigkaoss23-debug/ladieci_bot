@@ -167,7 +167,16 @@ async function fetchActiveServiceSessionSelfHealing({
   if (!isRolloverDue(classification)) return session;
 
   try {
-    const result = await rollover({ session: { id: session.id }, actor, source });
+    // performIncidentSafeRollover forwards this object into
+    // rolloverClassifier.js's classifyForIncidentSafeRollover, which needs
+    // business_date/service_kind (snake_case, matching the raw DB row shape
+    // every other caller of this engine already passes) to classify at all
+    // -- {id} alone hard-blocks with SESSION_IDENTITY_INVALID, proven live
+    // against the real 2026-08-11 stale session before this fix.
+    const result = await rollover({
+      session: { id: session.id, business_date: session.businessDate, service_kind: session.serviceKind },
+      actor, source,
+    });
     if (result && result.success === true) {
       // Rolled over (possibly with incidents) — re-read so the caller sees
       // the fresh/newly-opened current session, not the one just closed.
