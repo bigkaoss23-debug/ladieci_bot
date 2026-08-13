@@ -851,7 +851,7 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
   if (serviceKind !== "PRANZO") {
     await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
   }
-  const completedSession = await serviceSessionLifecycle.completeClose({ sessionId: serviceSessionId, actor, source });
+  const completedSession = await serviceSessionLifecycle.completeClose({ sessionId: serviceSessionId, actor, source, preserveActiveOrders });
   if (!completedSession?.ok) {
     return { success: false, error: completedSession?.code || "service_session_complete_failed", service_session_id: serviceSessionId };
   }

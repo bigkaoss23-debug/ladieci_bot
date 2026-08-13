@@ -29,8 +29,16 @@ function createServiceSessionLifecycle({ rpc = sbRpc } = {}) {
     async beginClose({ actor, source = "backend" }) {
       return normalize(await rpc("begin_service_session_close", { p_closed_by: actor, p_source: source }));
     },
-    async completeClose({ sessionId, actor, source = "backend" }) {
-      return normalize(await rpc("complete_service_session_close", { p_session_id: sessionId, p_closed_by: actor, p_source: source }));
+    // preserveActiveOrders: forwarded to the RPC's own p_preserve_active_orders
+    // -- see that function's header for the exact, DB-enforced (incident-
+    // backed, per-order) contract this authorizes. Only the close engine's one
+    // incident-safe caller ever passes true; every other caller keeps the
+    // guard exactly as strict as before.
+    async completeClose({ sessionId, actor, source = "backend", preserveActiveOrders = false }) {
+      return normalize(await rpc("complete_service_session_close", {
+        p_session_id: sessionId, p_closed_by: actor, p_source: source,
+        p_preserve_active_orders: preserveActiveOrders,
+      }));
     },
     async currentCloseout() {
       return normalize(await rpc("get_current_service_closeout_session", {}));
