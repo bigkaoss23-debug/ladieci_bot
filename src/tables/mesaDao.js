@@ -155,6 +155,9 @@ const postPayment = (args) => rpc('mesa_post_payment_v1', {
   p_covers_settled: args.coversSettled ?? null,
   p_line_ids: Array.isArray(args.lineIds) ? args.lineIds : null,
   p_meta: args.meta || {},
+  // S1 — explicit override for the duplicate-candidate window (V2.1.2 §14.3).
+  // Defaults false: every existing caller is unaffected.
+  p_confirm_duplicate: args.confirmDuplicate === true,
 });
 
 const saveReservation = (args) => rpc('mesa_save_reservation_v1', {
