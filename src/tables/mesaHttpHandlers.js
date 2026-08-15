@@ -139,6 +139,11 @@ function createMesaHandlers({ service = createMesaService(), logger = console } 
       coversSettled: req.body?.coversSettled,
       lineIds: req.body?.lineIds,
       clientRequestId: requestId(req.body),
+      // S1 follow-up -- explicit override for the duplicate-candidate window
+      // (MESA_REMEDIATION_PLAN_FINAL_V2_1_2_2026-08-15.md, slice S1, §19).
+      // Passed through raw; mesaService.pay strictly narrows it to
+      // `=== true` before it ever reaches the DAO.
+      confirmDuplicate: req.body?.confirmDuplicate,
     })),
     saveTable: run('save_table', (req) => service.saveTable({
       context: req.mesaContext,

@@ -337,7 +337,7 @@ function createMesaService({
       return { ok: true, orderId, state: 'RETIRADO', idempotent: false };
     },
 
-    async pay({ context, tableSessionId, paymentMethod, mode, amount, coversSettled, lineIds, clientRequestId } = {}) {
+    async pay({ context, tableSessionId, paymentMethod, mode, amount, coversSettled, lineIds, clientRequestId, confirmDuplicate } = {}) {
       const ctx = requireContext(context, PAYMENT_ROLES);
       if (typeof ctx.sid !== 'string' || !ctx.sid) throw new MesaServiceError('MESA_RELOGIN_REQUIRED', 401);
       const bySidHash = hashSid(ctx.sid);
@@ -354,6 +354,11 @@ function createMesaService({
         workspaceId: ctx.workspaceId, byActor: ctx.actor, bySidHash,
         ...semantic, clientRequestId, requestHash: canonicalHash(semantic),
         meta: { source: 'mesa_dashboard' },
+        // S1 follow-up -- kept OUTSIDE `semantic` deliberately: it must never
+        // affect requestHash/idempotency (a retry with vs. without
+        // confirmDuplicate is still the same logical payment intent). Strict
+        // `=== true`: no truthy-string/number coercion enables the override.
+        confirmDuplicate: confirmDuplicate === true,
       });
     },
 
