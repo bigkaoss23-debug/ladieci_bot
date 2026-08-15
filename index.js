@@ -3,6 +3,7 @@ const express = require("express");
 const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert, sbInsert } = require("./src/utils/supabase");
 const { supabaseRequest } = require("./src/utils/supabaseTransport");
+const { getMigrationStatus } = require("./src/utils/migrationAuthority");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
 // DRIVER_STATO = telemetria visiva opzionale (best-effort). getDriverStatus per la
 // UI, closeGiroInternal condiviso col legacy chiudiGiro (idempotente).
@@ -1100,6 +1101,17 @@ async function _loadStatusChecks() {
   let waIn = { lastAt: null, ageMin: null, level: "yellow" };
   let waProc = { lastAt: null, ageMin: null, level: "yellow" };
   let ordini = { lastCreatedAt: null, todayCount: 0, level: "green" };
+  // S4 — migration-authority block (MESA_REMEDIATION_PLAN_FINAL_V2_1_2_2026-08-15.md
+  // §15): "yellow when only unverified bootstrap rows exist, red on any missing
+  // required or checksum mismatch." Read failures degrade to red rather than
+  // silently omitting the block, matching dbCheck's own fail-closed shape below.
+  let migrations = { level: "red", headVerified: null, headRecorded: null, unverifiedCount: null, missingRequired: null, checksumMismatches: null };
+  try {
+    const m = await _withTimeout(getMigrationStatus(), STATUS_DB_TIMEOUT_MS, "migrations_timeout");
+    migrations = { ...m };
+  } catch (e) {
+    migrations = { level: "red", headVerified: null, headRecorded: null, unverifiedCount: null, missingRequired: null, checksumMismatches: null, error: String(e?.message || e).slice(0, 80) };
+  }
 
   const t0 = Date.now();
   try {
@@ -1139,7 +1151,8 @@ async function _loadStatusChecks() {
     };
   }
 
-  return { dbCheck, waIn, waProc, ordini };
+  // language-guard: allow-legacy `ordini` below is the pre-existing local variable declared above in this same function (not introduced by S4); touched only to append the new `migrations` field alongside it
+  return { dbCheck, waIn, waProc, ordini, migrations };
 }
 
 app.get("/status", async (_req, res) => {
@@ -1152,8 +1165,10 @@ app.get("/status", async (_req, res) => {
   const commit = sha === "unknown" ? "unknown" : sha.slice(0, 7);
   const backend = { ok: true, level: "green" };
   try {
-    const { dbCheck, waIn, waProc, ordini } = await _loadStatusChecks();
-    const overall = _worstLevel([backend.level, dbCheck.level, waIn.level, waProc.level, ordini.level]);
+    // language-guard: allow-legacy `ordini` below is the pre-existing destructured field from _loadStatusChecks (not introduced by S4); touched only to also destructure the new `migrations` field
+    const { dbCheck, waIn, waProc, ordini, migrations } = await _loadStatusChecks();
+    // language-guard: allow-legacy `ordini` below is the pre-existing level fed into _worstLevel (not introduced by S4); touched only to also fold in migrations.level
+    const overall = _worstLevel([backend.level, dbCheck.level, waIn.level, waProc.level, ordini.level, migrations.level]);
     const payload = {
       ok: overall !== "red",
       level: overall,
@@ -1166,6 +1181,7 @@ app.get("/status", async (_req, res) => {
         whatsappInbound: waIn,
         whatsappProcessed: waProc,
         ordini,
+        migrations,
       },
       checkedAt: new Date().toISOString(),
     };
@@ -1193,6 +1209,13 @@ app.get("/status", async (_req, res) => {
 // no port and triggering no scheduled DB work. Production startup semantics are unchanged.
 if (require.main === module) {
   app.listen(PORT, () => console.log(`La Dieci Bot running on port ${PORT}`));
+  // S4 boot check (§15 SHADOW): log both migration heads once at boot, ahead of
+  // /status's own reporting of them, so an operator can compare boot-log evidence
+  // against the dashboard before trusting it live. Never throws into the boot path —
+  // a read failure here must not prevent the server from starting.
+  getMigrationStatus()
+    .then(m => console.log(`[S4 boot check] migration heads: verified=${m.headVerified} recorded=${m.headRecorded} unverified=${m.unverifiedCount} level=${m.level}`))
+    .catch(e => console.error(`[S4 boot check] migration status read failed: ${String(e?.message || e).slice(0, 200)}`));
 }
 
 // ─── Messaggio operatore di fine chiusura (summary completa) ────────────────

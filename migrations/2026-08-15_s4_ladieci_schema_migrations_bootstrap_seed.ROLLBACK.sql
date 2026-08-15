@@ -1,0 +1,13 @@
+-- ROLLBACK for 2026-08-15_s4_ladieci_schema_migrations_bootstrap_seed.sql
+--
+-- DOCUMENTATION-ONLY -- there is no SQL to run here. The seeded rows cannot
+-- be deleted in isolation: ladieci_schema_migrations_immutable_v1 (installed
+-- by the paired DDL migration) forbids DELETE unconditionally, with no
+-- bypass anywhere in S4 (S4 is not S8 -- there is no sanctioned trigger
+-- suspension in this slice). Rolling back the seed therefore always means
+-- rolling back the whole ledger.
+--
+-- Run 2026-08-15_s4_ladieci_schema_migrations_ledger.ROLLBACK.sql instead --
+-- it DROPs the table, which removes the seeded rows along with the schema
+-- (refusing first if any row carries real post-bootstrap verification work,
+-- so a rollback can never silently destroy a human's later promotion).

@@ -115,6 +115,8 @@ const REGISTRY = Object.freeze([
   // this module never mutates the table directly, only via the RPC below.
   entry('service_closeout_snapshots', KIND.TABLE, ['GET'], SENSITIVITY.AUDIT,
     'closeoutSnapshots.js getByCorrelationId/listBySession, read-only, called from incidentSafeRollover.js'),
+  entry('ladieci_schema_migrations', KIND.TABLE, ['GET'], SENSITIVITY.AUDIT,
+    'migrationAuthority.js getMigrationStatus (S4 /status migration-authority block), read-only'),
 
   // ── menu catalogue — src/menu/menuRepository.js, read-only ──
   entry('menu_categorias', KIND.TABLE, ['GET'], SENSITIVITY.PUBLIC_OPERATIONAL, 'menuRepository.js readMenuTables'),
