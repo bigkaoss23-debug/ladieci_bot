@@ -53,6 +53,7 @@ test('a waiter assigned to someone else\'s table is rejected', (() => {
 })());
 
 test('the UPDATE relies on the pre-existing monotonic guard trigger -- does not redefine or bypass it',
+  // language-guard: allow-legacy messa is the pre-V3-J legacy function-name alternative this regex checks for the ABSENCE of (alongside the current mesa_ name), not new vocabulary
   !/CREATE (OR REPLACE )?(FUNCTION|TRIGGER) public\.(mesa|messa)_guard_covers_monotonic/i.test(forward)
   && /pre-existing monotonic guard trigger/.test(forward));
 

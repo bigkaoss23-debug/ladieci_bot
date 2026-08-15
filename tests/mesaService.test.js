@@ -155,9 +155,11 @@ test('the first comanda on a walk-in table requires real covers and forwards the
 });
 
 // MESA_AMBIGUOUS_RETRY_IDEMPOTENT -- the real idempotency mechanism lives in
+// language-guard: allow-legacy agentOrdini/ordini is the existing backend module name this comment references, not new vocabulary
 // agentOrdini.js's creaOrdine (a client_req_id lookup before any insert,
 // unchanged by this P0 fix -- see its own "Idempotency check" comment: "Se
 // il frontend passa client_req_id... copre il caso Railway ha creato
+// language-guard: allow-legacy ordine is quoted verbatim from agentOrdini.js's own existing Italian code comment, not new vocabulary
 // l'ordine ma la risposta non è arrivata al client"). This proves
 // mesaService.addCommand's OWN contract: it forwards the SAME
 // clientRequestId on every call (so a retry is recognizable at all) and
@@ -170,6 +172,7 @@ test('addCommand forwards the identical clientRequestId on every call and surfac
     createOrder: async (payload) => {
       seen.push(payload.client_req_id);
       callCount += 1;
+      // language-guard: allow-legacy creaOrdine is the existing backend function name this test simulates the behavior of, not new vocabulary
       // Simulate creaOrdine's real idempotency replay on the second call.
       if (callCount === 1) return { success: true, id: '#001' };
       return { success: true, id: '#001', idempotent: true };

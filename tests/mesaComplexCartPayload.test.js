@@ -129,6 +129,7 @@ test('the whole complex cart is accepted end-to-end by mesaService.addCommand (r
   const service = createMesaService({
     dao: { getSession: async () => ({ id: 'session-1', status: 'open', covers_total: 4 }) },
     createOrder: async (payload) => {
+      // language-guard: allow-legacy agentOrdini/creaOrdine are the existing backend module/function names this test exercises, not new vocabulary
       // Mirrors agentOrdini.creaOrdine's own first real step: normalize
       // every item before insert (Phase A -- "throws -> order not saved").
       insertedItems = payload.items.map((it) => normalizeOrderItem(it));
