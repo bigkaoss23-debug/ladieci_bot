@@ -1,0 +1,1677 @@
+{
+  "artifact": "mesa_baseline",
+  "schema_version": "1.0",
+  "generated_at": "2026-08-15T15:00:12Z",
+  "specification_file": "MESA_REMEDIATION_PLAN_FINAL_V2_1_2_2026-08-15.md",
+  "specification_sha256": "4da7f4f1638e46b576bc047f49869bb5eabcc00b33274a4022808ada6c952ca2",
+  "slice": "S0",
+  "mode": "READ_ONLY",
+  "environment": {
+    "supabase_project": "tdikhfeinufaahagmpjz",
+    "railway_project": "surprising-tenderness",
+    "railway_service": "fearless-reverence",
+    "frontend": "https://ladieci-v1-staging.netlify.app",
+    "legacy_automatic_lifecycle_enabled": false
+  },
+  "identity": {
+    "backend_repo": "ladieci-messa-staging-backend",
+    "backend_branch": "feature/staging-messa-tables-2026-08-01",
+    "backend_commit": "67d178b1e77ce4d4cb57dacca2c9c61ffa620597",
+    "backend_tracked_changes": 0,
+    "frontend_repo": "ladieci-messa-staging-frontend",
+    "frontend_branch": "feature/staging-messa-tables-2026-08-01",
+    "frontend_commit": "bf2d1f5bfe271b797c16d02afbac97206534c0de",
+    "frontend_tracked_changes": 0,
+    "deployed_commit": "67d178b",
+    "deployed_commit_full": "67d178b1e77ce4d4cb57dacca2c9c61ffa620597",
+    "deployment_id": "67af641e-70b1-4016-a815-4d0cd7730040",
+    "deployed_boot_time": "2026-08-15T11:17:45.266Z",
+    "status_endpoint_commit": "unknown",
+    "status_commit_note": "F-04 unfixed (S5 not started): /status.commit is 'unknown' while /version.commit is 67d178b"
+  },
+  "pre_s0_drift_probes": {
+    "ops_baseline_artifacts_existed_before": false,
+    "new_tables_present": 0,
+    "new_functions_present": 0,
+    "payment_transactions_idempotency_uq": "CREATE UNIQUE INDEX payment_transactions_idempotency_uq ON public.payment_transactions USING btree (workspace_id, by_actor, by_sid_hash, client_request_id)",
+    "payment_transactions_service_session_id_nullable": "NO",
+    "migration_files_count": 134,
+    "benign_name_collision": {
+      "object": "public.table_reservations.seated_at",
+      "note": "pre-existing reservations column; UNRELATED to S17's table_sessions.seated_at, which does not exist"
+    },
+    "verdict": "NO_DRIFT"
+  },
+  "current_balance_predicate": {
+    "source": "live bodies of mesa_close_session_v1 (L41-L51) and mesa_post_payment_v1 (L84-L94), identical",
+    "sql": "FROM table_order_lines l JOIN ordenes o ON o.id=l.order_id AND o.table_session_id=l.table_session_id WHERE l.table_session_id=<S> AND upper(COALESCE(o.estado,'')) NOT IN ('ANULADO','CANCELADO','CANCELLED','CHIUSO_FORZATO'); outstanding := GREATEST(0, total - paid)"
+  },
+  "section_A": {
+    "title": "current vs target balance; lines invisible to the current join",
+    "invisible_lines": 11,
+    "invisible_amount_cents": 14050,
+    "invisible_amount_display": "EUR 140.50",
+    "closed_table_sessions_affected": 6,
+    "expected": {
+      "lines": 11,
+      "cents": 14050,
+      "closed_table_sessions": 6
+    },
+    "match": true,
+    "cf1dd7d1_target_outstanding_cents": 1200,
+    "cf1dd7d1_target_outstanding_display": "EUR 12.00",
+    "cf1dd7d1_current_outstanding_cents": 0,
+    "cf1dd7d1_match": true,
+    "sessions": [
+      {
+        "table_session_id": "5316367c-076d-415f-9f22-f9230856236a",
+        "status": "closed",
+        "has_settled_at": true,
+        "current_total_cents": 0,
+        "target_total_cents": 4000,
+        "settled_cents": 4000,
+        "current_outstanding_cents": 0,
+        "target_outstanding_cents": 0,
+        "invisible_lines": 3,
+        "invisible_cents": 4000
+      },
+      {
+        "table_session_id": "5dcdb420-e074-42fd-a73d-987f880c6f24",
+        "status": "closed",
+        "has_settled_at": true,
+        "current_total_cents": 0,
+        "target_total_cents": 2750,
+        "settled_cents": 2750,
+        "current_outstanding_cents": 0,
+        "target_outstanding_cents": 0,
+        "invisible_lines": 2,
+        "invisible_cents": 2750
+      },
+      {
+        "table_session_id": "74837efe-796f-4a5a-a956-faa730061e1e",
+        "status": "closed",
+        "has_settled_at": true,
+        "current_total_cents": 0,
+        "target_total_cents": 2600,
+        "settled_cents": 2600,
+        "current_outstanding_cents": 0,
+        "target_outstanding_cents": 0,
+        "invisible_lines": 2,
+        "invisible_cents": 2600
+      },
+      {
+        "table_session_id": "3e3e214d-8584-4f0a-98de-87db0d6c8cb6",
+        "status": "closed",
+        "has_settled_at": true,
+        "current_total_cents": 0,
+        "target_total_cents": 2500,
+        "settled_cents": 2500,
+        "current_outstanding_cents": 0,
+        "target_outstanding_cents": 0,
+        "invisible_lines": 2,
+        "invisible_cents": 2500
+      },
+      {
+        "table_session_id": "cf1dd7d1-f8b1-4b65-b731-b266eb74ea60",
+        "status": "closed",
+        "has_settled_at": true,
+        "current_total_cents": 0,
+        "target_total_cents": 1200,
+        "settled_cents": 0,
+        "current_outstanding_cents": 0,
+        "target_outstanding_cents": 1200,
+        "invisible_lines": 1,
+        "invisible_cents": 1200
+      },
+      {
+        "table_session_id": "6016b28b-8479-4ebb-8194-2e34aeaf4053",
+        "status": "closed",
+        "has_settled_at": true,
+        "current_total_cents": 0,
+        "target_total_cents": 1000,
+        "settled_cents": 1000,
+        "current_outstanding_cents": 0,
+        "target_outstanding_cents": 0,
+        "invisible_lines": 1,
+        "invisible_cents": 1000
+      },
+      {
+        "table_session_id": "b4fe37af-2da8-4b0c-8d79-ac3e2b92da8c",
+        "status": "open",
+        "has_settled_at": false,
+        "current_total_cents": 2750,
+        "target_total_cents": 2750,
+        "settled_cents": 0,
+        "current_outstanding_cents": 2750,
+        "target_outstanding_cents": 2750,
+        "invisible_lines": 0,
+        "invisible_cents": 0
+      }
+    ],
+    "closed_with_target_outstanding": [
+      {
+        "table_session_id": "cf1dd7d1-f8b1-4b65-b731-b266eb74ea60",
+        "target_outstanding_cents": 1200
+      }
+    ]
+  },
+  "section_B": {
+    "title": "order/line service attribution mismatch (F-02)",
+    "mismatch_orders": 4,
+    "mismatch_amount_cents": 4751,
+    "mismatch_amount_display": "EUR 47.51",
+    "expected": {
+      "orders": 4,
+      "cents": 4751
+    },
+    "match": true,
+    "rows": [
+      {
+        "order_id": "#379",
+        "table_session_id": "b4fe37af-2da8-4b0c-8d79-ac3e2b92da8c",
+        "line_service": "c9d5aaa7-d0d5-4740-a6ee-83a8ee57adda",
+        "order_service": "d20ee320-6132-4021-af5f-c4dbe95f84a0",
+        "lines": 3,
+        "cents": 2750
+      },
+      {
+        "order_id": "#364",
+        "table_session_id": "7c47ddf9-c1dc-4e94-a22d-9cdb560741e3",
+        "line_service": "33174121-4f95-4ff5-a67e-aa5dde803d31",
+        "order_service": "9746dfdd-4d30-4b4d-a7c6-8d285b4fca98",
+        "lines": 1,
+        "cents": 1000
+      },
+      {
+        "order_id": "#365",
+        "table_session_id": "fa445973-b98e-47ee-b9be-4fc9158a932f",
+        "line_service": "33174121-4f95-4ff5-a67e-aa5dde803d31",
+        "order_service": "9746dfdd-4d30-4b4d-a7c6-8d285b4fca98",
+        "lines": 1,
+        "cents": 1000
+      },
+      {
+        "order_id": "#V36-SYNTH-1",
+        "table_session_id": "7c47ddf9-c1dc-4e94-a22d-9cdb560741e3",
+        "line_service": "33174121-4f95-4ff5-a67e-aa5dde803d31",
+        "order_service": "9746dfdd-4d30-4b4d-a7c6-8d285b4fca98",
+        "lines": 1,
+        "cents": 1
+      }
+    ]
+  },
+  "section_C": {
+    "title": "historical receipt-service reconstruction (service_session_audit only)",
+    "evidence_source": "public.service_session_audit",
+    "schedule_inference_used": false,
+    "transactions_total": 13,
+    "classification_counts": {
+      "resolved": 13,
+      "off_service": 0,
+      "unresolvable": 0
+    },
+    "stored_vs_reconstructed_divergences": 2,
+    "divergence_amount_cents": 7751,
+    "divergence_amount_display": "EUR 77.51",
+    "divergences": [
+      {
+        "tx_id": "57fc0bb4-eccb-4e8d-a4ab-e10a4af2777a",
+        "created_at": "2026-08-10T09:43:39.252182Z",
+        "amount_cents": 3951,
+        "stored_service": "33174121-4f95-4ff5-a67e-aa5dde803d31",
+        "reconstructed_service": "9746dfdd-4d30-4b4d-a7c6-8d285b4fca98",
+        "classification": "resolved"
+      },
+      {
+        "tx_id": "3f0988b3-d2e7-46a4-ac2d-af16001dca90",
+        "created_at": "2026-08-10T09:56:57.337800Z",
+        "amount_cents": 3800,
+        "stored_service": "33174121-4f95-4ff5-a67e-aa5dde803d31",
+        "reconstructed_service": "9746dfdd-4d30-4b4d-a7c6-8d285b4fca98",
+        "classification": "resolved"
+      }
+    ],
+    "note": "live F-29 receipt-service mis-attribution; both rows are 'resolved', so S16 may repair them"
+  },
+  "section_D": {
+    "title": "recycled display identity (F-09)",
+    "expected": {
+      "#369_created_events": 3,
+      "#371_created_events": 2,
+      "#379_table_sessions": 2
+    },
+    "match": true,
+    "rows": [
+      {
+        "display_id": "#001",
+        "created_events": 15,
+        "line_table_sessions": 2,
+        "line_services": 2,
+        "storico_rows": 2,
+        "storico_services": 2
+      },
+      {
+        "display_id": "#002",
+        "created_events": 10,
+        "line_table_sessions": 1,
+        "line_services": 1,
+        "storico_rows": 1,
+        "storico_services": 1
+      },
+      {
+        "display_id": "#003",
+        "created_events": 3,
+        "line_table_sessions": 2,
+        "line_services": 2,
+        "storico_rows": 1,
+        "storico_services": 1
+      },
+      {
+        "display_id": "#006",
+        "created_events": 2,
+        "line_table_sessions": 1,
+        "line_services": 1,
+        "storico_rows": 0,
+        "storico_services": 0
+      },
+      {
+        "display_id": "#369",
+        "created_events": 3,
+        "line_table_sessions": 1,
+        "line_services": 1,
+        "storico_rows": 2,
+        "storico_services": 2
+      },
+      {
+        "display_id": "#370",
+        "created_events": 3,
+        "line_table_sessions": 1,
+        "line_services": 1,
+        "storico_rows": 1,
+        "storico_services": 1
+      },
+      {
+        "display_id": "#371",
+        "created_events": 2,
+        "line_table_sessions": 1,
+        "line_services": 1,
+        "storico_rows": 0,
+        "storico_services": 0
+      },
+      {
+        "display_id": "#379",
+        "created_events": 2,
+        "line_table_sessions": 2,
+        "line_services": 1,
+        "storico_rows": 1,
+        "storico_services": 1
+      },
+      {
+        "display_id": "#723",
+        "created_events": 7,
+        "line_table_sessions": 0,
+        "line_services": 0,
+        "storico_rows": 0,
+        "storico_services": 0
+      },
+      {
+        "display_id": "#724",
+        "created_events": 4,
+        "line_table_sessions": 0,
+        "line_services": 0,
+        "storico_rows": 0,
+        "storico_services": 0
+      },
+      {
+        "display_id": "#726",
+        "created_events": 2,
+        "line_table_sessions": 0,
+        "line_services": 0,
+        "storico_rows": 0,
+        "storico_services": 0
+      },
+      {
+        "display_id": "#727",
+        "created_events": 2,
+        "line_table_sessions": 0,
+        "line_services": 0,
+        "storico_rows": 0,
+        "storico_services": 0
+      },
+      {
+        "display_id": "#728",
+        "created_events": 3,
+        "line_table_sessions": 0,
+        "line_services": 0,
+        "storico_rows": 0,
+        "storico_services": 0
+      },
+      {
+        "display_id": "#729",
+        "created_events": 3,
+        "line_table_sessions": 0,
+        "line_services": 0,
+        "storico_rows": 0,
+        "storico_services": 0
+      }
+    ]
+  },
+  "section_E": {
+    "title": "payment intent idempotency duplicates",
+    "duplicate_keys": 0,
+    "conflicting_request_hash_keys": 0,
+    "expected": {
+      "duplicate_keys": 0
+    },
+    "match": true,
+    "verdict": "S1's UNIQUE (workspace_id, client_request_id) is safe to create"
+  },
+  "section_F": {
+    "title": "cancelled / deleted / de-linked financial-line populations",
+    "buckets_fine": {
+      "forced_close": {
+        "lines": 1,
+        "cents": 1000,
+        "table_sessions": 1,
+        "order_ids": [
+          "#366"
+        ]
+      },
+      "order_deleted": {
+        "lines": 2,
+        "cents": 2600,
+        "table_sessions": 1,
+        "order_ids": [
+          "#369"
+        ]
+      },
+      "order_delinked": {
+        "lines": 8,
+        "cents": 10450,
+        "table_sessions": 4,
+        "order_ids": [
+          "#001",
+          "#003",
+          "#370",
+          "#371",
+          "#379"
+        ]
+      },
+      "cancelled_estado": {
+        "lines": 0,
+        "cents": 0,
+        "table_sessions": 0,
+        "order_ids": []
+      },
+      "visible": {
+        "lines": 22,
+        "cents": 21401,
+        "table_sessions": 8
+      }
+    },
+    "buckets_coarse_as_frozen": {
+      "cancelled_estado": {
+        "lines": 1,
+        "cents": 1000,
+        "note": "estado-excluded population; its estado is CHIUSO_FORZATO, so V2.1.1 \u00a726 classifies it as taxonomy bucket 4 (forced_close_line) rather than bucket 3"
+      },
+      "order_deleted": {
+        "lines": 2,
+        "cents": 2600
+      },
+      "order_delinked": {
+        "lines": 8,
+        "cents": 10450
+      }
+    },
+    "expected": {
+      "cancelled_estado": [
+        1,
+        1000
+      ],
+      "order_deleted": [
+        2,
+        2600
+      ],
+      "order_delinked": [
+        8,
+        10450
+      ]
+    },
+    "counters_match": true,
+    "label_refinement": "counts and amounts match the frozen expectation exactly; only the sub-label of the 1-line estado-excluded bucket differs (forced_close vs cancelled_estado). Not a counter divergence."
+  },
+  "section_G": {
+    "title": "storico completeness and NULL guards",
+    "storico_null_service_session": 0,
+    "storico_null_orden_id": 0,
+    "same_session_display_id_duplicates": 0,
+    "storico_total_rows": 12,
+    "orders_with_lines_absent_from_storico": 17,
+    "order_369_storico_rows": 2,
+    "order_369_distinct_services": 2,
+    "live_orders_referencing_missing_service_session": 0,
+    "expected": {
+      "same_session_dupes": 0,
+      "null_service": 0,
+      "null_orden": 0,
+      "#369_storico_rows": 2
+    },
+    "match": true,
+    "note": "17 orders have bill lines but no storico row for that service - the archive-skip evidence behind V2.1.1 \u00a716"
+  },
+  "section_H": {
+    "title": "service_closeouts and the unallocated-payment invariant",
+    "closeout_rows": 2,
+    "closeouts": [
+      {
+        "service_session_id": "33174121-4f95-4ff5-a67e-aa5dde803d31",
+        "session_status": "closed",
+        "business_date": "2026-08-07",
+        "created_at": "2026-08-10T08:07:41.412806Z"
+      },
+      {
+        "service_session_id": "9746dfdd-4d30-4b4d-a7c6-8d285b4fca98",
+        "session_status": "rolled_over",
+        "business_date": "2026-08-10",
+        "created_at": "2026-08-10T19:07:19.078326Z"
+      }
+    ],
+    "payment_transactions_total": 13,
+    "allocation_invariant_violations": 0,
+    "max_abs_delta_cents": 0,
+    "allocation_invariant": "PASS",
+    "expected": {
+      "closeout_rows": 2,
+      "transactions": 13,
+      "violations": 0
+    },
+    "match": true
+  },
+  "section_I": {
+    "title": "residue and incident backing \u2014 CORRECTED in V2.1.2 (see root_cause_9746dfdd_section_I)",
+    "expected_v2_1_1": {
+      "9746dfdd_non_terminal_orders": 5,
+      "9746dfdd_incidents": 0,
+      "c9d5aaa7_non_terminal_orders": 6,
+      "c9d5aaa7_all_incident_backed": true
+    },
+    "expected_v2_1_2_corrected": {
+      "9746dfdd_non_terminal_residue_orders": 5,
+      "9746dfdd_stored_closeout_incident_count": 0,
+      "9746dfdd_stored_closeout_incident_count_status": "KNOWN_INCORRECT_HISTORICAL_VALUE - proven wrong at write time, not merely superseded later",
+      "9746dfdd_true_point_in_time_incidents_at_closeout_insert": 6,
+      "9746dfdd_true_point_in_time_composition": {
+        "KITCHEN_WORK_PENDING_AT_CLOSE": 4,
+        "ORDER_READY_NOT_FINALIZED_AT_CLOSE": 1,
+        "EMPTY_TABLE_LEFT_OPEN": 1
+      },
+      "9746dfdd_current_total_incidents": 11,
+      "9746dfdd_later_incidents_created_after_terminalization": 5,
+      "9746dfdd_later_incident_composition": {
+        "PREVIOUS_BUSINESS_DAY_OPERATIONAL_RESIDUE": 5
+      },
+      "9746dfdd_financial_mutation_from_any_of_the_11_incidents": false,
+      "c9d5aaa7_non_terminal_orders": 6,
+      "c9d5aaa7_all_incident_backed": true
+    },
+    "match": true,
+    "match_note": "matches the V2.1.2-corrected expectation exactly; the V2.1.1 expectation (0 incidents) is now understood to have been drawn from a provably-wrong stored counter, not from independent evidence",
+    "observed": {
+      "9746dfdd_non_terminal_orders": 5,
+      "9746dfdd_session_incidents_total": 11,
+      "9746dfdd_incidents_at_or_before_closeout_insert_2026_08_10T19_07_19Z": 6,
+      "9746dfdd_incidents_after_closeout_insert": 5,
+      "9746dfdd_residue_orders_incident_backed": 5,
+      "c9d5aaa7_non_terminal_orders": 6,
+      "c9d5aaa7_session_incidents": 25,
+      "c9d5aaa7_residue_orders_incident_backed": 6,
+      "c9d5aaa7_incidents_per_residue_order": 4
+    },
+    "9746dfdd_residue_orders": [
+      {
+        "order_id": "#362",
+        "estado": "LISTO",
+        "incidents_for_this_order": 2
+      },
+      {
+        "order_id": "#363",
+        "estado": "EN_COCINA",
+        "incidents_for_this_order": 2
+      },
+      {
+        "order_id": "#364",
+        "estado": "EN_COCINA",
+        "incidents_for_this_order": 2
+      },
+      {
+        "order_id": "#365",
+        "estado": "EN_COCINA",
+        "incidents_for_this_order": 2
+      },
+      {
+        "order_id": "#V36-SYNTH-1",
+        "estado": "EN_COCINA",
+        "incidents_for_this_order": 2
+      }
+    ],
+    "9746dfdd_incident_composition_full": [
+      {
+        "incident_type": "KITCHEN_WORK_PENDING_AT_CLOSE",
+        "category": "operational",
+        "entity_type": "order",
+        "n": 4,
+        "created_relative_to_closeout_insert": "before"
+      },
+      {
+        "incident_type": "ORDER_READY_NOT_FINALIZED_AT_CLOSE",
+        "category": "operational",
+        "entity_type": "order",
+        "n": 1,
+        "created_relative_to_closeout_insert": "before"
+      },
+      {
+        "incident_type": "EMPTY_TABLE_LEFT_OPEN",
+        "category": "informational",
+        "entity_type": "table_session",
+        "n": 1,
+        "created_relative_to_closeout_insert": "before"
+      },
+      {
+        "incident_type": "PREVIOUS_BUSINESS_DAY_OPERATIONAL_RESIDUE",
+        "category": "financial",
+        "entity_type": "order",
+        "n": 3,
+        "created_relative_to_closeout_insert": "after"
+      },
+      {
+        "incident_type": "PREVIOUS_BUSINESS_DAY_OPERATIONAL_RESIDUE",
+        "category": "operational",
+        "entity_type": "order",
+        "n": 2,
+        "created_relative_to_closeout_insert": "after"
+      }
+    ],
+    "c9d5aaa7_residue_orders": [
+      {
+        "order_id": "#370",
+        "estado": "EN_ENTREGA",
+        "incidents_for_this_order": 4
+      },
+      {
+        "order_id": "#371",
+        "estado": "POR_CONFIRMAR",
+        "incidents_for_this_order": 4
+      },
+      {
+        "order_id": "#372",
+        "estado": "EN_ENTREGA",
+        "incidents_for_this_order": 4
+      },
+      {
+        "order_id": "#373",
+        "estado": "LISTO",
+        "incidents_for_this_order": 4
+      },
+      {
+        "order_id": "#376",
+        "estado": "LISTO",
+        "incidents_for_this_order": 4
+      },
+      {
+        "order_id": "#378",
+        "estado": "LISTO",
+        "incidents_for_this_order": 4
+      }
+    ],
+    "interpretation": "The V2.1.1 STOP was caused by a provably-wrong historical stored counter (service_closeouts.incident_count=0), not by database drift after the audit or by later lifecycle processing silently invalidating a once-true fact. Full genealogy: economicBoundaryEngine.js resumed a closeout attempt that serviceLifecycleEngine.js had already classified 6 incidents against, and passed hardcoded zero counters to the shared service_closeouts writer without ever querying service_incidents. Fixed at the specification level in V2.1.2 by widening S18's scope to make closeout counters a live, correlation-scoped, server-derived fact rather than a caller-supplied integer."
+  },
+  "section_J": {
+    "title": "two separate inventories",
+    "J1_append_only_trigger_inventory": {
+      "count": 4,
+      "tables": [
+        {
+          "table": "table_order_lines",
+          "trigger": "table_order_lines_append_only_v1",
+          "timing": "BEFORE",
+          "events": "DELETE UPDATE",
+          "tgenabled": "O",
+          "owner": "postgres"
+        },
+        {
+          "table": "payment_allocations",
+          "trigger": "payment_allocations_append_only_v1",
+          "timing": "BEFORE",
+          "events": "DELETE UPDATE",
+          "tgenabled": "O",
+          "owner": "postgres"
+        },
+        {
+          "table": "payment_transactions",
+          "trigger": "payment_transactions_append_only_v1",
+          "timing": "BEFORE",
+          "events": "DELETE UPDATE",
+          "tgenabled": "O",
+          "owner": "postgres"
+        },
+        {
+          "table": "order_financial_events",
+          "trigger": "order_financial_events_no_update_delete",
+          "timing": "BEFORE",
+          "events": "DELETE UPDATE",
+          "tgenabled": "O",
+          "owner": "postgres"
+        }
+      ]
+    },
+    "J2_s8_bypass_set": {
+      "count": 4,
+      "tables": [
+        "table_order_lines",
+        "payment_allocations",
+        "order_financial_events",
+        "service_incidents"
+      ],
+      "payment_transactions_present": false,
+      "detail": [
+        {
+          "table": "table_order_lines",
+          "owner": "postgres",
+          "rows": 33,
+          "blocking_trigger": "table_order_lines_append_only_v1",
+          "tgenabled": "O"
+        },
+        {
+          "table": "payment_allocations",
+          "owner": "postgres",
+          "rows": 29,
+          "blocking_trigger": "payment_allocations_append_only_v1",
+          "tgenabled": "O"
+        },
+        {
+          "table": "order_financial_events",
+          "owner": "postgres",
+          "rows": 29,
+          "blocking_trigger": "order_financial_events_no_update_delete",
+          "tgenabled": "O"
+        },
+        {
+          "table": "service_incidents",
+          "owner": "postgres",
+          "rows_entity_order": 44,
+          "rows_all": 49,
+          "blocking_trigger": "service_incidents_facts_immutable",
+          "tgenabled": "O"
+        }
+      ],
+      "other_triggers_on_bypass_tables": [
+        {
+          "table": "order_financial_events",
+          "trigger": "financial_event_assign_service_session",
+          "timing": "BEFORE",
+          "events": "INSERT",
+          "tgenabled": "O",
+          "note": "disabled too by DISABLE TRIGGER USER - this is why V2.1.1 \u00a717.6 forbids any INSERT inside the S8 transaction"
+        },
+        {
+          "table": "service_incidents",
+          "trigger": "service_incidents_no_delete",
+          "timing": "BEFORE",
+          "events": "DELETE",
+          "tgenabled": "O"
+        }
+      ]
+    },
+    "J3_order_financial_events_partial_unique_indexes": {
+      "null_service_session_census": 0,
+      "definitions": [
+        "CREATE UNIQUE INDEX order_financial_events_one_payment_session_uq ON public.order_financial_events USING btree (service_session_id, order_id) WHERE ((service_session_id IS NOT NULL) AND (type = ANY (ARRAY['payment'::text, 'payment_imported'::text])) AND (payment_transaction_id IS NULL))",
+        "CREATE UNIQUE INDEX order_financial_events_one_payment_legacy_uq ON public.order_financial_events USING btree (order_id) WHERE ((service_session_id IS NULL) AND (type = ANY (ARRAY['payment'::text, 'payment_imported'::text])) AND (payment_transaction_id IS NULL))",
+        "CREATE UNIQUE INDEX order_financial_events_one_refund_session_uq ON public.order_financial_events USING btree (service_session_id, order_id) WHERE ((service_session_id IS NOT NULL) AND (type = 'refund'::text))",
+        "CREATE UNIQUE INDEX order_financial_events_one_refund_legacy_uq ON public.order_financial_events USING btree (order_id) WHERE ((service_session_id IS NULL) AND (type = 'refund'::text))",
+        "CREATE UNIQUE INDEX order_financial_events_scope_session_uq ON public.order_financial_events USING btree (service_session_id, order_id, type, idem_scope_key) WHERE (service_session_id IS NOT NULL)",
+        "CREATE UNIQUE INDEX order_financial_events_scope_legacy_uq ON public.order_financial_events USING btree (order_id, type, idem_scope_key) WHERE (service_session_id IS NULL)"
+      ]
+    },
+    "J4_service_incidents_mutable_keys": [
+      "resolution_status",
+      "resolution_type",
+      "resolved_at",
+      "resolved_by",
+      "resolution_note",
+      "updated_at"
+    ],
+    "all_triggers_enabled": true,
+    "all_bypass_tables_owned_by_postgres": true,
+    "match": true
+  },
+  "section_K": {
+    "title": "migration-ledger bootstrap input",
+    "supabase_migrations_schema_migrations_exists": true,
+    "supabase_migrations_schema_migrations_rows": 64,
+    "public_ladieci_schema_migrations_exists": false,
+    "manifest_file": "migrations/MIGRATION_MANIFEST.md",
+    "manifest_rows_total": 70,
+    "verified": 36,
+    "bootstrapped_unverified": 34,
+    "verification_method": "manifest filename slug matched against supabase_migrations.schema_migrations.name",
+    "manifest_self_description_is_stale": true,
+    "manifest_stale_note": "MIGRATION_MANIFEST.md's header asserts there is 'no supabase_migrations.schema_migrations table populated by the CLI'. That is FALSE today: the table exists with 64 rows, written by Supabase MCP apply_migration. This strengthens V2.1.1 \u00a715's decision to name the new ledger public.ladieci_schema_migrations rather than public.schema_migrations.",
+    "rows": [
+      {
+        "apply_order": 1,
+        "filename": "2026-05-14_geo_cache_confidence.sql",
+        "slug": "geo_cache_confidence",
+        "manifest_commit": "fab25bc",
+        "manifest_date": "2026-05-14",
+        "manifest_sha256_prefix": "598f1f38caffe541",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 2,
+        "filename": "2026-05-25_manual_giros.sql",
+        "slug": "manual_giros",
+        "manifest_commit": "cfba8b9",
+        "manifest_date": "2026-05-25",
+        "manifest_sha256_prefix": "46c748f218f411cb",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 3,
+        "filename": "2026-05-29_manual_giros_entrega_ref.sql",
+        "slug": "manual_giros_entrega_ref",
+        "manifest_commit": "3061989",
+        "manifest_date": "2026-05-29",
+        "manifest_sha256_prefix": "352741f5ad731f19",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 4,
+        "filename": "2026-05-29_manual_giros_hora_ref.sql",
+        "slug": "manual_giros_hora_ref",
+        "manifest_commit": "9edcdb9",
+        "manifest_date": "2026-05-29",
+        "manifest_sha256_prefix": "444f31d91d9b14ac",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 5,
+        "filename": "2026-06-02_driver_schedule_fields.sql",
+        "slug": "driver_schedule_fields",
+        "manifest_commit": "5f7f31d",
+        "manifest_date": "2026-06-02",
+        "manifest_sha256_prefix": "36a1447f9e69cc51",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 6,
+        "filename": "2026-06-05_order_state_transition_logs.sql",
+        "slug": "order_state_transition_logs",
+        "manifest_commit": "5d9e2de",
+        "manifest_date": "2026-06-05",
+        "manifest_sha256_prefix": "6a80a260b9a7e77c",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 7,
+        "filename": "2026-07-10_p0_lock_sensitive_reads.sql",
+        "slug": "p0_lock_sensitive_reads",
+        "manifest_commit": "3e0814c",
+        "manifest_date": "2026-07-10",
+        "manifest_sha256_prefix": "69fdb47bda938354",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 8,
+        "filename": "2026-07-13_auth_active_events.sql",
+        "slug": "auth_active_events",
+        "manifest_commit": "3888d22",
+        "manifest_date": "2026-07-14",
+        "manifest_sha256_prefix": "a2ca58a671383c12",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 9,
+        "filename": "2026-07-13_auth_rpc.sql",
+        "slug": "auth_rpc",
+        "manifest_commit": "eaad05b",
+        "manifest_date": "2026-07-13",
+        "manifest_sha256_prefix": "7e9a6ce04f5b7290",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 10,
+        "filename": "2026-07-13_auth_v2_foundation.sql",
+        "slug": "auth_v2_foundation",
+        "manifest_commit": "1fef81d",
+        "manifest_date": "2026-07-13",
+        "manifest_sha256_prefix": "9af802a1c54ae7c1",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 11,
+        "filename": "2026-07-14_auth_recovery_windows.sql",
+        "slug": "auth_recovery_windows",
+        "manifest_commit": "8a1a4ff",
+        "manifest_date": "2026-07-15",
+        "manifest_sha256_prefix": "61b7fece50873718",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 12,
+        "filename": "2026-07-15_auth_admin_access_management.sql",
+        "slug": "auth_admin_access_management",
+        "manifest_commit": "785d317",
+        "manifest_date": "2026-07-15",
+        "manifest_sha256_prefix": "c18838668c3d3219",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 13,
+        "filename": "2026-07-15_auth_unlocked_event.sql",
+        "slug": "auth_unlocked_event",
+        "manifest_commit": "15512c9",
+        "manifest_date": "2026-07-15",
+        "manifest_sha256_prefix": "4728a8de17371a94",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 14,
+        "filename": "2026-07-15_b7_financial_ledger_foundation.sql",
+        "slug": "b7_financial_ledger_foundation",
+        "manifest_commit": "93861d8",
+        "manifest_date": "2026-07-15",
+        "manifest_sha256_prefix": "f9f51b24f32c331e",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 15,
+        "filename": "2026-07-15_b7_financial_ledger_grant_hardening.sql",
+        "slug": "b7_financial_ledger_grant_hardening",
+        "manifest_commit": "2955c27",
+        "manifest_date": "2026-07-15",
+        "manifest_sha256_prefix": "a783b8d57b01abde",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 16,
+        "filename": "2026-07-15_b7_payment_basis_rpcs.sql",
+        "slug": "b7_payment_basis_rpcs",
+        "manifest_commit": "700c03b",
+        "manifest_date": "2026-07-15",
+        "manifest_sha256_prefix": "53f572f8fa61a557",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 17,
+        "filename": "2026-07-15_b7_refund_void_rpcs.sql",
+        "slug": "b7_refund_void_rpcs",
+        "manifest_commit": "e72218a",
+        "manifest_date": "2026-07-15",
+        "manifest_sha256_prefix": "bebb7de415c20d23",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 18,
+        "filename": "2026-07-16_b7_void_digest_replay_fix.sql",
+        "slug": "b7_void_digest_replay_fix",
+        "manifest_commit": "aca5969",
+        "manifest_date": "2026-07-16",
+        "manifest_sha256_prefix": "4021e40294324feb",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 19,
+        "filename": "2026-07-17_b7_financial_session_version_guard.sql",
+        "slug": "b7_financial_session_version_guard",
+        "manifest_commit": "a5ef761",
+        "manifest_date": "2026-07-17",
+        "manifest_sha256_prefix": "f3d56d58b834ce72",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 20,
+        "filename": "2026-07-19_b7_payment_basis_historical_replay_fix.sql",
+        "slug": "b7_payment_basis_historical_replay_fix",
+        "manifest_commit": "2ec5246",
+        "manifest_date": "2026-07-19",
+        "manifest_sha256_prefix": "8707762a27ab5f99",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 21,
+        "filename": "2026-07-20_config_write_revoke.sql",
+        "slug": "config_write_revoke",
+        "manifest_commit": "573398b",
+        "manifest_date": "2026-07-20",
+        "manifest_sha256_prefix": "b46a6bdeac02022c",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 22,
+        "filename": "2026-07-20_manual_giros_rls_lockdown.sql",
+        "slug": "manual_giros_rls_lockdown",
+        "manifest_commit": "573398b",
+        "manifest_date": "2026-07-20",
+        "manifest_sha256_prefix": "1cf173b97249f40b",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 23,
+        "filename": "2026-07-20_rider_trip_rpcs.sql",
+        "slug": "rider_trip_rpcs",
+        "manifest_commit": "77693e9",
+        "manifest_date": "2026-07-20",
+        "manifest_sha256_prefix": "450c5d75edf210b8",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 24,
+        "filename": "2026-07-21_fix_rider_delivery_log_timestamps.sql",
+        "slug": "fix_rider_delivery_log_timestamps",
+        "manifest_commit": "9fef8d3",
+        "manifest_date": "2026-07-21",
+        "manifest_sha256_prefix": "bec2490d9d32e56e",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 25,
+        "filename": "2026-07-21_fix_rider_trip_json_null_idempotency.sql",
+        "slug": "fix_rider_trip_json_null_idempotency",
+        "manifest_commit": "821d56b",
+        "manifest_date": "2026-07-21",
+        "manifest_sha256_prefix": "73d4b2fa60cc6925",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 26,
+        "filename": "2026-07-22_service_session_identity.sql",
+        "slug": "service_session_identity",
+        "manifest_commit": "207672b",
+        "manifest_date": "2026-07-22",
+        "manifest_sha256_prefix": "835d9d6d0fa7d971",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 27,
+        "filename": "2026-07-23_storico_drop_legacy_orden_fecha_uniqueness.sql",
+        "slug": "storico_drop_legacy_orden_fecha_uniqueness",
+        "manifest_commit": "0cf9320",
+        "manifest_date": "2026-07-23",
+        "manifest_sha256_prefix": "993ab0c39e842814",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 28,
+        "filename": "2026-07-23_storico_session_order_uq_nonpartial.sql",
+        "slug": "storico_session_order_uq_nonpartial",
+        "manifest_commit": "4ecf3e1",
+        "manifest_date": "2026-07-23",
+        "manifest_sha256_prefix": "a074088c269073e0",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 29,
+        "filename": "2026-07-24_workspace_foundation.sql",
+        "slug": "workspace_foundation",
+        "manifest_commit": "140c8cd",
+        "manifest_date": "2026-07-23",
+        "manifest_sha256_prefix": "42c949a39ce7d34d",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 30,
+        "filename": "2026-07-24_account_auth_boundary.sql",
+        "slug": "account_auth_boundary",
+        "manifest_commit": "0222f04",
+        "manifest_date": "2026-07-23",
+        "manifest_sha256_prefix": "c46be5b362fa6541",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 31,
+        "filename": "2026-07-24_workspace_owner_pin.sql",
+        "slug": "workspace_owner_pin",
+        "manifest_commit": "bd6f363",
+        "manifest_date": "2026-07-24",
+        "manifest_sha256_prefix": "e5c02d93520ee665",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 32,
+        "filename": "2026-07-25_canonical_pin_rotation.sql",
+        "slug": "canonical_pin_rotation",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-07-25",
+        "manifest_sha256_prefix": "bfa0711f14dde6be",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 33,
+        "filename": "2026-07-26_disable_legacy_pin_rotation.sql",
+        "slug": "disable_legacy_pin_rotation",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-07-26",
+        "manifest_sha256_prefix": "510ab39362dd4ff7",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 34,
+        "filename": "2026-07-26_two_service_identity.sql",
+        "slug": "two_service_identity",
+        "manifest_commit": "9a86fb1",
+        "manifest_date": "2026-07-26",
+        "manifest_sha256_prefix": "3027d7291d3c6c6d",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 35,
+        "filename": "2026-07-27_order_state_logs_session_identity.sql",
+        "slug": "order_state_logs_session_identity",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-07-27",
+        "manifest_sha256_prefix": "f1448c0f33ef8bad",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 36,
+        "filename": "2026-07-27_s2_7d6e3a_rider_ledger_writer_additive.sql",
+        "slug": "s2_7d6e3a_rider_ledger_writer_additive",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-07-27",
+        "manifest_sha256_prefix": "2c0796cc34aaa546",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 37,
+        "filename": "2026-07-27_s2_7d6e3d_retire_complete_rider_stop.sql",
+        "slug": "s2_7d6e3d_retire_complete_rider_stop",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-07-27",
+        "manifest_sha256_prefix": "5766f9eebe9c1cee",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 38,
+        "filename": "2026-07-28_service_order_number.sql",
+        "slug": "service_order_number",
+        "manifest_commit": "846a58f",
+        "manifest_date": "2026-07-28",
+        "manifest_sha256_prefix": "18e91cd253cbad04",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 39,
+        "filename": "2026-07-29_v3a_access_control_foundation.sql",
+        "slug": "v3a_access_control_foundation",
+        "manifest_commit": "d3610ae",
+        "manifest_date": "2026-07-29",
+        "manifest_sha256_prefix": "4d3aae1ea98ba87c",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 40,
+        "filename": "2026-07-29_v3b_auth_set_actor_pin_v3.sql",
+        "slug": "v3b_auth_set_actor_pin_v3",
+        "manifest_commit": "f75a8f4",
+        "manifest_date": "2026-07-29",
+        "manifest_sha256_prefix": "f2e887c6dce6abe4",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 41,
+        "filename": "2026-07-29_v3c_auth_change_actor_role.sql",
+        "slug": "v3c_auth_change_actor_role",
+        "manifest_commit": "35344f3",
+        "manifest_date": "2026-07-29",
+        "manifest_sha256_prefix": "0825d580cc96eb10",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 42,
+        "filename": "2026-07-29_v3d_dynamic_access_user.sql",
+        "slug": "v3d_dynamic_access_user",
+        "manifest_commit": "d8cfc96",
+        "manifest_date": "2026-07-30",
+        "manifest_sha256_prefix": "c64249995bbf4fbd",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 43,
+        "filename": "2026-07-30_v3e_access_user_lifecycle.sql",
+        "slug": "v3e_access_user_lifecycle",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-07-30",
+        "manifest_sha256_prefix": "cb570e3d738f2aeb",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 44,
+        "filename": "2026-07-31_v3g_waiter_table_assignment_safety.sql",
+        "slug": "v3g_waiter_table_assignment_safety",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-07-31",
+        "manifest_sha256_prefix": "4956087056f1a299",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 45,
+        "filename": "2026-08-01_v3h_messa_billing_foundation.sql",
+        "slug": "v3h_messa_billing_foundation",
+        "manifest_commit": "aeab2ff",
+        "manifest_date": "2026-08-01",
+        "manifest_sha256_prefix": "9ed5d790049bc270",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 46,
+        "filename": "2026-08-01_v3h1_messa_fk_indexes.sql",
+        "slug": "v3h1_messa_fk_indexes",
+        "manifest_commit": "1505250",
+        "manifest_date": "2026-08-01",
+        "manifest_sha256_prefix": "d16fc57267c0bd98",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 47,
+        "filename": "2026-08-01_v3h1a_messa_payment_digest_path.sql",
+        "slug": "v3h1a_messa_payment_digest_path",
+        "manifest_commit": "58dd10c",
+        "manifest_date": "2026-08-01",
+        "manifest_sha256_prefix": "97a4e11977d43313",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 48,
+        "filename": "2026-08-01_v3h2_messa_reservations.sql",
+        "slug": "v3h2_messa_reservations",
+        "manifest_commit": "e3e90ad",
+        "manifest_date": "2026-08-01",
+        "manifest_sha256_prefix": "b2d165b1d97f9c8c",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 49,
+        "filename": "2026-08-02_service_close_live_work_guard.sql",
+        "slug": "service_close_live_work_guard",
+        "manifest_commit": "a43dbb5",
+        "manifest_date": "2026-08-02",
+        "manifest_sha256_prefix": "c036a2ceab7414bc",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 50,
+        "filename": "2026-08-02_v3i_mesa_covers_deferred.sql",
+        "slug": "v3i_mesa_covers_deferred",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-08-02",
+        "manifest_sha256_prefix": "bdd5807446fbce55",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 51,
+        "filename": "2026-08-02_v3j_mesa_nomenclature_cutover.sql",
+        "slug": "v3j_mesa_nomenclature_cutover",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-08-02",
+        "manifest_sha256_prefix": "(local draft, not yet committed)",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 52,
+        "filename": "2026-08-02_v3k_mesa_table_shapes.sql",
+        "slug": "v3k_mesa_table_shapes",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-08-02",
+        "manifest_sha256_prefix": "(local draft, not yet committed)",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 53,
+        "filename": "2026-08-08_service_closeout_incidents_foundation.sql",
+        "slug": "service_closeout_incidents_foundation",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-08-08",
+        "manifest_sha256_prefix": "(local draft, not yet committed)",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 54,
+        "filename": "2026-08-08_service_closeout_post_close_financial_resolutions.sql",
+        "slug": "service_closeout_post_close_financial_resolutions",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-08-08",
+        "manifest_sha256_prefix": "eebf5ed95d15b5c9",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 55,
+        "filename": "2026-08-08_service_closeout_attempt_ownership.sql",
+        "slug": "service_closeout_attempt_ownership",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-08-08",
+        "manifest_sha256_prefix": "(local draft, not yet committed)",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 56,
+        "filename": "2026-08-09_service_closeout_cross_service_table_policy.sql",
+        "slug": "service_closeout_cross_service_table_policy",
+        "manifest_commit": "pending",
+        "manifest_date": "2026-08-09",
+        "manifest_sha256_prefix": "ce409a48f88904dc",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 57,
+        "filename": "2026-08-09_service_lifecycle_v3_foundation.sql",
+        "slug": "service_lifecycle_v3_foundation",
+        "manifest_commit": "4252241",
+        "manifest_date": "2026-08-09",
+        "manifest_sha256_prefix": "cf2d1699527828b4",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 58,
+        "filename": "2026-08-09_service_lifecycle_v3_close_engine.sql",
+        "slug": "service_lifecycle_v3_close_engine",
+        "manifest_commit": "5152055",
+        "manifest_date": "2026-08-09",
+        "manifest_sha256_prefix": "1246fd5abf816520",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 59,
+        "filename": "2026-08-09_service_lifecycle_v3_close_ownership_hardening.sql",
+        "slug": "service_lifecycle_v3_close_ownership_hardening",
+        "manifest_commit": "77279d6",
+        "manifest_date": "2026-08-09",
+        "manifest_sha256_prefix": "69366f98d4d234c6",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 61,
+        "filename": "2026-08-09_service_lifecycle_v3_incident_policy.sql",
+        "slug": "service_lifecycle_v3_incident_policy",
+        "manifest_commit": "49c4839",
+        "manifest_date": "2026-08-09",
+        "manifest_sha256_prefix": "320fd694de9129d7",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 60,
+        "filename": "2026-08-09_service_lifecycle_v3_table_release.sql",
+        "slug": "service_lifecycle_v3_table_release",
+        "manifest_commit": "78ff66d",
+        "manifest_date": "2026-08-09",
+        "manifest_sha256_prefix": "ba2690b78a7be07f",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 62,
+        "filename": "2026-08-09_service_lifecycle_v3_rollover.sql",
+        "slug": "service_lifecycle_v3_rollover",
+        "manifest_commit": "78ff66d",
+        "manifest_date": "2026-08-09",
+        "manifest_sha256_prefix": "473c8b651321c6c8",
+        "verification_status": "bootstrapped_unverified",
+        "verification_method": null,
+        "reason": "no independent ledger record; applied manually or under a different ledger name"
+      },
+      {
+        "apply_order": 63,
+        "filename": "2026-08-10_mesa_close_forces_orphaned_orders.sql",
+        "slug": "mesa_close_forces_orphaned_orders",
+        "manifest_commit": "(local, not yet committed)",
+        "manifest_date": "2026-08-10",
+        "manifest_sha256_prefix": "dc6e1bdc898d9a967a",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 64,
+        "filename": "2026-08-10_mesa_decouple_payment_from_close.sql",
+        "slug": "mesa_decouple_payment_from_close",
+        "manifest_commit": "(local, this session)",
+        "manifest_date": "2026-08-10",
+        "manifest_sha256_prefix": "647e731a3bd607f3",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 65,
+        "filename": "2026-08-10_service_lifecycle_economic_boundary_v1.sql",
+        "slug": "service_lifecycle_economic_boundary_v1",
+        "manifest_commit": "applied",
+        "manifest_date": "2026-08-10",
+        "manifest_sha256_prefix": "f76543f7f1054ccc",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 66,
+        "filename": "2026-08-11_service_lifecycle_economic_boundary_v1_audit_fix.sql",
+        "slug": "service_lifecycle_economic_boundary_v1_audit_fix",
+        "manifest_commit": "applied",
+        "manifest_date": "2026-08-11",
+        "manifest_sha256_prefix": "c175f8d19c191a7c",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 67,
+        "filename": "2026-08-12_service_session_close_stale_return_fix.sql",
+        "slug": "service_session_close_stale_return_fix",
+        "manifest_commit": "4a439b5",
+        "manifest_date": "2026-08-12",
+        "manifest_sha256_prefix": "1ede59519bf77160",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 68,
+        "filename": "2026-08-13_guard_service_session_closed_incident_safe_exemption.sql",
+        "slug": "guard_service_session_closed_incident_safe_exemption",
+        "manifest_commit": "(local, not yet committed)",
+        "manifest_date": "2026-08-13",
+        "manifest_sha256_prefix": "8789a5623bd98a14",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 69,
+        "filename": "2026-08-14_mesa_covers_authoritative_on_selection.sql",
+        "slug": "mesa_covers_authoritative_on_selection",
+        "manifest_commit": "(local, not yet committed)",
+        "manifest_date": "2026-08-14",
+        "manifest_sha256_prefix": "27bdc06d366b73db",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      },
+      {
+        "apply_order": 70,
+        "filename": "2026-08-15_begin_service_session_close_incident_safe_exemption.sql",
+        "slug": "begin_service_session_close_incident_safe_exemption",
+        "manifest_commit": "183ed7d (allowActiveRiderTripAcrossBoundary, preceding this migration)",
+        "manifest_date": "2026-08-15",
+        "manifest_sha256_prefix": "c5103d5bfd438ad5",
+        "verification_status": "verified",
+        "verification_method": "supabase_migrations.schema_migrations name match",
+        "reason": "present in the Supabase-managed migration ledger by exact slug"
+      }
+    ]
+  },
+  "stop_conditions": [
+    {
+      "id": 1,
+      "description": "any expected counter differs",
+      "result": "CLEAR",
+      "detail": "V2.1.1 expected 9746dfdd_incidents=0; that expectation is now proven to have been drawn from a provably-wrong stored counter. The V2.1.2-corrected expectation (stored=0/known-incorrect, true point-in-time=6, current=11) matches observed evidence exactly. Root cause: root_cause_9746dfdd_section_I."
+    },
+    {
+      "id": 2,
+      "description": "duplicate (workspace_id, client_request_id) with conflicting request_hash",
+      "result": "CLEAR",
+      "observed": 0
+    },
+    {
+      "id": 3,
+      "description": "payment where amount != sum(allocations)",
+      "result": "CLEAR",
+      "observed": 0
+    },
+    {
+      "id": 4,
+      "description": "same-session storico display-id duplicate",
+      "result": "CLEAR",
+      "observed": 0
+    },
+    {
+      "id": 5,
+      "description": "storico row with NULL service_session_id or NULL orden_id",
+      "result": "CLEAR",
+      "observed": 0
+    },
+    {
+      "id": 6,
+      "description": "bypass table not owned by postgres, trigger missing/disabled, or payment_transactions listed in J.2",
+      "result": "CLEAR"
+    },
+    {
+      "id": 7,
+      "description": "live order referencing a nonexistent service session",
+      "result": "CLEAR",
+      "observed": 0
+    },
+    {
+      "id": 8,
+      "description": "repository or database drift relative to the frozen pre-S0 baseline",
+      "result": "CLEAR"
+    }
+  ],
+  "stop_conditions_triggered": 0,
+  "rerun_check": {
+    "performed": true,
+    "counters_compared": [
+      "A_invisible_lines",
+      "A_invisible_cents",
+      "A_closed_ts_with_invisible",
+      "B_mismatch_orders",
+      "B_mismatch_cents",
+      "E_dup_intents",
+      "G_storico_null_service",
+      "G_storico_null_orden",
+      "G_same_session_dupes",
+      "H_pt_count",
+      "H_alloc_violations",
+      "I_9746_residue",
+      "I_9746_incidents",
+      "J_tol_rows",
+      "J_pa_rows",
+      "J_ofe_rows",
+      "J_si_order_rows",
+      "J_enabled_triggers"
+    ],
+    "all_identical": true,
+    "baseline_changed_during_capture": false,
+    "reconfirmed_at_refreeze": true,
+    "reconfirmed_counters": [
+      "A_invisible_lines",
+      "A_invisible_cents",
+      "A_closed_ts_with_invisible",
+      "B_mismatch_orders",
+      "B_mismatch_cents",
+      "E_dup_intents",
+      "G_storico_null_service",
+      "G_storico_null_orden",
+      "G_same_session_dupes",
+      "H_pt_count",
+      "H_alloc_violations",
+      "I_9746_residue",
+      "I_9746_incidents_total",
+      "I_9746_incidents_pre_closeout",
+      "I_9746_incidents_post_closeout",
+      "J_tol_rows",
+      "J_pa_rows",
+      "J_ofe_rows",
+      "J_si_order_rows",
+      "K_ladieci_ledger_exists"
+    ],
+    "all_identical_at_refreeze": true,
+    "baseline_changed_during_refreeze": false
+  },
+  "mutations": {
+    "database_writes": 0,
+    "schema_changes": 0,
+    "migrations_created": 0,
+    "application_code_changes": 0,
+    "deployments": 0,
+    "variable_changes": 0
+  },
+  "verdict": {
+    "s0_execution": "PASS",
+    "sections_completed": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F",
+      "G",
+      "H",
+      "I",
+      "J",
+      "K"
+    ],
+    "safe_to_begin_s1_evidence_basis": true,
+    "safe_to_begin_s1_procedural_gate": "PENDING_HUMAN_APPROVAL",
+    "note": "S0's hard-gate criteria (per V2.1.2 S0-PASS rule) are all satisfied: A-H/J/K unchanged and matching; Section I matches the V2.1.2-corrected model exactly; residue population and incident composition/timeline independently reconfirmed; zero financial mutation; zero database/code/migration/deployment mutations; baseline unchanged across both the original capture and this re-freeze. S1 is evidence-ready but requires explicit human sign-off before starting, per this engagement's standing instruction.",
+    "next_action": "Human review and approval of MESA_REMEDIATION_PLAN_FINAL_V2_1_2_2026-08-15.md and this re-frozen artifact. Once approved, S1 (guard-NULL fix + narrowed payment idempotency key) may begin."
+  },
+  "refrozen_at": "2026-08-15T15:42:33Z",
+  "refreeze_reason": "Section I's frozen expectation for 9746dfdd was contradicted by live evidence during S0 execution. A dedicated read-only investigation traced the exact root cause (a non-financial, cross-engine closeout-counter write-order defect). V2.1.2 corrects the specification; this artifact is re-frozen to match, with sections A-H/J/K re-verified unchanged.",
+  "root_cause_9746dfdd_section_I": {
+    "defect_class": "WRITE_ORDER_DEFECT (cross-engine resumed-attempt variant)",
+    "closeout_id": "3f61a0e1-3a3c-49dd-9bff-0f021c8850eb",
+    "closeout_correlation_id": "76c44f7d-f24f-43de-bd15-703d98848a13",
+    "closeout_insert_at": "2026-08-10T19:07:19.078326Z",
+    "closeout_writer": "src/closeout/serviceCloseoutCreation.js -> RPC create_service_closeout (sole service_closeouts writer)",
+    "closeout_writer_caller": "src/serviceSessions/economicBoundaryEngine.js rollEconomicPeriod(), Phase D, lines 215-216 - hardcoded literal 0 for kitchenPendingCount/listoCount/deliveryPendingCount/incidentCount/criticalIncidentCount",
+    "earlier_pass_engine": "src/serviceSessions/serviceLifecycleEngine.js (source='ensure_reconcile')",
+    "earlier_pass_persisted_incidents_at": "2026-08-10T15:37:09.269493Z - 2026-08-10T15:37:09.523222Z",
+    "mechanism": "service_closeout_attempts.acquire() is origin-agnostic (keyed by service_session_id alone); capture_closeout_snapshot is idempotent by correlation_id (a resumed attempt gets back the existing snapshot, created:false). Both are correct by design. economicBoundaryEngine.js never queries service_incidents at all and never re-derives from what an earlier, different engine may already have persisted under the same correlation.",
+    "financial_impact": "NONE - confirmed zero writes to table_order_lines, payment_allocations, payment_transactions, order_financial_events, or orden_estado_logs in either incident-creation window (2026-08-10T15:32-15:42Z and 2026-08-11T07:44-07:55Z)",
+    "fix_owner": "S18 (scope explicitly widened in V2.1.2 to include economicBoundaryEngine.rollEconomicPeriod and serviceCloseoutCreation.js)",
+    "canonical_counter_source": "live, closeout_correlation_id-scoped COUNT(*) against public.service_incidents, evaluated at the moment of the service_closeouts INSERT; never a caller-supplied integer"
+  }
+}
