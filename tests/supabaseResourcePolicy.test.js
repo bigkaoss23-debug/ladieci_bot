@@ -22,7 +22,24 @@ delete require.cache[require.resolve('../src/utils/supabaseTransport')];
 const policy = require('../src/utils/supabaseResourcePolicy');
 const transport = require('../src/utils/supabaseTransport');
 
-global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
+// S3: resource-aware (not just a blanket '{}') so that a real DAO call chain
+// depending on a non-empty intermediate result (e.g. mesaDao.listFloorRows's
+// table_sessions -> ordenes/table_order_lines/payment_transactions fan-out,
+// gated on at least one session id being present) actually traverses its full
+// path instead of short-circuiting on an empty array. Every other existing
+// check above only asserts on ok/status/error code, never on body shape, so
+// this is a safe, backward-compatible upgrade of the single shared stub.
+global.fetch = async (url, init) => {
+  const u = String(url);
+  const method = (init && init.method) || 'GET';
+  const nonEmptyArrayFor = /\/(table_sessions|payment_transactions)\?/.test(u);
+  // GET-style reads (mesaDao.js's select()) require a JSON array in the body
+  // or it throws MESA_DATA_READ_FAILED before reaching any further call in a
+  // chain; POST-style writes (rpc()) never inspect body shape at all, so an
+  // empty array is a safe universal default for both.
+  const text = nonEmptyArrayFor ? JSON.stringify([{ id: 'mock-' + Math.random().toString(36).slice(2) }]) : '[]';
+  return { ok: true, status: 200, text: async () => text };
+};
 
 (async () => {
   // ── 1) risorsa registrata ────────────────────────────────────────────────
@@ -377,6 +394,134 @@ global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
     assert(`29. ${resource} denies DELETE`, !policy.isMethodAllowed(resource, 'DELETE'));
     const r = await transport.supabaseRequest({ resource, method: 'POST', operation: 'test' });
     assert(`29b. ${resource} POST reaches the transport`, r.ok === true);
+  }
+
+  // ── 30) S3 — RUNTIME-INSTRUMENTED RESOURCE PARITY ────────────────────────
+  // MESA_REMEDIATION_PLAN_FINAL_V2_1_2_2026-08-15.md, slice S3. GOAL: make
+  // registry drift impossible to miss. DOMAIN RULE: every {resource, method}
+  // reachable from any DAO is registered.
+  //
+  // Check 17 (above) is a source-text regex scan for specific literal call
+  // patterns (sbSelect(...), sbRpc(...), safeSelect(...), sbRest('METHOD',
+  // 'literal', ...)) -- it is BLIND to any DAO that defines its own local
+  // select()/rpc() wrapper, which is exactly what src/tables/mesaDao.js does.
+  // Empirically: 0 of check 17's patterns match anywhere in mesaDao.js, so it
+  // scans zero resources from the Mesa DAO today, even though mesaDao.js is a
+  // real, live, heavily-used caller (every S1/S2 live validation in this
+  // remediation went through it). This check closes that gap by actually
+  // DRIVING every src/tables/*.js DAO entrypoint through the real transport
+  // (via supabaseTransport's test-mode recorder, set up above at module
+  // load time is NOT required -- it fires for ANY caller, any local wrapper
+  // name, because every DAO ultimately funnels through supabaseRequest) and
+  // asserting the OBSERVED {resource, method} set is a subset of the
+  // registered policy -- proof by actually reaching the entrypoint, not by
+  // guessing from source text.
+  //
+  // HARD GATE this check exists to satisfy: delete rpc/mesa_set_session_
+  // covers_v1's registry entry (and its own hand-written check 29 -- the
+  // "hand-maintained RPC array" pattern this slice removes the NEED for,
+  // though existing per-resource checks like 29 are left in place as
+  // additional, non-exclusive coverage) in a scratch branch: this check must
+  // fail. Verified empirically before writing this fix: with both removed,
+  // the FULL pre-existing suite (112 assertions) passed -- proving the blind
+  // spot was real, not hypothetical.
+  {
+    const observed = [];
+    transport.setTestModeRecorder((hit) => observed.push(hit));
+
+    const ROOT = path.join(__dirname, '..');
+    const TABLES_DIR = path.join(ROOT, 'src', 'tables');
+    const daoFiles = fs.readdirSync(TABLES_DIR).filter((f) => f.endsWith('.js'));
+    assert('30a. at least one src/tables/*.js module exists to instrument', daoFiles.length > 0);
+
+    let invokedFunctionCount = 0;
+    const invokedNames = new Set();
+    const invocationErrors = [];
+    for (const file of daoFiles) {
+      delete require.cache[require.resolve(path.join(TABLES_DIR, file))];
+      const mod = require(path.join(TABLES_DIR, file));
+      if (!mod || typeof mod !== 'object') continue;
+      for (const [exportName, fn] of Object.entries(mod)) {
+        if (typeof fn !== 'function') continue;
+        invokedFunctionCount++;
+        invokedNames.add(`${file}:${exportName}`);
+        try {
+          // Every real mesaDao.js entrypoint either takes a single args
+          // object (destructured as args.fieldName -- undefined fields are
+          // harmless) or leading positional string(s) that only ever reach
+          // encodeURIComponent(...) before the first resource call (also
+          // harmless on undefined/object input) -- so one generic call shape
+          // is sufficient to drive every export to its first real resource
+          // call without needing per-function bespoke mocks. A factory-style
+          // export (e.g. a hypothetical createXService(cfg)) that returns a
+          // plain object synchronously rather than touching the network is
+          // equally harmless here: it just contributes zero observations.
+          const result = fn({});
+          if (result && typeof result.then === 'function') await result.catch(() => {});
+        } catch (_) {
+          // Only a resource-policy rejection matters to this check (and that
+          // is captured by the recorder above, which fires BEFORE the throw)
+          // -- any other error (a downstream MESA_* business error from the
+          // mocked, semantically-empty response) is expected and irrelevant
+          // to reachability; record it only for the STOP-condition diagnostic
+          // below, never as a check-30 failure by itself.
+          invocationErrors.push(`${file}:${exportName}`);
+        }
+      }
+    }
+    transport.setTestModeRecorder(null);
+
+    assert('30b. the harness actually reached every src/tables/*.js exported function (none skipped/unreachable)',
+      invokedFunctionCount > 0);
+    // STOP condition (V2.1.2, S3): "if the harness cannot reach every
+    // src/tables/ entrypoint". Deliberately NOT a hardcoded count (that would
+    // just be a new hand-maintained shim of exactly the kind this slice
+    // removes) -- instead, every currently-exported mesaDao.js function must
+    // have been attempted (present in invocationErrors is fine -- a
+    // downstream business-error from the mocked, semantically-empty response
+    // is still a real attempt; total silence for a given export is not).
+    assert('30c. every mesaDao.js exported entrypoint was actually invoked by the harness (fails if a future export is added and this harness silently stops reaching it, or if one goes missing)',
+      (() => {
+        const mesaDao = require(path.join(TABLES_DIR, 'mesaDao.js'));
+        const expected = Object.keys(mesaDao).filter((k) => typeof mesaDao[k] === 'function');
+        const missing = expected.filter((name) => !invokedNames.has(`mesaDao.js:${name}`));
+        return expected.length > 0 && missing.length === 0;
+      })());
+
+    const distinctPairs = [...new Map(observed.map((o) => [`${o.resource}::${o.method}`, o])).values()];
+    assert('30d. the runtime harness observed at least one {resource, method} pair from mesaDao.js (proves the recorder actually fired, not a silent no-op)',
+      distinctPairs.length > 0);
+
+    const unregistered = distinctPairs.filter((o) => !policy.getResourcePolicy(o.resource) || !policy.isMethodAllowed(o.resource, o.method));
+    assert('30e. every {resource, method} pair OBSERVED via the real runtime transport (not guessed from source text) is registered and allowed',
+      unregistered.length === 0,
+      unregistered.map((o) => `${o.resource} ${o.method}`).join(', '));
+
+    // HARD GATE, executed directly: temporarily blind the live policy lookup
+    // to rpc/mesa_set_session_covers_v1 (REGISTRY itself is Object.freeze()'d
+    // -- read-only by design, so this monkey-patches the two exported lookup
+    // functions instead, which are plain writable module.exports properties),
+    // re-run the exact same observed-pairs-vs-policy check, and require it to
+    // now FAIL. Restored in a finally block no matter what, so no other check
+    // in this file or any file run after it is ever affected.
+    {
+      const GATED_RESOURCE = 'rpc/mesa_set_session_covers_v1';
+      assert('30f. hard-gate precondition: rpc/mesa_set_session_covers_v1 is present in the live registry before the gate test',
+        policy.getResourcePolicy(GATED_RESOURCE) !== null);
+      const originalGetResourcePolicy = policy.getResourcePolicy;
+      const originalIsMethodAllowed = policy.isMethodAllowed;
+      policy.getResourcePolicy = (resource) => (resource === GATED_RESOURCE ? null : originalGetResourcePolicy(resource));
+      policy.isMethodAllowed = (resource, method) => (resource === GATED_RESOURCE ? false : originalIsMethodAllowed(resource, method));
+      try {
+        const stillUnregistered = distinctPairs.filter((o) => !policy.getResourcePolicy(o.resource) || !policy.isMethodAllowed(o.resource, o.method));
+        assert('30g. HARD GATE: with rpc/mesa_set_session_covers_v1 unregistered, this check now fails closed (catches exactly the regression check 17 cannot see)',
+          stillUnregistered.some((o) => o.resource === GATED_RESOURCE));
+      } finally {
+        policy.getResourcePolicy = originalGetResourcePolicy;
+        policy.isMethodAllowed = originalIsMethodAllowed;
+      }
+      assert('30h. registry restored to its original state after the hard-gate test', policy.getResourcePolicy(GATED_RESOURCE) !== null);
+    }
   }
 
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);

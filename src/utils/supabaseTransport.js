@@ -58,6 +58,25 @@ const METHODS_WITHOUT_BODY = Object.freeze(['GET', 'DELETE']);
 
 const OPERATION_NAME_RE = /^[A-Za-z0-9_:./-]{1,200}$/;
 
+// S3 — Runtime-instrumented resource parity (MESA_REMEDIATION_PLAN_FINAL_V2_1_2_
+// 2026-08-15.md, slice S3). Test-mode-only observation hook: when set, records
+// the {resource, method} pair of EVERY request attempt that reaches this
+// function, before the registry check below runs -- so a test can drive real
+// DAO entrypoints (whatever local select()/rpc() convention they use; this
+// hook fires regardless, since every DAO ultimately funnels through this one
+// transport) and observe exactly what the registry needs to cover, instead of
+// guessing from a source-text regex that can only recognize specific literal
+// call patterns (sbSelect(...), sbRpc(...), etc.) and is blind to any DAO that
+// defines its own local wrapper -- see tests/supabaseResourcePolicy.test.js's
+// runtime-reachability check for the harness that uses this.
+// Never wired to anything outside test files; production code never calls
+// setTestModeRecorder, so this is a no-op (_testModeRecorder stays null) on
+// every real request path.
+let _testModeRecorder = null;
+function setTestModeRecorder(fn) {
+  _testModeRecorder = typeof fn === 'function' ? fn : null;
+}
+
 function validateRequestShape(params) {
   const badKeys = Object.keys(params).filter((k) => !ALLOWED_PARAM_KEYS.includes(k));
   if (badKeys.length > 0) {
@@ -68,6 +87,9 @@ function validateRequestShape(params) {
 
   if (typeof resource !== 'string' || resource.length === 0) {
     throw new SupabaseTransportError(ERROR_CODES.REQUEST_INVALID, 'resource is required');
+  }
+  if (_testModeRecorder) {
+    try { _testModeRecorder({ resource, method: String(method).toUpperCase() }); } catch (_) { /* never let a recorder bug break a real request */ }
   }
   // Absolute URL, protocol-relative, path traversal, duplicated "?", fragment,
   // CR/LF (header/response-splitting defense in depth) — resource must be a bare
@@ -290,6 +312,9 @@ module.exports = {
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
   ALLOWED_EXTRA_HEADERS,
+  // S3 — test-mode-only resource-reachability recorder. Never called by any
+  // production wrapper; see the comment at its definition above.
+  setTestModeRecorder,
   // exported for tests only — not used by production wrappers
   _internal: { loadConfig, buildHeaders },
 };
