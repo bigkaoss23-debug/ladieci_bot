@@ -148,6 +148,64 @@ const reset = () => {
   check("active trip -> NO serata_summary lock insert", !inserts.includes("serata_summary"));
   check("active trip -> NO config write", upserts.length === 0);
 
+  // ── STALE_SERVICE_SESSION_SELF_HEAL (2026-08-15) — negative case: this
+  // same "active trip -> DEFERRED" behavior above is the manual/default path
+  // (no closeContext at all, matching index.js's manual HTTP close action and
+  // the frozen legacy retry, neither of which ever sets the new flag). The
+  // block below proves the NEW flag changes nothing about that default. ──
+  reset();
+  RESET = { status: 409, payload: { ok: false, error: "ACTIVE_TRIP_CONFLICT" } };
+  // language-guard: allow-legacy chiudiServizio is the existing close-engine function this test exercises directly, not new vocabulary
+  r = await chiudiServizio(true, "manual", "owner", {});
+  check("4C.3 negative: explicit empty closeContext -> still deferred exactly like today (manual close keeps its safety behavior)",
+    r.skipped === true && r.deferred === true && r.reason === "active_rider_trip");
+
+  // ── SLICE 4C.3 — a truthy-but-not-strictly-true value must NOT bypass the gate ──
+  reset();
+  RESET = { status: 409, payload: { ok: false, error: "ACTIVE_TRIP_CONFLICT" } };
+  // language-guard: allow-legacy chiudiServizio is the existing close-engine function this test exercises directly, not new vocabulary
+  r = await chiudiServizio(true, "cron2350", "system", { allowActiveRiderTripAcrossBoundary: "true" });
+  check("4C.3: string 'true' does not bypass (strict === true only)", r.skipped === true && r.reason === "active_rider_trip");
+  reset();
+  RESET = { status: 409, payload: { ok: false, error: "ACTIVE_TRIP_CONFLICT" } };
+  // language-guard: allow-legacy chiudiServizio is the existing close-engine function this test exercises directly, not new vocabulary
+  r = await chiudiServizio(true, "cron2350", "system", { allowActiveRiderTripAcrossBoundary: 1 });
+  check("4C.3: numeric 1 does not bypass (strict === true only)", r.skipped === true && r.reason === "active_rider_trip");
+
+  // ── SLICE 4C.3 — allowActiveRiderTripAcrossBoundary:true (incident-safe
+  // rollover call site only) — the exact real staging scenario: two orders
+  // (#370/#372-equivalent) genuinely EN_ENTREGA/active-trip, everything else
+  // terminal. Mirrors the 4C.1 Mesa cross-boundary test immediately above. ──
+  reset();
+  completedOrders = [order];
+  RESET = { status: 409, payload: { ok: false, error: "ACTIVE_TRIP_CONFLICT" } };
+  // language-guard: allow-legacy chiudiServizio is the existing close-engine function this test exercises directly, not new vocabulary
+  r = await chiudiServizio(true, "order_intake_reconcile", "system", {
+    preserveActiveOrders: true,
+    allowActiveRiderTripAcrossBoundary: true,
+  });
+  check("4C.3: active rider trip no longer blocks incident-safe rollover", r.success === true, JSON.stringify(r));
+  // language-guard: allow-legacy serata_summary is the existing archive-lock table name this assertion checks, not new vocabulary
+  check("4C.3: the service still fully closes (reaches cleanup)", inserts.includes("serata_summary"));
+  check("4C.3: only ONE rider-gate call is made -- the trip is never re-queried, re-cleared, or completed by this path", beginCalls === 1);
+  check("4C.3: endServiceClose is still called at the end (idempotent no-op against the real RPC when no marker was ever set), never a second begin", endCalls === 1);
+  check("4C.3: no close_id was ever minted for this bypassed gate -- nothing here ever held a real close-window marker", endIds[0] === undefined);
+
+  // ── SLICE 4C.3 — the bypass must not affect the OTHER two independent
+  // outcomes of beginServiceCloseIfIdle: a genuine transport failure still
+  // fails closed, and an unexpected not-ok body still fails closed, even
+  // with the new flag set. ──
+  reset();
+  throwReset = true;
+  // language-guard: allow-legacy chiudiServizio is the existing close-engine function this test exercises directly, not new vocabulary
+  r = await chiudiServizio(true, "order_intake_reconcile", "system", { allowActiveRiderTripAcrossBoundary: true });
+  check("4C.3: RPC failure still fails closed even with the bypass flag set", r.success === false && r.error === "rider_state_gate_failed");
+  reset();
+  RESET = { status: 500, payload: { error: "internal_error" } };
+  // language-guard: allow-legacy chiudiServizio is the existing close-engine function this test exercises directly, not new vocabulary
+  r = await chiudiServizio(true, "order_intake_reconcile", "system", { allowActiveRiderTripAcrossBoundary: true });
+  check("4C.3: unexpected not-ok gate body still fails closed even with the bypass flag set", r.success === false && r.error === "rider_state_gate_failed");
+
   // ── RPC failure -> fail closed, no destructive work ──
   reset();
   throwReset = true;

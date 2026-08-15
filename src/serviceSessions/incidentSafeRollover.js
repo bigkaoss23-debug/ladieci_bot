@@ -400,9 +400,29 @@ function createIncidentSafeRollover({
     // residual order still never blocks the close, but is no longer
     // archived/removed by it. The manual, human-initiated close action and
     // the frozen legacy automatic path are untouched — neither sets it.
+    // STALE_SERVICE_SESSION_SELF_HEAL (2026-08-15) — allowActiveRiderTripAcross
+    // Boundary:true, scoped to this one call site for the same reason as the
+    // two flags above: an active rider trip's member orders (EN_ENTREGA) are
+    // already classified as a soft, incident-backed warning above (persisted
+    // BEFORE this call, so the fact is durable before the boundary is ever
+    // crossed), never a hard blocker. Proven live 2026-08-15 against a real,
+    // genuinely-stuck trip (a separate rider/delivery defect left it ACTIVE
+    // language-guard: allow-legacy chiudiServizio is the existing close-engine function this comment paragraph references throughout, not new vocabulary
+    // indefinitely): chiudiServizio's rider-trip gate had no equivalent
+    // bypass, so incident-safe rollover could detect and persist the exact
+    // same incident twice and never once complete. This flag does not touch,
+    // clear, or complete the trip — config.DRIVER_STATO is not written by
+    // language-guard: allow-legacy chiudiServizio is the existing close-engine function this comment paragraph references throughout, not new vocabulary
+    // chiudiServizio at all when it fires; the trip still closes normally,
+    // later, via the existing close_rider_trip reconciliation path, once its
+    // member orders are genuinely resolved. The manual, human-initiated close
+    // action and the frozen legacy automatic path are untouched — neither
+    // sets it, so an operator explicitly closing the service keeps exactly
+    // today's active-trip-blocks-close behavior.
     const closeResult = await closeSession(true, source, actor, {
       allowOpenTablesAcrossBoundary: true,
       preserveActiveOrders: true,
+      allowActiveRiderTripAcrossBoundary: true,
     });
 
     // ── on success: mark this attempt terminal, then try the next session ──

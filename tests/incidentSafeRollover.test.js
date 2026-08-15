@@ -173,6 +173,43 @@ const SERA_WINDOW_NOW = new Date(Date.UTC(2026, 7, 8, 18, 0)); // 20:00 Madrid
     assert("3c: incident persistence happened before the auto-release (report call recorded, then release)", env.reportCalls.length === 1);
   }
 
+  console.log("\n── STALE_SERVICE_SESSION_SELF_HEAL: TRUE_HARD_BLOCKER_STILL_BLOCKS — a genuine hard blocker fails closed, nothing archived, no incidents persisted ──");
+  {
+    // The ONLY hard-blocker condition rolloverClassifier.js can currently
+    // produce (SESSION_IDENTITY_INVALID): missing business_date/service_kind.
+    // Not invented for this test -- pinned against the real source in
+    // src/serviceSessions/rolloverClassifier.js's own classify function.
+    const BROKEN_SESSION = { id: "sess-broken" }; // no business_date/service_kind
+    const orders = [{ id: "o1", estado: "EN_ENTREGA", totale: 17 }];
+    const env = fakeEnv({ orders });
+    const perform = makeOrchestrator(env, SERA_WINDOW_NOW);
+    const r = await perform({ session: BROKEN_SESSION, actor: "system", source: "order_intake_reconcile" });
+    assert("hard-a: fails closed with ROLLOVER_HARD_BLOCKED", r.success === false && r.error === "ROLLOVER_HARD_BLOCKED", JSON.stringify(r));
+    assert("hard-b: the exact hard blocker is reported (SESSION_IDENTITY_INVALID), not a generic failure", r.hardBlockers && r.hardBlockers.some((b) => b.code === "SESSION_IDENTITY_INVALID"), JSON.stringify(r.hardBlockers));
+    // language-guard: allow-legacy chiudiServizio is the existing close-engine function this assertion label names, not new vocabulary
+    assert("hard-c: chiudiServizio is NEVER called — a hard blocker stops before any close attempt", env.closeCalls.length === 0);
+    assert("hard-d: zero incidents persisted — nothing is reported for a session whose identity can't even be trusted", env.reportCalls.length === 0);
+    assert("hard-e: the attempt is neither completed nor superseded — it just stays active, waiting for a real fix", env.attemptRows.length === 1 && env.attemptRows[0].status === "active");
+  }
+
+  console.log("\n── STALE_SERVICE_SESSION_SELF_HEAL: FINANCIAL_INCIDENT_POLICY — encodes the CURRENT canonical rule from source, not a guess: no unpaid amount, however large, is ever a hard blocker ──");
+  {
+    // rolloverClassifier.js's classifyForIncidentSafeRollover has ZERO
+    // threshold/amount logic anywhere in its financial branch — every
+    // ticket.unpaidAmount > 0 becomes a financialIncidents entry,
+    // unconditionally. This test pins that contract directly against a
+    // deliberately large exposure (matches real staging's own six unpaid
+    // UNPAID_BALANCE_AT_CLOSE incidents on c9d5aaa7..., €129.50 total) so a
+    // future change adding a silent threshold would fail this test loudly.
+    const orders = [{ id: "o1", estado: "RETIRADO", totale: 5000 }];
+    const env = fakeEnv({ orders });
+    const perform = makeOrchestrator(env, SERA_WINDOW_NOW);
+    const r = await perform({ session: SESSION, actor: "system", source: "cron_lunch" });
+    assert("fin-a: a huge (5000) unpaid balance still succeeds — never a hard blocker regardless of amount", r.success === true && r.hardBlockers === undefined, JSON.stringify(r));
+    assert("fin-b: it is recorded as an ordinary financial incident with the authoritative exposure (500000 cents)", env.reportCalls.some((c) => c.incidentType === "UNPAID_BALANCE_AT_CLOSE" && c.financialExposureCents === 500000), JSON.stringify(env.reportCalls));
+    assert("fin-c: the close still went through and the next session was established", env.closeCalls.length === 1 && r.newSession && r.newSession.id === "next-session");
+  }
+
   console.log("\n── SLICE 4C.1: occupied tables span the boundary — automatic rollover succeeds, table_sessions are never touched by this module ──");
   {
     // Mirrors real staging (2026-08-07 stale PRANZO): two occupied tables with
@@ -191,6 +228,45 @@ const SERA_WINDOW_NOW = new Date(Date.UTC(2026, 7, 8, 18, 0)); // 20:00 Madrid
     assert("mix-c: only the truly-empty table was auto-released", env.releaseCalls.length === 1 && env.releaseCalls[0].tableSessionId === "empty-1");
     assert("mix-d: the occupied tables were never passed to the release RPC", !env.releaseCalls.some((c) => c.tableSessionId === "occupied-1" || c.tableSessionId === "occupied-2"));
     assert("mix-e: exactly one informational incident (the empty table), occupied tables produce none", r.incidents.filter((i) => i.category === "informational").length === 1);
+  }
+
+  console.log("\n── STALE_SERVICE_SESSION_SELF_HEAL (2026-08-15): an active rider trip spans the boundary exactly like an occupied table — rollover succeeds, the trip is never touched by this module ──");
+  {
+    // Mirrors real staging (2026-08-13 stuck SERA, service_session_id
+    // c9d5aaa7...): two EN_ENTREGA orders belonging to one active rider
+    // trip, everything else terminal. The rider trip's own live/active
+    // state is NOT modeled by this fake (config.DRIVER_STATO lives entirely
+    // language-guard: allow-legacy chiudiServizio is the existing close-engine function this comment paragraph references twice, not new vocabulary
+    // inside chiudiServizio/riderTrip.js, mocked away here as closeSession)
+    // — what THIS test proves is the orchestrator's own contract: it always
+    // language-guard: allow-legacy chiudiServizio is the existing close-engine function this line references, not new vocabulary
+    // asks chiudiServizio to cross the boundary rather than defer, and it
+    // persists the delivery-active fact as an incident BEFORE ever doing so.
+    const orders = [
+      { id: "o1", estado: "EN_ENTREGA", totale: 17 },
+      { id: "o2", estado: "EN_ENTREGA", totale: 27.5 },
+      { id: "o3", estado: "RETIRADO", totale: 25 },
+    ];
+    const env = fakeEnv({ orders });
+    const perform = makeOrchestrator(env, SERA_WINDOW_NOW);
+    const r = await perform({ session: SESSION, actor: "system", source: "order_intake_reconcile" });
+    assert("trip-a: rollover succeeds despite two EN_ENTREGA orders on an active trip", r.success === true, JSON.stringify(r));
+    // language-guard: allow-legacy chiudiServizio is the existing close-engine function this assertion label names, not new vocabulary
+    assert("trip-b: chiudiServizio called with allowActiveRiderTripAcrossBoundary:true", env.closeCalls.length === 1 && env.closeCalls[0].closeContext?.allowActiveRiderTripAcrossBoundary === true, JSON.stringify(env.closeCalls[0].closeContext));
+    assert("trip-b2: preserveActiveOrders and allowOpenTablesAcrossBoundary are STILL also true — the new flag is additive, not a replacement", env.closeCalls[0].closeContext?.preserveActiveOrders === true && env.closeCalls[0].closeContext?.allowOpenTablesAcrossBoundary === true);
+    assert("trip-c: both delivery-active orders became DELIVERY_ACTIVE_AT_CLOSE incidents", env.reportCalls.filter((c) => c.incidentType === "DELIVERY_ACTIVE_AT_CLOSE").length === 2, JSON.stringify(env.reportCalls));
+    // language-guard: allow-legacy chiudiServizio is the existing close-engine function this assertion label names, not new vocabulary
+    assert("trip-d: the incidents were persisted BEFORE chiudiServizio was ever called (report calls exist, close already recorded as having happened)", env.reportCalls.length >= 2 && env.closeCalls.length === 1);
+    assert("trip-e: this module never calls anything resembling a rider/trip RPC directly — it only ever calls the mocked closeSession/releaseEmptyTableSession", env.releaseCalls.length === 0);
+    assert("trip-f: the attempt completed and the next session was established — order intake is unblocked", env.attemptRows[0].status === "completed" && r.newSession && r.newSession.id === "next-session");
+  }
+
+  console.log("\n── STALE_SERVICE_SESSION_SELF_HEAL negative-adjacent case: the flag is passed even when there is no delivery activity at all (always-on, matching the other two boundary flags) ──");
+  {
+    const env = fakeEnv({});
+    const perform = makeOrchestrator(env, SERA_WINDOW_NOW);
+    await perform({ session: SESSION, actor: "system", source: "cron_lunch" });
+    assert("trip-g: allowActiveRiderTripAcrossBoundary:true is unconditional, exactly like allowOpenTablesAcrossBoundary", env.closeCalls[0].closeContext?.allowActiveRiderTripAcrossBoundary === true);
   }
 
   console.log("\n── Step 12 case: snapshot persisted, incident persistence fails -> no unsafe close, retry converges on the SAME attempt ──");

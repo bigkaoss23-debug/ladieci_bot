@@ -182,10 +182,32 @@ async function fetchActiveServiceSessionSelfHealing({
       // the fresh/newly-opened current session, not the one just closed.
       return await fetchActiveServiceSession({ select });
     }
-  } catch (_) {
+    // STALE_SERVICE_SESSION_SELF_HEAL (2026-08-15) — a non-success result is
+    // NOT an error (deferred/skipped are ordinary, expected outcomes: e.g. a
+    // genuinely active rider trip whose own orders aren't resolved yet), but
+    // it must never be silently indistinguishable from "nothing happened."
+    // Proven live: two real closeout attempts against the same stale session
+    // left zero trace of *why* self-heal kept failing until this line was
+    // added. Server-side only -- the HTTP caller still just sees the
+    // ordinary STALE_SERVICE_SESSION rejection below, unchanged; nothing
+    // here is operator-facing or leaks internals to the response.
+    console.warn("[orderIntakePolicy] self-heal did not complete for session", session.id, JSON.stringify({
+      error: result && result.error,
+      code: result && result.code,
+      reason: result && result.reason,
+      deferred: result && result.deferred,
+      hardBlockers: result && result.hardBlockers,
+      closeoutCorrelationId: result && result.closeoutCorrelationId,
+    }));
+  } catch (e) {
     // Never let a reconciliation failure crash order intake. Fall through —
     // the caller gets the still-stale session and the ordinary
-    // STALE_SERVICE_SESSION rejection applies, unchanged from today.
+    // STALE_SERVICE_SESSION rejection applies, unchanged from today. Still
+    // log it (STALE_SERVICE_SESSION_SELF_HEAL, 2026-08-15) -- a thrown
+    // exception here was previously indistinguishable from an ordinary
+    // deferral, which is exactly the silent-swallowing this task exists to
+    // fix.
+    console.warn("[orderIntakePolicy] self-heal threw for session", session.id, e && e.message || e);
   }
   return session;
 }

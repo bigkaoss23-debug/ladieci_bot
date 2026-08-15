@@ -402,6 +402,51 @@ function installGate({ now, session }) {
       assert("deferred: still-stale session returned, never force-advanced past an active operational trip", session && session.id === "s-stale", JSON.stringify(session));
     }
 
+    console.log("\n── STALE_SERVICE_SESSION_SELF_HEAL (2026-08-15): a non-success rollover outcome is logged with its actual reason, never silently swallowed ──");
+    {
+      // Proven live: two real closeout attempts against the same stale
+      // service session left zero server-side trace of *why* self-heal kept
+      // failing, until this logging was added -- this test pins that it now
+      // genuinely fires with the actual diagnostic detail, not just "it
+      // failed". Server-side only: the caller's return value is untouched
+      // (still just the stale session), matching robustness2/deferred above.
+      const originalWarn = console.warn;
+      const logged = [];
+      console.warn = (...args) => logged.push(args.map(String).join(" "));
+      try {
+        const select = async (table) => table === "service_session_state" ? [CURRENT_STATE] : [STALE_ROW];
+        const rollover = async () => ({
+          success: false, deferred: true, reason: "active_rider_trip",
+          closeoutCorrelationId: "corr-active-trip-1",
+        });
+        const session = await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 });
+        assert("observability1: still returns the stale session unchanged", session && session.id === "s-stale");
+        const line = logged.join("\n");
+        assert("observability2: the log line names the stale session id", line.includes("s-stale"), line);
+        assert("observability3: the log line carries the actual deferral reason (active_rider_trip), not a generic message", line.includes("active_rider_trip"), line);
+        assert("observability4: the log line carries the closeout correlation id for cross-referencing service_closeout_attempts", line.includes("corr-active-trip-1"), line);
+      } finally {
+        console.warn = originalWarn;
+      }
+    }
+    {
+      const originalWarn = console.warn;
+      const logged = [];
+      console.warn = (...args) => logged.push(args.map(String).join(" "));
+      try {
+        const select = async (table) => table === "service_session_state" ? [CURRENT_STATE] : [STALE_ROW];
+        const rollover = async () => ({
+          success: false, error: "ROLLOVER_HARD_BLOCKED",
+          hardBlockers: [{ code: "SESSION_IDENTITY_INVALID", message: "session is missing business_date or service_kind" }],
+        });
+        await fetchActiveServiceSessionSelfHealing({ select, rollover, now: nowOnAug12 });
+        const line = logged.join("\n");
+        assert("observability5: a genuine hard blocker is distinguishable in the log from an ordinary deferral (carries error+hardBlockers, not just \"deferred\")", line.includes("ROLLOVER_HARD_BLOCKED") && line.includes("SESSION_IDENTITY_INVALID"), line);
+      } finally {
+        console.warn = originalWarn;
+      }
+    }
+
     console.log("\n── robustness: rollover throwing is caught, never propagates to order intake ──");
     {
       const select = async (table) => table === "service_session_state" ? [CURRENT_STATE] : [STALE_ROW];

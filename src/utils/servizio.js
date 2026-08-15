@@ -461,6 +461,11 @@ function madridStartOfDayIso(businessDate) {
 async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "system", closeContext = {}) {
   const allowOpenTablesAcrossBoundary = !!closeContext && closeContext.allowOpenTablesAcrossBoundary === true;
   const preserveActiveOrders = !!closeContext && closeContext.preserveActiveOrders === true;
+  // STALE_SERVICE_SESSION_SELF_HEAL (2026-08-15) — same cross-boundary posture
+  // as allowOpenTablesAcrossBoundary, applied to the one remaining gate that
+  // never got an equivalent bypass when preserveActiveOrders/
+  // allowOpenTablesAcrossBoundary were added. See the ACTIVE-TRIP GATE below.
+  const allowActiveRiderTripAcrossBoundary = !!closeContext && closeContext.allowActiveRiderTripAcrossBoundary === true;
   // Never block on a residual order (deleteAttivi OR preserveActiveOrders).
   const skipActiveOrderBlock = deleteAttivi || preserveActiveOrders;
   // Whether non-terminal orders actually get archived+removed this call.
@@ -594,10 +599,32 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
     catch (e) { console.warn(`[chiudiServizio] endServiceClose (${label}) failed:`, e?.message || e); }
   };
   if (gateBody && gateBody.error === "ACTIVE_TRIP_CONFLICT") {
-    console.warn(`[chiudiServizio ${source}] DEFERRED — active rider trip in progress; no archival/deletion performed`);
-    return { skipped: true, deferred: true, reason: "active_rider_trip", data: oggi };
-  }
-  if (!(gateBody && gateBody.ok)) {
+    // STALE_SERVICE_SESSION_SELF_HEAL (2026-08-15) — proven live on staging:
+    // an active rider trip is a genuinely real, unresolved fact. This call
+    // NEVER clears, completes, or mutates it: closeId stays unset (nothing
+    // below this point calls beginServiceCloseIfIdle again, and endClose's
+    // no-op-on-no-marker semantics make every later cleanup call harmless),
+    // and config.DRIVER_STATO.active_trip is not written by anything in this
+    // function. The trip can still close normally later via the existing
+    // close_rider_trip reconciliation path once its member orders reach a
+    // terminal state — a separate, real, out-of-scope operational fact, not
+    // something this flag papers over. What this flag changes is only
+    // whether the trip's mere existence is allowed to keep the SERVICE
+    // SESSION boundary stuck — exactly the same posture
+    // allowOpenTablesAcrossBoundary already gives an occupied Mesa table.
+    // Only the incident-safe rollover call site ever sets this flag; the
+    // manual HTTP close action and the frozen legacy retry path never do, so
+    // a human explicitly closing the service keeps today's exact behavior.
+    if (allowActiveRiderTripAcrossBoundary) {
+      // language-guard: allow-legacy chiudiServizio is this existing function's own name, logged verbatim exactly like every other log line in this file, not new vocabulary
+      console.warn(`[chiudiServizio ${source}] active rider trip present but crossing the service boundary unarchived (allowActiveRiderTripAcrossBoundary) — trip state untouched`);
+    } else {
+      // language-guard: allow-legacy chiudiServizio is this existing function's own name, not new vocabulary
+      console.warn(`[chiudiServizio ${source}] DEFERRED — active rider trip in progress; no archival/deletion performed`);
+      // language-guard: allow-legacy oggi is this existing function's own pre-existing business_date variable, unchanged, not new vocabulary
+      return { skipped: true, deferred: true, reason: "active_rider_trip", data: oggi };
+    }
+  } else if (!(gateBody && gateBody.ok)) {
     console.warn(`[chiudiServizio ${source}] rider-state gate not ok; failing closed`);
     return { success: false, error: "rider_state_gate_failed", deferred: true, data: oggi };
   }
