@@ -187,6 +187,21 @@ const openReservation = (args) => rpc('mesa_open_reservation_v1', {
   p_service_session_id: args.serviceSessionId,
 });
 
+// MESA_SEND_TO_KITCHEN_P0_FIX (2026-08-14) — persists covers the moment the
+// operator selects them, not only as a side effect of the first comanda's
+// own insert. See migrations/2026-08-14_mesa_covers_authoritative_on_
+// selection.sql for the full root-cause note: covers_total IS NULL was the
+// only signal mesa_release_empty_session_auto_v1 had to distinguish "table
+// genuinely empty" from "operator actively building a real order", and a
+// routine service close silently destroyed a real in-progress draft because
+// of it.
+const setCovers = (args) => rpc('mesa_set_session_covers_v1', {
+  p_workspace_id: args.workspaceId,
+  p_by_actor: args.byActor,
+  p_table_session_id: args.tableSessionId,
+  p_covers_total: args.coversTotal,
+});
+
 module.exports = {
   listFloorRows,
   getSession,
@@ -195,6 +210,7 @@ module.exports = {
   releaseEmptySession,
   closeSession,
   releaseEmptySessionAuto,
+  setCovers,
   saveTable,
   postPayment,
   saveReservation,

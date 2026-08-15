@@ -272,6 +272,31 @@ function createMesaService({
       return { ok: true, orderId: result.id, idempotent: result.idempotent === true };
     },
 
+    // MESA_SEND_TO_KITCHEN_P0_FIX (2026-08-14) — persists covers the moment
+    // the operator selects them (MesaOrderBuilder's covers step), server-
+    // authoritative, before the picker even opens. See mesaDao.js's
+    // setCovers and migrations/2026-08-14_mesa_covers_authoritative_on_
+    // selection.sql for the full root-cause note. Session lookup/open/role
+    // checks mirror addCommand exactly -- setting covers is part of the
+    // same "start a comanda" operator action.
+    async setCovers({ context, tableSessionId, coversTotal } = {}) {
+      const ctx = requireContext(context, OPEN_ROLES);
+      const session = await dao.getSession(ctx.workspaceId, tableSessionId);
+      if (!session) throw new MesaServiceError('MESA_SESSION_NOT_FOUND', 404);
+      if (session.status !== 'open') throw new MesaServiceError('MESA_SESSION_NOT_OPEN', 409);
+      if (ctx.role === 'waiter' && session.assigned_waiter_actor
+          && session.assigned_waiter_actor !== ctx.actor) {
+        throw new MesaServiceError('MESA_WAITER_NOT_ASSIGNED', 403);
+      }
+      const coversValue = Number(coversTotal);
+      if (!Number.isInteger(coversValue) || coversValue < 1 || coversValue > 99) {
+        throw new MesaServiceError('MESA_INVALID_REQUEST', 400);
+      }
+      return dao.setCovers({
+        workspaceId: ctx.workspaceId, byActor: ctx.actor, tableSessionId, coversTotal: coversValue,
+      });
+    },
+
     async releaseEmptyTable({ context, tableSessionId } = {}) {
       const ctx = requireContext(context, OPEN_ROLES);
       return dao.releaseEmptySession({

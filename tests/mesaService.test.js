@@ -154,6 +154,49 @@ test('the first comanda on a walk-in table requires real covers and forwards the
   assert.equal(created[0].table_covers_total_input, 4);
 });
 
+// MESA_AMBIGUOUS_RETRY_IDEMPOTENT -- the real idempotency mechanism lives in
+// agentOrdini.js's creaOrdine (a client_req_id lookup before any insert,
+// unchanged by this P0 fix -- see its own "Idempotency check" comment: "Se
+// il frontend passa client_req_id... copre il caso Railway ha creato
+// l'ordine ma la risposta non è arrivata al client"). This proves
+// mesaService.addCommand's OWN contract: it forwards the SAME
+// clientRequestId on every call (so a retry is recognizable at all) and
+// faithfully surfaces createOrder's idempotent flag rather than masking it.
+test('addCommand forwards the identical clientRequestId on every call and surfaces an idempotent replay untouched', async () => {
+  const seen = [];
+  let callCount = 0;
+  const service = createMesaService({
+    dao: { getSession: async () => ({ id: 'session-1', status: 'open', covers_total: 4 }) },
+    createOrder: async (payload) => {
+      seen.push(payload.client_req_id);
+      callCount += 1;
+      // Simulate creaOrdine's real idempotency replay on the second call.
+      if (callCount === 1) return { success: true, id: '#001' };
+      return { success: true, id: '#001', idempotent: true };
+    },
+  });
+  const base = { context: ctx(), tableSessionId: 'session-1', items: [{ n: 'Pizza', p: 10 }], clientRequestId: 'same-request-id-0001' };
+  const first = await service.addCommand(base);
+  const retry = await service.addCommand(base);
+  assert.deepEqual(seen, ['same-request-id-0001', 'same-request-id-0001']);
+  assert.equal(first.orderId, '#001');
+  assert.equal(first.idempotent, false);
+  assert.equal(retry.orderId, '#001');
+  assert.equal(retry.idempotent, true);
+});
+
+test('a genuinely different retry (new clientRequestId) is never conflated with a prior one', async () => {
+  const seen = [];
+  const service = createMesaService({
+    dao: { getSession: async () => ({ id: 'session-1', status: 'open', covers_total: 4 }) },
+    createOrder: async (payload) => { seen.push(payload.client_req_id); return { success: true, id: `#00${seen.length}` }; },
+  });
+  const base = { context: ctx(), tableSessionId: 'session-1', items: [{ n: 'Pizza', p: 10 }] };
+  await service.addCommand({ ...base, clientRequestId: 'request-a' });
+  await service.addCommand({ ...base, clientRequestId: 'request-b' });
+  assert.deepEqual(seen, ['request-a', 'request-b']);
+});
+
 test('waiter cannot add a command to somebody else assigned table', async () => {
   const service = createMesaService({
     dao: { getSession: async () => ({ id: 's1', status: 'open', assigned_waiter_actor: 'other' }) },
@@ -162,6 +205,89 @@ test('waiter cannot add a command to somebody else assigned table', async () => 
     service.addCommand({ context: ctx({ actor: 'waiter-1', role: 'waiter' }), tableSessionId: 's1', items: [{}], clientRequestId: 'request-0001' }),
     (error) => error instanceof MesaServiceError && error.code === 'MESA_WAITER_NOT_ASSIGNED'
   );
+});
+
+// MESA_SEND_TO_KITCHEN_P0_FIX (2026-08-14) -- setCovers persists covers the
+// moment the operator selects them, server-authoritative, instead of only
+// ever landing as a side effect of the first comanda's own success. See
+// mesaService.js's own setCovers comment and migrations/2026-08-14_mesa_
+// covers_authoritative_on_selection.sql for the full root-cause note.
+test('setCovers forwards a valid selection straight to the DAO on an open session', async () => {
+  let args;
+  const service = createMesaService({
+    dao: {
+      getSession: async () => ({ id: 'session-1', status: 'open', covers_total: null }),
+      setCovers: async (value) => { args = value; return { ok: true, sessionId: 'session-1', coversTotal: value.coversTotal }; },
+    },
+  });
+  const result = await service.setCovers({ context: ctx(), tableSessionId: 'session-1', coversTotal: 2 });
+  assert.deepEqual(args, { workspaceId: 'ws-1', byActor: 'operator_primary', tableSessionId: 'session-1', coversTotal: 2 });
+  assert.equal(result.coversTotal, 2);
+});
+
+test('setCovers rejects a non-integer / out-of-range value before ever touching the DAO', async () => {
+  let called = false;
+  const service = createMesaService({
+    dao: {
+      getSession: async () => ({ id: 'session-1', status: 'open', covers_total: null }),
+      setCovers: async () => { called = true; return { ok: true }; },
+    },
+  });
+  for (const bad of [0, -1, 100, 1.5, NaN, null, undefined]) {
+    await assert.rejects(
+      service.setCovers({ context: ctx(), tableSessionId: 'session-1', coversTotal: bad }),
+      (error) => error instanceof MesaServiceError && error.code === 'MESA_INVALID_REQUEST' && error.status === 400
+    );
+  }
+  assert.equal(called, false);
+});
+
+test('setCovers rejects a session that is no longer open -- the exact boundary that let 2026-08-14\'s draft vanish', async () => {
+  const service = createMesaService({
+    dao: { getSession: async () => ({ id: 'session-1', status: 'closed', covers_total: null }) },
+  });
+  await assert.rejects(
+    service.setCovers({ context: ctx(), tableSessionId: 'session-1', coversTotal: 2 }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_SESSION_NOT_OPEN' && error.status === 409
+  );
+});
+
+test('setCovers rejects an unknown session/table', async () => {
+  const service = createMesaService({ dao: { getSession: async () => null } });
+  await assert.rejects(
+    service.setCovers({ context: ctx(), tableSessionId: 'ghost', coversTotal: 2 }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_SESSION_NOT_FOUND' && error.status === 404
+  );
+});
+
+test('setCovers: a waiter cannot set covers on a table assigned to someone else', async () => {
+  const service = createMesaService({
+    dao: { getSession: async () => ({ id: 's1', status: 'open', covers_total: null, assigned_waiter_actor: 'other' }) },
+  });
+  await assert.rejects(
+    service.setCovers({ context: ctx({ actor: 'waiter-1', role: 'waiter' }), tableSessionId: 's1', coversTotal: 2 }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_WAITER_NOT_ASSIGNED' && error.status === 403
+  );
+});
+
+// FIRST_COMMAND_COVERS_PERSIST end-to-end at the service layer: covers set
+// via setCovers are already durable by the time addCommand runs, so the
+// first comanda's own atomic covers-requirement becomes a no-op (matching
+// mesa_prepare_table_order_v1's own documented "later comanda" branch).
+test('after setCovers, the first addCommand no longer needs (or forwards) coversTotal at all', async () => {
+  const created = [];
+  let sessionCovers = null;
+  const service = createMesaService({
+    dao: {
+      getSession: async () => ({ id: 'session-1', table_ref: 'Mesa 1', status: 'open', covers_total: sessionCovers }),
+      setCovers: async (value) => { sessionCovers = value.coversTotal; return { ok: true, coversTotal: sessionCovers }; },
+    },
+    createOrder: async (payload) => { created.push(payload); return { success: true, id: '#001' }; },
+  });
+  await service.setCovers({ context: ctx(), tableSessionId: 'session-1', coversTotal: 2 });
+  await service.addCommand({ context: ctx(), tableSessionId: 'session-1', items: [{ n: 'Pizza', p: 10 }], clientRequestId: 'r1' });
+  assert.equal(created.length, 1);
+  assert.equal(created[0].table_covers_total_input, null);
 });
 
 test('addCommand rejects a session that is no longer open (e.g. already settling/closed)', async () => {

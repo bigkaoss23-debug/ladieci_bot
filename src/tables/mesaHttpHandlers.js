@@ -109,6 +109,13 @@ function createMesaHandlers({ service = createMesaService(), logger = console } 
       coversTotal: req.body?.coversTotal == null ? null : Number(req.body.coversTotal),
       clientRequestId: requestId(req.body),
     })),
+    // MESA_SEND_TO_KITCHEN_P0_FIX (2026-08-14) -- see mesaService.js's
+    // setCovers for the full root-cause note.
+    setCovers: run('set_covers', (req) => service.setCovers({
+      context: req.mesaContext,
+      tableSessionId: requireId(req.params.sessionId),
+      coversTotal: req.body?.coversTotal,
+    })),
     releaseEmptyTable: run('release_empty_table', (req) => service.releaseEmptyTable({
       context: req.mesaContext,
       tableSessionId: requireId(req.params.sessionId),
@@ -198,13 +205,14 @@ function registerMesaRoutes(router, deps = {}) {
   router.post('/sessions/:sessionId/release', auth, handlers.releaseEmptyTable);
   router.post('/sessions/:sessionId/close', auth, handlers.closeTable);
   router.post('/sessions/:sessionId/commands', auth, handlers.addCommand);
+  router.post('/sessions/:sessionId/covers', auth, handlers.setCovers);
   router.post('/sessions/:sessionId/commands/:orderId/served', auth, handlers.markServed);
   router.post('/sessions/:sessionId/payments', auth, handlers.pay);
   router.post('/tables/:tableId/reservations', auth, handlers.createReservation);
   router.put('/reservations/:reservationId', auth, handlers.updateReservation);
   router.post('/reservations/:reservationId/status', auth, handlers.setReservationStatus);
   router.post('/reservations/:reservationId/open', auth, handlers.openReservation);
-  return Object.freeze({ routes: 12 });
+  return Object.freeze({ routes: 13 });
 }
 
 module.exports = {

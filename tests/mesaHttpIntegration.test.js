@@ -18,13 +18,16 @@ test('disabled integration mounts zero routes', () => {
   assert.deepEqual(result, { enabled: false, prefix: PREFIX, routes: 0 });
 });
 
-test('enabled integration mounts exactly twelve static routes', () => {
+test('enabled integration mounts exactly thirteen static routes', () => {
   const app = express();
   const service = {
     floor: async () => ({ ok: true, tables: [] }),
     open: async () => ({ ok: true }),
     saveTable: async () => ({ ok: true }),
     addCommand: async () => ({ ok: true }),
+    // MESA_SEND_TO_KITCHEN_P0_FIX -- covers persisted server-authoritatively
+    // at selection time, a new sibling route to addCommand.
+    setCovers: async () => ({ ok: true }),
     markServed: async () => ({ ok: true }),
     pay: async () => ({ ok: true }),
     releaseEmptyTable: async () => ({ ok: true }),
@@ -39,5 +42,5 @@ test('enabled integration mounts exactly twelve static routes', () => {
     verifyToken: () => ({ sub: 'operator_primary', role: 'operator', sv: 1, sid: 'sid' }),
     getActor: async () => ({ actor: 'operator_primary', role: 'operator', active: true, session_version: 1, workspace_id: 'ws' }),
   });
-  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 12 });
+  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 13 });
 });
