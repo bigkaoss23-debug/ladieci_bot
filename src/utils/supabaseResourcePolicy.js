@@ -283,6 +283,12 @@ const REGISTRY = Object.freeze([
   entry('rpc/mesa_save_reservation_v1', KIND.RPC, ['POST'], SENSITIVITY.PII, 'tables/mesaDao.js'),
   entry('rpc/mesa_set_reservation_status_v1', KIND.RPC, ['POST'], SENSITIVITY.PII, 'tables/mesaDao.js'),
   entry('rpc/mesa_open_reservation_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/mesaDao.js'),
+  // MESA_SEND_TO_KITCHEN_P0_FIX (2026-08-14) -- missed at implementation time,
+  // caught by live UI UAT: mesaDao.setCovers() called rpc('mesa_set_session_
+  // covers_v1', ...) but this registry gate sits below the DAO, so every real
+  // request was rejected with SUPABASE_RESOURCE_NOT_ALLOWED before reaching
+  // Supabase at all (surfaced to the operator as MESA_DATA_WRITE_FAILED).
+  entry('rpc/mesa_set_session_covers_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/mesaDao.js'),
 
   // ── account RPC ──
   entry('rpc/auth_account_claim_workspace', KIND.RPC, ['POST'], SENSITIVITY.AUTH_SECURITY, 'workspaceOwnerDao.js claimWorkspace'),

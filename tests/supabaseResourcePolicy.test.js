@@ -362,6 +362,23 @@ global.fetch = async () => ({ ok: true, status: 200, text: async () => '{}' });
     assert(`28b. ${resource} POST reaches the transport`, r.ok === true);
   }
 
+  // ── 29) MESA_SEND_TO_KITCHEN_P0_FIX (2026-08-14) -- mesa_set_session_
+  //       covers_v1 (tables/mesaDao.js setCovers()). Missed at implementation
+  //       time and only caught by live UI UAT: without this entry the DAO
+  //       call is rejected by this very registry (SUPABASE_RESOURCE_NOT_
+  //       ALLOWED) before ever reaching Supabase -- exactly the class of bug
+  //       this suite exists to catch. Same posture as its mesaDao.js siblings
+  //       (mesa_open_session_v1 etc): POST-only, service_role internal. ────
+  {
+    const resource = 'rpc/mesa_set_session_covers_v1';
+    assert(`29. ${resource} is registered`, policy.getResourcePolicy(resource) !== null);
+    assert(`29. ${resource} allows POST`, policy.isMethodAllowed(resource, 'POST'));
+    assert(`29. ${resource} denies GET`, !policy.isMethodAllowed(resource, 'GET'));
+    assert(`29. ${resource} denies DELETE`, !policy.isMethodAllowed(resource, 'DELETE'));
+    const r = await transport.supabaseRequest({ resource, method: 'POST', operation: 'test' });
+    assert(`29b. ${resource} POST reaches the transport`, r.ok === true);
+  }
+
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   delete global.fetch;
   process.exit(fail === 0 ? 0 : 1);
