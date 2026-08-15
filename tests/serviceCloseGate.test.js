@@ -47,10 +47,13 @@ require.cache[rtPath].exports = Object.assign({}, realRt, {
 
 const ssPath = require.resolve("../src/serviceSessions/serviceSessionLifecycle");
 const realSs = require(ssPath);
-let SESSION_CURRENT, SESSION_BEGIN, sessionCompleteCalls = [];
+let SESSION_CURRENT, SESSION_BEGIN, sessionCompleteCalls = [], sessionBeginCalls = [];
 const sessionLifecycle = {
   currentCloseout: async () => SESSION_CURRENT,
-  beginClose: async () => SESSION_BEGIN,
+  // STALE_SERVICE_SESSION_SELF_HEAL (2026-08-15) -- args tracked so 4C.3 can
+  // assert preserveActiveOrders genuinely reaches beginClose, not just
+  // completeClose.
+  beginClose: async (args) => { sessionBeginCalls.push(args); return SESSION_BEGIN; },
   completeClose: async (args) => { sessionCompleteCalls.push(args); return { ok:true, code:"CLOSED", session:SESSION_BEGIN.session }; },
 };
 require.cache[ssPath].exports = Object.assign({}, realSs, { lifecycle: sessionLifecycle });
@@ -66,7 +69,7 @@ const reset = () => {
   existingSummary = []; completedOrders = []; activeOrders = []; throwStorico = false;
   tableSessions = [];
   SESSION_CURRENT = { ok:true, code:"OK", session:{...session,status:"open"} };
-  SESSION_BEGIN = { ok:true, code:"CLOSING", session }; sessionCompleteCalls=[];
+  SESSION_BEGIN = { ok:true, code:"CLOSING", session }; sessionCompleteCalls=[]; sessionBeginCalls=[];
 };
 
 (async () => {
@@ -190,6 +193,8 @@ const reset = () => {
   check("4C.3: only ONE rider-gate call is made -- the trip is never re-queried, re-cleared, or completed by this path", beginCalls === 1);
   check("4C.3: endServiceClose is still called at the end (idempotent no-op against the real RPC when no marker was ever set), never a second begin", endCalls === 1);
   check("4C.3: no close_id was ever minted for this bypassed gate -- nothing here ever held a real close-window marker", endIds[0] === undefined);
+  check("4C.4: preserveActiveOrders reaches beginClose too, not just completeClose (both halves of the close transition, one identical policy)", sessionBeginCalls[0]?.preserveActiveOrders === true, JSON.stringify(sessionBeginCalls[0]));
+  check("4C.4: completeClose still also receives preserveActiveOrders:true, unchanged from before this fix", sessionCompleteCalls[0]?.preserveActiveOrders === true);
 
   // ── SLICE 4C.3 — the bypass must not affect the OTHER two independent
   // outcomes of beginServiceCloseIfIdle: a genuine transport failure still
@@ -229,6 +234,7 @@ const reset = () => {
   check("idle -> NO direct DRIVER_STATO config write", !upserts.includes("DRIVER_STATO"));
   check("idle -> service_closing marker released after cleanup (endServiceClose)", endCalls === 1);
   check("idle -> releases matching close_id", endIds[0] === "close-ok");
+  check("4C.4 negative: a manual close (no closeContext) forwards preserveActiveOrders:false to beginClose -- open Mesa tables would still block it, unchanged", sessionBeginCalls[0]?.preserveActiveOrders === false, JSON.stringify(sessionBeginCalls[0]));
 
   // ── Duplicate close is identified by the explicit lifecycle pointer ──
   reset();

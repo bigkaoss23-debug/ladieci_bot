@@ -631,7 +631,13 @@ async function chiudiServizio(deleteAttivi = false, source = "manual", actor = "
 
   // Only after the active-trip gate succeeds may the service become `closing`.
   // A deferred rider trip therefore leaves the session open and orderable.
-  const sessionClose = await serviceSessionLifecycle.beginClose({ actor, source });
+  // STALE_SERVICE_SESSION_SELF_HEAL — preserveActiveOrders forwarded here too
+  // (mirroring completeClose below): begin_service_session_close's own
+  // MESA_TABLES_NOT_RELEASED check is the third of three independent gates
+  // for the same condition, proven live to have no exemption otherwise, even
+  // though the JS-level gate just above and completeClose's own guard both
+  // already tolerate an occupied table crossing the boundary.
+  const sessionClose = await serviceSessionLifecycle.beginClose({ actor, source, preserveActiveOrders });
   if (!sessionClose?.ok) { await endClose("session-begin-failed"); return { success: false, error: sessionClose?.code || "service_session_close_failed" }; }
   if (sessionClose.code === "ALREADY_CLOSED") {
     await endClose("already-closed-session");

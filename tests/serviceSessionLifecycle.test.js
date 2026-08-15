@@ -17,3 +17,21 @@ test("transport and malformed RPC results fail closed",async()=>{
   const lifecycle=createServiceSessionLifecycle({rpc:async()=>({ok:false,body:null})});
   assert.deepEqual(await lifecycle.currentCloseout(),{ok:false,code:"SERVICE_SESSION_TRANSPORT_ERROR"});
 });
+
+// STALE_SERVICE_SESSION_SELF_HEAL (2026-08-15) -- beginClose now forwards
+// preserveActiveOrders to p_preserve_active_orders, the exact same name/
+// meaning/default completeClose already established, so both halves of the
+// close transition express one identical policy.
+test("beginClose defaults preserveActiveOrders to false (manual/legacy callers keep today's strict behavior)",async()=>{
+  const calls=[]; const rpc=async(fn,args)=>{calls.push([fn,args]); return {ok:true,body:{ok:true,code:"CLOSING",session:{id:"S"}}};};
+  const lifecycle=createServiceSessionLifecycle({rpc});
+  await lifecycle.beginClose({actor:"owner",source:"manual"});
+  assert.deepEqual(calls[0],["begin_service_session_close",{p_closed_by:"owner",p_source:"manual",p_preserve_active_orders:false}]);
+});
+
+test("beginClose forwards preserveActiveOrders:true only when the caller explicitly asks (incident-safe rollover call site)",async()=>{
+  const calls=[]; const rpc=async(fn,args)=>{calls.push([fn,args]); return {ok:true,body:{ok:true,code:"CLOSING",session:{id:"S"}}};};
+  const lifecycle=createServiceSessionLifecycle({rpc});
+  await lifecycle.beginClose({actor:"system",source:"order_intake_reconcile",preserveActiveOrders:true});
+  assert.deepEqual(calls[0],["begin_service_session_close",{p_closed_by:"system",p_source:"order_intake_reconcile",p_preserve_active_orders:true}]);
+});

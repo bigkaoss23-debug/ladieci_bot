@@ -26,8 +26,16 @@ function createServiceSessionLifecycle({ rpc = sbRpc } = {}) {
     async open({ actor, source = "backend" }) {
       return normalize(await rpc("open_service_session", { p_opened_by: actor, p_source: source }));
     },
-    async beginClose({ actor, source = "backend" }) {
-      return normalize(await rpc("begin_service_session_close", { p_closed_by: actor, p_source: source }));
+    // preserveActiveOrders: forwarded to the RPC's own p_preserve_active_orders
+    // -- same name, same meaning, same default as completeClose below, so the
+    // two halves of the close transition express one identical policy, never
+    // contradictory gates. Only the close engine's one incident-safe caller
+    // ever passes true; every other caller keeps the guard exactly as strict
+    // as before.
+    async beginClose({ actor, source = "backend", preserveActiveOrders = false }) {
+      return normalize(await rpc("begin_service_session_close", {
+        p_closed_by: actor, p_source: source, p_preserve_active_orders: preserveActiveOrders,
+      }));
     },
     // preserveActiveOrders: forwarded to the RPC's own p_preserve_active_orders
     // -- see that function's header for the exact, DB-enforced (incident-
