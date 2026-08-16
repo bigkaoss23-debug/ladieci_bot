@@ -681,6 +681,19 @@ app.post("/api", async (req, res) => {
       // resetTickets must be an explicit boolean from the caller — never
       // defaulted here (R-DAY0's own ticket-reset contract: a separate,
       // deliberate decision, never an automatic consequence of consolidating).
+      //
+      // CONTAINMENT (owner decision, this session, immediately after R-DAY4
+      // certification): the exposed action name does not match the product's
+      // actual "Resumen del servicio" contract (read-only, non-mutating) and
+      // must not be reachable for normal operational use until that semantic
+      // question is resolved. Exact-match fail-closed gate, same discipline
+      // as AUTH_V2_LOGIN_HTTP_ENABLED/DYNAMIC_MENU_SHADOW_ENABLED elsewhere in
+      // this file: unset/anything other than the literal string 'true' means
+      // disabled. Does not touch the RPC, the table, or any existing row —
+      // this is the smallest possible containment, at the HTTP boundary only.
+      if (process.env.SERVICE_PERIOD_CONSOLIDATION_ENABLED !== "true") {
+        return res.status(403).json({ error: "SERVICE_PERIOD_CONSOLIDATION_DISABLED" });
+      }
       const actorId = req.authCtx?.actor;
       const actorRole = req.authCtx?.role;
       if (!actorId || !actorRole) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
