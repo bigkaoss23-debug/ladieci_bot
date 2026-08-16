@@ -165,6 +165,11 @@ const REGISTRY = Object.freeze([
   entry('rpc/begin_service_session_close', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/serviceSessionLifecycle.js'),
   entry('rpc/complete_service_session_close', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/serviceSessionLifecycle.js'),
   entry('rpc/get_current_service_closeout_session', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'serviceSessions/serviceSessionLifecycle.js'),
+  // R-DAY3 — read-only intake-schedule preflight mirror. The canonical,
+  // authoritative resolve_order_intake_context_v1() is called ONLY from
+  // inside the service_session_assign_order() DB trigger, never via sbRpc
+  // from this backend, so it deliberately has no registry entry here.
+  entry('rpc/get_order_intake_context_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/orderIntakePolicy.js'),
 
   // ── SERVICE CLOSEOUT V2 lifecycle RPCs — SLICE 4C.2A, extended 4C.2C.
   // Minimal set actually exercised by performIncidentSafeRollover

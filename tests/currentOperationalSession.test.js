@@ -7,6 +7,7 @@ const {
   serviceSessionQuery,
   getOperationalSessionIds,
   serviceSessionsQuery,
+  getPriorDayCarryoverSessionIds,
 } = require("../src/serviceSessions/currentOperationalSession");
 
 test("returns only the lifecycle-authoritative open service", async () => {
@@ -93,7 +94,10 @@ test("getOperationalSessionIds: same business_date, current + its rolled_over PR
       return [{ id: "A" }, { id: "B" }];
     },
   });
-  assert.deepEqual(ids, ["A", "B"]);
+  // Order is not a contract (R-DAY3's C3 carryover merge seeds `current` into
+  // a Set before adding same-day rows, whereas the pre-C3 implementation
+  // appended it last) — both ids being present, regardless of order, is.
+  assert.deepEqual([...ids].sort(), ["A", "B"]);
 });
 
 test("getOperationalSessionIds: a PREVIOUS business_date's rolled_over session is NEVER included, even though it would have been under the old one-hop rule — the exact live bug this fix closes", async () => {
@@ -128,7 +132,10 @@ test("getOperationalSessionIds: current is always included even if the read race
     currentCloseout: async () => ({ ok: true, session: { id: "B", status: "open", business_date: "2026-08-11" } }),
     select: async () => [{ id: "A" }], // hypothetical stale/partial read, missing B itself
   });
-  assert.deepEqual(ids, ["A", "B"]);
+  // Order is not a contract here either — see the comment above the first
+  // "both ids" test. What this test actually guarantees (current present
+  // despite the partial read) still holds.
+  assert.deepEqual([...ids].sort(), ["A", "B"]);
 });
 
 test("getOperationalSessionIds: a read error fails closed to just the current session", async () => {
@@ -145,6 +152,93 @@ test("getOperationalSessionIds: no current session at all -> empty array", async
     select: async () => [{ id: "A" }],
   });
   assert.deepEqual(ids, []);
+});
+
+// ── C3 (R-DAY3) — getPriorDayCarryoverSessionIds ───────────────────────────
+test("getPriorDayCarryoverSessionIds: a prior-day rolled_over session with a non-terminal order is surfaced", async () => {
+  const calls = [];
+  const select = async (table, query) => {
+    calls.push({ table, query });
+    if (table === "service_sessions") return [{ id: "yesterday-pranzo" }];
+    if (table === "ordenes") return [{ service_session_id: "yesterday-pranzo" }];
+    if (table === "table_sessions") return [];
+    throw new Error("unexpected table " + table);
+  };
+  const ids = await getPriorDayCarryoverSessionIds({ select, currentBusinessDate: "2026-08-16" });
+  assert.deepEqual(ids, ["yesterday-pranzo"]);
+  assert.ok(calls.some((c) => c.table === "service_sessions" && /status=eq\.rolled_over/.test(c.query) && /business_date=lt\.2026-08-16/.test(c.query)));
+});
+
+test("getPriorDayCarryoverSessionIds: a prior-day rolled_over session with an open table is surfaced", async () => {
+  const select = async (table) => {
+    if (table === "service_sessions") return [{ id: "yesterday-sera" }];
+    if (table === "ordenes") return [];
+    if (table === "table_sessions") return [{ service_session_id: "yesterday-sera" }];
+    throw new Error("unexpected table " + table);
+  };
+  const ids = await getPriorDayCarryoverSessionIds({ select, currentBusinessDate: "2026-08-16" });
+  assert.deepEqual(ids, ["yesterday-sera"]);
+});
+
+test("getPriorDayCarryoverSessionIds: a rolled_over session with NO non-terminal order and NO open table is NOT surfaced (fully reconciled residue stays hidden)", async () => {
+  const select = async (table) => {
+    if (table === "service_sessions") return [{ id: "long-settled" }];
+    if (table === "ordenes") return [];
+    if (table === "table_sessions") return [];
+    throw new Error("unexpected table " + table);
+  };
+  const ids = await getPriorDayCarryoverSessionIds({ select, currentBusinessDate: "2026-08-16" });
+  assert.deepEqual(ids, []);
+});
+
+test("getPriorDayCarryoverSessionIds: no rolled_over candidates at all -> empty, never queries ordenes/table_sessions", async () => {
+  let touchedOtherTables = false;
+  const select = async (table) => {
+    if (table === "service_sessions") return [];
+    touchedOtherTables = true;
+    return [];
+  };
+  const ids = await getPriorDayCarryoverSessionIds({ select, currentBusinessDate: "2026-08-16" });
+  assert.deepEqual(ids, []);
+  assert.equal(touchedOtherTables, false, "must not query ordenes/table_sessions when there are zero candidates");
+});
+
+test("getPriorDayCarryoverSessionIds: read error on the candidate query fails closed to empty, never widens", async () => {
+  const ids = await getPriorDayCarryoverSessionIds({
+    select: async () => { throw new Error("transport down"); },
+    currentBusinessDate: "2026-08-16",
+  });
+  assert.deepEqual(ids, []);
+});
+
+test("getPriorDayCarryoverSessionIds: read error on the live-work verification queries fails closed to empty", async () => {
+  const ids = await getPriorDayCarryoverSessionIds({
+    select: async (table) => {
+      if (table === "service_sessions") return [{ id: "x" }];
+      throw new Error("transport down");
+    },
+    currentBusinessDate: "2026-08-16",
+  });
+  assert.deepEqual(ids, []);
+});
+
+test("getPriorDayCarryoverSessionIds: no select function or no currentBusinessDate -> empty, no query attempted", async () => {
+  assert.deepEqual(await getPriorDayCarryoverSessionIds({ select: undefined, currentBusinessDate: "2026-08-16" }), []);
+  assert.deepEqual(await getPriorDayCarryoverSessionIds({ select: async () => [{ id: "x" }], currentBusinessDate: null }), []);
+});
+
+test("getOperationalSessionIds: end-to-end — current-day session plus a genuinely live prior-day carryover, merged with no duplicates", async () => {
+  const ids = await getOperationalSessionIds({
+    currentCloseout: async () => ({ ok: true, session: { id: "today", status: "open", business_date: "2026-08-16" } }),
+    select: async (table, query) => {
+      if (table === "service_sessions" && /business_date=eq\.2026-08-16/.test(query)) return [{ id: "today" }];
+      if (table === "service_sessions" && /status=eq\.rolled_over/.test(query)) return [{ id: "yesterday" }];
+      if (table === "ordenes") return [{ service_session_id: "yesterday" }];
+      if (table === "table_sessions") return [];
+      throw new Error("unexpected query: " + table + " " + query);
+    },
+  });
+  assert.deepEqual([...ids].sort(), ["today", "yesterday"]);
 });
 
 test("getCurrentOperationalBusinessDate: returns the current session's own business_date", async () => {

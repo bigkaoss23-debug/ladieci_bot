@@ -56,12 +56,19 @@ const { gestisci } = require("../src/agents/orchestrator");
 let pass = 0, fail = 0;
 const assert = (n, c, d = "") => { if (c) { pass++; console.log("  PASS  " + n); } else { fail++; console.log("  FAIL  " + n + (d ? "  -> " + d : "")); } };
 
-const summer = (h, m = 0, day = 15) => new Date(Date.UTC(2026, 6, day, h - 2, m)); // CEST, July
-const SERA_OPEN = { id: "s-sera", status: "open", serviceKind: "SERA", businessDate: "2026-07-15" };
-
-function installGate({ now, session }) {
+// R-DAY3: the schedule decision moved server-side (public.get_order_intake_
+// context_v1(), reading real clock_timestamp() — see orderIntakePolicy.js's
+// own header). This harness can no longer inject a fake JS-side `now`; it
+// instead injects the exact intake context the DB resolver would have
+// returned for the scenario under test, via fetchContext — the same seam
+// createGateNewOrderIntake already exposes for this purpose (see
+// tests/orderIntakePolicy.test.js §C for the isolated unit coverage of that
+// seam itself). Service Period is no longer a permission signal at all: the
+// 00:05 scenario below no longer needs a "session" fixture, because nothing
+// in the new gate ever consults one.
+function installGate({ ctx }) {
   require.cache[intakePath].exports.gateNewOrderIntake = createGateNewOrderIntake({
-    now: () => now, fetchActiveSession: async () => session,
+    fetchContext: async () => ctx,
   });
 }
 
@@ -70,9 +77,9 @@ function baseIa(hora) {
 }
 
 (async () => {
-  console.log("\n── WhatsApp order at 23:50 with an active matching SERA session ──");
+  console.log("\n── WhatsApp order at 23:50, DB resolver reports intake open (SERA) ──");
   STORE = {}; INSERTED = [];
-  installGate({ now: summer(23, 50, 15), session: SERA_OPEN });
+  installGate({ ctx: { canCreateNewOrder: true, businessDate: "2026-07-15", serviceKind: "SERA" } });
   let r = await gestisci({
     waId: "699000001", nombre: "Test", testo: "quiero una margherita",
     ia: baseIa("23:50"), config: {}, conv: null,
@@ -81,30 +88,27 @@ function baseIa(hora) {
   assert("23:50 order accepted (flusso 1, stato NUEVO, ordenId set)", r.flusso === 1 && r.stato === "NUEVO" && !!r.ordenId, JSON.stringify(r));
   assert("the order was actually inserted into ordenes", INSERTED.length === 1 && INSERTED[0].hora === "23:50");
 
-  console.log("\n── WhatsApp order at 00:00 — no active session (intake closed) ──");
+  console.log("\n── WhatsApp order at 00:00 — DB resolver reports intake closed (AFTER_ORDER_CUTOFF) ──");
   STORE = {}; INSERTED = [];
-  installGate({ now: summer(0, 0, 16), session: null });
+  installGate({ ctx: { canCreateNewOrder: false, businessDate: "2026-07-15", serviceKind: "SERA" } });
   r = await gestisci({
     waId: "699000002", nombre: "Test", testo: "quiero una margherita",
     ia: baseIa("00:05"), config: {}, conv: null,
     statoOrd: { haOrdine: false }, caricoForno: null, isWhitelist: false, waMsgId: null,
   });
   assert("new WhatsApp order at 00:00 is rejected, not silently confirmed", r.stato === "IN_TRATTAMENTO" && !r.ordenId, JSON.stringify(r));
-  // 00:00 is AFTER_ORDER_CUTOFF — the schedule-level rejection fires before the
-  // (absent) session is ever consulted, exactly like the pure evaluateNewOrderIntake
-  // tests in orderIntakePolicy.test.js.
   assert("rejection motivo is the intake policy's own code (ORDER_INTAKE_CLOSED), not a generic error", r.motivo === INTAKE_CODE.ORDER_INTAKE_CLOSED, r.motivo);
   assert("no order was inserted for the rejected attempt", INSERTED.length === 0);
 
-  console.log("\n── WhatsApp order at 00:05 — SERA session still open, but intake window closed ──");
+  console.log("\n── WhatsApp order at 00:05 — R-DAY3: Service Period is no longer consulted at all, only the DB-canonical schedule window ──");
   STORE = {}; INSERTED = [];
-  installGate({ now: summer(0, 5, 16), session: SERA_OPEN });
+  installGate({ ctx: { canCreateNewOrder: false, businessDate: "2026-07-15", serviceKind: "SERA" } });
   r = await gestisci({
     waId: "699000003", nombre: "Test", testo: "quiero una margherita",
     ia: baseIa("00:10"), config: {}, conv: null,
     statoOrd: { haOrdine: false }, caricoForno: null, isWhitelist: false, waMsgId: null,
   });
-  assert("rejected even though the SERA session from before midnight is still open", r.stato === "IN_TRATTAMENTO" && !r.ordenId);
+  assert("rejected purely on the DB-canonical schedule window (no session concept involved at all post-R-DAY3)", r.stato === "IN_TRATTAMENTO" && !r.ordenId);
   assert("motivo is ORDER_INTAKE_CLOSED (schedule-level, not a session problem)", r.motivo === INTAKE_CODE.ORDER_INTAKE_CLOSED, r.motivo);
   assert("no order inserted", INSERTED.length === 0);
 

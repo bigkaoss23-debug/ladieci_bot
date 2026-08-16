@@ -4,6 +4,7 @@
 // a broad ordenes query. The lifecycle pointer is the single authority that
 // decides which service owns the live board.
 const { lifecycle } = require("./serviceSessionLifecycle");
+const { TERMINAL_ORDER_STATES } = require("./rolloverClassifier");
 
 // P0-C1 — AVAILABILITY CONTAINMENT. A session mid-close ('closing') still owns
 // real, unresolved, real-money operational facts (orders, tables) until it
@@ -69,6 +70,55 @@ function serviceSessionQuery(sessionId, query = "") {
 // destructive close already archived/removed everything) stay excluded
 // same-day exactly as before — this cannot resurrect what a real close
 // already terminated.
+// C3 (R-DAY3) — CROSS-DAY OPERATIONAL CARRYOVER VISIBILITY. Once the current
+// Business Day can advance while yesterday's Service Period still holds real,
+// unresolved work — exactly the case R-DAY3 removes the old blocking gate
+// for, see R_DAY3_INTAKE_AUTHORITY_AMENDMENT_V1_2026-08-16.md §10/correction
+// C3 — that work must not silently vanish from the operational board merely
+// because the day advanced. Minimal, bounded widening only: candidates are
+// 'rolled_over' sessions strictly before the current business_date (the
+// exact, non-destructive status a day-boundary advance leaves the outgoing
+// period in — never every historical session, never a broad scan), and only
+// those among them that still carry a non-terminal order or an open table
+// session are surfaced. Full R-DAY8 carryover UX (business_day_id-scoped
+// reads, explicit `carryover: true` flagging) is deliberately NOT
+// implemented here — this restores continuity of visibility only.
+async function getPriorDayCarryoverSessionIds({ select, currentBusinessDate }) {
+  if (typeof select !== "function" || !currentBusinessDate) return [];
+  let rolledOverRows;
+  try {
+    rolledOverRows = await select(
+      "service_sessions",
+      `status=eq.rolled_over&business_date=lt.${encodeURIComponent(currentBusinessDate)}&select=id`,
+    );
+  } catch (_) {
+    return []; // fail closed — never widen on a read error
+  }
+  if (!Array.isArray(rolledOverRows) || rolledOverRows.length === 0) return [];
+  const candidateIds = rolledOverRows.map((r) => r.id).filter(Boolean);
+  if (candidateIds.length === 0) return [];
+
+  const idList = candidateIds.map((id) => encodeURIComponent(id)).join(",");
+  const terminalList = Array.from(TERMINAL_ORDER_STATES).map((s) => encodeURIComponent(s)).join(",");
+  let liveOrders, openTables;
+  try {
+    [liveOrders, openTables] = await Promise.all([
+      select("ordenes", `service_session_id=in.(${idList})&estado=not.in.(${terminalList})&select=service_session_id`),
+      select("table_sessions", `service_session_id=in.(${idList})&status=eq.open&select=service_session_id`),
+    ]);
+  } catch (_) {
+    return [];
+  }
+  const liveIds = new Set();
+  for (const r of Array.isArray(liveOrders) ? liveOrders : []) {
+    if (r && r.service_session_id) liveIds.add(r.service_session_id);
+  }
+  for (const r of Array.isArray(openTables) ? openTables : []) {
+    if (r && r.service_session_id) liveIds.add(r.service_session_id);
+  }
+  return Array.from(liveIds);
+}
+
 async function getOperationalSessionIds({ currentCloseout = lifecycle.currentCloseout, select } = {}) {
   const current = await getCurrentOperationalSession({ currentCloseout });
   if (!current) return [];
@@ -82,10 +132,13 @@ async function getOperationalSessionIds({ currentCloseout = lifecycle.currentClo
   } catch (_) {
     rows = null; // fail closed to just [current.id] — never widen on a read error
   }
-  if (!Array.isArray(rows) || rows.length === 0) return [current.id];
-  const ids = rows.map((r) => r.id);
-  if (!ids.includes(current.id)) ids.push(current.id); // current is always included, regardless of read timing
-  return ids;
+  const ids = new Set([current.id]); // current is always included, regardless of read timing
+  if (Array.isArray(rows)) {
+    for (const r of rows) if (r && r.id) ids.add(r.id);
+  }
+  const carryoverIds = await getPriorDayCarryoverSessionIds({ select, currentBusinessDate: current.business_date });
+  for (const id of carryoverIds) ids.add(id);
+  return Array.from(ids);
 }
 
 // P0-C3 — the ONE authoritative answer to "what business date is currently
@@ -118,5 +171,5 @@ function serviceSessionsQuery(sessionIds, query = "") {
 module.exports = {
   getCurrentOperationalSession, serviceSessionQuery,
   getOperationalSessionIds, serviceSessionsQuery,
-  getCurrentOperationalBusinessDate,
+  getCurrentOperationalBusinessDate, getPriorDayCarryoverSessionIds,
 };
