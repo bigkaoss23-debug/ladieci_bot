@@ -57,6 +57,9 @@ const CANONICAL_ACTIONS = Object.freeze([
   'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro',
   'getAuthActors', 'setActorPin', 'verifyOwnPin', 'openServiceSession', 'ensureCurrentServiceSession',
   'rollEconomicPeriod',
+  // R-DAY4 — explicit Service Period consolidation checkpoint. Same admin+
+  // operator class as rollEconomicPeriod (not admin-only, not rider-enabled).
+  'consolidateServicePeriod',
 ]);
 const CANONICAL_SET = Object.freeze(new Set(CANONICAL_ACTIONS));
 
@@ -109,6 +112,11 @@ const FRESH_AUTH_ACTIONS = Object.freeze([
   // sensitivity class as eliminaOrdine/setActorPin, always an explicit,
   // one-off admin decision, never called silently.
   'resolveServiceIncident',
+  // R-DAY4 — consolidateServicePeriod records an immutable economic
+  // checkpoint; same class as rollEconomicPeriod immediately above (mutates
+  // lifecycle-adjacent state, always an explicit one-off decision, never
+  // called silently).
+  'consolidateServicePeriod',
 ]);
 const FRESH_AUTH_SET = Object.freeze(new Set(FRESH_AUTH_ACTIONS));
 

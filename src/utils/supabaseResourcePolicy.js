@@ -92,6 +92,11 @@ const REGISTRY = Object.freeze([
     'serviceSessions/orderIntakePolicy.js reads the current service pointer before every new order'),
   entry('service_sessions', KIND.TABLE, ['GET'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'serviceSessions/orderIntakePolicy.js validates the active service kind/date/status before every new order'),
+  // R-DAY4 — fail-closed workspace resolution for consolidateServicePeriod
+  // (JS-side mirror of the SQL layer's own mesa_singleton_workspace_v1()
+  // check; index.js refuses with WORKSPACE_AMBIGUOUS unless exactly 1 row).
+  entry('workspaces', KIND.TABLE, ['GET'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'index.js consolidateServicePeriod action'),
   // SERVICE CLOSEOUT V2 / SLICE 4A — only readActions.js's getServiceIncidents
   // hits these two literally as "safeSelect(...)" (the scanner this registry
   // feeds only sees the literal sbSelect/safeSelect/sbRpc call-site pattern —
@@ -170,6 +175,12 @@ const REGISTRY = Object.freeze([
   // inside the service_session_assign_order() DB trigger, never via sbRpc
   // from this backend, so it deliberately has no registry entry here.
   entry('rpc/get_order_intake_context_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/orderIntakePolicy.js'),
+
+  // R-DAY4 — explicit, immutable Service Period consolidation checkpoint.
+  // Structurally independent of order-intake authority (period ASSIGNMENT
+  // stays resolveEconomicPeriod()'s alone) -- same SENSITIVITY class as
+  // capture_closeout_snapshot below, which it calls internally.
+  entry('rpc/consolidate_period_v1', KIND.RPC, ['POST'], SENSITIVITY.AUDIT, 'serviceSessions/periodConsolidation.js'),
 
   // ── SERVICE CLOSEOUT V2 lifecycle RPCs — SLICE 4C.2A, extended 4C.2C.
   // Minimal set actually exercised by performIncidentSafeRollover

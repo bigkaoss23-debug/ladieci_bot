@@ -55,6 +55,7 @@ const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceClos
 const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/serviceSessionLifecycle");
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
 const { rollEconomicPeriod } = require("./src/serviceSessions/economicBoundaryEngine");
+const { periodConsolidation } = require("./src/serviceSessions/periodConsolidation");
 const { resolveSchedule, closeEligibility, SCHEDULE_STATE, SERVICE_KIND } = require("./src/schedule/serviceSchedule");
 const { computeAutoCloseDecision } = require("./src/serviceSessions/autoCloseDecision");
 const { performIncidentSafeRollover } = require("./src/serviceSessions/incidentSafeRollover");
@@ -671,6 +672,54 @@ app.post("/api", async (req, res) => {
       const rolled = await rollEconomicPeriod({ actor: actorId, source: "operator" });
       if (!rolled.success) return res.status(409).json({ error: rolled.code || "ECONOMIC_BOUNDARY_ROLL_FAILED", detail: rolled });
       result = rolled;
+    } else if (action === "consolidateServicePeriod") {
+      // R-DAY4 — explicit, immutable economic checkpoint for one Service
+      // Period. NOT a permission gate, NOT a period transition: it never
+      // touches business_day_lifecycle_state/service_session_state/service_
+      // sessions.status (see periodConsolidation.js's own header). actor/role/
+      // sid are the VERIFIED req.authCtx identity, never client-asserted.
+      // resetTickets must be an explicit boolean from the caller — never
+      // defaulted here (R-DAY0's own ticket-reset contract: a separate,
+      // deliberate decision, never an automatic consequence of consolidating).
+      const actorId = req.authCtx?.actor;
+      const actorRole = req.authCtx?.role;
+      if (!actorId || !actorRole) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
+      const { periodId, resetTickets, clientRequestId } = req.body || {};
+      if (!periodId || typeof periodId !== "string") {
+        return res.status(400).json({ error: "PERIOD_ID_REQUIRED" });
+      }
+      if (typeof resetTickets !== "boolean") {
+        return res.status(400).json({ error: "RESET_TICKETS_MUST_BE_EXPLICIT_BOOLEAN" });
+      }
+      if (!clientRequestId || typeof clientRequestId !== "string") {
+        return res.status(400).json({ error: "CLIENT_REQUEST_ID_REQUIRED" });
+      }
+      // Fail-closed workspace resolution, JS-side mirror of the SQL layer's
+      // own mesa_singleton_workspace_v1() check (defense in depth, same
+      // reasoning as order_entity_anchor_v1 for non-table orders).
+      let workspaceRows;
+      try {
+        workspaceRows = await sbSelect("workspaces", "select=id&limit=2");
+      } catch (e) {
+        return res.status(500).json({ error: "WORKSPACE_LOOKUP_FAILED", detail: String((e && e.message) || e) });
+      }
+      if (!Array.isArray(workspaceRows) || workspaceRows.length !== 1) {
+        return res.status(500).json({ error: "WORKSPACE_AMBIGUOUS" });
+      }
+      const consolidated = await periodConsolidation.consolidate({
+        workspaceId: workspaceRows[0].id,
+        periodId,
+        actor: actorId,
+        role: actorRole,
+        sid: req.authCtx?.sid || null,
+        resetTickets,
+        clientRequestId,
+      });
+      if (!consolidated.success) {
+        const status = consolidated.code === "SERVICE_PERIOD_NOT_FOUND" ? 404 : 409;
+        return res.status(status).json({ error: consolidated.code || "PERIOD_CONSOLIDATION_FAILED", detail: consolidated });
+      }
+      result = consolidated;
     } else if (action === "resolveServiceIncident") {
       // P0-C3 — Phase 5 explicit resolution primitive. Thin wrapper over the
       // already-built, already-idempotent, already-admin-gated (DB-level)
