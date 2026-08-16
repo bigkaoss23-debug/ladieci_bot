@@ -3,7 +3,7 @@ const express = require("express");
 const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert, sbInsert } = require("./src/utils/supabase");
 const { supabaseRequest } = require("./src/utils/supabaseTransport");
-const { getMigrationStatus } = require("./src/utils/migrationAuthority");
+const { getMigrationStatus, getMigrationStatusForStatusEndpoint } = require("./src/utils/migrationAuthority");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
 // DRIVER_STATO = telemetria visiva opzionale (best-effort). getDriverStatus per la
 // UI, closeGiroInternal condiviso col legacy chiudiGiro (idempotente).
@@ -1103,11 +1103,16 @@ async function _loadStatusChecks() {
   let ordini = { lastCreatedAt: null, todayCount: 0, level: "green" };
   // S4 — migration-authority block (MESA_REMEDIATION_PLAN_FINAL_V2_1_2_2026-08-15.md
   // §15): "yellow when only unverified bootstrap rows exist, red on any missing
-  // required or checksum mismatch." Read failures degrade to red rather than
-  // silently omitting the block, matching dbCheck's own fail-closed shape below.
-  let migrations = { level: "red", headVerified: null, headRecorded: null, unverifiedCount: null, missingRequired: null, checksumMismatches: null };
+  // required or checksum mismatch." SHADOW FIX (§15: "the boot check logs both
+  // heads for one full service before /status reports on them"): until a
+  // genuine post-boot service closes, this returns only the non-consuming
+  // { phase: "shadow" } marker (see migrationAuthority.js) — never the real
+  // heads, and (below) never a level that could influence overall _worstLevel.
+  // Once shadow completes, a read failure degrades to red exactly as before,
+  // matching dbCheck's own fail-closed shape.
+  let migrations = { phase: "shadow" };
   try {
-    const m = await _withTimeout(getMigrationStatus(), STATUS_DB_TIMEOUT_MS, "migrations_timeout");
+    const m = await _withTimeout(getMigrationStatusForStatusEndpoint(new Date(BOOT_TIME).toISOString()), STATUS_DB_TIMEOUT_MS, "migrations_timeout");
     migrations = { ...m };
   } catch (e) {
     migrations = { level: "red", headVerified: null, headRecorded: null, unverifiedCount: null, missingRequired: null, checksumMismatches: null, error: String(e?.message || e).slice(0, 80) };
@@ -1167,8 +1172,14 @@ app.get("/status", async (_req, res) => {
   try {
     // language-guard: allow-legacy `ordini` below is the pre-existing destructured field from _loadStatusChecks (not introduced by S4); touched only to also destructure the new `migrations` field
     const { dbCheck, waIn, waProc, ordini, migrations } = await _loadStatusChecks();
-    // language-guard: allow-legacy `ordini` below is the pre-existing level fed into _worstLevel (not introduced by S4); touched only to also fold in migrations.level
-    const overall = _worstLevel([backend.level, dbCheck.level, waIn.level, waProc.level, ordini.level, migrations.level]);
+    // language-guard: allow-legacy `ordini` below is the pre-existing level fed into _worstLevel (not introduced by S4); touched only to also fold in migrations.level once shadow has completed
+    const levels = [backend.level, dbCheck.level, waIn.level, waProc.level, ordini.level];
+    // §15 SHADOW: during the shadow phase migrations has no `level` at all (only
+    // { phase: "shadow" }) -- it must never influence overall, not even
+    // incidentally via an undefined array entry, so it is omitted outright
+    // rather than pushed and relied on to no-op.
+    if (migrations.phase !== "shadow") levels.push(migrations.level);
+    const overall = _worstLevel(levels);
     const payload = {
       ok: overall !== "red",
       level: overall,

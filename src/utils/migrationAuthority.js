@@ -59,4 +59,65 @@ async function getMigrationStatus() {
   };
 }
 
-module.exports = { getMigrationStatus, REQUIRED_MIGRATIONS };
+// S4 SHADOW FIX — §15: "the boot check logs both heads for one full service
+// before /status reports on them." The boot-time log (index.js) calls
+// getMigrationStatus() directly and unconditionally, unaffected by any of
+// this. /status must not expose head_verified/head_recorded/unverified_count/
+// missing_required/checksum_mismatches, and migration authority must not
+// influence /status's overall level, until a genuine post-boot service has
+// completed.
+//
+// SHADOW_COMPLETION_RULE: a public.service_sessions row exists with
+// status='closed' (DB-enforced 1:1 with closed_at IS NOT NULL, so this is
+// the one unambiguous terminal signal — 'rolled_over' is a different,
+// non-close terminal outcome and is deliberately NOT counted here, matching
+// this fix's own test matrix, which names "closes"/"closed" throughout, not
+// "terminates"), opened_at strictly after this process's own BOOT_TIME (so a
+// session already open at boot, or a historical session closed before boot,
+// never counts), and open_source <> 'test_fixture' (the existing marker this
+// project already uses for synthetic fixtures — see the TEST-S1-ACCEPTANCE
+// row from S1's own live acceptance testing).
+//
+// Once true for this process, it stays true: a monotonic, in-memory,
+// per-boot latch — never persisted, never re-armed without a real restart,
+// matching "no manual cutover, no restart required" and "do not persist a
+// global shadow-already-completed-forever flag".
+let _shadowWindowElapsed = false;
+
+async function hasShadowWindowElapsed(bootTimeIso) {
+  if (_shadowWindowElapsed) return true;
+  const rows = await sbSelect(
+    'service_sessions',
+    `status=eq.closed&open_source=neq.test_fixture&opened_at=gt.${encodeURIComponent(bootTimeIso)}&limit=1`
+  );
+  if (Array.isArray(rows) && rows.length > 0) {
+    _shadowWindowElapsed = true;
+  }
+  return _shadowWindowElapsed;
+}
+
+// What /status itself consumes. Before shadow completion: a non-consuming
+// marker only, per §15's "before /status reports on them" — never the real
+// heads, never a level that could influence _worstLevel. After completion:
+// the exact, unchanged getMigrationStatus() shape.
+async function getMigrationStatusForStatusEndpoint(bootTimeIso) {
+  const elapsed = await hasShadowWindowElapsed(bootTimeIso);
+  if (!elapsed) {
+    return { phase: 'shadow' };
+  }
+  return getMigrationStatus();
+}
+
+// Test-only: resets the in-memory latch so each test starts from a fresh
+// per-boot state. Never called from production code.
+function _resetShadowWindowForTests() {
+  _shadowWindowElapsed = false;
+}
+
+module.exports = {
+  getMigrationStatus,
+  REQUIRED_MIGRATIONS,
+  hasShadowWindowElapsed,
+  getMigrationStatusForStatusEndpoint,
+  _resetShadowWindowForTests,
+};

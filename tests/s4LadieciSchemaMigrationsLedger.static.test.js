@@ -196,11 +196,12 @@ assert("13d: reads ladieci_schema_migrations via sbSelect (the same runtime-enfo
   !/sbInsert|sbUpdate|sbUpsert|sbDelete/.test(AUTHORITY_JS));
 
 const INDEX_JS = read("index.js");
-assert("13e: index.js imports getMigrationStatus from migrationAuthority",
-  /const \{ getMigrationStatus \} = require\("\.\/src\/utils\/migrationAuthority"\);/.test(INDEX_JS));
-assert("13f: /status folds migrations.level into the overall _worstLevel computation",
-  // language-guard: allow-legacy `ordini` below is index.js's own existing local variable name (pre-dating S4), quoted verbatim to assert it's still in the _worstLevel call, not new vocabulary
-  /_worstLevel\(\[backend\.level, dbCheck\.level, waIn\.level, waProc\.level, ordini\.level, migrations\.level\]\)/.test(INDEX_JS));
+assert("13e: index.js imports getMigrationStatus AND getMigrationStatusForStatusEndpoint from migrationAuthority (the latter added by the SHADOW fix -- see tests/s4ShadowWindow.test.js)",
+  /const \{ getMigrationStatus, getMigrationStatusForStatusEndpoint \} = require\("\.\/src\/utils\/migrationAuthority"\);/.test(INDEX_JS));
+assert("13f: /status folds migrations.level into the overall _worstLevel computation ONLY once shadow has completed (SHADOW fix: omitted entirely, not merely pushed as undefined, while migrations.phase === 'shadow')",
+  // language-guard: allow-legacy `ordini` below is index.js's own existing local variable name (pre-dating S4), quoted verbatim to assert it's still in the base levels array, not new vocabulary
+  /const levels = \[backend\.level, dbCheck\.level, waIn\.level, waProc\.level, ordini\.level\];/.test(INDEX_JS) &&
+  /if \(migrations\.phase !== "shadow"\) levels\.push\(migrations\.level\);/.test(INDEX_JS));
 assert("13g: /status payload exposes the migrations block under checks.migrations",
   /checks:\s*\{[\s\S]*?migrations,[\s\S]*?\}/.test(INDEX_JS));
 assert("13h: boot check logs both heads once at startup, never throws into the boot path",
