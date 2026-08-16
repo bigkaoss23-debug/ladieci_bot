@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-10T18:52:47.073Z",
+  "generatedAt": "2026-08-16T16:21:07.298Z",
   "entries": [
     {
       "file": "index.js",
@@ -34,7 +34,7 @@
     {
       "file": "index.js",
       "term": "ordini",
-      "count": 13
+      "count": 10
     },
     {
       "file": "index.js",
@@ -472,6 +472,26 @@
       "count": 1
     },
     {
+      "file": "migrations/2026-08-16_r_day3_business_day_intake_authority.ROLLBACK.sql",
+      "term": "pranzo",
+      "count": 3
+    },
+    {
+      "file": "migrations/2026-08-16_r_day3_business_day_intake_authority.sql",
+      "term": "pranzo",
+      "count": 6
+    },
+    {
+      "file": "migrations/2026-08-16_r_day3_hotfix_resolver_bootstrap_demotion.ROLLBACK.sql",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-16_r_day3_hotfix_resolver_bootstrap_demotion.sql",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
       "file": "ops/backup/b7a2_e2e_b_restore_2026-07-22.sql",
       "term": "chiuso",
       "count": 6
@@ -614,7 +634,7 @@
     {
       "file": "src/agents/agentCucina.js",
       "term": "ordine",
-      "count": 6
+      "count": 5
     },
     {
       "file": "src/agents/agentCucina.js",
@@ -674,12 +694,12 @@
     {
       "file": "src/agents/agentOrdini.js",
       "term": "completato",
-      "count": 8
+      "count": 6
     },
     {
       "file": "src/agents/agentOrdini.js",
       "term": "consegna",
-      "count": 71
+      "count": 69
     },
     {
       "file": "src/agents/agentOrdini.js",
@@ -1222,16 +1242,6 @@
       "count": 1
     },
     {
-      "file": "src/incidents/serviceIncidents.js",
-      "term": "chiudi",
-      "count": 1
-    },
-    {
-      "file": "src/incidents/serviceIncidents.js",
-      "term": "servizio",
-      "count": 1
-    },
-    {
       "file": "src/menu/__tests__/agentWhatsappShadowIntegration.test.js",
       "term": "consegna",
       "count": 1
@@ -1394,27 +1404,17 @@
     {
       "file": "src/serviceSessions/incidentSafeRollover.js",
       "term": "chiudi",
-      "count": 12
-    },
-    {
-      "file": "src/serviceSessions/incidentSafeRollover.js",
-      "term": "pranzo",
-      "count": 1
+      "count": 10
     },
     {
       "file": "src/serviceSessions/incidentSafeRollover.js",
       "term": "servizio",
-      "count": 14
+      "count": 12
     },
     {
       "file": "src/serviceSessions/orderIntakePolicy.js",
       "term": "ordine",
       "count": 1
-    },
-    {
-      "file": "src/serviceSessions/orderIntakePolicy.js",
-      "term": "pranzo",
-      "count": 2
     },
     {
       "file": "src/serviceSessions/pendingActivityGuard.js",
@@ -1719,17 +1719,17 @@
     {
       "file": "src/utils/servizio.js",
       "term": "chiudi",
-      "count": 17
+      "count": 16
     },
     {
       "file": "src/utils/servizio.js",
       "term": "chiuso",
-      "count": 8
+      "count": 7
     },
     {
       "file": "src/utils/servizio.js",
       "term": "completato",
-      "count": 10
+      "count": 9
     },
     {
       "file": "src/utils/servizio.js",
@@ -1744,12 +1744,12 @@
     {
       "file": "src/utils/servizio.js",
       "term": "oggi",
-      "count": 35
+      "count": 34
     },
     {
       "file": "src/utils/servizio.js",
       "term": "ordine",
-      "count": 19
+      "count": 18
     },
     {
       "file": "src/utils/servizio.js",
@@ -1784,7 +1784,7 @@
     {
       "file": "src/utils/servizio.js",
       "term": "servizio",
-      "count": 23
+      "count": 22
     },
     {
       "file": "src/utils/servizio.js",
@@ -1949,7 +1949,7 @@
     {
       "file": "tests/authorizationContract.test.js",
       "term": "archivio",
-      "count": 4
+      "count": 3
     },
     {
       "file": "tests/authorizationContract.test.js",
@@ -1979,7 +1979,7 @@
     {
       "file": "tests/authorizationContract.test.js",
       "term": "storico",
-      "count": 5
+      "count": 4
     },
     {
       "file": "tests/authorizationContract.test.js",
@@ -1999,12 +1999,12 @@
     {
       "file": "tests/autoCloseEngine.test.js",
       "term": "chiudi",
-      "count": 7
+      "count": 5
     },
     {
       "file": "tests/autoCloseEngine.test.js",
       "term": "servizio",
-      "count": 9
+      "count": 6
     },
     {
       "file": "tests/closeoutAttemptOwnership.static.test.js",
@@ -2102,6 +2102,11 @@
       "count": 16
     },
     {
+      "file": "tests/currentOperationalSession.test.js",
+      "term": "pranzo",
+      "count": 3
+    },
+    {
       "file": "tests/currentServiceCloseout.test.js",
       "term": "pranzo",
       "count": 6
@@ -2110,11 +2115,6 @@
       "file": "tests/currentServiceCloseout.test.js",
       "term": "storico",
       "count": 2
-    },
-    {
-      "file": "tests/currentServiceOperationalReads.static.test.js",
-      "term": "consegna",
-      "count": 1
     },
     {
       "file": "tests/currentServiceOperationalReads.static.test.js",
@@ -2809,7 +2809,7 @@
     {
       "file": "tests/lifecycleReset.test.js",
       "term": "servizio",
-      "count": 13
+      "count": 10
     },
     {
       "file": "tests/lifecycleRuntimeAuthorityP0C1.static.test.js",
@@ -2913,28 +2913,13 @@
     },
     {
       "file": "tests/orderIntakePolicy.test.js",
-      "term": "consegna",
-      "count": 10
-    },
-    {
-      "file": "tests/orderIntakePolicy.test.js",
-      "term": "ordine",
-      "count": 12
-    },
-    {
-      "file": "tests/orderIntakePolicy.test.js",
       "term": "ordini",
       "count": 1
     },
     {
       "file": "tests/orderIntakePolicy.test.js",
       "term": "pranzo",
-      "count": 27
-    },
-    {
-      "file": "tests/orderIntakePolicy.test.js",
-      "term": "ritiro",
-      "count": 9
+      "count": 4
     },
     {
       "file": "tests/orderStateMachine.test.js",
@@ -3024,7 +3009,7 @@
     {
       "file": "tests/orderTerminalStateFilters.test.js",
       "term": "completato",
-      "count": 26
+      "count": 25
     },
     {
       "file": "tests/orderTerminalStateFilters.test.js",
@@ -3034,7 +3019,7 @@
     {
       "file": "tests/orderTerminalStateFilters.test.js",
       "term": "ordini",
-      "count": 4
+      "count": 3
     },
     {
       "file": "tests/orderTerminalStateFilters.test.js",
@@ -3095,6 +3080,16 @@
       "file": "tests/proposeForNewOrder.test.js",
       "term": "ordini",
       "count": 1
+    },
+    {
+      "file": "tests/rDay3BusinessDayIntakeAuthority.static.test.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "tests/rDay3ScheduleParity.test.js",
+      "term": "pranzo",
+      "count": 2
     },
     {
       "file": "tests/readActions.test.js",
