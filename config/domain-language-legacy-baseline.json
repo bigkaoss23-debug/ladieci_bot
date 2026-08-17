@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-17T09:36:29.840Z",
+  "generatedAt": "2026-08-17T13:07:46.062Z",
   "entries": [
     {
       "file": "index.js",
@@ -498,6 +498,16 @@
     },
     {
       "file": "migrations/2026-08-16_s_a_ensure_service_session_period_reuse.sql",
+      "term": "pranzo",
+      "count": 3
+    },
+    {
+      "file": "migrations/2026-08-17_f2_v3_next_service_on_conflict_repair.ROLLBACK.sql",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "migrations/2026-08-17_f2_v3_next_service_on_conflict_repair.sql",
       "term": "pranzo",
       "count": 3
     },
@@ -2590,6 +2600,11 @@
       "file": "tests/ensureServiceSession.test.js",
       "term": "pranzo",
       "count": 8
+    },
+    {
+      "file": "tests/f2V3NextServiceOnConflictRepair.static.test.js",
+      "term": "pranzo",
+      "count": 2
     },
     {
       "file": "tests/fixtures/deliveryPlannerRealSnapshot20260528.js",
