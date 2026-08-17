@@ -48,6 +48,15 @@ function fakeDb({ sessions = {}, incidents = {}, archivedOrders = new Set() } = 
 
     const session = sessions[args.p_service_session_id];
     if (!session) return { ok: true, body: { ok: false, code: 'SERVICE_SESSION_NOT_FOUND' } };
+    // F-4C — era-aware: a missing lifecycle_semantics defaults to
+    // 'economic_period_v1', mirroring the real column's own DEFAULT. Only a
+    // NULL kind on an economic_period_v1 parent is rejected;
+    // operational_service_v1 + NULL kind is valid by construction (S-B's own
+    // CHECK already forbids any other combination from existing at all).
+    const era = session.lifecycle_semantics || 'economic_period_v1';
+    if (era === 'economic_period_v1' && session.service_kind == null) {
+      return { ok: true, body: { ok: false, code: 'SERVICE_SESSION_MISSING_KIND' } };
+    }
 
     // SLICE 2.1 — the archived order itself must exist, keyed on the same
     // (service_session_id, orden_id) pair storico is keyed on.
@@ -120,6 +129,7 @@ function fakeDb({ sessions = {}, incidents = {}, archivedOrders = new Set() } = 
       service_session_id: args.p_service_session_id,
       business_date: session.business_date,
       service_kind: session.service_kind,
+      lifecycle_semantics: era,
       archived_order_id: args.p_archived_order_id,
       related_incident_id: args.p_related_incident_id,
       action_correlation_id: args.p_action_correlation_id,
@@ -160,6 +170,12 @@ function fakeDb({ sessions = {}, incidents = {}, archivedOrders = new Set() } = 
   console.log('\n== archivedOrderFinancialResolutions.js — behavioural contract ==\n');
 
   const SESSIONS = { s1: { business_date: '2026-08-08', service_kind: 'PRANZO' }, s2: { business_date: '2026-08-08', service_kind: 'SERA' } };
+  // F-4C — era-aware fixtures. s1/s2 above omit lifecycle_semantics
+  // entirely, matching every pre-F-4C session in this suite; the fakeDb
+  // defaults a missing lifecycle_semantics to 'economic_period_v1',
+  // mirroring the real column's own DEFAULT.
+  SESSIONS.s3 = { business_date: '2026-08-17', service_kind: null, lifecycle_semantics: 'operational_service_v1' };
+  SESSIONS.s4 = { business_date: '2026-08-17', service_kind: null, lifecycle_semantics: 'economic_period_v1' };
   // One financial incident per archived order used across the suite, keyed
   // (session, order) exactly like the RPC validates it.
   const INCIDENTS = {
@@ -184,11 +200,15 @@ function fakeDb({ sessions = {}, incidents = {}, archivedOrders = new Set() } = 
     'inc-14b': { service_session_id: 's1', category: 'financial', order_id: 'ORD-14', financial_exposure_cents: 9000 },
     'inc-15': { service_session_id: 's1', category: 'financial', order_id: 'ORD-15', financial_exposure_cents: 9000 },
     'inc-16': { service_session_id: 's2', category: 'financial', order_id: 'ORD-16', financial_exposure_cents: 9000 },
+    // F-4C — era-aware fixtures.
+    'inc-s3': { service_session_id: 's3', category: 'financial', order_id: 'ORD-S3', financial_exposure_cents: 4000 },
+    'inc-s4': { service_session_id: 's4', category: 'financial', order_id: 'ORD-S4', financial_exposure_cents: 4000 },
   };
   const ARCHIVED_ORDERS = new Set([
     's1::ORD-42', 's1::ORD-1', 's1::ORD-2', 's1::ORD-3', 's1::ORD-4', 's1::ORD-5', 's1::ORD-6', 's1::ORD-7',
     's1::ORD-8', 's1::ORD-9', 's1::ORD-10', 's1::ORD-11', 's1::ORD-12', 's1::ORD-13', 's1::ORD-OP', 's2::ORD-42',
     's1::ORD-14', 's1::ORD-15', 's2::ORD-16',
+    's3::ORD-S3', 's4::ORD-S4',
   ]);
 
   console.log('\n── 1. first event establishes the lineage baseline — exposure DERIVED from the incident, never caller-supplied ──');
@@ -557,6 +577,29 @@ function fakeDb({ sessions = {}, incidents = {}, archivedOrders = new Set() } = 
     assert('14h: no stray rows were created on ORD-15/ORD-16 by the rejected collision attempts', db.rows.filter((r) => r.archived_order_id === 'ORD-15').length === 0 && db.rows.filter((r) => r.archived_order_id === 'ORD-16').length === 0);
     const sequences = ord14Rows.slice().sort((a, b) => a.lineage_sequence - b.lineage_sequence).map((r) => r.lineage_sequence);
     assert('14h: sequences are exactly [1,2,3,4] — no gaps, no phantom allocations from any rejected collision', JSON.stringify(sequences) === JSON.stringify([1, 2, 3, 4]), JSON.stringify(sequences));
+  }
+
+  console.log('\n── 15. F-4C — era-aware: operational_service_v1 + NULL kind is VALID, never rejected ──');
+  {
+    const db = fakeDb({ sessions: SESSIONS, incidents: INCIDENTS, archivedOrders: ARCHIVED_ORDERS });
+    const svc = createArchivedOrderFinancialResolutions(db);
+
+    const legacyNull = await svc.record({
+      serviceSessionId: 's4', archivedOrderId: 'ORD-S4', relatedIncidentId: 'inc-s4', actionCorrelationId: 'act-f4c-legacy-null',
+      resolutionType: 'write_off', amountCents: 500, actor: 'owner', role: 'admin', reason: 'legacy session with a NULL kind must still be rejected',
+    });
+    assert('15a: an economic_period_v1 parent with a NULL kind is STILL rejected (F-4C did not loosen the legacy branch)', legacyNull.success === false && legacyNull.code === 'SERVICE_SESSION_MISSING_KIND', JSON.stringify(legacyNull));
+    assert('15a: no row was created by the rejected legacy-NULL attempt', db.rows.filter((r) => r.service_session_id === 's4').length === 0);
+
+    const newEra = await svc.record({
+      serviceSessionId: 's3', archivedOrderId: 'ORD-S3', relatedIncidentId: 'inc-s3', actionCorrelationId: 'act-f4c-new-era',
+      resolutionType: 'write_off', amountCents: 500, actor: 'owner', role: 'admin', reason: 'operational_service_v1 parent with NULL kind must now succeed',
+    });
+    assert('15b: an operational_service_v1 parent with a NULL kind is NOT rejected as SERVICE_SESSION_MISSING_KIND', newEra.success === true, JSON.stringify(newEra));
+    assert('15c: serviceKind is honestly null on the returned resolution -- never fabricated, never guessed', newEra.resolution.serviceKind === null, JSON.stringify(newEra.resolution));
+    assert('15d: businessDate is still derived from the session, exactly as for a legacy-era parent', newEra.resolution.businessDate === '2026-08-17', JSON.stringify(newEra.resolution));
+    assert('15e: the stored row carries lifecycle_semantics=operational_service_v1 (self-describing evidence)', db.rows.find((r) => r.action_correlation_id === 'act-f4c-new-era').lifecycle_semantics === 'operational_service_v1');
+    assert('15f: financial arithmetic is unaffected by a NULL top-level service_kind -- original/remaining exposure derived from the incident exactly as for a legacy-era parent', newEra.resolution.originalExposureCents === 4000 && newEra.resolution.remainingExposureCents === 3500, JSON.stringify(newEra.resolution));
   }
 
   console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');
