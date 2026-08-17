@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-17T09:29:55.729Z",
+  "generatedAt": "2026-08-17T09:36:29.840Z",
   "entries": [
     {
       "file": "index.js",
@@ -3192,6 +3192,11 @@
       "count": 1
     },
     {
+      "file": "tests/sEEconomicPeriodReaders.static.test.js",
+      "term": "pranzo",
+      "count": 45
+    },
+    {
       "file": "tests/serviceCloseGate.test.js",
       "term": "chiudi",
       "count": 17
@@ -3454,7 +3459,7 @@
     {
       "file": "tests/twoServiceMigration.test.js",
       "term": "pranzo",
-      "count": 6
+      "count": 7
     },
     {
       "file": "tests/twoServiceMigration.test.js",
