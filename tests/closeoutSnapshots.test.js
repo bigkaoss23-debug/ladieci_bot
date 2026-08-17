@@ -32,7 +32,13 @@ function fakeDb({ sessions = {} } = {}) {
     }
     const session = sessions[args.p_service_session_id];
     if (!session) return { ok: true, body: { ok: false, code: 'SERVICE_SESSION_NOT_FOUND' } };
-    if (!session.service_kind) return { ok: true, body: { ok: false, code: 'SERVICE_SESSION_MISSING_KIND' } };
+    // F-4A — era-aware: only an economic_period_v1 parent requires a
+    // non-null kind. An operational_service_v1 parent's NULL kind is valid
+    // by design (S-B) and must not be rejected here.
+    const lifecycleSemantics = session.lifecycle_semantics || 'economic_period_v1';
+    if (lifecycleSemantics === 'economic_period_v1' && !session.service_kind) {
+      return { ok: true, body: { ok: false, code: 'SERVICE_SESSION_MISSING_KIND' } };
+    }
 
     const existing = rows.find((r) => r.closeout_correlation_id === args.p_closeout_correlation_id);
     if (existing) {
@@ -47,6 +53,7 @@ function fakeDb({ sessions = {} } = {}) {
       service_session_id: args.p_service_session_id,
       business_date: session.business_date,
       service_kind: session.service_kind,
+      lifecycle_semantics: lifecycleSemantics,
       closeout_correlation_id: args.p_closeout_correlation_id,
       schema_version: args.p_schema_version || 1,
       captured_at: new Date(Date.now() + nextId).toISOString(),
@@ -73,9 +80,13 @@ function fakeDb({ sessions = {} } = {}) {
   console.log('\n== closeoutSnapshots.js — behavioural contract ==\n');
 
   const SESSIONS = {
-    's1': { business_date: '2026-08-08', service_kind: 'PRANZO' },
-    's2': { business_date: '2026-08-08', service_kind: 'SERA' },
-    's3-no-kind': { business_date: '2026-08-08', service_kind: null },
+    // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, already present in these pre-existing fixtures before these lines were touched to add lifecycle_semantics, not new vocabulary
+    's1': { business_date: '2026-08-08', service_kind: 'PRANZO', lifecycle_semantics: 'economic_period_v1' },
+    's2': { business_date: '2026-08-08', service_kind: 'SERA', lifecycle_semantics: 'economic_period_v1' },
+    's3-no-kind': { business_date: '2026-08-08', service_kind: null, lifecycle_semantics: 'economic_period_v1' },
+    // F-4A — a lawful new-era parent: operational_service_v1 + service_kind
+    // NULL is VALID (S-B), and must not be rejected here.
+    's5-operational': { business_date: '2026-08-08', service_kind: null, lifecycle_semantics: 'operational_service_v1' },
   };
 
   console.log('\n── 1. create + fetch by service session ──');
@@ -173,6 +184,21 @@ function fakeDb({ sessions = {} } = {}) {
     assert('5a: unknown session -> SERVICE_SESSION_NOT_FOUND', missing.success === false && missing.code === 'SERVICE_SESSION_NOT_FOUND');
     const noKind = await snapshots.capture({ serviceSessionId: 's3-no-kind', closeoutCorrelationId: 'attempt-no-kind', capturedBy: 'system', source: 'x', payload: {} });
     assert('5b: session without a kind -> SERVICE_SESSION_MISSING_KIND', noKind.success === false && noKind.code === 'SERVICE_SESSION_MISSING_KIND');
+  }
+
+  console.log('\n── 6. F-4A — era-aware: operational_service_v1 + NULL kind is VALID, never rejected ──');
+  {
+    const db = fakeDb({ sessions: SESSIONS });
+    const snapshots = createCloseoutSnapshots(db);
+    const r = await snapshots.capture({
+      serviceSessionId: 's5-operational', closeoutCorrelationId: 'attempt-operational-1', capturedBy: 'system', source: 'v3_engine',
+      payload: { orders: [], anomalies: [] },
+    });
+    assert('6a: a NULL-kind operational_service_v1 parent is NOT rejected as SERVICE_SESSION_MISSING_KIND', r.success === true && r.created === true, JSON.stringify(r));
+    assert('6b: serviceKind is honestly null -- never fabricated, never guessed', r.snapshot.serviceKind === null, JSON.stringify(r.snapshot));
+    assert('6c: businessDate is still derived from the session, exactly as for a legacy-era parent', r.snapshot.businessDate === '2026-08-08');
+    const stored = db.rows.find((row) => row.id === r.snapshot.id);
+    assert('6d: the stored row carries lifecycle_semantics=operational_service_v1 (self-describing evidence)', stored.lifecycle_semantics === 'operational_service_v1', JSON.stringify(stored));
   }
 
   console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');
