@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-17T06:29:43.685Z",
+  "generatedAt": "2026-08-17T06:52:13.087Z",
   "entries": [
     {
       "file": "index.js",
@@ -500,6 +500,11 @@
       "file": "migrations/2026-08-16_s_a_ensure_service_session_period_reuse.sql",
       "term": "pranzo",
       "count": 3
+    },
+    {
+      "file": "migrations/2026-08-17_s_b_service_sessions_lifecycle_semantics.sql",
+      "term": "pranzo",
+      "count": 2
     },
     {
       "file": "ops/backup/b7a2_e2e_b_restore_2026-07-22.sql",
