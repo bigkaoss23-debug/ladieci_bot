@@ -216,10 +216,11 @@ BEGIN
           )
           OR (
             -- F-3: V3-authorized branch, mirroring the table-residue block's
-            -- own pre-existing V3 shape. Bare v_v3_authorized is never
-            -- sufficient by itself -- both an authoritative service_closeouts
-            -- row AND a per-order service_incidents row are required, AND-
-            -- chained. No new evidence table, no new lineage identifier.
+            -- own pre-existing V3 shape. The bare authorization flag is
+            -- never sufficient by itself -- both an authoritative
+            -- service_closeouts row AND a per-order service_incidents row
+            -- are required, AND-chained. No new evidence table, no new
+            -- lineage identifier.
             v_v3_authorized
             AND EXISTS (
               SELECT 1 FROM public.service_closeouts c WHERE c.service_session_id = OLD.id
