@@ -14,6 +14,22 @@ const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
 const EMPTY_PAYMENT_TOTALS = () => ({ efectivo: 0, tarjeta: 0, bizum: 0, other: 0 });
 const EMPTY_TOTALS = () => ({ gross: 0, collected: 0, refunded: 0, unpaid: 0 });
+// S-E — mirrors currentServiceCloseout.aggregate()'s economicBreakdown shape
+// (obligations = sales by their own creation window, receipts = net payments
+// by their own, independent window; "unknown" only for the currently-inert
+// cross-session-receipt edge case — see economicPeriodReadRule.js).
+const EMPTY_ECONOMIC_BREAKDOWN = () => ({
+  obligations: { PRANZO: 0, SERA: 0, unknown: 0 }, // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, used here as object keys, not new vocabulary
+  receipts: { PRANZO: 0, SERA: 0, unknown: 0 },
+});
+
+function addBreakdownInto(target, source) {
+  for (const scope of ["obligations", "receipts"]) {
+    for (const key of Object.keys(target[scope])) {
+      target[scope][key] = round(target[scope][key] + (Number(source?.[scope]?.[key]) || 0));
+    }
+  }
+}
 
 function addInto(target, source) {
   for (const k of Object.keys(target)) target[k] = round(target[k] + (Number(source[k]) || 0));
@@ -51,29 +67,39 @@ async function getEconomiaLedgerAggregate({ desde, hasta, select = sbSelect } = 
     sessionSummaries.push({
       serviceSessionId: session.id,
       businessDate: session.business_date,
-      serviceKind: session.service_kind || null,
+      // S-E — era-aware (agg.serviceKind, computed from actual ticket
+      // evidence with the session's own kind only as fallback), not the raw
+      // column: a session can now legitimately span both economic windows,
+      // in which case this is null and economicBreakdown below carries the
+      // real split. Byte-identical to before for every session that is
+      // still genuinely single-kind (all real data, as of S-E).
+      serviceKind: agg.serviceKind,
       status: session.status,
       paymentTotals: agg.paymentTotals,
       totals: agg.totals,
+      economicBreakdown: agg.economicBreakdown,
     });
 
     const day = session.business_date;
     if (!day) continue;
-    if (!perDay.has(day)) perDay.set(day, { paymentTotals: EMPTY_PAYMENT_TOTALS(), totals: EMPTY_TOTALS() });
+    if (!perDay.has(day)) perDay.set(day, { paymentTotals: EMPTY_PAYMENT_TOTALS(), totals: EMPTY_TOTALS(), economicBreakdown: EMPTY_ECONOMIC_BREAKDOWN() });
     const bucket = perDay.get(day);
     addInto(bucket.paymentTotals, agg.paymentTotals);
     addInto(bucket.totals, agg.totals);
+    addBreakdownInto(bucket.economicBreakdown, agg.economicBreakdown);
   }
 
   const porGiorno = Array.from(perDay.entries())
-    .map(([businessDate, v]) => ({ businessDate, paymentTotals: v.paymentTotals, totals: v.totals }))
+    .map(([businessDate, v]) => ({ businessDate, paymentTotals: v.paymentTotals, totals: v.totals, economicBreakdown: v.economicBreakdown }))
     .sort((a, b) => String(a.businessDate).localeCompare(String(b.businessDate)));
 
   const grandPaymentTotals = EMPTY_PAYMENT_TOTALS();
   const grandTotals = EMPTY_TOTALS();
+  const grandEconomicBreakdown = EMPTY_ECONOMIC_BREAKDOWN();
   for (const day of porGiorno) {
     addInto(grandPaymentTotals, day.paymentTotals);
     addInto(grandTotals, day.totals);
+    addBreakdownInto(grandEconomicBreakdown, day.economicBreakdown);
   }
 
   return {
@@ -82,6 +108,7 @@ async function getEconomiaLedgerAggregate({ desde, hasta, select = sbSelect } = 
     sessions: sessionSummaries,
     paymentTotals: grandPaymentTotals,
     totals: grandTotals,
+    economicBreakdown: grandEconomicBreakdown,
   };
 }
 

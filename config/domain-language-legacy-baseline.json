@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-17T08:45:48.029Z",
+  "generatedAt": "2026-08-17T09:29:55.729Z",
   "entries": [
     {
       "file": "index.js",
@@ -1103,11 +1103,6 @@
     },
     {
       "file": "src/closeout/currentServiceCloseout.js",
-      "term": "pranzo",
-      "count": 1
-    },
-    {
-      "file": "src/closeout/currentServiceCloseout.js",
       "term": "storico",
       "count": 2
     },
@@ -1129,6 +1124,11 @@
     {
       "file": "src/closeout/economiaLedgerAggregate.js",
       "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "src/closeout/economicPeriodReadRule.js",
+      "term": "pranzo",
       "count": 1
     },
     {

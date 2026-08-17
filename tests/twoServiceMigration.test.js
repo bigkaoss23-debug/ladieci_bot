@@ -111,9 +111,19 @@ assert("I: close marker is per kind", /LAST_CLOSE_PRANZO/.test(SERVIZIO) && /LAS
 assert("I: a lunch close does not move LAST_CLOSE_DATE", /if \(serviceKind !== "PRANZO"\)[\s\S]{0,140}LAST_CLOSE_DATE/.test(SERVIZIO));
 assert("I: financial events are still never deleted", /Financial events are never deleted here/.test(SERVIZIO));
 
-console.log("\n══ J. closeout reports which service it is (S2-7D6C2) ══");
+console.log("\n══ J. closeout reports which service it is (S2-7D6C2, corrected S-E) ══");
 const CLOSEOUT = read("src/closeout/currentServiceCloseout.js");
-assert("J: the closeout contract exposes the kind in camelCase", /serviceKind: session\?\.service_kind \|\| null/.test(CLOSEOUT));
+// S-E — after the Operational Service repair (S-D), a session can legitimately
+// span both economic windows, so the closeout no longer asserts the raw
+// session.service_kind unconditionally: it exposes a single PRANZO/SERA label
+// only when every ticket's own era-aware kind agrees (byte-identical to the
+// old behavior for every closeout that is still genuinely single-kind, which
+// is all real data as of S-E), falling back to the session's own kind only
+// when there are no tickets to disagree with. See
+// tests/sEEconomicPeriodReaders.static.test.js for the full S-E proof; this
+// file keeps its original, narrower camelCase/no-clock/single-aggregate checks.
+assert("J: the closeout contract exposes the kind in camelCase, era-aware (not the raw session column unconditionally)",
+  /serviceKind: tickets\.length === 0/.test(CLOSEOUT) && /singleKindOrNull\(tickets\.map/.test(CLOSEOUT));
 assert("J: the kind is read from the session row only, never from the clock", !/getHours\(|new Date\(\)|Date\.now\(/.test(CLOSEOUT));
 assert("J: one aggregate builds every contract return path", (CLOSEOUT.match(/ok: true,/g) || []).length === 1);
 

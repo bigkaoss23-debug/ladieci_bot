@@ -2,6 +2,7 @@
 
 const { sbSelect } = require("../utils/supabase");
 const { lifecycle } = require("../serviceSessions/serviceSessionLifecycle");
+const { resolveEconomicPeriodKind, singleKindOrNull, KNOWN_KINDS } = require("./economicPeriodReadRule");
 
 const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
 const CANCELLED = new Set(["CANCELADO", "CANCELLED", "ANULADO", "CHIUSO_FORZATO"]);
@@ -29,12 +30,36 @@ function addMethodAmount(target, method, amount) {
   target[key] = round(target[key] + amount);
 }
 
-function safeTicket(order, events) {
+function safeTicket(order, events, session) {
   const state = String(order.estado || order.state || "");
   const amount = round(order.totale ?? order.total ?? 0);
   const refunds = events.filter((event) => eventType(event) === "refund");
   const payments = events.filter((event) => ["payment", "payment_imported"].includes(eventType(event)));
   const voided = events.some((event) => eventType(event) === "void") || CANCELLED.has(state.toUpperCase());
+
+  // S-E — OBLIGATION-side economic classification for this ticket: the
+  // explicit S-C stamp from any of its own financial events (all events on
+  // one order share the same obligation, so the first present one suffices),
+  // else the era-aware legacy fallback. Independent of any RECEIPT-side
+  // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, named here only to describe the obligation/receipt separation, not new vocabulary
+  // classification below (a PRANZO sale can be paid in SERA).
+  const obligationStampedEvent = events.find((event) => KNOWN_KINDS.has(event.obligation_economic_period_kind));
+  const economicKind = resolveEconomicPeriodKind(
+    obligationStampedEvent ? obligationStampedEvent.obligation_economic_period_kind : null,
+    session
+  );
+
+  // RECEIPT-side: each payment/refund event carries its OWN economic window,
+  // independently of the obligation's. event_service_session_id, when
+  // present, names the actual receipt-time session; only fall back to THIS
+  // ticket's session when the event agrees with it (off-session/cross-
+  // session receipts are honestly reported as unknown rather than guessed —
+  // zero real rows currently diverge, see the S-E report).
+  const receiptKindOf = (event) => resolveEconomicPeriodKind(
+    event.event_economic_period_kind,
+    (!event.event_service_session_id || String(event.event_service_session_id) === String(session && session.id))
+      ? session : null
+  );
   const refundedAmount = round(refunds.reduce((sum, event) => sum + eventAmount(event), 0));
   const paidAmount = round(payments.reduce((sum, event) => sum + eventAmount(event), 0));
   const hasLedgerEvidence = events.length > 0;
@@ -62,6 +87,24 @@ function safeTicket(order, events) {
     : collectedAmount > 0 ? "partially_paid"
     : "unpaid";
 
+  // S-E — net receipts (payments minus refunds) bucketed by their OWN
+  // economic window, independent of economicKind above. "unknown" holds only
+  // the rare, currently-inert case where a receipt's event_service_session_id
+  // names a session other than this ticket's own and carries no S-C stamp
+  // (see receiptKindOf) — never merged into a guessed bucket.
+  // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, used here as object keys, not new vocabulary
+  const receiptTotalsByKind = { PRANZO: 0, SERA: 0, unknown: 0 };
+  if (!voided) {
+    for (const event of payments) {
+      const bucket = receiptKindOf(event) || "unknown";
+      receiptTotalsByKind[bucket] = round(receiptTotalsByKind[bucket] + eventAmount(event));
+    }
+    for (const event of refunds) {
+      const bucket = receiptKindOf(event) || "unknown";
+      receiptTotalsByKind[bucket] = round(receiptTotalsByKind[bucket] - eventAmount(event));
+    }
+  }
+
   return Object.freeze({
     // storico rows carry BOTH their own identity PK `id` and the real order key
     // `orden_id`; order_financial_events.order_id is the latter. Preferring `id`
@@ -80,6 +123,13 @@ function safeTicket(order, events) {
     paymentTotals: methodTotals,
     cancelled: voided,
     refunded: refundedAmount > 0,
+    // S-E — era-aware economic classification. economicKind is the
+    // OBLIGATION window (sale-creation time); receiptTotalsByKind splits net
+    // receipts by their OWN, independent window (a sale created in one
+    // window can legitimately be paid in the other) — see the S-E report for
+    // the frozen S2 obligation/receipt precedent this mirrors.
+    economicKind,
+    receiptTotalsByKind,
   });
 }
 
@@ -93,7 +143,7 @@ function aggregate(session, orders, events) {
   }
   const tickets = (orders || []).map((order) => {
     const id = String(order.orden_id || order.id || "");
-    return safeTicket(order, byOrder.get(id) || []);
+    return safeTicket(order, byOrder.get(id) || [], session);
   });
   const paymentTotals = emptyPaymentTotals();
   for (const ticket of tickets) {
@@ -106,20 +156,47 @@ function aggregate(session, orders, events) {
   const collectedTotal = round(tickets.reduce((s, t) => s + t.collectedAmount, 0));
   const refundedTotal = round(tickets.reduce((s, t) => s + t.refundedAmount, 0));
   const unpaidTotal = round(tickets.reduce((s, t) => s + t.unpaidAmount, 0));
+
+  // S-E — economic breakdown: an Operational Service now legitimately spans
+  // both windows, so obligations (sales, gross) and receipts (net payments)
+  // are split independently by their own era-aware kind, per Phase 2/3/6 of
+  // the S-E brief. Cancelled tickets are excluded from obligations (mirrors
+  // grossTotal above); receipts already exclude them at the source
+  // (safeTicket zeroes receiptTotalsByKind for voided tickets).
+  const economicBreakdown = {
+    obligations: { PRANZO: 0, SERA: 0, unknown: 0 }, // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, used here as object keys, not new vocabulary
+    receipts: { PRANZO: 0, SERA: 0, unknown: 0 },
+  };
+  for (const ticket of tickets) {
+    if (!ticket.cancelled) {
+      const bucket = ticket.economicKind || "unknown";
+      economicBreakdown.obligations[bucket] = round(economicBreakdown.obligations[bucket] + ticket.amount);
+    }
+    for (const key of Object.keys(economicBreakdown.receipts)) {
+      economicBreakdown.receipts[key] = round(economicBreakdown.receipts[key] + (ticket.receiptTotalsByKind[key] || 0));
+    }
+  }
+
   return {
     ok: true,
     available: status !== "none",
     code: status === "none" ? "NO_CURRENT_SERVICE" : "OK",
     serviceSessionId: session?.id || null,
-    // S2-7D6C2 — the closeout must be able to say WHICH service it is reporting.
-    // Projected straight from the session row (service_kind, CHECK'd to
-    // PRANZO|SERA by 2026-07-26_two_service_identity.sql) and never derived from
-    // the clock, business_date or status: a closeout can report a CLOSED session
-    // whose kind no longer matches whatever service is current. camelCase to
-    // match the ensureCurrentServiceSession contract.
-    // Stays null for legacy sessions closed before the column existed — the
-    // frontend renders a neutral fallback rather than guessing.
-    serviceKind: session?.service_kind || null,
+    // S2-7D6C2, corrected S-E — the Operational Service identity (S-D) can
+    // now legitimately contain obligations from BOTH economic windows, so
+    // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, named here only to describe the label-honesty rule, not new vocabulary
+    // this field only ever asserts a single PRANZO/SERA label when every
+    // ticket's own era-aware economicKind agrees (singleKindOrNull) — which,
+    // as of S-E, is still true for every real closeout (S-D PONR not yet
+    // reached), so behavior is byte-identical to before for all current
+    // data. A genuinely mixed closeout reports null here rather than a false
+    // single label; economicBreakdown below always carries the real split.
+    // camelCase to match the ensureCurrentServiceSession contract. A session
+    // with zero tickets yet (nothing to disagree with) still reports its own
+    // era-aware kind — matches pre-S-E behavior exactly for that case.
+    serviceKind: tickets.length === 0
+      ? resolveEconomicPeriodKind(null, session)
+      : singleKindOrNull(tickets.map((t) => t.economicKind)),
     businessDate: session?.business_date || null,
     openedAt: session?.opened_at || null,
     closedAt: session?.closed_at || null,
@@ -127,6 +204,7 @@ function aggregate(session, orders, events) {
     tickets,
     totals: { gross: grossTotal, collected: collectedTotal, refunded: refundedTotal, unpaid: unpaidTotal, difference: round(grossTotal - collectedTotal) },
     paymentTotals,
+    economicBreakdown,
     counts: {
       tickets: tickets.length,
       cancelled: tickets.filter((t) => t.cancelled).length,
