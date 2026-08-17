@@ -118,18 +118,19 @@ assert("5c: post-condition asserts unrelated function logic (validation codes) u
   /F-2 post-condition failed: unrelated function logic changed -- out of scope/.test(SQL));
 assert("5d: post-condition asserts lifecycle_semantics still not referenced (V3-D3 guard)",
   /F-2 post-condition failed: lifecycle_semantics referenced -- V3-D3 must remain untouched/.test(SQL));
-assert("5e: post-condition performs a REAL empirical SAVEPOINT-wrapped re-probe of the exact 42P10 scenario",
-  /SAVEPOINT f2_inference_probe;/.test(SQL) &&
+assert("5e: post-condition performs a REAL empirical re-probe of the exact 42P10 scenario, using PL/pgSQL's own implicit-savepoint BEGIN/EXCEPTION/END (no invalid raw SAVEPOINT statement inside the DO block)",
   /F-2 post-condition failed: repaired arbiter clause STILL raises 42P10 against the real live index/.test(SQL) &&
-  /ROLLBACK TO SAVEPOINT f2_inference_probe;/.test(SQL));
-assert("5f: probe row leak check -- proves the SAVEPOINT rollback actually cleaned up",
+  !/\bSAVEPOINT\b/.test(SQL_CODE_ONLY));
+assert("5f: probe row is explicitly deleted after the re-probe (its own status='closed' never matches the arbiter's status predicate, so it always genuinely commits and must be cleaned up by hand)",
+  /DELETE FROM public\.service_sessions WHERE business_date='1999-01-01' AND opened_by='f2_migration_probe';/.test(SQL_CODE_ONLY));
+assert("5g: post-condition asserts zero probe-row residue after the explicit cleanup",
   /F-2 post-condition failed: the inference probe row leaked/.test(SQL));
-assert("5g: post-condition asserts canonical pointer + legacy shadow unchanged by this migration",
+assert("5h: post-condition asserts canonical pointer + legacy shadow unchanged by this migration",
   /current_period_id.*changed unexpectedly by this migration/.test(SQL) &&
   /legacy shadow changed unexpectedly by this migration/.test(SQL));
-assert("5h: post-condition asserts payment_transactions/service_closeouts population unchanged",
+assert("5i: post-condition asserts payment_transactions/service_closeouts population unchanged",
   /payment_transactions\) <> 20/.test(SQL) && /service_closeouts\) <> 3/.test(SQL));
-assert("5i: post-condition asserts zero real operational_service_v1 rows",
+assert("5j: post-condition asserts zero real operational_service_v1 rows",
   /operational_service_v1['"]?\s*\)\s*<>\s*0/.test(SQL) || /must remain 0/.test(SQL));
 
 console.log("\n== F. Paired rollback — restores exact byte-captured pre-F-2 (broken) body, refuses if not applied ==");

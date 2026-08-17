@@ -218,13 +218,20 @@ BEGIN
   END IF;
 
   -- Empirical, not merely asserted: prove the repaired arbiter actually
-  -- resolves inference against the real live index, inside a throwaway
-  -- SAVEPOINT that is always rolled back, using a harmless historical probe
-  -- row far outside any real business date.
-  SAVEPOINT f2_inference_probe;
+  -- resolves inference against the real live index, using a harmless
+  -- historical probe row far outside any real business date. PL/pgSQL has
+  -- no SAVEPOINT/ROLLBACK TO SAVEPOINT statement of its own -- a nested
+  -- BEGIN/EXCEPTION/END block already takes an implicit savepoint and rolls
+  -- back to it automatically if (and only if) an exception is caught, which
+  -- is exactly what proves 42P10 is gone. Since the probe row's own
+  -- status='closed' never matches the arbiter's own status predicate, this
+  -- INSERT is never itself suppressed by DO NOTHING -- it genuinely commits
+  -- a row, so it is explicitly deleted immediately after, regardless of
+  -- outcome, before this migration's own COMMIT.
   BEGIN
-    INSERT INTO public.service_sessions(business_date, status, opened_by, open_source, service_kind)
-    VALUES ('1999-01-01', 'closed', 'f2_migration_probe', 'f2_migration_probe', 'PRANZO')
+    INSERT INTO public.service_sessions(business_date, status, opened_by, open_source, service_kind, closed_at, close_source)
+    -- language-guard: allow-legacy PRANZO is the existing service_kind enum value, used here only as a harmless historical probe value to empirically re-exercise the arbiter fix, not new vocabulary
+    VALUES ('1999-01-01', 'closed', 'f2_migration_probe', 'f2_migration_probe', 'PRANZO', now(), 'f2_migration_probe')
     ON CONFLICT (business_date, service_kind) WHERE service_kind IS NOT NULL AND status = ANY (ARRAY['open','closing'])
     DO NOTHING;
   EXCEPTION WHEN OTHERS THEN
@@ -233,7 +240,7 @@ BEGIN
     END IF;
     RAISE;
   END;
-  ROLLBACK TO SAVEPOINT f2_inference_probe;
+  DELETE FROM public.service_sessions WHERE business_date='1999-01-01' AND opened_by='f2_migration_probe';
 
   -- Nothing else touched: pointer/shadow/financial invariants unchanged by
   -- this migration itself (a CREATE OR REPLACE performs no data writes,
