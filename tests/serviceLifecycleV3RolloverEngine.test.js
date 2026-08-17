@@ -1,14 +1,26 @@
 'use strict';
-// SERVICE LIFECYCLE V3 / Slice 3.4 — engine-level rollover contract for
-// src/serviceSessions/serviceLifecycleEngine.js's Phase F0/F1/G (ensure/reuse
-// B, carryover summary, completion), against fake dependencies (no live DB —
-// the real function-overload-free-of-ambiguity primitive, the real trigger
+// SERVICE LIFECYCLE V3 — engine-level contract for
+// src/serviceSessions/serviceLifecycleEngine.js's terminal phases (carryover
+// summary + attempt completion), against fake dependencies (no live DB — the
+// real function-overload-free-of-ambiguity primitive, the real trigger
 // mechanism for post-boundary order attribution, and the real idempotent-
 // reuse/lineage/current-already-set logic are all proven empirically against
 // staging Postgres in this session's own report, not re-proven here).
 //
-// Each scenario maps to one lettered case from the V3.4 spec's own required
-// test matrix (A-N).
+// F-5 — this file used to be SLICE 3.4's rollover contract (cases A-N of the
+// V3.4 spec's own required test matrix), proving the engine auto-opened a
+// next current service B after closing A. F-5 retired that step entirely:
+// Finalizar servicio CLOSES the Operational Service and does not
+// automatically open another one, and clock/schedule state must never
+// determine post-close service identity. This file is rewritten to prove
+// the OPPOSITE of what it used to: every scenario below asserts ZERO
+// successor is ever created, regardless of residue, crash/retry, or the
+// clock at the moment of close — env.calls.ensureNext.length stays 0 in
+// every single case, and env.transition.ensureNext (still present in the
+// fake, mirroring the real serviceLifecycleV3Transition.js wrapper, which
+// F-5 also left in place — see that file's own header) is a tripwire: if a
+// future regression ever reintroduces a call to it, these tests fail loudly
+// rather than silently passing.
 
 const { createServiceLifecycleEngine } = require('../src/serviceSessions/serviceLifecycleEngine');
 
@@ -33,13 +45,11 @@ const openTable = (o = {}) => ({
   id: 'ts-1', service_session_id: SESSION_ID, status: 'open', covers_total: 2, workspace_id: 'ws-1', ...o,
 });
 
-// Precise query-string parser — the exact bug this file guards against:
-// tests/serviceLifecycleV3CloseEngine.test.js's own fakeEnv used a loose
-// `/id=eq\.([^&]+)/` regex that ALSO substring-matches
-// "rollover_source_session_id=eq.X" (which literally contains "...id=eq."),
-// silently misrouting a Slice-3.4 lookup to the plain-id lookup instead. Not
-// a live bug there today only because nothing in that file asserts on
-// nextService — but it must not be repeated here, where every scenario does.
+// Precise query-string parser — guards against a loose `/id=eq\.([^&]+)/`
+// regex that would ALSO substring-match "rollover_source_session_id=eq.X"
+// (which literally contains "...id=eq."). No scenario below still queries
+// by rollover_source_session_id (F-5 removed that read entirely along with
+// the successor concept), but the parser stays precise regardless.
 function parseQuery(query) {
   const out = {};
   for (const part of String(query || '').split('&')) {
@@ -55,12 +65,11 @@ function fakeEnv({
   allOrders = [],
   tableSessions = [],
   financialEvents = [],
-  nowDate = new Date('2026-08-09T20:00:00Z'), // 22:00 Madrid CEST -> SERA_WINDOW
+  nowDate = new Date('2026-08-09T20:00:00Z'), // 22:00 Madrid CEST
 } = {}) {
   const env = {
     sessions: new Map([[sessionRow.id, { ...sessionRow }]]),
     nowDate,
-    nextServiceSeq: 0,
     attemptsByCorr: new Map(),
     attemptsBySession: new Map(),
     snapshotsByCorr: new Map(),
@@ -88,9 +97,6 @@ function fakeEnv({
       if (q.id) {
         const row = env.sessions.get(q.id);
         return row ? [row] : [];
-      }
-      if (q.rollover_source_session_id) {
-        return [...env.sessions.values()].filter((s) => s.rollover_source_session_id === q.rollover_source_session_id);
       }
       throw new Error('unexpected service_sessions query: ' + query);
     }
@@ -174,28 +180,15 @@ function fakeEnv({
       row.status = 'closed'; row.closed_at = '2026-08-09T23:00:00Z'; row.closed_by = actor; row.close_source = source;
       return { success: true, idempotent: false, code: 'V3_CLOSED', session: row };
     },
-    // Mirrors ensure_next_service_session_v3's real idempotency shape:
-    // provenance-keyed (rollover_source_session_id), not clock-keyed. Return
-    // shape mirrors the REAL serviceLifecycleV3Transition.js wrapper, which
-    // maps the RPC's raw jsonb row through publicSession() (camelCase, incl.
-    // rolloverSourceSessionId) before handing it back to the engine — a raw
-    // snake_case row here would silently misrepresent what the engine
-    // actually receives in production.
-    async ensureNext({ sourceSessionId, serviceKind, businessDate, actor, source }) {
+    // F-5 TRIPWIRE — mirrors the real serviceLifecycleV3Transition.js
+    // wrapper's shape exactly (still present in real source, per that
+    // file's own header), but the engine must never call it anymore. Every
+    // scenario below asserts env.calls.ensureNext.length === 0; if a future
+    // regression reintroduces the call, this records it and the assertion
+    // fails loudly rather than the test silently continuing to pass.
+    async ensureNext({ sourceSessionId, serviceKind, businessDate }) {
       env.calls.ensureNext.push({ sourceSessionId, serviceKind, businessDate });
-      const toPublic = (row) => ({
-        id: row.id, businessDate: row.business_date, status: row.status, serviceKind: row.service_kind,
-        openedAt: row.opened_at, openedBy: row.opened_by, openSource: row.open_source,
-        rolloverSourceSessionId: row.rollover_source_session_id || null,
-      });
-      const existing = [...env.sessions.values()].find((s) => s.rollover_source_session_id === sourceSessionId);
-      if (existing) return { success: true, created: false, code: 'REUSED', session: toPublic(existing) };
-      if (env.forceEnsureNextFailure) return { success: false, code: env.forceEnsureNextFailure, session: null };
-      env.nextServiceSeq += 1;
-      const id = 'sess-B-' + env.nextServiceSeq;
-      const row = { id, business_date: businessDate, status: 'open', service_kind: serviceKind, opened_by: actor, open_source: source, rollover_source_session_id: sourceSessionId };
-      env.sessions.set(id, row);
-      return { success: true, created: true, code: 'ROLLED_OVER', session: toPublic(row) };
+      return { success: false, code: 'F5_TRIPWIRE_ENSURE_NEXT_SHOULD_NEVER_BE_CALLED', session: null };
     },
   };
 
@@ -212,9 +205,9 @@ function engineFrom(env, overrides = {}) {
 }
 
 (async () => {
-  console.log('\n== serviceLifecycleEngine.js — V3.4 next-service + carryover (engine integration) ==\n');
+  console.log('\n== serviceLifecycleEngine.js — F-5: close without auto-successor (engine integration) ==\n');
 
-  console.log('\n── Test A — clean A→B rollover ──');
+  console.log('\n── Test A — clean close: no successor created, no nextService field at all ──');
   {
     const orders = [order({ totale: 10 })];
     const events = [paymentEvent({ amount: 10 })];
@@ -222,12 +215,13 @@ function engineFrom(env, overrides = {}) {
     const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
     assert('A1: success', result.success === true, JSON.stringify(result));
     assert('A2: A closed', env.sessions.get(SESSION_ID).status === 'closed');
-    assert('A3: exactly one B created', env.calls.ensureNext.length === 1 && env.calls.ensureNext[0].serviceKind === 'SERA');
-    assert('A4: nextService present, correct kind, provenance points at A', result.nextService && result.nextService.serviceKind === 'SERA' && result.nextService.rolloverSourceSessionId === SESSION_ID);
-    assert('A5: attempt completed', env.attemptsByCorr.get(result.closeoutCorrelationId).status === 'completed');
+    assert('A3: ensureNext (the retired RPC wrapper) was never called', env.calls.ensureNext.length === 0);
+    assert('A4: the result carries no nextService field at all (not even null) — the concept is gone, not empty', !('nextService' in result));
+    assert('A5: exactly one service_sessions row exists in total — A, nothing else', env.sessions.size === 1);
+    assert('A6: attempt completed', env.attemptsByCorr.get(result.closeoutCorrelationId).status === 'completed');
   }
 
-  console.log('\n── Test B — occupied carried table: survives, origin stays A, B becomes current ──');
+  console.log('\n── Test B — occupied carried table: survives, origin stays A, still no successor ──');
   {
     const table = openTable({ id: 'ts-occupied', covers_total: 4 });
     const orders = [order({ totale: 10 })];
@@ -237,21 +231,21 @@ function engineFrom(env, overrides = {}) {
     assert('B1: success', result.success === true, JSON.stringify(result));
     assert('B2: table row itself untouched — still open, still origin A', table.status === 'open' && table.service_session_id === SESSION_ID && table.covers_total === 4);
     assert('B3: carryoverSummary reports exactly this one open table', result.carryoverSummary.openTablesCarried === 1 && result.carryoverSummary.openTableSessionIds[0] === 'ts-occupied');
-    assert('B4: B still ensured despite the carried table (never blocks rollover)', result.nextService && result.nextService.id);
+    assert('B4: no successor created despite the carried table', env.calls.ensureNext.length === 0 && env.sessions.size === 1);
     assert('B5: zero incidents — an occupied table is not an anomaly (V3.3 policy unchanged)', result.incidents.length === 0);
   }
 
   console.log('\n── Test C — post-boundary order attribution: proven at the real-Postgres trigger level (this session\'s own report), not re-simulated in JS fakes ──');
   { assert('C: documented, not a JS-fake scenario (see report §9)', true); }
 
-  console.log('\n── Test D — unpaid A: exposure frozen, B still opens, no later rewrite path exists in this engine ──');
+  console.log('\n── Test D — unpaid A: exposure frozen, no successor, no later rewrite path exists in this engine ──');
   {
     const orders = [order({ totale: 20 })]; // fully unpaid
     const env = fakeEnv({ allOrders: orders, financialEvents: [] });
     const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
     assert('D1: success', result.success === true, JSON.stringify(result));
     assert('D2: unpaidExposureCents frozen at 2000', result.closeout.financial.unpaidExposureCents === 2000);
-    assert('D3: B still opened', result.nextService && result.nextService.serviceKind === 'SERA');
+    assert('D3: no successor created for an unpaid close either', env.calls.ensureNext.length === 0);
     assert('D4: no financial-event write dependency exists anywhere in this engine (grep-provable, not just here)', typeof env.select === 'function' && !('insertFinancialEvent' in env));
   }
 
@@ -264,7 +258,7 @@ function engineFrom(env, overrides = {}) {
     assert('E1: success', result.success === true, JSON.stringify(result));
     assert('E2: 1 KITCHEN_WORK_PENDING_AT_CLOSE incident, unchanged from V3.3', result.incidents.length === 1 && result.incidents[0].incidentType === 'KITCHEN_WORK_PENDING_AT_CLOSE');
     assert('E3: the order itself was never touched/cloned (still order #1, same fields)', orders[0].orden_id === '#1' && orders[0].estado === 'EN_COCINA');
-    assert('E4: B still opens regardless', result.nextService !== null);
+    assert('E4: no successor created regardless of the pending kitchen work', env.calls.ensureNext.length === 0);
   }
 
   console.log('\n── Test F — LISTO carryover (V3.3 policy unchanged) ──');
@@ -275,6 +269,7 @@ function engineFrom(env, overrides = {}) {
     const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
     assert('F1: success', result.success === true);
     assert('F2: 1 ORDER_READY_NOT_FINALIZED_AT_CLOSE incident', result.incidents.length === 1 && result.incidents[0].incidentType === 'ORDER_READY_NOT_FINALIZED_AT_CLOSE');
+    assert('F3: no successor created', env.calls.ensureNext.length === 0);
   }
 
   console.log('\n── Test G — rider/delivery carryover (V3.3 policy unchanged, no accidental regression) ──');
@@ -285,142 +280,74 @@ function engineFrom(env, overrides = {}) {
     const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
     assert('G1: success', result.success === true);
     assert('G2: 1 DELIVERY_ACTIVE_AT_CLOSE incident, order untouched', result.incidents.length === 1 && result.incidents[0].incidentType === 'DELIVERY_ACTIVE_AT_CLOSE');
+    assert('G3: no successor created', env.calls.ensureNext.length === 0);
   }
 
-  console.log('\n── Test H — crash after A closed, before B opened: retry creates/ensures B ──');
+  console.log('\n── Test H — resume: crash after Phase E (closed) but before Phase G (attempt completion) ──');
   {
     const orders = [order({ totale: 10 })];
     const events = [paymentEvent({ amount: 10 })];
     const env = fakeEnv({ allOrders: orders, financialEvents: events });
-    // Simulate: engine already ran Phase A-E successfully once (closeout
-    // exists, session closed) but crashed before Phase F0 by seeding that
-    // exact state directly, then invoking the SAME engine as a fresh call —
-    // it must land in the CASE B/D resume branch and finish the rollover.
     const first = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('H0 (setup): first call already fully completes in this fake (no crash point exists in fakes) — verify H via the resume branch instead', first.success === true);
+    assert('H0 (setup): first call succeeds', first.success === true);
 
-    // Genuine resume-branch exercise: reset only the attempt to 'active' and
-    // strip nextService/completion to model "closed + closeout persisted +
-    // attempt still active, B not yet ensured" — the exact CASE B/D state.
+    // Model "closed + closeout persisted + attempt still active" — the exact
+    // CASE B/D resume state — by rolling only the attempt back to active.
     const attemptRow = env.attemptsByCorr.get(first.closeoutCorrelationId);
     attemptRow.status = 'active';
-    const bId = first.nextService.id;
-    env.sessions.delete(bId); // undo the "B already ensured" part of the crash window
-    env.calls.ensureNext.length = 0;
 
     const second = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test-retry' });
-    assert('H1: retry succeeds', second.success === true, JSON.stringify(second));
-    assert('H2: retry (re)ensured B via the resume branch', env.calls.ensureNext.length === 1);
-    assert('H3: B present in the result', second.nextService && second.nextService.serviceKind === 'SERA');
+    assert('H1: retry succeeds via the resume branch', second.success === true, JSON.stringify(second));
+    assert('H2: retry never calls the retired ensureNext RPC', env.calls.ensureNext.length === 0);
+    assert('H3: no successor session exists after the retry', env.sessions.size === 1);
     assert('H4: attempt completed again', env.attemptsByCorr.get(first.closeoutCorrelationId).status === 'completed');
   }
 
-  console.log('\n── Test I — crash after B created, before attempt completion: retry reuses B, never a second B ──');
+  console.log('\n── Test I — CASE C (already-completed close) is read-only and idempotent ──');
   {
     const orders = [order({ totale: 10 })];
     const events = [paymentEvent({ amount: 10 })];
     const env = fakeEnv({ allOrders: orders, financialEvents: events });
     const first = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('I0 (setup): first call succeeds, B created once', first.success === true && env.calls.ensureNext.length === 1);
-
-    // Model "B already ensured, attempt not yet completed": B row stays,
-    // only roll the attempt back to active.
-    env.attemptsByCorr.get(first.closeoutCorrelationId).status = 'active';
-    env.calls.ensureNext.length = 0;
+    assert('I0 (setup): first call fully completes', first.success === true && env.attemptsByCorr.get(first.closeoutCorrelationId).status === 'completed');
 
     const second = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test-retry' });
-    assert('I1: retry succeeds', second.success === true, JSON.stringify(second));
-    assert('I2: ensureNext (the RPC) was NOT called on retry — the engine\'s own JS-side read-first check already found B (double idempotency: JS read + SQL provenance, belt and suspenders)', env.calls.ensureNext.length === 0);
-    assert('I3: retry reused the SAME B — never created a second one', second.nextService.id === first.nextService.id);
-    assert('I4: exactly one session total besides A exists', [...env.sessions.values()].filter((s) => s.rollover_source_session_id === SESSION_ID).length === 1);
+    assert('I1: idempotent success', second.success === true && second.idempotent === true, JSON.stringify(second));
+    assert('I2: still no nextService field on the idempotent replay', !('nextService' in second));
+    assert('I3: ensureNext was never called on the idempotent path either', env.calls.ensureNext.length === 0);
   }
 
-  console.log('\n── Test J — B already exists legitimately: ensure returns existing B, no duplicate ──');
+  console.log('\n── Test J — clock independence: the outcome is identical across different economic-window conditions at the close instant ──');
   {
-    const orders = [order({ totale: 10 })];
-    const events = [paymentEvent({ amount: 10 })];
-    const env = fakeEnv({ allOrders: orders, financialEvents: events });
-    // Pre-seed B as if a prior, separate process already ensured it.
-    env.sessions.set('sess-preexisting-B', { id: 'sess-preexisting-B', business_date: '2026-08-09', status: 'open', service_kind: 'SERA', rollover_source_session_id: SESSION_ID });
-    const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('J1: success', result.success === true, JSON.stringify(result));
-    assert('J2: reused the pre-existing B, never called ensureNext (found via the read-first check)', env.calls.ensureNext.length === 0);
-    assert('J3: nextService IS the pre-existing session', result.nextService.id === 'sess-preexisting-B');
+    const scenarios = [
+      // language-guard: allow-legacy PRANZO is the existing service_kind enum value, named here only as a fixture-scenario label, not new vocabulary
+      { label: 'daytime PRANZO window', nowDate: new Date('2026-08-09T10:00:00Z') },   // 12:00 Madrid
+      { label: 'evening SERA window', nowDate: new Date('2026-08-09T20:00:00Z') },      // 22:00 Madrid
+      { label: 'the old 17:30-18:00 buffer window', nowDate: new Date('2026-08-09T15:45:00Z') }, // 17:45 Madrid
+      { label: 'deep overnight window', nowDate: new Date('2026-08-09T02:00:00Z') },    // 04:00 Madrid
+    ];
+    for (const { label, nowDate } of scenarios) {
+      const orders = [order({ totale: 10 })];
+      const events = [paymentEvent({ amount: 10 })];
+      const env = fakeEnv({ allOrders: orders, financialEvents: events, nowDate });
+      const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
+      assert(`J[${label}]: success regardless of the clock`, result.success === true, JSON.stringify(result));
+      assert(`J[${label}]: session closed`, env.sessions.get(SESSION_ID).status === 'closed');
+      assert(`J[${label}]: zero successor created`, env.calls.ensureNext.length === 0 && env.sessions.size === 1);
+      assert(`J[${label}]: no nextService field regardless of window`, !('nextService' in result));
+    }
   }
 
-  console.log('\n── Test K — wrong/conflicting current service: fail closed, deterministic, never overwrite ──');
-  {
-    const orders = [order({ totale: 10 })];
-    const events = [paymentEvent({ amount: 10 })];
-    const env = fakeEnv({ allOrders: orders, financialEvents: events });
-    env.forceEnsureNextFailure = 'CURRENT_SESSION_ALREADY_SET';
-    const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('K1: success is false', result.success === false, JSON.stringify(result));
-    assert('K2: the SPECIFIC RPC failure code is propagated verbatim (CURRENT_SESSION_ALREADY_SET), not masked by the generic fallback', result.code === 'CURRENT_SESSION_ALREADY_SET', result.code);
-    assert('K3: A is still closed (Phase E already committed) — never rolled back or reclosed', env.sessions.get(SESSION_ID).status === 'closed');
-    assert('K4: attempt stays active — recoverable, never completed', env.attemptsByCorr.get(result.closeoutCorrelationId).status === 'active');
-    assert('K5: no session was fabricated as B', [...env.sessions.values()].filter((s) => s.rollover_source_session_id === SESSION_ID).length === 0);
-  }
-
-  console.log('\n── Test L — stale synthetic A: B derived from the ACTUAL current clock, not a catch-up guess ──');
-  {
-    const orders = [order({ totale: 10 })];
-    const events = [paymentEvent({ amount: 10 })];
-    // A itself claims to be a lunch session opened long ago; "now" is firmly
-    // in the evening SERA window. The engine must derive B from `now`, not
-    // from A's own stale identity.
-    // language-guard: allow-legacy PRANZO is the existing service_kind enum value, exercised here verbatim, not new vocabulary
-    const staleSession = session({ business_date: '2026-08-01', service_kind: 'PRANZO', opened_at: '2026-08-01T12:00:00Z' });
-    const env = fakeEnv({ sessionRow: staleSession, allOrders: orders, financialEvents: events, nowDate: new Date('2026-08-09T20:00:00Z') });
-    const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('L1: success', result.success === true, JSON.stringify(result));
-    // language-guard: allow-legacy PRANZO is the existing service_kind enum value, exercised here verbatim, not new vocabulary
-    assert('L2: B is SERA (today, per actual now), not a PRANZO catch-up of the stale date', result.nextService.serviceKind === 'SERA');
-    assert('L3: B businessDate is 2026-08-09 (actual current business date), not 2026-08-01', result.nextService.businessDate === '2026-08-09', result.nextService.businessDate);
-  }
-  {
-    // Same stale A, but retried during the 17:30-18:00 buffer — correctly
-    // produces NO next service. Not a failure; a complete outcome.
-    const orders = [order({ totale: 10 })];
-    const events = [paymentEvent({ amount: 10 })];
-    // language-guard: allow-legacy PRANZO is the existing service_kind enum value, exercised here verbatim, not new vocabulary
-    const staleSession = session({ business_date: '2026-08-01', service_kind: 'PRANZO' });
-    const env = fakeEnv({ sessionRow: staleSession, allOrders: orders, financialEvents: events, nowDate: new Date('2026-08-09T15:45:00Z') }); // 17:45 Madrid
-    const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('L4: success, but nextService is null (buffer window, correctly nothing ensured)', result.success === true && result.nextService === null, JSON.stringify(result));
-    assert('L5: ensureNext (the RPC) was never called — the engine decided not to, without even asking', env.calls.ensureNext.length === 0);
-    assert('L6: attempt still completes — "nothing to ensure" is a successful terminal outcome', env.attemptsByCorr.get(result.closeoutCorrelationId).status === 'completed');
-  }
-
-  console.log('\n── Test M — pending incidents from A remain linked to A, never reassigned/duplicated to B ──');
+  console.log('\n── Test K — incidents remain scoped to A ──');
   {
     const orders = [order({ totale: 10, estado: 'EN_COCINA' })];
     const events = [paymentEvent({ amount: 10 })];
     const env = fakeEnv({ allOrders: orders, financialEvents: events });
     const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('M1: success', result.success === true);
-    assert('M2: the incident report call was scoped to A (serviceSessionId), never to B', env.incidents.calls.report.length === 1 && env.incidents.calls.report[0].serviceSessionId === SESSION_ID);
-    assert('M3: B\'s own id never appears as an incident serviceSessionId', !env.incidents.calls.report.some((r) => r.serviceSessionId === result.nextService.id));
+    assert('K1: success', result.success === true);
+    assert('K2: the incident report call was scoped to A (serviceSessionId)', env.incidents.calls.report.length === 1 && env.incidents.calls.report[0].serviceSessionId === SESSION_ID);
   }
 
-  console.log('\n── Test N — CASE C (already-completed rollover) is read-only: never re-derives from today\'s clock ──');
-  {
-    const orders = [order({ totale: 10 })];
-    const events = [paymentEvent({ amount: 10 })];
-    const env = fakeEnv({ allOrders: orders, financialEvents: events, nowDate: new Date('2026-08-09T20:00:00Z') });
-    const first = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('N0 (setup): first call fully completes, attempt is now completed', first.success === true && env.attemptsByCorr.get(first.closeoutCorrelationId).status === 'completed');
-
-    env.calls.ensureNext.length = 0;
-    // Retry MUCH later — deep in the overnight window, where a fresh derive
-    // would say shouldEnsure:false. CASE C must NOT re-derive at all; it
-    // must return exactly what was already decided.
-    const second = await engineFrom(env, {})({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test-retry' });
-    assert('N1: idempotent success', second.success === true && second.idempotent === true, JSON.stringify(second));
-    assert('N2: same nextService as the original decision', second.nextService && second.nextService.id === first.nextService.id);
-    assert('N3: ensureNext (the RPC, which can mutate) was NEVER called from CASE C — strictly read-only', env.calls.ensureNext.length === 0);
-  }
-
-  console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');
+  console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   process.exit(fail === 0 ? 0 : 1);
 })();

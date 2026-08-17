@@ -28,21 +28,27 @@
 // (unchanged from Slice 3.2), an invalid lineage (unchanged from Slice
 // 3.2.1), or a failure to durably persist a REQUIRED incident (Slice 3.3).
 //
-// SLICE 3.4 — the engine no longer ends once the current service is closed:
+// F-5 — SLICE 3.4's "ensure/reuse the next current service B" step has been
+// RETIRED from this engine (not adapted, not made operational_service_v1-
+// aware). Finalizar servicio CLOSES the Operational Service; it does not
+// automatically open another one.
+// -- language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, named here only to describe the design principle, not new vocabulary
+// Clock/schedule state (PRANZO/SERA) must never determine post-close
+// service identity — a second Operational
+// Service in the same Business Day exists only after genuine termination
+// plus an intentional, explicit reopen (a future contract, not this file's
+// job). v3NextServiceIdentity.js (the clock-derived successor-identity rule)
+// -- language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, named here only to describe the retired DB primitive, not new vocabulary
+// and its use of ensure_next_service_session_v3 (the PRANZO/SERA-only DB
+// primitive) are gone from this path; see the F-5 report for the full
+// writer-inventory/retirement disposition. The engine now ends at Phase E:
 // acquire -> snapshot -> reconcile -> classify/persist incidents -> safe
-// actions -> closeout A -> close A -> ensure/reuse the next current service
-// B (src/serviceSessions/v3NextServiceIdentity.js decides WHETHER one should
-// exist right now; ensure_next_service_session_v3 is the atomic DB primitive
-// that creates/reuses it) -> compute the carryover summary -> complete the
-// rollover attempt. Carryover itself is a NON-EVENT by design: an open table
+// actions -> closeout A -> close A -> carryover summary -> complete the
+// attempt. Carryover itself remains a NON-EVENT by design: an open table
 // keeps its immutable origin (table_sessions.service_session_id still =
-// A — never rewritten, see V3.1), a NEW order on that table gets B because
-// ordenes_assign_service_session (unmodified since V3.1) always assigns the
-// CURRENT session, and A's financial/incident facts are frozen and never
-// touched here. Opening B is never mandatory: outside a window where a
-// service should be current (the 17:30-18:00 buffer, the overnight span),
-// `nextService` is correctly null and current_session_id correctly stays
-// NULL — that is a complete, successful rollover outcome, not a deferred one.
+// A — never rewritten, see V3.1) and A's financial/incident facts are frozen
+// and never touched here; this file no longer creates or reuses any B for a
+// new order to be attributed to in the first place.
 // ===============================================================
 
 const { sbSelect } = require("../utils/supabase");
@@ -54,28 +60,7 @@ const { serviceLifecycleV3Transition } = require("./serviceLifecycleV3Transition
 const { aggregate } = require("../closeout/currentServiceCloseout");
 const { serviceIncidents } = require("../incidents/serviceIncidents");
 const { classifyForV3Close } = require("./v3IncidentPolicy");
-const { deriveNextServiceIdentity } = require("./v3NextServiceIdentity");
 const mesaDao = require("../tables/mesaDao");
-
-// SLICE 3.4 — maps a raw service_sessions row (select()'s own snake_case
-// PostgREST shape) into the same public shape serviceLifecycleV3Transition.js's
-// publicSession() already uses for the RPC-wrapper path, plus the one new
-// V3.4 provenance field. Two mappers, not one shared export, because the two
-// callers see two different raw shapes (RPC jsonb body vs a plain SELECT
-// row) even though the columns are the same — see that file's own header.
-function publicNextService(row) {
-  if (!row || typeof row !== "object") return null;
-  return {
-    id: row.id,
-    businessDate: row.business_date,
-    status: row.status,
-    serviceKind: row.service_kind,
-    openedAt: row.opened_at,
-    openedBy: row.opened_by,
-    openSource: row.open_source,
-    rolloverSourceSessionId: row.rollover_source_session_id || null,
-  };
-}
 
 // language-guard: allow-legacy servizio.js is named here only as a cross-reference to where the same literal terminal-state set also lives, not new vocabulary
 // Identical set to guard_service_session_closed_v1 (SQL) / servizio.js /
@@ -106,56 +91,7 @@ function createServiceLifecycleEngine({
   releaseEmptyTable = mesaDao.releaseEmptySessionAuto,
   classify = classifyForV3Close,
   now = () => new Date(),
-  deriveNextService = deriveNextServiceIdentity,
 } = {}) {
-  // SLICE 3.4 — read-only lookup, safe to call from a fully-completed
-  // (CASE C) lineage — NEVER creates anything. If a rollover already
-  // finished and decided (at the time) that nothing should be ensured, this
-  // must keep returning null forever for that record, never retroactively
-  // open a session based on whatever the clock says on a LATER read.
-  async function lookupNextService(serviceSessionId) {
-    try {
-      const rows = await select("service_sessions", `rollover_source_session_id=eq.${encodeURIComponent(serviceSessionId)}`);
-      return Array.isArray(rows) && rows.length > 0 ? publicNextService(rows[0]) : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  // SLICE 3.4 — ensures/reuses the V3 rollover continuation of a just-closed
-  // session. Checks for an already-ensured B FIRST, independent of the
-  // clock — a retry must find a B a prior attempt already created even if
-  // the schedule has since moved into a window where nothing NEW should be
-  // ensured (see v3NextServiceIdentity.js's own header for why "nothing due
-  // right now" is a complete, successful outcome, not a failure). Only ever
-  // called from an active-attempt path (fresh or resuming) — never from
-  // CASE C, which must stay strictly read-only (see lookupNextService above).
-  async function ensureNextService(serviceSessionId, actor, source) {
-    let existingRows;
-    try {
-      existingRows = await select("service_sessions", `rollover_source_session_id=eq.${encodeURIComponent(serviceSessionId)}`);
-    } catch (e) {
-      return { success: false, code: "V3_ROLLOVER_NEXT_SERVICE_READ_FAILED", detail: String((e && e.message) || e) };
-    }
-    if (Array.isArray(existingRows) && existingRows.length > 0) {
-      return { success: true, nextService: publicNextService(existingRows[0]) };
-    }
-    const identity = deriveNextService(now());
-    if (!identity.shouldEnsure) {
-      return { success: true, nextService: null };
-    }
-    const ensureResult = await transition.ensureNext({
-      sourceSessionId: serviceSessionId,
-      serviceKind: identity.serviceKind,
-      businessDate: identity.businessDate,
-      actor, source,
-    });
-    if (!ensureResult.success) {
-      return { success: false, code: ensureResult.code || "V3_ROLLOVER_ENSURE_NEXT_FAILED" };
-    }
-    return { success: true, nextService: ensureResult.session };
-  }
-
   // SLICE 3.4 — the carryover summary: which tables are STILL open, with
   // their origin STILL this session (table_sessions.service_session_id is
   // never rewritten at close — see V3.1). Read fresh, AFTER close, so a
@@ -257,16 +193,11 @@ function createServiceLifecycleEngine({
             closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
           };
         }
-        // SLICE 3.4 — strictly read-only: whatever the rollover decided WHEN
-        // IT COMPLETED is the permanent answer for this record. Never
-        // re-derive from today's clock here (see lookupNextService's header).
-        const nextService = await lookupNextService(serviceSessionId);
         return {
           success: true, code: "V3_CLOSED", idempotent: true,
           closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
           closeout: existingCloseout,
           occupiedTablesAtClose: existingCloseout.operational.occupiedTablesAtClose,
-          nextService,
         };
       }
 
@@ -290,24 +221,15 @@ function createServiceLifecycleEngine({
           };
         }
 
-        // SLICE 3.4 — resume Phase F0: ensure/reuse B before ever completing
-        // the attempt. A REQUIRED step, same posture as incident persistence
-        // — a failure here leaves the attempt active/recoverable rather than
-        // silently skipping the rollover's own remaining half.
-        const rolloverResult = await ensureNextService(serviceSessionId, actor, source);
-        if (!rolloverResult.success) {
-          return {
-            success: false, code: rolloverResult.code || "V3_ROLLOVER_ENSURE_NEXT_FAILED",
-            closeoutCorrelationId: existingAttempt.closeoutCorrelationId, closeout: existingCloseout,
-            session: transitionResult.session,
-          };
-        }
+        // F-5 — the old "resume Phase F0" (ensure/reuse B) step is retired;
+        // resume now goes straight from the terminal transition to the
+        // carryover summary, exactly like the main happy path below.
         const carryoverSummary = await computeCarryoverSummary(serviceSessionId);
 
-        // Non-fatal if this fails: the session is already closed, the
-        // closeout already persisted, and B (if any) already ensured, so a
-        // failed completion is never retried into a duplicate of any of
-        // those — same discipline as Phase F below.
+        // Non-fatal if this fails: the session is already closed and the
+        // closeout already persisted, so a failed completion is never
+        // retried into a duplicate of either — same discipline as Phase F
+        // below.
         try {
           await attempts.complete({ closeoutCorrelationId: existingAttempt.closeoutCorrelationId, actor });
         } catch (e) {
@@ -322,7 +244,6 @@ function createServiceLifecycleEngine({
           closeout: existingCloseout,
           session: transitionResult.session,
           occupiedTablesAtClose: existingCloseout.operational.occupiedTablesAtClose,
-          nextService: rolloverResult.nextService,
           carryoverSummary,
         };
       }
@@ -596,33 +517,16 @@ function createServiceLifecycleEngine({
       };
     }
 
-    // Phase F0 — SLICE 3.4: ensure/reuse the next current service B, if the
-    // schedule says one should exist right now. A REQUIRED step: a failure
-    // here leaves the attempt active/recoverable, exactly like a required
-    // incident-persistence failure — V3 must never mark a rollover complete
-    // while its own "open B" half could not be durably resolved either way
-    // (created, reused, or deliberately skipped).
-    const rolloverResult = await ensureNextService(serviceSessionId, actor, source);
-    if (!rolloverResult.success) {
-      return {
-        success: false,
-        code: rolloverResult.code || "V3_ROLLOVER_ENSURE_NEXT_FAILED",
-        closeoutCorrelationId,
-        closeout: createResult.closeout,
-        session: transitionResult.session,
-      };
-    }
-
-    // Phase F1 — SLICE 3.4: carryover is a non-event by construction (no
-    // mutation happens here — see this file's own header); this only
-    // summarizes what already, structurally, carried over.
+    // Phase F — carryover is a non-event by construction (no mutation
+    // happens here — see this file's own header); this only summarizes what
+    // already, structurally, carried over. F-5 retired the old Phase F0
+    // ("ensure/reuse the next current service B") that used to sit here.
     const carryoverSummary = await computeCarryoverSummary(serviceSessionId);
 
-    // Phase G — mark the rollover attempt completed. Non-fatal if this
-    // fails: the session is already closed, the closeout already persisted,
-    // and B (if any) already ensured, so a failed completion is never
-    // retried into a duplicate of any of those (same pattern as
-    // incidentSafeRollover.js's own final step).
+    // Phase G — mark the closeout attempt completed. Non-fatal if this
+    // fails: the session is already closed and the closeout already
+    // persisted, so a failed completion is never retried into a duplicate
+    // of either (same pattern as incidentSafeRollover.js's own final step).
     try {
       await attempts.complete({ closeoutCorrelationId, actor });
     } catch (e) {
@@ -640,7 +544,6 @@ function createServiceLifecycleEngine({
       session: transitionResult.session,
       occupiedTablesAtClose,
       incidents: persistedIncidents,
-      nextService: rolloverResult.nextService,
       carryoverSummary,
     };
   };

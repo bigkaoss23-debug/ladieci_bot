@@ -53,8 +53,10 @@ const ENGINE_FILES = [
   path.join(ROOT, 'src', 'serviceSessions', 'serviceLifecycleEngine.js'),
   path.join(ROOT, 'src', 'serviceSessions', 'serviceLifecycleV3Transition.js'),
   path.join(ROOT, 'src', 'closeout', 'serviceCloseoutCreation.js'),
-  // SLICE 3.4
-  path.join(ROOT, 'src', 'serviceSessions', 'v3NextServiceIdentity.js'),
+  // SLICE 3.4's v3NextServiceIdentity.js was retired by F-5 (the engine no
+  // longer derives or ensures a next service as part of close success) —
+  // removed from this list along with the file itself, not left as a stale
+  // fs.existsSync() check against a deleted path.
 ];
 
 // language-guard: allow-legacy chiudiServizio/storico/serata_summary are the exact forbidden-term identifiers this test asserts are ABSENT from the new engine, not new vocabulary being introduced
@@ -70,10 +72,12 @@ const FORBIDDEN_PATTERNS = [
   // language-guard: allow-legacy serata_summary is the exact forbidden identifier this entry checks for the ABSENCE of, not new vocabulary
   { name: 'serata_summary (legacy archive table)', re: /serata_summary/ },
   { name: 'scheduleDeferredCloseRetry (legacy retry mechanism)', re: /scheduleDeferredCloseRetry/ },
-  // SLICE 3.4 — "no legacy scheduler dependency", "does not enable automatic
-  // scheduling", "does not call legacy close machinery": the engine derives
-  // next-service identity itself (v3NextServiceIdentity.js) and must never
-  // reach for the legacy ensure/auto-close machinery to do it.
+  // "no legacy scheduler dependency", "does not enable automatic scheduling",
+  // "does not call legacy close machinery": F-5 retired the engine's own
+  // clock-derived next-service step entirely (it no longer derives or
+  // ensures any successor identity, own or legacy), so this list only needs
+  // to keep proving it never reaches for the legacy ensure/auto-close
+  // machinery either.
   { name: 'ensure_service_session (legacy next-service RPC)', re: /ensure_service_session\(/ },
   { name: 'ensureCurrentServiceSession / ensureServiceSession.js (legacy S2-7D6B ensure orchestrator)', re: /ensureServiceSession|ensureCurrentServiceSession/ },
   { name: 'incidentSafeRollover / performIncidentSafeRollover (legacy V2 rollover orchestrator)', re: /incidentSafeRollover|performIncidentSafeRollover/ },
@@ -86,7 +90,7 @@ const FORBIDDEN_PATTERNS = [
 (async () => {
   console.log('\n== V3.2 close engine — legacy non-interference guard ==\n');
 
-  assert('0: the engine file set is non-trivial (guards against a typo silently checking nothing)', ENGINE_FILES.length === 4);
+  assert('0: the engine file set is non-trivial (guards against a typo silently checking nothing)', ENGINE_FILES.length === 3);
 
   for (const file of ENGINE_FILES) {
     const rel = path.relative(ROOT, file);

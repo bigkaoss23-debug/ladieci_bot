@@ -244,11 +244,15 @@ const REGISTRY = Object.freeze([
     'serviceCloseoutCreation.js create(), called by serviceLifecycleEngine.js — the only writer of service_closeouts'),
   entry('rpc/close_service_session_v3', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'serviceLifecycleV3Transition.js close(), called by serviceLifecycleEngine.js — the V3-native terminal transition'),
-  // SLICE 3.4 — the next-service-opening primitive. Same DI-invisible pattern
-  // (rpc/... string only, reached via serviceLifecycleV3Transition.js's
-  // ensureNext(), never a literal RPC-name string in the engine itself).
+  // F-5 — SLICE 3.4's next-service-opening primitive. serviceLifecycleEngine.js
+  // no longer calls this (the auto-successor step was retired, not adapted
+  // to operational_service_v1 — see the F-5 report). serviceLifecycleV3
+  // Transition.js's ensureNext() wrapper still exists and still names this
+  // RPC literally, so the entry stays registered rather than orphaned;
+  // classified LEGACY_PRIMITIVE_PENDING_DB_RETIREMENT in the F-5 retirement
+  // inventory, not physically dropped here.
   entry('rpc/ensure_next_service_session_v3', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
-    'serviceLifecycleV3Transition.js ensureNext(), called by serviceLifecycleEngine.js — opens/reuses the V3 rollover continuation of a just-closed session'),
+    'serviceLifecycleV3Transition.js ensureNext() — no remaining caller after F-5; kept registered pending the mandatory legacy-retirement slice'),
 
   // ── P0-C2 — the non-destructive intraday economic-boundary primitive.
   // Deliberately its own entry, not merged into the V3 block above: reuses
