@@ -667,6 +667,21 @@ app.post("/api", async (req, res) => {
       // independently" precedent). Idempotent: NO_ROLLOVER_DUE is a normal,
       // non-error success when the current session's kind/date already match
       // what the clock says should be current.
+      //
+      // CONTAINMENT (S-D, this session): after the Operational Service repair,
+      // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, named here only to describe what no longer selects session identity, not new vocabulary
+      // service_sessions identity no longer follows PRANZO/SERA within a
+      // Business Day (see resolve_order_intake_context_v1). This action is the
+      // one remaining runtime surface still capable of manually recreating a
+      // period-as-session split; it has zero frontend callers (grepped both
+      // frontend repos, confirmed empty) and is orphaned. Same discipline as
+      // SERVICE_PERIOD_CONSOLIDATION_ENABLED immediately below: exact-match
+      // fail-closed gate, unset/anything other than the literal string 'true'
+      // means disabled. Does not touch the RPC or economicBoundaryEngine.js —
+      // this is the smallest possible containment, at the HTTP boundary only.
+      if (process.env.ECONOMIC_PERIOD_ROLLOVER_ENABLED !== "true") {
+        return res.status(403).json({ error: "ECONOMIC_PERIOD_ROLLOVER_DISABLED" });
+      }
       const actorId = req.authCtx?.actor;
       if (!actorId) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
       const rolled = await rollEconomicPeriod({ actor: actorId, source: "operator" });
