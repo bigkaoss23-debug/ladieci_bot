@@ -233,29 +233,21 @@ for (const legacyFn of ["resolve_order_intake_context_v1", "ensure_service_sessi
 }
 
 console.log("\n== P. No application-source change AT F-6's OWN COMMIT -- F-6 itself is DB-only, dormant, zero registration ==");
-// F-7 (a later, separate, deliberate slice) is the sanctioned activator: it
-// wires the ONE real caller entirely in SQL (resolve_order_intake_context_v1
-// calling open_operational_service_v1 for its first-ever-lazy-open path,
-// never from JS/HTTP). These checks therefore scan for FUNCTIONAL JS wiring
-// -- an actual rpc(...) call site or route dispatch -- comment-stripped, so
-// F-7's own legitimate explanatory prose (which necessarily names this RPC
-// to document why/where it is now the real caller) cannot false-positive
-// against a check whose real intent was always "no JS caller", not "the
-// string never appears in a comment."
-assert("16a: no functional HTTP action wiring for this RPC in index.js (rpc(...) call site or inline route dispatch)",
+// F-7 (a later, separate, deliberate slice) added the ONE SQL-only caller
+// (resolve_order_intake_context_v1's first-ever-lazy-open path), still never
+// from JS/HTTP -- 16a below (index.js only) still guards exactly that and
+// remains true. F-9 (owner-frozen brief, dated after this file) is the real
+// JS activator anticipated but not yet built when this comment was written:
+// explicitReopenServiceSession.js is now the one JS call site, reachable
+// only from the one intentional openServiceSession HTTP action, never from
+// page load or order intake (see tests/f9ExplicitSameDayReopen.static.test.js
+// for that slice's own, narrower guards). 16b/16c's ORIGINAL claim -- "zero
+// JS callers, registration unnecessary" -- is retired by design, not by
+// drift; the invariant they protected (no SILENT/undocumented JS wiring) is
+// carried forward by F-9's own file instead.
+assert("16a: no functional HTTP action wiring for this RPC directly in index.js (rpc(...) call site or inline route dispatch) -- F-9 routes through serviceSessionLifecycle.js/explicitReopenServiceSession.js, never a literal rpc() call in index.js itself",
   !/rpc\(\s*['"`]open_operational_service_v1['"`]/.test(stripJsComments(fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8")))
   && !/action\s*===\s*['"`]open_operational_service_v1['"`]/.test(stripJsComments(fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8"))));
-assert("16b: no supabaseResourcePolicy.js registration for this RPC (matches open_business_day_v1's own dormant precedent) -- still true after F-7, registration remains unnecessary",
-  !/open_operational_service_v1/.test(fs.readFileSync(path.join(__dirname, "..", "src", "utils", "supabaseResourcePolicy.js"), "utf8")));
-{
-  const srcDir = path.join(__dirname, "..", "src");
-  const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-    const full = path.join(dir, e.name);
-    return e.isDirectory() ? walk(full) : (e.isFile() && e.name.endsWith(".js") ? [full] : []);
-  });
-  const callers = walk(srcDir).filter((f) => /rpc\(\s*['"`]open_operational_service_v1['"`]/.test(stripJsComments(fs.readFileSync(f, "utf8"))));
-  assert("16c: zero files under src/ contain a functional rpc('open_operational_service_v1', ...) call site (F-7's real caller lives entirely in SQL, not JS)", callers.length === 0, callers.join(", "));
-}
 
 console.log("\n=== RESULT: " + pass + " passed, " + fail + " failed ===");
 process.exit(fail === 0 ? 0 : 1);

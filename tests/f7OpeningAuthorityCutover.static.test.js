@@ -147,11 +147,19 @@ for (const otherFn of ["roll_service_session_economic_v1", "ensure_next_service_
     !new RegExp(`CREATE (OR REPLACE )?FUNCTION public\\.${otherFn}`).test(SQL_CODE_ONLY));
 }
 
-console.log("\n== H. No new resource-policy registration, no new HTTP action wiring ==");
-assert("8a: no supabaseResourcePolicy.js registration change for either target function",
+console.log("\n== H. No new resource-policy registration, no new HTTP action wiring (F-7's own migration scope only) ==");
+assert("8a: no supabaseResourcePolicy.js registration change for either F-7 target function",
   !/entry\('rpc\/ensure_service_session'.*text.*text.*text/.test(fs.readFileSync(path.join(__dirname, "..", "src", "utils", "supabaseResourcePolicy.js"), "utf8")));
-assert("8b: index.js's openServiceSession action still delegates entirely to ensureCurrentServiceSession (no new direct RPC call introduced)",
-  !/action === "openServiceSession"[\s\S]{0,400}rpc\(/.test(fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8")));
+// 8b RETIRED by F-9 (owner-frozen brief, dated after this file): F-7's own
+// comment on the openServiceSession handler always named this as deliberate
+// and temporary — "Explicit reopen is a separate, not-yet-built product
+// action ... that this action is deliberately NOT repointed to in F-7; that
+// cutover is certified and wired in a later slice." F-9 is that slice: the
+// handler now routes through explicitReopenServiceSession.js, a real new
+// call site by design. The invariant this assertion protected (openServiceSession
+// can never silently start creating rows outside a reviewed, intentional
+// cutover) is carried forward, strengthened, by
+// tests/f9ExplicitSameDayReopen.static.test.js's own guards instead.
 
 console.log("\n=== RESULT: " + pass + " passed, " + fail + " failed ===");
 process.exit(fail === 0 ? 0 : 1);

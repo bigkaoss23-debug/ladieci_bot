@@ -55,6 +55,7 @@ const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceClos
 const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/serviceSessionLifecycle");
 const { closeServiceV3 } = require("./src/serviceSessions/serviceLifecycleEngine");
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
+const { explicitReopenServiceSession } = require("./src/serviceSessions/explicitReopenServiceSession");
 const { rollEconomicPeriod } = require("./src/serviceSessions/economicBoundaryEngine");
 const { periodConsolidation } = require("./src/serviceSessions/periodConsolidation");
 const { resolveSchedule, closeEligibility, SCHEDULE_STATE, SERVICE_KIND } = require("./src/schedule/serviceSchedule");
@@ -686,19 +687,20 @@ app.post("/api", async (req, res) => {
     }
 
     if (action === "openServiceSession") {
-      // F-7 — CONTAINED, not routed. This delegates entirely to
-      // ensureCurrentServiceSession (Part 1 of F-7's opening authority
-      // cutover), which is now read/reuse only: it can never create a
-      // service under ANY circumstance, window or no window. This action's
-      // real answer today is REUSED (an active session exists) or a typed
-      // NO_OPEN_SERVICE / REOPEN_REQUIRED read-only report — never a create.
-      // Explicit reopen is a separate, not-yet-built product action
-      // (open_operational_service_v1 with 'explicit_reopen') that this
-      // action is deliberately NOT repointed to in F-7; that cutover is
-      // certified and wired in a later slice.
+      // F-9 — the cutover F-7 deliberately deferred. This action is the
+      // ONLY intentional-open UI trigger (useOpenServiceController +
+      // OpenServiceConfirmation, role-gated, confirmed, single-flight-
+      // locked, verified by a post-call state re-read) and now routes to
+      // explicitReopenServiceSession, which resolves REUSED / typed
+      // rejection / a genuine explicit_reopen entirely server-side — the
+      // client sends no arguments and no lifecycle identity of any kind.
+      // Page load (ensureCurrentServiceSession, above) is untouched and
+      // still can never create anything; only THIS explicit, authenticated,
+      // human-triggered action may ever pass 'explicit_reopen' to
+      // open_operational_service_v1.
       const actorId = req.authCtx?.actor;
       if (!actorId) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
-      const ensured = await ensureCurrentServiceSession({ actor: actorId, source: "manual_recovery" });
+      const ensured = await explicitReopenServiceSession({ actor: actorId, source: "manual_recovery" });
       if (!ensured.success) return res.status(409).json({ error: ensured.code || "SERVICE_SESSION_OPEN_FAILED", detail: ensured });
       result = { ok: true, ...ensured };
     } else if (action === "rollEconomicPeriod") {

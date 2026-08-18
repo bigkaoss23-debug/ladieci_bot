@@ -170,6 +170,10 @@ const REGISTRY = Object.freeze([
   entry('rpc/begin_service_session_close', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/serviceSessionLifecycle.js'),
   entry('rpc/complete_service_session_close', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/serviceSessionLifecycle.js'),
   entry('rpc/get_current_service_closeout_session', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'serviceSessions/serviceSessionLifecycle.js'),
+  // F-9 — the canonical opener (F-6), now given its first real caller:
+  // serviceSessionLifecycle.js's openOperational(), reachable only from
+  // explicitReopenServiceSession.js's own single 'explicit_reopen' call site.
+  entry('rpc/open_operational_service_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/serviceSessionLifecycle.js'),
   // R-DAY3 — read-only intake-schedule preflight mirror. The canonical,
   // authoritative resolve_order_intake_context_v1() is called ONLY from
   // inside the service_session_assign_order() DB trigger, never via sbRpc

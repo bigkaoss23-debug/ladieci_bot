@@ -53,6 +53,15 @@ function createServiceSessionLifecycle({ rpc = sbRpc } = {}) {
     async currentCloseout() {
       return normalize(await rpc("get_current_service_closeout_session", {}));
     },
+    // F-9 — the sole wrapper for the canonical opener (F-6). p_open_reason is
+    // never defaulted here: every caller must state 'first_open_of_business_day'
+    // or 'explicit_reopen' explicitly, matching the RPC's own fail-closed
+    // signature (no default, INVALID_OPEN_REASON on anything else).
+    async openOperational({ actor, openReason, source = 'backend' }) {
+      return normalize(await rpc("open_operational_service_v1", {
+        p_opened_by: actor, p_open_reason: openReason, p_source: source,
+      }));
+    },
   });
 }
 
