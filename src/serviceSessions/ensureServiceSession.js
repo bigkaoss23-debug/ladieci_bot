@@ -1,19 +1,22 @@
 "use strict";
 // ===============================================================
-// ensureServiceSession.js — S2-7D6B, recovery pre-check S2-7D6F
+// ensureServiceSession.js — S2-7D6B, recovery pre-check S2-7D6F,
+// F-7 opening authority cutover
 //
 // The service session is an INVISIBLE operational and accounting container. The
 // operator should never have to open one by hand on a normal day: the first
 // authorised admin or operator who enters Servicio inside a valid window causes
 // the correct session to exist, exactly once, and walks straight in.
 //
-// This module owns the decision "which kind, and may we create it?". The SQL
-// function owns atomicity and the invariants. Neither owns the schedule — that
-// is serviceSchedule.js, the single source of truth.
-//
-// The client NEVER supplies the kind. It is derived here from server time, for
-// the same reason ordenes.service_session_id is trigger-assigned: a caller that
-// can name its own service can misfile takings.
+// F-7 — this module no longer decides "which kind, and may we create it?"
+// (there is no longer a kind to decide, and it never creates at all). Once
+// no active session remains, it answers purely from DB state, read-only:
+// NO_OPEN_SERVICE (the current Business Day has never had a service) or
+// REOPEN_REQUIRED (it has, but nothing is active right now). Page load
+// observes state. Page load does not create lifecycle. The FIRST-EVER
+// creation for a Business Day happens lazily on the first real order,
+// inside resolve_order_intake_context_v1 (see that RPC's own header) —
+// never from here.
 //
 // S2-7D6F — a REAL, still-open session must never be shadowed by a window-only
 // refusal. Before S2-7D6F, BETWEEN_SERVICES/AFTER_ORDER_CUTOFF/OUTSIDE_WINDOWS
@@ -22,8 +25,10 @@
 // dinner still running at 05:00, could dead-end an operator with zero access
 // even though the RPC's own kind-mismatch conflict (LUNCH_SESSION_STILL_ACTIVE)
 // already handles the exact same situation correctly inside the ensure-eligible
-// windows. This module runs ONE recovery pre-check, in every window, before
-// ever consulting canEnsureSession:
+// windows. This module runs ONE recovery pre-check, unconditionally, before
+// ever consulting the read-only discriminator below — UNCHANGED by F-7, this
+// is orthogonal to opening authority: it closes a DUE, still-grandfathered
+// legacy session, it never creates one:
 //   1. read the actual current session (open/closing), regardless of window;
 //   2. if it is genuinely due for rollover (classifySessionForRollover says
 //      PRIOR_DAY_STALE or SAME_DAY_TRANSITION_DUE) -> run the incident-safe
@@ -35,36 +40,31 @@
 //      no longer keep a DUE session current forever. Pending work becomes a
 //      persisted incident instead (see rolloverClassifier.js); the session
 //      still closes, via the SAME engine (chiudiServizio) this always used;
-//   3. if the rollover succeeds -> re-enter the window logic from a clean
-//      slate — never auto-open a NEW session outside an allowed window just
-//      because the old one just closed (unchanged from before);
+//   3. if the rollover succeeds -> re-enter the discriminator below from a
+//      clean slate — never auto-open a NEW session just because the old one
+//      just closed (unchanged from before);
 //   4. if the rollover is deferred (e.g. an active rider trip) or fails for a
 //      real reason -> hand back the still-open session rather than dead-end
 //      the operator (unchanged from before);
 //   5. only when no recoverable session exists, or it is not yet due, does
-//      the ordinary window-typed refusal apply.
+//      the ordinary read-only discriminator apply.
 // No logic is duplicated: step 2 reuses classifySessionForRollover and
 // performIncidentSafeRollover, which itself reuses chiudiServizio — exactly
 // as cron/boot/external now do too (see index.js).
 // ===============================================================
 
 const { lifecycle } = require("./serviceSessionLifecycle");
-const { DEFAULT_SCHEDULE, SCHEDULE_STATE, resolveSchedule } = require("../schedule/serviceSchedule");
+const { DEFAULT_SCHEDULE } = require("../schedule/serviceSchedule");
 const { classifySessionForRollover, isRolloverDue } = require("./sessionRolloverClassification");
 const { performIncidentSafeRollover } = require("./incidentSafeRollover");
 
 // Typed non-success states. None of these is an error in the crash sense — each
 // is a legitimate answer that the UI renders differently.
 const ENSURE_CODE = Object.freeze({
-  CREATED: "CREATED",
   REUSED: "REUSED",
-  BETWEEN_SERVICES: "BETWEEN_SERVICES",
-  OUTSIDE_WINDOWS: "OUTSIDE_WINDOWS",
-  AFTER_ORDER_CUTOFF: "AFTER_ORDER_CUTOFF",
-  LUNCH_SESSION_STILL_ACTIVE: "LUNCH_SESSION_STILL_ACTIVE",
-  OTHER_SERVICE_STILL_ACTIVE: "OTHER_SERVICE_STILL_ACTIVE",
+  NO_OPEN_SERVICE: "NO_OPEN_SERVICE",
+  REOPEN_REQUIRED: "REOPEN_REQUIRED",
   SERVICE_SESSION_CLOSING: "SERVICE_SESSION_CLOSING",
-  SERVICE_ALREADY_COMPLETED_TODAY: "SERVICE_ALREADY_COMPLETED_TODAY",
   INVALID_ACTOR: "INVALID_ACTOR",
   ENSURE_FAILED: "ENSURE_FAILED",
 });
@@ -92,15 +92,16 @@ function publicSession(row) {
 // exactly what produced the stuck PRANZO of 2026-08-10 15:37 UTC (see
 // SERVICE_LIFECYCLE_ECONOMIC_BOUNDARY_AUDIT_REPORT.md §7).
 // automaticLifecycleEnabled() mirrors index.js's own flag (same env var, same
-// default-true semantics) so the rollover call below becomes the FOURTH path
-// under the SAME single safety switch, never a new mechanism. When disabled,
-// "due for rollover" degrades to the SAME safe fallback already used for a
-// deferred rollover: hand back the still-open, still-usable session. Only an
+// default-true semantics) so the rollover call below stays under the SAME
+// single safety switch, never a new mechanism. When disabled, "due for
+// rollover" degrades to the SAME safe fallback already used for a deferred
+// rollover: hand back the still-open, still-usable session. Only an
 // explicit, human-initiated close (index.js action "chiudiServizio") remains
-// reachable while automatic lifecycle is frozen. Safe/idempotent session
-// creation (the ensure() call further below, for when NO session exists at
-// all yet) is untouched — that was never an implicit close/rollover and stays
-// available regardless of this flag.
+// reachable while automatic lifecycle is frozen. This gate governs ONLY the
+// legacy rollover-of-an-existing-session step — it has never governed, and
+// still does not govern, whether this module may CREATE anything (it never
+// could create outside a window before F-7 either; after F-7 it can never
+// create at all, window or no window).
 function createEnsureCurrentServiceSession({
   sessionLifecycle = lifecycle,
   schedule = DEFAULT_SCHEDULE,
@@ -114,9 +115,9 @@ function createEnsureCurrentServiceSession({
     }
 
     const nowDate = now();
-    const when = resolveSchedule(nowDate, schedule);
 
-    // ── S2-7D6F recovery pre-check — runs in EVERY window, before canEnsureSession ──
+    // ── S2-7D6F recovery pre-check — runs unconditionally, before ever
+    // consulting the read-only discriminator below ──
     let current = null;
     try {
       const identity = await sessionLifecycle.currentCloseout();
@@ -126,7 +127,7 @@ function createEnsureCurrentServiceSession({
     } catch (_) {
       // A read failure here must not make ensure() itself fail — it only means
       // the recovery pre-check is unavailable this attempt; fall through to the
-      // ordinary window logic below exactly as before S2-7D6F.
+      // ordinary discriminator below exactly as before S2-7D6F.
       current = null;
     }
 
@@ -134,15 +135,12 @@ function createEnsureCurrentServiceSession({
       if (current.status === "closing") {
         return {
           success: false, created: false, code: ENSURE_CODE.SERVICE_SESSION_CLOSING,
-          session: publicSession(current), scheduleState: when.state, businessDate: when.businessDate,
+          session: publicSession(current),
         };
       }
 
-      // status === "open" — steps 2/3/4 of the contract. P0-C1: the rollover
-      // attempt itself is gated by automaticLifecycleEnabled() — see this
-      // file's header. A due-but-ungated session falls through to "grant
-      // access to the still-open session" below, exactly like a deferred
-      // rollover already does — never a silent mutation from a page load.
+      // status === "open" — steps 2/3/4 of the S2-7D6F contract, UNCHANGED
+      // by F-7: this closes a DUE legacy session, it never creates one.
       const classification = classifySessionForRollover(current, nowDate, schedule);
       if (isRolloverDue(classification) && automaticLifecycleEnabled()) {
         let rolloverResult;
@@ -150,9 +148,9 @@ function createEnsureCurrentServiceSession({
         catch (e) { rolloverResult = { success: false, error: String((e && e.message) || e) }; }
 
         if (rolloverResult && rolloverResult.success === true) {
-          // Rolled over (with or without incidents). Re-enter the window logic
-          // from a clean slate — never auto-open a new session outside an
-          // allowed window just because this one just closed.
+          // Rolled over (with or without incidents). Re-enter the
+          // discriminator below from a clean slate — never auto-open a new
+          // session just because this one just closed.
           current = null;
         } else if (rolloverResult && rolloverResult.deferred) {
           // An active rider trip (or similar mechanical defer inside
@@ -171,36 +169,22 @@ function createEnsureCurrentServiceSession({
       if (current) {
         return {
           success: true, created: false, code: ENSURE_CODE.REUSED,
-          session: publicSession(current), scheduleState: when.state, businessDate: when.businessDate,
+          session: publicSession(current),
         };
       }
     }
 
-    // Outside a creation window we must NOT invent a service. Returning a typed
-    // state (rather than silently picking a kind) is what keeps a 03:00 or a
-    // 17:45 arrival from minting a phantom session.
-    if (!when.canEnsureSession) {
-      const code =
-        when.state === SCHEDULE_STATE.BETWEEN_SERVICES ? ENSURE_CODE.BETWEEN_SERVICES
-        : when.state === SCHEDULE_STATE.AFTER_ORDER_CUTOFF ? ENSURE_CODE.AFTER_ORDER_CUTOFF
-        : ENSURE_CODE.OUTSIDE_WINDOWS;
-      return {
-        success: false, created: false, code, session: null,
-        scheduleState: when.state, businessDate: when.businessDate,
-      };
-    }
-
-    const res = await sessionLifecycle.ensure({
-      actor, serviceKind: when.serviceKind, source,
-    });
+    // F-7 — no active session remains. Read-only discriminator: never
+    // creates, never infers PRANZO/SERA identity, never rolls anything, // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, named here only to describe identity logic this discriminator never performs, not new vocabulary
+    // never calls open_operational_service_v1. ensure_service_session
+    // itself answers REUSED / NO_OPEN_SERVICE / REOPEN_REQUIRED purely from
+    // DB state.
+    const res = await sessionLifecycle.ensure({ actor, source });
 
     if (res && res.ok === true) {
       return {
-        success: true,
-        created: res.created === true,
-        code: res.created === true ? ENSURE_CODE.CREATED : ENSURE_CODE.REUSED,
+        success: true, created: false, code: ENSURE_CODE.REUSED,
         session: publicSession(res.session),
-        scheduleState: when.state,
       };
     }
 
@@ -210,8 +194,7 @@ function createEnsureCurrentServiceSession({
       created: false,
       code,
       session: publicSession(res && res.session),
-      scheduleState: when.state,
-      businessDate: when.businessDate,
+      businessDate: (res && res.businessDate) || null,
     };
   };
 }

@@ -13,6 +13,31 @@ let pass = 0, fail = 0;
 const assert = (n, c, d = "") => { if (c) { pass++; } else { fail++; console.log("  FAIL  " + n + (d ? "  -> " + d : "")); } };
 const read = (p) => fs.readFileSync(path.join(__dirname, "..", p), "utf8");
 const stripSqlComments = (s) => s.split("\n").map((line) => line.replace(/--.*$/, "")).join("\n");
+// Same comment-stripping shape as tests/serviceLifecycleV3EngineLegacyNonInterference
+// .static.test.js — section P's own checks are about FUNCTIONAL JS wiring
+// (a real rpc(...) call site), not prose; F-7 legitimately names this RPC in
+// explanatory comments once it becomes the real, sanctioned caller (via SQL,
+// not JS), so a naive raw-substring scan would false-positive on that prose.
+function stripJsComments(text) {
+  let out = ""; let i = 0; const n = text.length;
+  while (i < n) {
+    const c = text[i]; const c2 = i + 1 < n ? text[i + 1] : "";
+    if (c === "/" && c2 === "/") { while (i < n && text[i] !== "\n") i++; continue; }
+    if (c === "/" && c2 === "*") { i += 2; while (i < n && !(text[i] === "*" && text[i + 1] === "/")) i++; i += 2; continue; }
+    if (c === '"' || c === "'" || c === "`") {
+      const quote = c; out += c; i++;
+      while (i < n) {
+        if (text[i] === "\\") { out += text[i] + (i + 1 < n ? text[i + 1] : ""); i += 2; continue; }
+        out += text[i];
+        if (text[i] === quote) { i++; break; }
+        i++;
+      }
+      continue;
+    }
+    out += c; i++;
+  }
+  return out;
+}
 
 const SQL = read("migrations/2026-08-18_f6_open_operational_service_primitive.sql");
 const ROLLBACK = read("migrations/2026-08-18_f6_open_operational_service_primitive.ROLLBACK.sql");
@@ -207,10 +232,20 @@ for (const legacyFn of ["resolve_order_intake_context_v1", "ensure_service_sessi
     !new RegExp(`CREATE FUNCTION public\\.${legacyFn}`).test(SQL_CODE_ONLY));
 }
 
-console.log("\n== P. No application-source change -- F-6 is DB-only, dormant, zero registration ==");
-assert("16a: no HTTP action wiring for this RPC anywhere in index.js",
-  !/open_operational_service_v1/.test(fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8")));
-assert("16b: no supabaseResourcePolicy.js registration for this RPC (matches open_business_day_v1's own dormant precedent)",
+console.log("\n== P. No application-source change AT F-6's OWN COMMIT -- F-6 itself is DB-only, dormant, zero registration ==");
+// F-7 (a later, separate, deliberate slice) is the sanctioned activator: it
+// wires the ONE real caller entirely in SQL (resolve_order_intake_context_v1
+// calling open_operational_service_v1 for its first-ever-lazy-open path,
+// never from JS/HTTP). These checks therefore scan for FUNCTIONAL JS wiring
+// -- an actual rpc(...) call site or route dispatch -- comment-stripped, so
+// F-7's own legitimate explanatory prose (which necessarily names this RPC
+// to document why/where it is now the real caller) cannot false-positive
+// against a check whose real intent was always "no JS caller", not "the
+// string never appears in a comment."
+assert("16a: no functional HTTP action wiring for this RPC in index.js (rpc(...) call site or inline route dispatch)",
+  !/rpc\(\s*['"`]open_operational_service_v1['"`]/.test(stripJsComments(fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8")))
+  && !/action\s*===\s*['"`]open_operational_service_v1['"`]/.test(stripJsComments(fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8"))));
+assert("16b: no supabaseResourcePolicy.js registration for this RPC (matches open_business_day_v1's own dormant precedent) -- still true after F-7, registration remains unnecessary",
   !/open_operational_service_v1/.test(fs.readFileSync(path.join(__dirname, "..", "src", "utils", "supabaseResourcePolicy.js"), "utf8")));
 {
   const srcDir = path.join(__dirname, "..", "src");
@@ -218,8 +253,8 @@ assert("16b: no supabaseResourcePolicy.js registration for this RPC (matches ope
     const full = path.join(dir, e.name);
     return e.isDirectory() ? walk(full) : (e.isFile() && e.name.endsWith(".js") ? [full] : []);
   });
-  const callers = walk(srcDir).filter((f) => /open_operational_service_v1/.test(fs.readFileSync(f, "utf8")));
-  assert("16c: zero files under src/ reference open_operational_service_v1 (no JS caller wired anywhere)", callers.length === 0, callers.join(", "));
+  const callers = walk(srcDir).filter((f) => /rpc\(\s*['"`]open_operational_service_v1['"`]/.test(stripJsComments(fs.readFileSync(f, "utf8"))));
+  assert("16c: zero files under src/ contain a functional rpc('open_operational_service_v1', ...) call site (F-7's real caller lives entirely in SQL, not JS)", callers.length === 0, callers.join(", "));
 }
 
 console.log("\n=== RESULT: " + pass + " passed, " + fail + " failed ===");

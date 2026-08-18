@@ -1,9 +1,19 @@
 "use strict";
 // S2-7D6B — the ensure lifecycle, with an injected fake RPC layer so every
-// branch (including the ones a real database would take hours to reproduce) is
-// provable offline. The SQL-side atomicity is asserted separately by the
-// migration test; here the subject is the DECISION: which kind, may we create,
-// and what does the caller learn.
+// branch is provable offline. The SQL-side atomicity is asserted separately
+// by the migration test; here the subject is the DECISION the JS
+// orchestrator makes and what the caller learns.
+//
+// F-7 (opening authority cutover) rewrites this file's whole premise: before
+// F-7, this module decided "which kind, and may we create it?" (window- // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, named here only to describe the retired pre-F-7 contract, not new vocabulary
+// gated PRANZO/SERA creation). After F-7 it decides nothing and creates
+// nothing — it is read/reuse only. An active session (any era) is REUSED;
+// otherwise the answer is NO_OPEN_SERVICE (the current Business Day has
+// never had a service) or REOPEN_REQUIRED (it has, but nothing is active
+// now) — both purely DB-derived, both clock-independent. The FIRST-EVER
+// creation for a Business Day happens lazily on the first real order via
+// resolve_order_intake_context_v1 (see tests/f7OpeningAuthorityCutover
+// .static.test.js and the live fixture matrix report), never from here.
 const { createEnsureCurrentServiceSession, ENSURE_CODE } = require("../src/serviceSessions/ensureServiceSession");
 const { DEFAULT_SCHEDULE } = require("../src/schedule/serviceSchedule");
 
@@ -12,153 +22,141 @@ const assert = (n, c, d = "") => { if (c) { pass++; console.log("  PASS  " + n);
 
 const summer = (h, m = 0, day = 15) => new Date(Date.UTC(2026, 6, day, h - 2, m));
 
-// A fake of the SQL contract, faithful to the real function's branches.
-function fakeDb(initial = {}) {
-  const db = {
-    current: initial.current || null,      // { id, service_kind, business_date, status, opened_at }
-    completed: initial.completed || [],    // [{ business_date, service_kind }]
-    inserts: 0,
-    calls: [],
-  };
+// A fake of the SQL contract, faithful to the real F-7 function's branches:
+// REUSED (active session exists, era-blind) / NO_OPEN_SERVICE (pristine
+// Business Day) / REOPEN_REQUIRED (Business Day has history, nothing
+// active) / INVALID_ACTOR. Never creates. No serviceKind parameter exists.
+function fakeDb({ current = null, hasHistoryToday = false, noCurrentBusinessDay = false } = {}) {
+  const db = { current, hasHistoryToday, noCurrentBusinessDay, calls: [] };
   db.lifecycle = {
-    async ensure({ actor, serviceKind, source }) {
-      db.calls.push({ actor, serviceKind, source });
-      if (!serviceKind || !["PRANZO", "SERA"].includes(serviceKind)) return { ok: false, code: "INVALID_SERVICE_KIND" };
+    async ensure({ actor, source }) {
+      db.calls.push({ actor, source });
       if (!actor || !String(actor).trim()) return { ok: false, code: "INVALID_ACTOR" };
       if (db.current) {
         if (db.current.status === "closing") return { ok: false, code: "SERVICE_SESSION_CLOSING", session: db.current };
-        if (db.current.service_kind !== serviceKind) {
-          return {
-            ok: false,
-            code: db.current.service_kind === "PRANZO" ? "LUNCH_SESSION_STILL_ACTIVE" : "OTHER_SERVICE_STILL_ACTIVE",
-            session: db.current,
-          };
-        }
         return { ok: true, code: "REUSED", created: false, session: db.current };
       }
-      const businessDate = "2026-07-15";
-      if (db.completed.some((c) => c.business_date === businessDate && c.service_kind === serviceKind)) {
-        return { ok: false, code: "SERVICE_ALREADY_COMPLETED_TODAY" };
+      if (db.noCurrentBusinessDay) {
+        return { ok: false, code: "NO_OPEN_SERVICE" };
       }
-      db.inserts++;
-      db.current = {
-        id: "uuid-" + db.inserts, service_kind: serviceKind, business_date: businessDate,
-        status: "open", opened_at: "2026-07-15T10:00:00Z",
-      };
-      return { ok: true, code: "CREATED", created: true, session: db.current };
+      if (db.hasHistoryToday) {
+        return { ok: false, code: "REOPEN_REQUIRED", businessDate: "2026-07-15" };
+      }
+      return { ok: false, code: "NO_OPEN_SERVICE", businessDate: "2026-07-15" };
     },
   };
   return db;
 }
 
+// This module's own S2-7D6F recovery pre-check calls currentCloseout()
+// before ever reaching ensure() — since these tests are about ensure()'s
+// OWN discriminator, currentCloseout() is stubbed to report nothing active
+// (mirroring db.current === null), letting the recovery pre-check fall
+// straight through, exactly matching every real "no current session" case.
+function withRecoveryStub(db) {
+  db.lifecycle.currentCloseout = async () => {
+    if (!db.current) return { ok: true, code: "NO_SERVICE_SESSION", session: null };
+    return { ok: true, session: db.current };
+  };
+  return db;
+}
+
 const make = (db, when) => createEnsureCurrentServiceSession({
-  sessionLifecycle: db.lifecycle, schedule: DEFAULT_SCHEDULE, now: () => when,
+  sessionLifecycle: withRecoveryStub(db).lifecycle, schedule: DEFAULT_SCHEDULE, now: () => when,
 });
 
 (async () => {
-  console.log("\n══ 1-3. lunch ══");
+  console.log("\n══ 1-3. active session -> REUSED, era/clock-independent ══");
   {
-    const db = fakeDb();
+    const db = fakeDb({ current: { id: "uuid-active", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } }); // language-guard: allow-legacy PRANZO is the existing service_kind enum value, used here only as a fixture label on a legacy-era session, not new vocabulary
     const ensure = make(db, summer(12));
     const first = await ensure({ actor: "operator_primary" });
-    assert("1: first lunch access CREATES PRANZO", first.success && first.created && first.session.serviceKind === "PRANZO", JSON.stringify(first));
-    assert("1: business date carried", first.session.businessDate === "2026-07-15");
+    assert("1: active session is REUSED, never re-created", first.success && first.created === false && first.session.id === "uuid-active", JSON.stringify(first));
     const second = await ensure({ actor: "operator_backup" });
-    assert("2: second access REUSES the same UUID", second.success && second.created === false && second.session.id === first.session.id);
-    assert("2: only one row was ever inserted", db.inserts === 1);
-    assert("2: the kind was never taken from a caller argument", db.calls.every((c) => c.serviceKind === "PRANZO"));
+    assert("2: second access REUSES the same identity", second.success && second.created === false && second.session.id === first.session.id);
+    assert("2: no serviceKind was ever forwarded to the RPC (the parameter no longer exists)", db.calls.every((c) => !("serviceKind" in c)));
   }
   {
-    // Simultaneous first access: the real serialization is the advisory lock, so
-    // here we prove the CALLER never asks for two different things at once and
-    // that a concurrent pair still yields one identity.
-    const db = fakeDb();
+    // Simultaneous access: proves the caller never invents two different
+    // outcomes for a concurrent pair. The real serialization is the
+    // advisory lock; here the fake DB is single-threaded, so this proves
+    // the CALLER-side contract (idempotent, no local guessing).
+    const db = fakeDb({ current: { id: "uuid-concurrent", service_kind: "SERA", business_date: "2026-07-15", status: "open", opened_at: "x" } });
     const ensure = make(db, summer(12));
     const [a, b] = await Promise.all([ensure({ actor: "owner" }), ensure({ actor: "operator_primary" })]);
-    assert("3: simultaneous ensure yields ONE uuid", a.session.id === b.session.id, `${a.session.id} vs ${b.session.id}`);
-    assert("3: exactly one insert", db.inserts === 1);
+    assert("3: simultaneous ensure yields ONE identity", a.session.id === b.session.id, `${a.session.id} vs ${b.session.id}`);
   }
 
-  console.log("\n══ 4-5. dinner ══");
+  console.log("\n══ 4-5. no active session, pristine Business Day -> NO_OPEN_SERVICE, at ANY hour ══");
   {
-    const db = fakeDb();
-    const ensure = make(db, summer(20));
-    const first = await ensure({ actor: "owner" });
-    assert("4: first dinner access CREATES SERA", first.success && first.created && first.session.serviceKind === "SERA");
-    const second = await ensure({ actor: "owner" });
-    assert("5: dinner access REUSES the same UUID", second.success && !second.created && second.session.id === first.session.id);
+    const db = fakeDb({ current: null, hasHistoryToday: false });
+    const r = await make(db, summer(12))({ actor: "owner" });
+    assert("4: NO_OPEN_SERVICE, session:null, nothing created — never creates", r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE && r.session === null, JSON.stringify(r));
+  }
+  {
+    // The exact same DB state at a wildly different hour must yield the
+    // identical answer — F-7 removed all clock/window dependence from this
+    // discriminator.
+    const db = fakeDb({ current: null, hasHistoryToday: false });
+    const r = await make(db, summer(3, 30, 16))({ actor: "owner" });
+    assert("5: identical NO_OPEN_SERVICE at 03:30 as at noon — clock-independent (F-7)", r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE && r.session === null, JSON.stringify(r));
   }
 
-  console.log("\n══ 6-7. boundaries ══");
+  console.log("\n══ 6-7. no active session, Business Day already has history -> REOPEN_REQUIRED, at ANY hour ══");
   {
-    const db = fakeDb({ current: { id: "uuid-lunch", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } });
-    const ensure = make(db, summer(18, 30));
-    const r = await ensure({ actor: "owner" });
-    assert("6: lunch still active at 18:30 → typed conflict", r.success === false && r.code === ENSURE_CODE.LUNCH_SESSION_STILL_ACTIVE, JSON.stringify(r));
-    assert("6: no dinner session was created", db.inserts === 0);
-    assert("6: the conflicting session is reported back", r.session && r.session.serviceKind === "PRANZO");
+    const db = fakeDb({ current: null, hasHistoryToday: true });
+    const r = await make(db, summer(20))({ actor: "owner" });
+    assert("6: REOPEN_REQUIRED, session:null, nothing created", r.success === false && r.code === ENSURE_CODE.REOPEN_REQUIRED && r.session === null, JSON.stringify(r));
   }
   {
-    const db = fakeDb();
-    const r = await make(db, summer(17, 45))({ actor: "owner" });
-    assert("7: 17:30-18:00 buffer creates NOTHING", r.success === false && r.code === ENSURE_CODE.BETWEEN_SERVICES);
-    assert("7: the RPC was never even called", db.calls.length === 0);
-    assert("7: no kind was silently chosen", r.session === null);
+    const db = fakeDb({ current: null, hasHistoryToday: true });
+    const r = await make(db, summer(4, 15, 16))({ actor: "owner" });
+    assert("7: identical REOPEN_REQUIRED at 04:15 — clock-independent (F-7)", r.success === false && r.code === ENSURE_CODE.REOPEN_REQUIRED && r.session === null, JSON.stringify(r));
   }
 
-  console.log("\n══ 8-10. evening and midnight ══");
+  console.log("\n══ 8. no current Business Day at all -> NO_OPEN_SERVICE, never a crash ══");
   {
-    const db = fakeDb();
-    const r = await make(db, summer(23, 50))({ actor: "owner" });
-    assert("8: 23:50 is still a normal SERA ensure", r.success && r.session.serviceKind === "SERA");
-  }
-  {
-    // After midnight an ALREADY-OPEN dinner stays valid and reusable; what must
-    // not happen is a NEW session being minted at 01:00.
-    const db = fakeDb({ current: { id: "uuid-dinner", service_kind: "SERA", business_date: "2026-07-15", status: "open", opened_at: "x" } });
-    const r = await make(db, summer(1, 0, 16))({ actor: "owner" });
-    assert("9: after midnight no new session is created", db.inserts === 0);
-    assert("9: the state is typed AFTER_ORDER_CUTOFF", r.code === ENSURE_CODE.AFTER_ORDER_CUTOFF);
-    assert("9: the dinner keeps its opening business date", db.current.business_date === "2026-07-15");
-  }
-  {
-    const db = fakeDb();
-    const r = await make(db, summer(4, 30, 16))({ actor: "owner" });
-    assert("10: 04:00+ is OUTSIDE_WINDOWS, never a blind create", r.success === false && r.code === ENSURE_CODE.OUTSIDE_WINDOWS && db.inserts === 0);
+    const db = fakeDb({ current: null, noCurrentBusinessDay: true });
+    const r = await make(db, summer(12))({ actor: "owner" });
+    assert("8: NO_OPEN_SERVICE (no current Business Day collapses to the same typed non-success, never throws)", r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE, JSON.stringify(r));
   }
 
-  console.log("\n══ 11. restart recovery ══");
+  console.log("\n══ 9. restart recovery — identity survives, no duplicate ══");
   {
     // A restart loses in-memory state only. The identity lives in
     // service_session_state, so a fresh controller finds the same session.
     const db = fakeDb({ current: { id: "uuid-survivor", service_kind: "SERA", business_date: "2026-07-15", status: "open", opened_at: "x" } });
     const afterRestart = make(db, summer(21));
     const r = await afterRestart({ actor: "owner" });
-    assert("11: identity survives a restart", r.success && r.created === false && r.session.id === "uuid-survivor");
-    assert("11: no duplicate session after restart", db.inserts === 0);
+    assert("9: identity survives a restart", r.success && r.created === false && r.session.id === "uuid-survivor");
   }
 
-  console.log("\n══ 12-13. actor safety ══");
+  console.log("\n══ 10. actor safety ══");
   {
-    const db = fakeDb();
+    const db = fakeDb({ current: null });
     for (const bad of [undefined, null, "", "   "]) {
       const r = await make(db, summer(12))({ actor: bad });
-      assert(`13: actor ${JSON.stringify(bad)} fails closed`, r.success === false && r.code === ENSURE_CODE.INVALID_ACTOR);
+      assert(`10: actor ${JSON.stringify(bad)} fails closed`, r.success === false && r.code === ENSURE_CODE.INVALID_ACTOR);
     }
-    assert("13: no session created for an unverified actor", db.inserts === 0);
-    assert("13: the RPC was never called", db.calls.length === 0);
+    assert("10: the RPC was never called for an unverified actor (the JS-level guard rejects first)", db.calls.length === 0);
   }
 
-  console.log("\n══ extra. already-completed service ══");
-  {
-    const db = fakeDb({ completed: [{ business_date: "2026-07-15", service_kind: "PRANZO" }] });
-    const r = await make(db, summer(12))({ actor: "owner" });
-    assert("a closed lunch is not silently reopened", r.success === false && r.code === "SERVICE_ALREADY_COMPLETED_TODAY");
-  }
+  console.log("\n══ 11. a closing session is a typed conflict, not a reuse ══");
   {
     const db = fakeDb({ current: { id: "uuid-c", service_kind: "SERA", business_date: "2026-07-15", status: "closing", opened_at: "x" } });
     const r = await make(db, summer(20))({ actor: "owner" });
-    assert("a closing session is a typed conflict, not a reuse", r.success === false && r.code === ENSURE_CODE.SERVICE_SESSION_CLOSING);
+    assert("11: a closing session is a typed conflict, not a reuse", r.success === false && r.code === ENSURE_CODE.SERVICE_SESSION_CLOSING);
+  }
+
+  console.log("\n══ 12. created is always false — this module never creates, era or reason notwithstanding ══");
+  {
+    const db1 = fakeDb({ current: { id: "uuid-a", service_kind: null, business_date: "2026-07-15", status: "open", opened_at: "x" } });
+    const r1 = await make(db1, summer(12))({ actor: "owner" });
+    assert("12a: even an operational_service_v1 (service_kind:null) active session is REUSED, era-blind (grandfather requirement)", r1.success && r1.created === false && r1.session.id === "uuid-a", JSON.stringify(r1));
+
+    const db2 = fakeDb({ current: null, hasHistoryToday: false });
+    const r2 = await make(db2, summer(12))({ actor: "owner" });
+    assert("12b: created is false even on a typed non-success (never true from here)", r2.created === false);
   }
 
   console.log("");

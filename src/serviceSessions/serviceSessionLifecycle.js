@@ -10,13 +10,15 @@ function normalize(rpcResult) {
 
 function createServiceSessionLifecycle({ rpc = sbRpc } = {}) {
   return Object.freeze({
-    // S2-7D6B — THE creator. Idempotent: an existing active session of the same
-    // kind is returned as `created:false`, never re-opened. The kind is resolved
-    // by the caller from the authoritative schedule module and is never taken
-    // from a client request.
-    async ensure({ actor, serviceKind, source = "auto_entry" }) {
+    // F-7 — READ/REUSE ONLY. ensure_service_session no longer creates
+    // anything (that authority moved to open_operational_service_v1, called
+    // only from resolve_order_intake_context_v1's first-ever-lazy-open path)
+    // — it answers REUSED / NO_OPEN_SERVICE / REOPEN_REQUIRED from DB state
+    // alone. No serviceKind parameter: this wrapper never infers or forwards
+    // a PRANZO/SERA identity, because the RPC no longer accepts one. // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, named here only to describe identity logic this wrapper never performs, not new vocabulary
+    async ensure({ actor, source = "auto_entry" }) {
       return normalize(await rpc("ensure_service_session", {
-        p_opened_by: actor, p_service_kind: serviceKind, p_source: source,
+        p_opened_by: actor, p_source: source,
       }));
     },
     // Retired: the kind-less opener now fail-closes in SQL with

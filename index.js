@@ -650,9 +650,16 @@ app.post("/api", async (req, res) => {
     }
 
     if (action === "openServiceSession") {
-      // Manual RECOVERY only. It no longer opens a kind-less session (the SQL
-      // opener fail-closes): it goes through the same ensure contract so a
-      // recovery can never create a service the accounting cannot attribute.
+      // F-7 — CONTAINED, not routed. This delegates entirely to
+      // ensureCurrentServiceSession (Part 1 of F-7's opening authority
+      // cutover), which is now read/reuse only: it can never create a
+      // service under ANY circumstance, window or no window. This action's
+      // real answer today is REUSED (an active session exists) or a typed
+      // NO_OPEN_SERVICE / REOPEN_REQUIRED read-only report — never a create.
+      // Explicit reopen is a separate, not-yet-built product action
+      // (open_operational_service_v1 with 'explicit_reopen') that this
+      // action is deliberately NOT repointed to in F-7; that cutover is
+      // certified and wired in a later slice.
       const actorId = req.authCtx?.actor;
       if (!actorId) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
       const ensured = await ensureCurrentServiceSession({ actor: actorId, source: "manual_recovery" });

@@ -118,15 +118,23 @@ function fakeRolloverEnv({ orders = [] } = {}) {
 
   // ══ A. ensureCurrentServiceSession — the silent auto-entry recovery pre-check ══════
   // SLICE 3: the stale session with a pending order now ROLLS OVER — the
-  // pending order becomes an incident, the session closes, a fresh session is
-  // established. This is the intentional opposite of this file's original
-  // assertion A ("session is NOT closed — reused as-is").
+  // pending order becomes an incident, the session closes. This is the
+  // intentional opposite of this file's original assertion A ("session is
+  // NOT closed — reused as-is").
+  // F-7 (opening authority cutover): after the rollover, "a fresh session is
+  // established" is no longer true — page load never creates lifecycle.
+  // ensure_service_session (real SQL) now answers purely from DB state, so
+  // the mock below simulates its real post-F-7 contract: no active session,
+  // and (in this scenario) no service history yet for today's Business Day
+  // either → NO_OPEN_SERVICE, session:null. The FIRST real creation for
+  // today happens lazily on the first real order via
+  // resolve_order_intake_context_v1, not from this recovery pre-check.
   {
     const env = fakeRolloverEnv({ orders: [pendingOrderRow] });
     const ensure = createEnsureCurrentServiceSession({
       sessionLifecycle: {
         currentCloseout: async () => ({ ok: true, session: staleSession }),
-        ensure: async (args) => ({ ok: true, created: true, session: { id: 'today-session', service_kind: args.serviceKind, business_date: '2026-07-28' } }),
+        ensure: async () => ({ ok: false, code: 'NO_OPEN_SERVICE', businessDate: '2026-07-28' }),
       },
       now: () => NOW,
       performRollover: env.performRollover,
@@ -142,9 +150,10 @@ function fakeRolloverEnv({ orders = [] } = {}) {
       env.incidentRows.length === 1 && env.incidentRows[0].incidentType === 'DELIVERY_ACTIVE_AT_CLOSE' && env.incidentRows[0].orderId === '#724',
       JSON.stringify(env.incidentRows));
     assert('A: the incident is category operational, not silently dropped or miscategorized', env.incidentRows[0].category === 'operational');
-    assert('A: the stale session id no longer appears as the CURRENT session in the result (a fresh one was established)',
+    assert('A: the stale session id no longer appears as the CURRENT session in the result',
       res.session === null || res.session.id !== STALE_SESSION_ID, JSON.stringify(res));
-    assert('A: exactly one fresh session was established after the rollover, no duplicate', res.created === true && res.session && res.session.id === 'today-session', JSON.stringify(res));
+    assert('A (F-7): after the rollover, NO fresh session is minted — page load reports NO_OPEN_SERVICE, never creates',
+      res.success === false && res.created === false && res.code === 'NO_OPEN_SERVICE' && res.session === null, JSON.stringify(res));
   }
 
   // ══ B. The shared engine used identically by serviceCloseTick / catchUpChiusura / ═══
