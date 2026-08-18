@@ -1,9 +1,15 @@
 "use strict";
 // P0-C1 — RUNTIME LIFECYCLE AUTHORITY + AVAILABILITY CONTAINMENT — static guard.
+// UPDATED F-8 (owner-authorized, conscious change to this exact test — the
+// tripwire's own stated purpose, not a silent weakening): Claim 2 below no
+// longer asserts blanket V3 unreachability. F-8's whole job is to make
+// the V3 close engine module reachable from index.js for ONE specific case.
+// The old blanket claim is replaced by a NARROWER, still-strict one — see
+// "Claim 2 (F-8 contract)" below. Claim 1 (performIncidentSafeRollover
+// gating) is completely untouched by F-8 and asserted exactly as before.
 //
-// Source-inspection proof (not just behavioral tests) of the two structural
-// claims SERVICE_LIFECYCLE_ECONOMIC_BOUNDARY_AUDIT_REPORT.md's root-cause
-// audit and P0_C1_RUNTIME_LIFECYCLE_AUTHORITY_REPORT.md both depend on:
+// Source-inspection proof (not just behavioral tests) of the structural
+// claims this codebase's runtime lifecycle authority depends on:
 //
 //   1. Every real, reachable call site of performIncidentSafeRollover — the
 //      V2 incident-safe orchestrator that actually mutates lifecycle state —
@@ -11,11 +17,29 @@
 //      Before P0-C1, ensureServiceSession.js's silent recovery pre-check was
 //      the one exception; this test locks in that it no longer is, and fails
 //      loudly if a future edit ever reintroduces an ungated call site.
-//   2. serviceLifecycleEngine.js's closeServiceV3 (V3's close engine) remains
-//      unreachable from any live entry point. This is a deliberate
-//      containment decision (V3_RUNTIME_CUTOVER_REMAINING — see the P0-C1
-//      report), not an oversight — this guard exists so a future session
-//      cannot silently wire V3 in as a FIFTH mutation path without a
+//   2. (F-8 contract) the V3 close engine's closeServiceV3 export is
+// language-guard: allow-legacy chiudiServizio is the existing action name this whole Claim-2 paragraph describes the new reachability contract for, not new vocabulary
+//      reachable from index.js, but ONLY from inside the chiudiServizio
+//      action's server-side `lifecycle_semantics === "operational_service_v1"`
+//      branch — never unconditionally, never from the legacy/else branch,
+// language-guard: allow-legacy servizio.js/incidentSafeRollover.js/ensureServiceSession.js are the existing legacy module paths this paragraph names as still-unreachable, not new vocabulary
+//      never from any OTHER file (the legacy close module, the incident-safe
+//      rollover orchestrator, the session-ensure module — the economic_
+//      period_v1/legacy machinery — must still never reach it at all), and
+//      never via a second HTTP Finalizar action. The legacy branch must
+// language-guard: allow-legacy chiudiServizio is the same existing legacy close function this line names as the transitional path's own call target, not new vocabulary
+//      still exclusively use the transitional chiudiServizio()/
+//      closeEligibility() path; the new-era branch must never itself call
+// language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, named here only to describe a clock identity the new-era branch must never have, not new vocabulary
+//      closeEligibility() (no PRANZO/SERA clock identity) or the legacy
+// language-guard: allow-legacy chiudiServizio is the same existing legacy close function this line names as what the new-era branch must never call, not new vocabulary
+//      chiudiServizio() function, must never read an era from req.body/
+//      req.query (era is server-resolved only), and must never call
+//      ensureNext()/ensure_next_service_session_v3/
+//      open_operational_service_v1 (no successor, no reopen). This guard
+//      exists so a future session cannot silently widen V3 to every era,
+//      remove the branch, cross-route either era onto the other's path,
+//      reintroduce a successor, or let the frontend pick the era — without a
 //      conscious, reviewed change to this exact test.
 //
 // Comment-stripped scan, same technique as
@@ -101,19 +125,94 @@ const readStripped = (rel) => stripComments(read(rel));
     })(),
   );
 
-  // ── Claim 2: V3's close engine remains unreachable — deliberate containment ─
+  // ── Claim 2 (F-8 contract): V3 reachable from index.js ONLY inside the ───
+  // ── era-aware branch; every other legacy file is still fully unreachable, ─
+  // ── exactly as P0-C1 originally required. ────────────────────────────────
   const v3EngineFile = "serviceLifecycleEngine";
-  const scanTargets = ["index.js", "src/utils/servizio.js", "src/serviceSessions/incidentSafeRollover.js", "src/serviceSessions/ensureServiceSession.js"];
-  for (const rel of scanTargets) {
+
+  // 2a-2c. The legacy/automatic machinery must still never reach V3 at all —
+  // unchanged from the original P0-C1 claim, just no longer including index.js.
+  const legacyOnlyScanTargets = [ // language-guard: allow-legacy servizio.js is the existing legacy module path in this fixture list, not new vocabulary
+    "src/utils/servizio.js",
+    "src/serviceSessions/incidentSafeRollover.js",
+    "src/serviceSessions/ensureServiceSession.js",
+  ];
+  for (const rel of legacyOnlyScanTargets) {
     const stripped = readStripped(rel);
     assert(
-      `${rel}: does not require/import ${v3EngineFile}.js (V3 close engine stays unreachable — containment, not cutover, per P0-C1)`,
+      `${rel}: still does not require/import the V3 engine module (economic_period_v1/legacy machinery stays unreachable to V3, per F-8 point 6)`,
       !new RegExp(`require\\([^)]*${v3EngineFile}['"]\\)`).test(stripped),
     );
   }
-  // Walk src/ once more, generically, so this guard also catches a new file
-  // that requires it from anywhere — not just the four historically-relevant
-  // ones above.
+
+  // 2d. index.js DOES now require the engine — the F-8 contract itself.
+  assert(
+    `index.js: DOES require/import the V3 engine module (F-8 point 1 — the deliberate cutover this test now asserts, not the old blanket containment)`,
+    new RegExp(`require\\([^)]*${v3EngineFile}['"]\\)`).test(indexJs),
+  );
+
+  // 2e. Exactly ONE Finalizar action block exists — no second/parallel
+  const finalizarActionMarker = 'action === "chiudiServizio"'; // language-guard: allow-legacy chiudiServizio is the existing action-name string literal being located, not new vocabulary
+  // HTTP endpoint was introduced (F-8 point 7).
+  const finalizarActionBlockCount = indexJs.split(finalizarActionMarker).length - 1;
+  assert(
+    "index.js: exactly ONE Finalizar action block (no second/parallel Finalizar HTTP endpoint introduced)",
+    finalizarActionBlockCount === 1,
+    `found ${finalizarActionBlockCount}`,
+  );
+
+  // Isolate the Finalizar action body and its two branches, same technique as
+  // tests/f8FinalizarRoutingCutover.static.test.js — but asserted
+  // independently here, under this tripwire's own authority.
+  const actionStart = indexJs.indexOf(finalizarActionMarker);
+  const actionEnd = indexJs.indexOf('action === "triggerCloseIfNeeded"');
+  const finalizarBlock = actionStart > -1 && actionEnd > actionStart ? indexJs.slice(actionStart, actionEnd) : "";
+  assert("index.js: Finalizar action block is locatable for the branch checks below", finalizarBlock.length > 0);
+
+  const newEraMarker = 'lifecycle_semantics === "operational_service_v1"';
+  const newEraStart = finalizarBlock.indexOf(newEraMarker);
+  assert(
+    "index.js: the server-side lifecycle_semantics === \"operational_service_v1\" branch marker is present (F-8 point 2 — this is the ONLY thing this test recognizes as the era gate; removing it fails this test by design)",
+    newEraStart > -1,
+  );
+  const newEraElse = finalizarBlock.indexOf("\n      } else {", newEraStart);
+  const newEraBody = newEraStart > -1 ? finalizarBlock.slice(newEraStart, newEraElse > -1 ? newEraElse : finalizarBlock.length) : "";
+  const legacyBody = newEraElse > -1 ? finalizarBlock.slice(newEraElse) : "";
+
+  const legacyCloseFnCall = "await chiudiServizio("; // language-guard: allow-legacy chiudiServizio is the existing legacy close function name this constant holds for the branch checks below, not new vocabulary
+  assert(
+    "new-era branch: calls closeServiceV3( exactly once (F-8 point 2 — V3 reachable here, and only here)",
+    (newEraBody.match(/closeServiceV3\(/g) || []).length === 1,
+  );
+  assert(
+    "new-era branch: NEVER calls the legacy close function (new-era must never fall back to the legacy close path)",
+    !newEraBody.includes(legacyCloseFnCall),
+  );
+  assert(
+    "new-era branch: NEVER calls closeEligibility( (F-8 point 5 — no legacy service_kind clock identity for an Operational Service)",
+    !/closeEligibility\(/.test(newEraBody),
+  );
+  assert(
+    "new-era branch: NEVER reads an era from req.body/req.query (F-8 point 4 — the frontend never chooses the era)",
+    !/req\.(body|query)\.lifecycle_semantics/.test(newEraBody) && !/req\.(body|query)\.era/.test(newEraBody),
+  );
+  assert(
+    "new-era branch: NEVER calls ensureNext/ensure_next_service_session_v3/open_operational_service_v1 (F-8 point 8 — no successor, no reopen)",
+    !/ensureNext\(/.test(newEraBody) && !/ensure_next_service_session_v3/.test(newEraBody) && !/open_operational_service_v1/.test(newEraBody),
+  );
+
+  assert(
+    "legacy/economic_period_v1 branch: still exclusively uses closeEligibility( + the legacy close function (F-8 point 3 — transitional path untouched)",
+    /closeEligibility\(/.test(legacyBody) && legacyBody.includes(legacyCloseFnCall),
+  );
+  assert(
+    "legacy/economic_period_v1 branch: NEVER calls closeServiceV3( (F-8 point 6 — economic_period_v1 must never reach V3)",
+    !/closeServiceV3\(/.test(legacyBody),
+  );
+
+  // 2f. Walk src/ once more, generically, so this guard also catches a new
+  // file that requires the engine from anywhere OTHER than index.js — the
+  // ONE authorized entry point under the F-8 contract.
   function walk(dir, out = []) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
@@ -126,7 +225,7 @@ const readStripped = (rel) => stripComments(read(rel));
   const allSrcFiles = walk(path.join(ROOT, "src"));
   const requiringFiles = allSrcFiles.filter((f) => new RegExp(`require\\([^)]*${v3EngineFile}['"]\\)`).test(stripComments(fs.readFileSync(f, "utf8"))));
   assert(
-    "src/**/*.js (excluding the engine's own files): zero files require serviceLifecycleEngine.js — V3 has no reachable caller anywhere in application code",
+    "src/**/*.js (excluding the engine's own files): zero files require the V3 engine module — index.js remains the ONLY authorized caller anywhere in application code",
     requiringFiles.length === 0,
     JSON.stringify(requiringFiles.map((f) => path.relative(ROOT, f))),
   );

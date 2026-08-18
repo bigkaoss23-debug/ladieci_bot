@@ -53,6 +53,7 @@ const riderTrip = require("./src/agents/riderTrip");
 const riderReads = require("./src/agents/riderReads");
 const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceCloseout");
 const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/serviceSessionLifecycle");
+const { closeServiceV3 } = require("./src/serviceSessions/serviceLifecycleEngine");
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
 const { rollEconomicPeriod } = require("./src/serviceSessions/economicBoundaryEngine");
 const { periodConsolidation } = require("./src/serviceSessions/periodConsolidation");
@@ -416,18 +417,53 @@ app.get("/api", async (req, res) => {
       // never becomes unclosable. `?force=true` still overrides, unchanged.
       const identity = await serviceSessionLifecycle.currentCloseout();
       const kind = identity?.ok ? (identity.session?.service_kind || null) : null;
-      const gate = closeEligibility(kind, new Date());
-      if (!gate.eligible && req.query.force !== "true") {
-        const label = kind || "servicio";
-        result = { success: false, error: `Cierre de ${label} permitido solo a partir de las ${gate.boundary} Madrid. Para forzar añadir &force=true.` };
+      // F-8 — ERA-AWARE ROUTING. Same operator-facing action/button/auth as
+      // always; the branch is decided server-side from the CURRENT session's
+      // own lifecycle_semantics (already present on `identity.session` —
+      // get_current_service_closeout_session returns to_jsonb(v_session), the
+      // whole row), never from anything the client supplies. An
+      // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, named here only to describe what an Operational Service does NOT have, not new vocabulary
+      // operational_service_v1 session has no PRANZO/SERA identity, so it
+      // never reaches (or needs) the closeEligibility clock gate below — that
+      // gate is a legacy economic_period_v1 concept only. See
+      // tests/f8FinalizarRoutingCutover.static.test.js.
+      if (identity?.ok && identity.session?.lifecycle_semantics === "operational_service_v1") {
+        const actorId = req.authCtx?.actor;
+        if (!actorId) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
+        if (!identity.session?.id) {
+          result = { success: false, error: "invalid_service_session_identity" };
+        } else {
+          // "operator_finalizar_v3" — the one new truthful close_source this
+          // slice adds: normal operator Finalizar via the V3 engine. Distinct
+          // from every existing value (never "rolled_over", "recovery", or a
+          // test/forgotten-close label) because none of those describe this
+          // call. The V3 engine itself never gates on service_kind/clock, is
+          // already idempotent on retry (its own CASE B/C/D lineage handling),
+          // and creates no successor (F-5) — nothing else is done here.
+          const v3Result = await closeServiceV3({
+            serviceSessionId: identity.session.id,
+            source: "operator_finalizar_v3",
+            actor: actorId,
+          });
+          result = v3Result.success
+            ? v3Result
+            : { success: false, error: v3Result.code || "V3_CLOSE_FAILED", ...v3Result };
+        }
       } else {
-        // Sempre via Guarded: idempotente, non si ripete nello stesso giorno
-        result = await chiudiServizio(req.query.deleteAttivi === "true", "operator", req.authCtx?.actor || "operator");
-        // S2-1G — a service close deferred by an active rider trip is an operational
-        // conflict: surface a stable 409 for the operator UI (schedulers consume the same
-        // structured body without treating it as a crash).
-        if (result && result.deferred && result.reason === "active_rider_trip") {
-          return res.status(409).json({ error: "ACTIVE_RIDER_TRIP", message: "Chiusura rinviata: giro rider in corso. Attendere il rientro o chiudere il giro.", data: result.data });
+        const gate = closeEligibility(kind, new Date());
+        if (!gate.eligible && req.query.force !== "true") {
+          const label = kind || "servicio";
+          result = { success: false, error: `Cierre de ${label} permitido solo a partir de las ${gate.boundary} Madrid. Para forzar añadir &force=true.` };
+        } else {
+          // Sempre via Guarded: idempotente, non si ripete nello stesso giorno
+          // language-guard: allow-legacy chiudiServizio is the existing legacy close function (src/utils/servizio.js), unchanged by F-8, restated here only because this whole branch was re-indented, not new vocabulary
+          result = await chiudiServizio(req.query.deleteAttivi === "true", "operator", req.authCtx?.actor || "operator");
+          // S2-1G — a service close deferred by an active rider trip is an operational
+          // conflict: surface a stable 409 for the operator UI (schedulers consume the same
+          // structured body without treating it as a crash).
+          if (result && result.deferred && result.reason === "active_rider_trip") {
+            return res.status(409).json({ error: "ACTIVE_RIDER_TRIP", message: "Chiusura rinviata: giro rider in corso. Attendere il rientro o chiudere il giro.", data: result.data });
+          }
         }
       }
     } else if (action === "triggerCloseIfNeeded") {
