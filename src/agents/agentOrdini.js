@@ -800,11 +800,25 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   let _prevManualGiroId = null;
   let estadoActual = null;
   let tipoConsegnaActual = null;
+  // F-7.6 — STRONG AUDIT IDENTITY. `orden_estado_logs` is keyed only by the
+  // DISPLAY order number (orden_id/numero_ordine), which is NOT globally // language-guard: allow-legacy numero_ordine is the existing orden_estado_logs column name, quoted here to identify the ambiguous key, not new vocabulary
+  // unique: it is recycled across service sessions, so two genuinely
+  // different orders can share one timeline (proven live: #370 carries both a
+  // PRANZO Mesa order and an unrelated SERA delivery order in the same log). // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, naming the two real colliding sessions as evidence, not new vocabulary
+  // These two identifiers are resolved SERVER-SIDE from the live row here and
+  // never accepted from the client, so every NEW transition is attributable
+  // to exactly one permanent order. Historical rows stay untouched — this is
+  // forward-only, never a backfill by inference.
+  let orderUidActual = null;
+  let serviceSessionIdActual = null;
   try {
-    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,estado,manual_giro_id,tipo_consegna`);
+    // language-guard: allow-legacy tipo_consegna is the existing ordenes column name, extended here with order_uid/service_session_id, not new vocabulary
+    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,estado,manual_giro_id,tipo_consegna,order_uid,service_session_id`);
     _prevManualGiroId = _prev?.[0]?.manual_giro_id || null;
     estadoActual = _prev?.[0]?.estado || null;
     tipoConsegnaActual = _prev?.[0]?.tipo_consegna || null;
+    orderUidActual = _prev?.[0]?.order_uid || null;
+    serviceSessionIdActual = _prev?.[0]?.service_session_id || null;
   } catch (e) {
     console.warn("[cambiaStato] prev fetch failed:", e?.message || e);
   }
@@ -862,6 +876,18 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
         has_hora_entrega: extras.hora_entrega !== undefined,
         has_payment_update: extras.metodo_pago !== undefined || extras.cobrado !== undefined || extras.ya_pagado !== undefined,
         has_discount_update: extras.descuento_tipo !== undefined || extras.descuento_valor !== undefined,
+        // F-7.6 — server-resolved permanent identity (see the fetch above).
+        // Always present when the live row could be read; null only when the
+        // best-effort prev-fetch itself failed, never client-supplied. Same
+        // metadata shape already used by the two prior audited reconciliations
+        // (#725 codex_staging_recovery, #366 manual_p0b_test_fixture_cleanup).
+        order_uid: orderUidActual,
+        service_session_id: serviceSessionIdActual,
+        // Optional operator justification. Only this one free-text field is
+        // accepted from the request (see index.js updateEstado) — arbitrary
+        // client metadata is never injectable. Omitted entirely when absent,
+        // so ordinary state changes keep their existing contract byte-for-byte.
+        ...(extras.reason ? { reason: extras.reason } : {}),
       },
     });
   }

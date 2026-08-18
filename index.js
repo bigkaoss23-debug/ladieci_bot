@@ -910,6 +910,15 @@ app.post("/api", async (req, res) => {
       // S2-7D6E3 — same rule as cambiaStato/creaOrdine: verified req.authCtx only.
       extras.actor_id = req.authCtx?.actor || null;
       extras.origin = req.body.origin || "dashboard";
+      // F-7.6 — OPTIONAL operator justification, persisted into the transition
+      // audit as metadata.reason (see agentOrdini.cambiaStato). Exactly ONE // language-guard: allow-legacy agentOrdini is the existing module filename being cross-referenced, not new vocabulary
+      // free-text field is accepted here: arbitrary client metadata must never
+      // become injectable into the audit log. Trimmed and length-capped; absent
+      // or blank leaves the ordinary contract untouched (no `reason` key is
+      // written at all), so existing callers are byte-for-byte unaffected.
+      if (typeof req.body.reason === "string" && req.body.reason.trim()) {
+        extras.reason = req.body.reason.trim().slice(0, 500);
+      }
 
       // S2-7D6E — money first, state second. A RETIRADO carrying a payment method is a
       // COLLECTION: it must produce a ledger event before the order is allowed to move.
