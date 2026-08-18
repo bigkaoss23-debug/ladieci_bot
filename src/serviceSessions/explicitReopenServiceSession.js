@@ -22,10 +22,14 @@
 //                       resolve_order_intake_context_v1 alone, never here).
 //   REOPEN_REQUIRED  -> the ONE case this module calls
 //                       open_operational_service_v1(actor, 'explicit_reopen',
-//                       source). The primitive's own advisory lock + its
+//                       source) — BUT ONLY after F-9.1's staleness check
+//                       below passes. The primitive's own advisory lock + its
 //                       has_any_service/REUSED checks make two overlapping
 //                       callers converge on one Service B, never a
-//                       duplicate (F-6, live concurrency-proven).
+//                       duplicate (F-6, live concurrency-proven) — that
+//                       protects against a RACE, not against a genuinely
+//                       STALE pointer, which is a different failure mode
+//                       entirely (see below).
 // Every other ensure_service_session code (SERVICE_SESSION_CLOSING,
 // MULTIPLE_ACTIVE_SERVICE_SESSIONS, SERVICE_SESSION_STATE_CORRUPT,
 // INVALID_ACTOR) is a pre-existing defensive read, passed through verbatim —
@@ -33,9 +37,47 @@
 // rollover/recovery of its own (that pre-check is S2-7D6F/P0-C1's, already
 // run unconditionally by the silent page-load ensure before an operator can
 // ever reach this action's UI trigger — see CurrentNightCloseoutPage.jsx).
+//
+// F-9.1 — STALE BUSINESS DAY GUARD. open_operational_service_v1 trusts
+// business_day_lifecycle_state.current_business_day_id AS-IS; it has no
+// notion of "stale." Found during F-9 certification: the canonical pointer
+// can sit unmoved on an OLD Business Day for days after its service closed,
+// because nothing but a real order (resolve_order_intake_context_v1, inside
+// the ordenes-insert trigger) ever advances it — R-DAY3's own comment
+// documents this is the ONLY mutating path. "Explicit Reopen" means
+// same-Business-Day reopen, never "reopen whichever historical Business Day
+// the pointer happens to still reference" (owner-frozen F-9.1 contract).
+//
+// Chosen architecture: REFUSE, never RECONCILE. This module has exactly one
+// new read, added to the REOPEN_REQUIRED branch only: fetchOrderIntakeContext
+// (orderIntakePolicy.js, unmodified, already the live order-intake preflight)
+// wraps get_order_intake_context_v1() — a STABLE, side-effect-free RPC that
+// mirrors resolve_order_intake_context_v1's own overnight-safe businessDate
+// computation constant-for-constant (parity-proven, tests/rDay3ScheduleParity
+// .test.js). Comparing its businessDate against the businessDate
+// ensure_service_session's REOPEN_REQUIRED response already carries (both are
+// the same `date` SQL type through the same jsonb_build_object shape, safe to
+// compare as strings) answers "is the pointer's Business Day still the
+// currently-valid one" using the SAME single canonical rule the rest of the
+// system already trusts — never a second, ad-hoc calendar clock, and no
+// naive `= CURRENT_DATE` (the 04:00 overnight cutoff is inherited for free).
+// open_business_day_v1 (R-DAY1) was deliberately NOT reused here: read fresh
+// this session, its own date computation omits that exact cutoff and it has
+// no live caller anywhere — reusing it would import a second, inconsistent
+// rule rather than the one the order-intake path actually runs on.
+// A stale pointer refuses with zero creation and zero mutation of any kind;
+// Business Day advancement remains exclusively resolve_order_intake_context_
+// v1's job, triggered by the next real order — this module never reconciles,
+// never writes business_day_lifecycle_state, never touches ticket_epoch.
+// A failure of the freshness READ itself fails CLOSED (refuses), the inverse
+// of orderIntakePolicy.js's own fail-OPEN posture for ordinary orders — that
+// module can fail open because the in-transaction DB resolver is still a
+// backstop; this module's check IS the backstop, since open_operational_
+// service_v1 itself has no staleness notion at all.
 // ===============================================================
 
 const { lifecycle } = require("./serviceSessionLifecycle");
+const { fetchOrderIntakeContext } = require("./orderIntakePolicy");
 
 const CODE = Object.freeze({
   REUSED: "REUSED",
@@ -51,6 +93,9 @@ const CODE = Object.freeze({
   BUSINESS_DAY_NOT_FOUND: "BUSINESS_DAY_NOT_FOUND",
   EXPLICIT_REOPEN_FAILED: "EXPLICIT_REOPEN_FAILED",
   ENSURE_READ_FAILED: "ENSURE_READ_FAILED",
+  // F-9.1
+  STALE_BUSINESS_DAY_REOPEN: "STALE_BUSINESS_DAY_REOPEN",
+  BUSINESS_DAY_VALIDITY_CHECK_FAILED: "BUSINESS_DAY_VALIDITY_CHECK_FAILED",
 });
 
 // Typed codes the F-6 primitive itself can return that are honest,
@@ -84,7 +129,10 @@ function publicSession(row) {
   };
 }
 
-function createExplicitReopenServiceSession({ sessionLifecycle = lifecycle } = {}) {
+function createExplicitReopenServiceSession({
+  sessionLifecycle = lifecycle,
+  fetchIntakeContext = fetchOrderIntakeContext,
+} = {}) {
   return async function explicitReopenServiceSession({ actor, source = "manual_recovery" } = {}) {
     if (!actor || typeof actor !== "string" || !actor.trim()) {
       return { success: false, created: false, code: CODE.INVALID_ACTOR, session: null };
@@ -112,6 +160,31 @@ function createExplicitReopenServiceSession({ sessionLifecycle = lifecycle } = {
     }
 
     if (read.ok === false && read.code === "REOPEN_REQUIRED") {
+      // F-9.1 — the stale-pointer guard. A read-only, side-effect-free check
+      // against the SAME canonical overnight-safe businessDate rule the real
+      // order-intake resolver runs on (see this module's own header). Fails
+      // CLOSED: an unreadable freshness check refuses the reopen, it never
+      // silently proceeds.
+      const intakeCtx = await fetchIntakeContext();
+      if (!intakeCtx || typeof intakeCtx.businessDate !== "string") {
+        return {
+          success: false, created: false, code: CODE.BUSINESS_DAY_VALIDITY_CHECK_FAILED,
+          businessDayId: read.businessDayId || null, businessDate: read.businessDate || null,
+        };
+      }
+      if (intakeCtx.businessDate !== read.businessDate) {
+        // The pointer's Business Day is not the currently-valid one. Zero
+        // creation, zero mutation — Business Day advancement remains
+        // exclusively resolve_order_intake_context_v1's job, on the next
+        // real order.
+        return {
+          success: false, created: false, code: CODE.STALE_BUSINESS_DAY_REOPEN,
+          businessDayId: read.businessDayId || null,
+          staleBusinessDate: read.businessDate || null,
+          currentBusinessDate: intakeCtx.businessDate,
+        };
+      }
+
       // The ONE call site allowed to pass 'explicit_reopen'. actor/source are
       // the server's own verified values — never a client-supplied
       // open_reason/businessDayId/serviceSessionId.

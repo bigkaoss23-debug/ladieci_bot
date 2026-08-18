@@ -34,8 +34,10 @@ assert("3a: the module exists and exports explicitReopenServiceSession",
   /module\.exports = \{[\s\S]*explicitReopenServiceSession[\s\S]*\};/.test(REOPEN_MODULE));
 assert("3b: exactly one CODE-level 'explicit_reopen' literal passed as an open_reason argument",
   (REOPEN_MODULE.match(/openReason:\s*"explicit_reopen"/g) || []).length === 1);
-assert("3c: explicit_reopen is only ever passed after reading REOPEN_REQUIRED from ensure_service_session",
-  /read\.code === "REOPEN_REQUIRED"\)\s*\{[\s\S]{0,300}openOperational\(\{ actor, openReason: "explicit_reopen"/.test(REOPEN_MODULE));
+const reopenRequiredBlock = REOPEN_MODULE.split('read.code === "REOPEN_REQUIRED"')[1] || "";
+assert("3c: explicit_reopen is only ever passed after reading REOPEN_REQUIRED from ensure_service_session, AND after F-9.1's staleness check (which appears strictly before it)",
+  reopenRequiredBlock.includes('openOperational({ actor, openReason: "explicit_reopen"') &&
+  reopenRequiredBlock.indexOf("STALE_BUSINESS_DAY_REOPEN") < reopenRequiredBlock.indexOf('openOperational({ actor, openReason: "explicit_reopen"'));
 assert("3d: the discriminator read comes from sessionLifecycle.ensure (ensure_service_session), never re-derived in JS",
   /const read = await sessionLifecycle\.ensure\(\{ actor, source \}\);/.test(REOPEN_MODULE));
 assert("3e: no client-supplied lifecycle identity is ever accepted as a function parameter",
