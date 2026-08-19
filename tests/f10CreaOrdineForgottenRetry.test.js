@@ -139,12 +139,34 @@ const baseOrder = (extra = {}) => ({
   check("O — recovery still invoked only once", recoveryCalls.length === 1, `calls=${recoveryCalls.length}`);
   check("O — typed failure returned", r && r.success === false && r.code === "FORGOTTEN_CLOSE_UNRESOLVED", JSON.stringify(r));
 
-  // ── N. recovery hard failure ⇒ zero retry ──────────────────────────────
+  // ── N/C (F-10.4) — recovery reports failure, but the retry still runs:
+  // this is the race-loser proxy for W1/W2 (the OTHER contender already
+  // closed stale A between this process's failed recovery observation and
+  // its retry). The retry must be given the chance to self-resolve instead
+  // of failing closed on a stale, possibly-wrong "recovery failed" verdict.
   reset(["forgotten", "ok"], { success: false, code: "V3_CLOSE_FAILED" });
   r = await creaOrdine(baseOrder());
-  check("N — failed recovery does not retry the order", insertAttempts === 1, `inserts=${insertAttempts}`);
-  check("N — typed recovery failure returned", r && r.success === false && r.code === "FORGOTTEN_CLOSE_RECOVERY_FAILED", JSON.stringify(r));
-  check("N — underlying recovery code surfaced", r && r.recoveryCode === "V3_CLOSE_FAILED", JSON.stringify(r));
+  check("N/C — a failed recovery still consumes the budgeted retry (2 inserts)", insertAttempts === 2, `inserts=${insertAttempts}`);
+  check("N/C — recovery is still invoked only once", recoveryCalls.length === 1, `calls=${recoveryCalls.length}`);
+  check("N/C — the race-loser retry succeeds overall", r && r.success === true, JSON.stringify(r));
+  check("N/C — the order is attributed to the NEW service", r && r.serviceSessionId === "SERVICE-B", JSON.stringify(r));
+
+  // ── D (F-10.4) — genuinely unresolved: recovery fails AND the stale
+  // service is still open on retry ⇒ typed failure, no third insert, no
+  // second recovery.
+  reset(["forgotten", "forgotten", "ok"], { success: false, code: "V3_CLOSE_FAILED" });
+  r = await creaOrdine(baseOrder());
+  check("D — exactly 2 insert attempts (no third)", insertAttempts === 2, `inserts=${insertAttempts}`);
+  check("D — recovery invoked only once even though still unresolved", recoveryCalls.length === 1, `calls=${recoveryCalls.length}`);
+  check("D — typed FORGOTTEN_CLOSE_UNRESOLVED returned", r && r.success === false && r.code === "FORGOTTEN_CLOSE_UNRESOLVED", JSON.stringify(r));
+
+  // ── E (F-10.4) — recovery fails, retry hits an unrelated DB error ⇒
+  // existing generic error behaviour, unchanged, no third attempt.
+  reset(["forgotten", "otherError"], { success: false, code: "V3_CLOSE_FAILED" });
+  r = await creaOrdine(baseOrder());
+  check("E — exactly 2 insert attempts (no third)", insertAttempts === 2, `inserts=${insertAttempts}`);
+  check("E — recovery invoked only once", recoveryCalls.length === 1, `calls=${recoveryCalls.length}`);
+  check("E — unrelated error keeps its existing generic shape", r && r.success === false && r.error === "errore DB", JSON.stringify(r));
 
   // ── M. idempotent recovery ⇒ one retry ─────────────────────────────────
   reset(["forgotten", "ok"], { success: true, code: "FORGOTTEN_CLOSE_RECOVERED", idempotent: true });

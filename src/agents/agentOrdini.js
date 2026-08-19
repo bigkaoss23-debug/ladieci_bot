@@ -624,14 +624,20 @@ async function creaOrdine(params) {
       const recovery = await forgottenClose.recoverForgottenService({
         staleServiceSessionId: forgotten.staleServiceSessionId,
       });
+      // F-10.4 — a reported recovery failure here does NOT prove the stale
+      // service is still open: a concurrent contender racing the SAME stale
+      // session can legitimately close it first, and this call then
+      // convergently observes a non-fresh outcome (e.g. V3_CLOSE_SESSION_
+      // ALREADY_CLOSED_NOT_RECOVERABLE) rather than a fresh success. The
+      // already-budgeted single retry below is what actually discriminates:
+      // if the stale service is truly still open, the retried insert hits
+      // FORGOTTEN_CLOSE_REQUIRED a second time and forgottenCloseAttempted
+      // (already true) turns that into the typed FORGOTTEN_CLOSE_UNRESOLVED
+      // failure below — never a second recovery, never a third insert.
+      // Failing closed here, before ever trying the retry, would wrongly
+      // fail a legitimate race-loser order the other contender already fixed.
       if (!recovery || recovery.success !== true) {
-        return {
-          success: false,
-          error: "FORGOTTEN_CLOSE_RECOVERY_FAILED",
-          code: "FORGOTTEN_CLOSE_RECOVERY_FAILED",
-          recoveryCode: (recovery && recovery.code) || null,
-          detail: "No se pudo cerrar automáticamente el servicio anterior.",
-        };
+        console.warn(`[creaOrdine] forgotten-close recovery reported failure for ${forgotten.staleServiceSessionId} (code=${(recovery && recovery.code) || null}) — retrying original insert once to let it self-resolve`);
       }
       continue; // the one authorized retry of the ORIGINAL order
     }
