@@ -1,0 +1,135 @@
+name: F-10 Concurrency Certification
+
+# Certification-only workflow (DB-SCHEMA-BASELINE.3 / F-10.3C). Triggers
+# ONLY on the isolated certification branch -- never on main, never on the
+# operational staging branch, never on a wildcard. See
+# ci/f10-certification/README.md for what this is and is not.
+on:
+  push:
+    branches:
+      - ci/f10-concurrency-cert-2026-08-19
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f10-concurrency-cert
+  cancel-in-progress: false
+
+jobs:
+  certify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_PASSWORD: ci_only_ephemeral_not_a_secret
+          POSTGRES_DB: f10cert
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: ci_only_ephemeral_not_a_secret
+      PGDATABASE: f10cert
+    steps:
+      - name: Checkout certification branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install postgresql-client
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Install real backend dependencies (npm ci, unmodified package-lock.json)
+        run: npm ci
+
+      - name: Apply V3 bootstrap (single-pass -- no manual reordering needed)
+        run: psql -v ON_ERROR_STOP=1 -f ci/f10-certification/schema/staging-schema-head-92-2026-08-19.v3.bootstrap.sql
+
+      - name: Create CI-only role model (f10-ci-role-model.json, implemented)
+        run: psql -v ON_ERROR_STOP=1 -f ci/f10-certification/schema/f10-ci-roles.sql
+
+      - name: Apply V3 synthetic seed
+        run: psql -v ON_ERROR_STOP=1 -f ci/f10-certification/schema/staging-schema-head-92-2026-08-19.v3.seed.sql
+
+      - name: Create CI-only overlap probe (Phase 11)
+        run: psql -v ON_ERROR_STOP=1 -f ci/f10-certification/schema/f10-ci-overlap-probe.sql
+
+      - name: Apply candidate F-10 resolver cutover (frozen bytes, unmodified)
+        run: psql -v ON_ERROR_STOP=1 -f ci/f10-certification/resolver/f10_forgotten_close_resolver_cutover.sql
+
+      - name: Mint ephemeral JWT secret + service key (never printed)
+        run: |
+          JWT_SECRET="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
+          SERVICE_KEY="$(node ci/f10-certification/harness/mintJwt.js "$JWT_SECRET" f10_ci_runtime)"
+          {
+            echo "JWT_SECRET=$JWT_SECRET"
+            echo "SUPABASE_KEY=$SERVICE_KEY"
+          } >> "$GITHUB_ENV"
+
+      - name: Start PostgREST (pinned version, non-floating tag)
+        run: |
+          docker run -d --name postgrest --network host \
+            -e PGRST_DB_URI="postgres://authenticator_login:ci_only_ephemeral_not_a_secret@localhost:5432/f10cert" \
+            -e PGRST_DB_SCHEMA=public \
+            -e PGRST_DB_ANON_ROLE=f10_ci_runtime \
+            -e PGRST_JWT_SECRET="$JWT_SECRET" \
+            postgrest/postgrest:v14.17
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/ >/dev/null; then echo "postgrest is up"; break; fi
+            sleep 1
+          done
+          curl -sf http://localhost:3000/ >/dev/null || { echo "postgrest failed to become healthy"; docker logs postgrest; exit 1; }
+
+      - name: Start the transparent /rest/v1 proxy
+        run: |
+          PROXY_PORT=8091 PROXY_UPSTREAM=http://localhost:3000 PROXY_LOG_FILE="$RUNNER_TEMP/proxy.log" \
+            node ci/f10-certification/harness/proxy.js > "$RUNNER_TEMP/proxy.stdout.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/proxy.pid"
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8091/rpc/f10_cert_overlap_probe_v1 -X POST -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $SUPABASE_KEY" -H "Content-Type: application/json" -d '{"p_hold_seconds":0}' >/dev/null 2>&1; then
+              echo "proxy is up"; break
+            fi
+            sleep 1
+          done
+
+      - name: Run the F-10 concurrency certification harness
+        env:
+          SUPABASE_URL: http://localhost:8091
+          F10_BACKEND_DIR: ${{ github.workspace }}
+          F10_SCHEMA_DIR: ${{ github.workspace }}/ci/f10-certification/schema
+          F10_RESOLVER_DIR: ${{ github.workspace }}/ci/f10-certification/resolver
+          PROXY_LOG_FILE: ${{ runner.temp }}/proxy.log
+          F10_CERT_OUTPUT: ${{ github.workspace }}/f10-concurrency-certification.json
+          F10_APPLICATION_COMMIT: e222c5e1a9c367774cedc2561b3c52cfb41a004e
+          F10_CERTIFICATION_COMMIT: ${{ github.sha }}
+          F10_V3_BOOTSTRAP_SHA256: 4b3bda0c5083a8e031a883ae0f0e18b29f26a009cb30bfca6f1d53bf6ee72a9d
+          F10_V3_SEED_SHA256: 770049b6aaa74e5ab356c244eda63efcc7d40051fa651aee9bb9f37dc2405673
+          F10_CANDIDATE_RESOLVER_SHA256: fe68cc760222f77a09c7ebb60657d82e7c67c108629b9690c2c71272cce44373
+          F10_POSTGREST_IMAGE: postgrest/postgrest:v14.17
+        run: node ci/f10-certification/harness/runAll.js
+
+      - name: Stop the proxy
+        if: always()
+        run: kill "$(cat "$RUNNER_TEMP/proxy.pid")" 2>/dev/null || true
+
+      - name: Upload certification artifact + sanitized logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: f10-concurrency-certification
+          path: |
+            f10-concurrency-certification.json
+          if-no-files-found: warn
+          retention-days: 90
