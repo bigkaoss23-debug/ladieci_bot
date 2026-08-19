@@ -61,10 +61,25 @@ assert("1a: at least 20 distinct functions tracked across migration history (gua
   Object.keys(latest).length >= 20, String(Object.keys(latest).length));
 assert("1b: open_operational_service_v1's latest definition is F-6's own migration file",
   latest.open_operational_service_v1 && latest.open_operational_service_v1.file === "2026-08-18_f6_open_operational_service_primitive.sql");
-assert("1c: ensure_service_session's latest definition is F-7's own migration file",
-  latest.ensure_service_session && latest.ensure_service_session.file === "2026-08-18_f7_opening_authority_cutover.sql");
-assert("1d: resolve_order_intake_context_v1's latest definition is F-7's own migration file",
-  latest.resolve_order_intake_context_v1 && latest.resolve_order_intake_context_v1.file === "2026-08-18_f7_opening_authority_cutover.sql");
+// 1c/1d track WHICH migration file most recently (re)defines each cutover
+// target. They are bookkeeping anchors for the replay, not the guard itself —
+// the actual frozen invariant is section B/C below (neither function may be a
+// creator). Both were last updated at F-7; two later slices have legitimately
+// redefined these bodies since, so the anchors move with them:
+//   ensure_service_session          -> F-11 (2026-08-19), stale Business Day
+//                                      classification (REOPEN_REQUIRED
+//                                      downgrades to NO_OPEN_SERVICE when the
+//                                      canonical pointer names a past day).
+//   resolve_order_intake_context_v1 -> F-10 (2026-08-19), forgotten-close
+//                                      resolver cutover, migration row 93.
+// The F-10 anchor had been stale since row 93 was applied (this assertion was
+// already failing before F-11); it is corrected here rather than left red.
+assert("1c: ensure_service_session's latest definition is F-11's own migration file",
+  latest.ensure_service_session && latest.ensure_service_session.file === "2026-08-19_f11_ensure_stale_business_day_classification.sql",
+  latest.ensure_service_session && latest.ensure_service_session.file);
+assert("1d: resolve_order_intake_context_v1's latest definition is F-10's own migration file",
+  latest.resolve_order_intake_context_v1 && latest.resolve_order_intake_context_v1.file === "2026-08-19_f10_forgotten_close_resolver_cutover.sql",
+  latest.resolve_order_intake_context_v1 && latest.resolve_order_intake_context_v1.file);
 
 console.log("\n== B. The exact, frozen, expected creation surface ==");
 const INSERT_RE = /INSERT\s+INTO\s+(?:public\.)?service_sessions\b/i;
