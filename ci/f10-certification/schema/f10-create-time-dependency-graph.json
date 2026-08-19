@@ -1,0 +1,3047 @@
+{
+  "purpose": "Phase 2 systematic CREATE-TIME dependency audit (DB-SCHEMA-BASELINE.3R). Covers all 14 categories the task specifies: LANGUAGE sql functions, function signatures, SQL-calls-SQL, CREATE POLICY, CHECK constraints, DEFAULTs, GENERATED expressions, index expressions, trigger targets, constraint triggers, FK targets, RLS helpers, views/matviews, extension functions.",
+  "categories_audited": {
+    "language_sql_functions": "2 found (is_platform_admin, is_workspace_member) -- both excluded, see objects[]",
+    "function_signatures": "all RETURNS/argument types are built-in (boolean/jsonb/trigger/uuid/text/integer/date) -- 0 custom types exist anywhere in public schema (re-confirmed, not assumed)",
+    "sql_calls_sql": "N/A -- only 2 LANGUAGE sql functions exist and neither calls the other",
+    "create_policy": "0 CREATE POLICY statements exist anywhere in the bootstrap (V2/V3 never emitted these as executable SQL) -- N/A for this bootstrap",
+    "check_constraints": "96 CHECK constraints scanned; only btrim/length/lower/jsonb_typeof used, all PostgreSQL built-ins",
+    "default_expressions": "only gen_random_uuid() (PG13+ built-in) and now() used, plus text/jsonb literals",
+    "generated_expressions": "0 computed-column GENERATED AS expressions exist -- only clientes.id's GENERATED...AS IDENTITY clause, which has no function-call create-time dependency",
+    "index_expressions": "46 indexes scanned; only upper()/COALESCE() used, both built-ins",
+    "trigger_targets": "all 21 trigger target functions confirmed present in Pass D, none targets an excluded function",
+    "constraint_triggers": "1 exists (workspace_activation_integrity_trg) -- target function workspace_activation_integrity() is LANGUAGE plpgsql (lazy-bound), kept",
+    "fk_targets": "33 FK constraints, all previously proven resolvable (re-verified unchanged in V4)",
+    "rls_helper_functions": "is_platform_admin/is_workspace_member -- the 2 excluded functions",
+    "views_matviews": "0 exist anywhere in public schema (re-confirmed)",
+    "extension_functions": "0 found -- grep-verified for uuid_generate_v4/digest/crypt/gen_salt/similarity/pg_trgm across the whole file"
+  },
+  "summary": {
+    "tables": {
+      "total": 20,
+      "excluded": 0
+    },
+    "constraints": {
+      "total": 157,
+      "excluded": 0
+    },
+    "indexes": {
+      "total": 54,
+      "excluded": 8
+    },
+    "functions": {
+      "total": 37,
+      "excluded": 2
+    },
+    "triggers": {
+      "total": 21,
+      "excluded": 0
+    }
+  },
+  "objects": [
+    {
+      "object": "business_day_lifecycle_state",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "business_days",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "clientes",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "config",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "geo_cache",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "ladieci_schema_migrations",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "manual_giros",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "ordenes",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "service_closeout_attempts",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "service_closeout_snapshots",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "service_closeouts",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "service_incidents",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "service_session_audit",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "service_session_state",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "service_sessions",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "table_sessions",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "auth_actors",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "order_entities",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "restaurant_tables",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "workspaces",
+      "object_type": "table",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass A bare CREATE TABLE (columns/defaults/identity only) has zero inter-table create-time dependency by construction."
+    },
+    {
+      "object": "business_day_lifecycle_state_current_business_day_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "business_day_lifecycle_state",
+        "business_days"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "business_day_lifecycle_state_current_period_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "business_day_lifecycle_state",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "business_day_lifecycle_state_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "business_day_lifecycle_state"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "business_day_lifecycle_state_recent_closed_business_day_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "business_day_lifecycle_state",
+        "business_days"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "business_day_lifecycle_state_singleton_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "business_day_lifecycle_state"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "business_days_business_date_uq",
+      "object_type": "constraint_unique",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "business_days"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "business_days_next_ticket_number_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "business_days"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "business_days_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "business_days"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "business_days_ticket_epoch_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "business_days"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "clientes_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "clientes"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "config_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "config"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "geo_cache_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "geo_cache"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ladieci_schema_migrations_apply_order_uq",
+      "object_type": "constraint_unique",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ladieci_schema_migrations"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ladieci_schema_migrations_checksum_shape_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ladieci_schema_migrations"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ladieci_schema_migrations_kind_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ladieci_schema_migrations"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ladieci_schema_migrations_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ladieci_schema_migrations"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ladieci_schema_migrations_verification_status_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ladieci_schema_migrations"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ladieci_schema_migrations_verified_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ladieci_schema_migrations"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "manual_giros_assigned_actor_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "manual_giros"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "manual_giros_assigned_actor_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "manual_giros",
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "manual_giros_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "manual_giros"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "manual_giros_salida_plan_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "manual_giros"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ordenes_cliente_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ordenes",
+        "clientes"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ordenes_manual_giro_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ordenes",
+        "manual_giros"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ordenes_order_uid_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ordenes",
+        "order_entities"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ordenes_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ordenes"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ordenes_service_order_number_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ordenes"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ordenes_service_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ordenes",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ordenes_table_covers_total_input_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ordenes"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ordenes_table_fields_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ordenes"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "ordenes_table_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ordenes",
+        "table_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_attempts_completed_fields_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_attempts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_attempts_created_by_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_attempts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_attempts_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_attempts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_attempts_service_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_attempts",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_attempts_status_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_attempts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_attempts_superseded_fields_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_attempts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_captured_by_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_correlation_uq",
+      "object_type": "constraint_unique",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_kind_era_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_lifecycle_semantics_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_payload_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_payload_sha256_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_schema_version_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_service_kind_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_service_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeout_snapshots_source_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_bizum_amount_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_card_amount_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_cash_amount_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_close_source_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_closed_after_opened_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_closed_by_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_closeout_correlation_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts",
+        "service_closeout_attempts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_correlation_uq",
+      "object_type": "constraint_unique",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_critical_incident_count_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_critical_le_total_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_delivery_pending_count_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_gross_sales_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_incident_count_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_kind_era_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_kitchen_pending_count_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_lifecycle_semantics_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_listo_count_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_net_sales_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_occupied_tables_at_close_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_open_orders_at_close_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_order_count_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_other_amount_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_paid_amount_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_payment_breakdown_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_service_kind_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_service_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_session_uq",
+      "object_type": "constraint_unique",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_total_discounts_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_total_refunds_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_total_void_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_closeouts_unpaid_exposure_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_auto_resolved_status_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_category_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_detected_by_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_financial_exposure_cents_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_financial_exposure_required_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_incident_type_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_kind_era_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_lifecycle_semantics_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_resolution_resolved_fields_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_resolution_status_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_service_kind_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_service_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_severity_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_incidents_snapshot_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents",
+        "service_closeout_snapshots"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_session_audit_event_type_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_session_audit"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_session_audit_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_session_audit"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_session_audit_service_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_session_audit",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_session_state_current_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_session_state",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_session_state_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_session_state"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_session_state_recent_closed_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_session_state",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_session_state_singleton_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_session_state"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_sessions_active_kind_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_sessions_business_day_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_sessions",
+        "business_days"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_sessions_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_sessions_kind_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_sessions_lifecycle_semantics_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_sessions_next_order_number_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_sessions_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_sessions_rollover_source_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_sessions",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "service_sessions_status_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "table_sessions_assigned_waiter_workspace_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "table_sessions",
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "table_sessions_covers_total_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "table_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "table_sessions_lifecycle_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "table_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "table_sessions_next_command_number_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "table_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "table_sessions_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "table_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "table_sessions_service_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "table_sessions",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "table_sessions_status_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "table_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "table_sessions_table_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "table_sessions",
+        "restaurant_tables"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "table_sessions_workspace_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "table_sessions",
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_active_giro_role_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_active_manual_giro_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors",
+        "manual_giros"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_actor_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_actor_role_map",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_created_by_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_display_name_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_failed_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_role_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_sv_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_updated_by_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_workspace_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors",
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "auth_actors_ws_actor_key",
+      "object_type": "constraint_unique",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "order_entities_business_day_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "order_entities",
+        "business_days"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "order_entities_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "order_entities"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "order_entities_service_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "order_entities",
+        "service_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "order_entities_table_session_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "order_entities",
+        "table_sessions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "order_entities_workspace_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "order_entities",
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_capacity_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_created_by_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables",
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_display_name_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_position_x_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_position_y_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_shape_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_shape_preset_chk",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_table_number_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_updated_by_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables",
+        "auth_actors"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_workspace_id_fkey",
+      "object_type": "constraint_fk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables",
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "restaurant_tables_workspace_number_uq",
+      "object_type": "constraint_unique",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "restaurant_tables"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "workspaces_commercial_status_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "workspaces_country_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "workspaces_display_name_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "workspaces_lifecycle_status_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "workspaces_pkey",
+      "object_type": "constraint_pk",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "workspaces_slug_check",
+      "object_type": "constraint_check",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "workspaces_slug_key",
+      "object_type": "constraint_unique",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "workspaces"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass B constraint; all create-time dependencies (own table, and FK target table+its Pass-B1 PK/UNIQUE) proven present before this pass runs -- see v3-v4-semantic-delta.json / original FK-resolvability proof."
+    },
+    {
+      "object": "business_days_business_date_uq",
+      "object_type": "index",
+      "runtime_required": false,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "EXCLUDE",
+      "reason": "Exact duplicate of an index already auto-created by an identically-named ADD CONSTRAINT ... UNIQUE -- see V3 disclosed finding #2. Not a create-time dependency issue."
+    },
+    {
+      "object": "clientes_alias_prefix",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "clientes_alias_uniq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "clientes_nombre_prefix",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "clientes_tel_uniq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "ladieci_schema_migrations_apply_order_uq",
+      "object_type": "index",
+      "runtime_required": false,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "EXCLUDE",
+      "reason": "Exact duplicate of an index already auto-created by an identically-named ADD CONSTRAINT ... UNIQUE -- see V3 disclosed finding #2. Not a create-time dependency issue."
+    },
+    {
+      "object": "idx_manual_giros_active",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "manual_giros_assigned_actor_active_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "manual_giros_day_seq_unique",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "idx_ordenes_conflicto_driver",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "idx_ordenes_estado",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "idx_ordenes_manual_giro_id",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "idx_ordenes_tipo_consegna",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "idx_ordenes_wa_id",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "ordenes_client_req_id_uniq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "ordenes_cliente_id_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "ordenes_order_uid_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "ordenes_service_order_number_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "ordenes_service_session_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "ordenes_table_command_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "ordenes_table_session_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_closeout_attempts_active_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_closeout_attempts_session_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_closeout_snapshots_business_date_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_closeout_snapshots_correlation_uq",
+      "object_type": "index",
+      "runtime_required": false,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "EXCLUDE",
+      "reason": "Exact duplicate of an index already auto-created by an identically-named ADD CONSTRAINT ... UNIQUE -- see V3 disclosed finding #2. Not a create-time dependency issue."
+    },
+    {
+      "object": "service_closeout_snapshots_session_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_closeouts_business_date_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_closeouts_correlation_uq",
+      "object_type": "index",
+      "runtime_required": false,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "EXCLUDE",
+      "reason": "Exact duplicate of an index already auto-created by an identically-named ADD CONSTRAINT ... UNIQUE -- see V3 disclosed finding #2. Not a create-time dependency issue."
+    },
+    {
+      "object": "service_closeouts_service_kind_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_closeouts_session_uq",
+      "object_type": "index",
+      "runtime_required": false,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "EXCLUDE",
+      "reason": "Exact duplicate of an index already auto-created by an identically-named ADD CONSTRAINT ... UNIQUE -- see V3 disclosed finding #2. Not a create-time dependency issue."
+    },
+    {
+      "object": "service_incidents_business_date_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_incidents_category_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_incidents_dedupe_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_incidents_resolution_status_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_incidents_session_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_sessions_business_day_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_sessions_date_kind_active_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_sessions_rollover_source_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "service_sessions_single_active_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "table_sessions_one_open_per_table_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "table_sessions_open_assigned_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "table_sessions_service_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "table_sessions_table_id_fk_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "auth_actors_workspace_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "auth_actors_ws_actor_key",
+      "object_type": "index",
+      "runtime_required": false,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "EXCLUDE",
+      "reason": "Exact duplicate of an index already auto-created by an identically-named ADD CONSTRAINT ... UNIQUE -- see V3 disclosed finding #2. Not a create-time dependency issue."
+    },
+    {
+      "object": "auth_actors_ws_actor_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "order_entities_business_day_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "order_entities_display_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "order_entities_ticket_uq",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "restaurant_tables_created_by_fk_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "restaurant_tables_updated_by_fk_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "restaurant_tables_workspace_active_idx",
+      "object_type": "index",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "Pass C index; expression functions used (upper/COALESCE) are PostgreSQL built-ins, verified present in every PG17 install, not a custom-function create-time dependency."
+    },
+    {
+      "object": "restaurant_tables_workspace_number_uq",
+      "object_type": "index",
+      "runtime_required": false,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "EXCLUDE",
+      "reason": "Exact duplicate of an index already auto-created by an identically-named ADD CONSTRAINT ... UNIQUE -- see V3 disclosed finding #2. Not a create-time dependency issue."
+    },
+    {
+      "object": "workspaces_slug_key",
+      "object_type": "index",
+      "runtime_required": false,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "EXCLUDE",
+      "reason": "Exact duplicate of an index already auto-created by an identically-named ADD CONSTRAINT ... UNIQUE -- see V3 disclosed finding #2. Not a create-time dependency issue."
+    },
+    {
+      "object": "acquire_closeout_attempt",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "business_day_lifecycle_state_guard_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "capture_closeout_snapshot",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "close_service_session_v3",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "complete_closeout_attempt",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "complete_service_session_close",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "create_service_closeout",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "create_service_incident",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "ensure_next_service_session_v3",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "ensure_service_session",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "get_current_service_closeout_session",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "get_order_intake_context_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "guard_service_session_closed_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "guard_service_sessions_lifecycle_semantics_immutable_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "open_operational_service_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "resolve_order_intake_context_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "roll_service_session_economic_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "service_closeout_attempts_no_delete",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "service_closeout_snapshots_append_only",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "service_closeouts_append_only",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "service_incidents_immutable_facts",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "service_incidents_no_delete",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "service_session_assign_order",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "service_session_business_day_derive_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "service_session_immutable_order",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "supersede_closeout_attempt",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "mesa_prepare_table_order_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "mesa_snapshot_order_lines_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "order_entity_anchor_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "is_platform_admin",
+      "object_type": "function (LANGUAGE sql)",
+      "runtime_required": false,
+      "create_time_dependencies": [
+        "public.platform_roles",
+        "auth.uid()"
+      ],
+      "missing_dependencies": [
+        "public.platform_roles",
+        "auth.uid()"
+      ],
+      "decision": "EXCLUDE",
+      "reason": "LANGUAGE sql function body is validated against the catalog AT CREATE FUNCTION TIME (unlike plpgsql's lazy binding). References objects deliberately excluded from the minimal F-10 runtime (RLS-policy-only reachability, and zero CREATE POLICY exists in this bootstrap to ever invoke it). Grep-verified: called by nothing else in the whole bootstrap (zero other functions, triggers, or policies reference it) -- fully orphaned, safe to exclude with no cascading effect."
+    },
+    {
+      "object": "is_workspace_member",
+      "object_type": "function (LANGUAGE sql)",
+      "runtime_required": false,
+      "create_time_dependencies": [
+        "public.workspace_memberships",
+        "auth.uid()"
+      ],
+      "missing_dependencies": [
+        "public.workspace_memberships",
+        "auth.uid()"
+      ],
+      "decision": "EXCLUDE",
+      "reason": "LANGUAGE sql function body is validated against the catalog AT CREATE FUNCTION TIME (unlike plpgsql's lazy binding). References objects deliberately excluded from the minimal F-10 runtime (RLS-policy-only reachability, and zero CREATE POLICY exists in this bootstrap to ever invoke it). Grep-verified: called by nothing else in the whole bootstrap (zero other functions, triggers, or policies reference it) -- fully orphaned, safe to exclude with no cascading effect."
+    },
+    {
+      "object": "mesa_append_only_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "mesa_guard_reserved_table_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "mesa_singleton_workspace_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "workspace_activation_integrity",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "mesa_complete_reservation_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "mesa_guard_covers_monotonic_v1",
+      "object_type": "function (LANGUAGE plpgsql)",
+      "runtime_required": true,
+      "create_time_dependencies": [],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "LANGUAGE plpgsql -- lazily bound, PostgreSQL does not validate referenced tables/functions inside the body at CREATE time, only at first execution."
+    },
+    {
+      "object": "business_day_lifecycle_state_guard_v1",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "business_day_lifecycle_state_guard_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (business_day_lifecycle_state_guard_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "ladieci_schema_migrations_immutable_v1",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "ladieci_schema_migrations_immutability_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (ladieci_schema_migrations_immutability_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "mesa_prepare_table_order_v1",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "mesa_prepare_table_order_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (mesa_prepare_table_order_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "mesa_snapshot_order_lines_v1",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "mesa_snapshot_order_lines_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (mesa_snapshot_order_lines_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "ordenes_assign_service_session",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_session_assign_order"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (service_session_assign_order) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "ordenes_order_entity_anchor_v1",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "order_entity_anchor_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (order_entity_anchor_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "ordenes_service_session_immutable",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_session_immutable_order"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (service_session_immutable_order) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "service_closeout_attempts_guarded_transitions",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_attempts_guarded_transitions"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (service_closeout_attempts_guarded_transitions) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "service_closeout_attempts_no_delete",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_attempts_no_delete"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (service_closeout_attempts_no_delete) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "service_closeout_snapshots_no_update_delete",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeout_snapshots_append_only"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (service_closeout_snapshots_append_only) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "service_closeouts_no_update_delete",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_closeouts_append_only"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (service_closeouts_append_only) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "service_incidents_facts_immutable",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents_immutable_facts"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (service_incidents_immutable_facts) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "service_incidents_no_delete",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_incidents_no_delete"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (service_incidents_no_delete) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "service_sessions_business_day_derive_v1",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "service_session_business_day_derive_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (service_session_business_day_derive_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "service_sessions_closed_live_work_guard",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "guard_service_session_closed_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (guard_service_session_closed_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "service_sessions_lifecycle_semantics_immutable_guard",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "guard_service_sessions_lifecycle_semantics_immutable_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (guard_service_sessions_lifecycle_semantics_immutable_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "mesa_complete_reservation_v1",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "mesa_complete_reservation_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (mesa_complete_reservation_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "table_sessions_guard_covers_monotonic_v1",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "mesa_guard_covers_monotonic_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (mesa_guard_covers_monotonic_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "order_entities_append_only_v1",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "mesa_append_only_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (mesa_append_only_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "mesa_guard_reserved_table_v1",
+      "object_type": "trigger",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "mesa_guard_reserved_table_v1"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (mesa_guard_reserved_table_v1) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    },
+    {
+      "object": "workspace_activation_integrity_trg",
+      "object_type": "trigger (CONSTRAINT TRIGGER)",
+      "runtime_required": true,
+      "create_time_dependencies": [
+        "workspace_activation_integrity"
+      ],
+      "missing_dependencies": [],
+      "decision": "INCLUDE",
+      "reason": "CREATE TRIGGER requires its target table and target function (workspace_activation_integrity) to already exist -- Pass A (tables) and Pass D (functions) both precede Pass E (triggers). Target function confirmed present and not one of the 2 excluded functions."
+    }
+  ],
+  "create_time_missing_dependencies": 0,
+  "runtime_missing_dependencies": 0
+}

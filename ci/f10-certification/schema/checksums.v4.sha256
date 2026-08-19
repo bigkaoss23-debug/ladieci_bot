@@ -1,0 +1,8 @@
+37e36c8174a740fbd6490f178cad1e3d896b5065912408e588af8345664b36f7  staging-schema-head-92-2026-08-19.v4.bootstrap.sql
+770049b6aaa74e5ab356c244eda63efcc7d40051fa651aee9bb9f37dc2405673  staging-schema-head-92-2026-08-19.v4.seed.sql
+f2bf978bb18e9e4f6cd1cdadc2f5fa874286597549b0ea304518476a0397131e  staging-schema-head-92-2026-08-19.v4.metadata.json
+0847f3b7e4cebe953be716c2ed8b2ee26907134ba07644980d426327e5e478e0  staging-schema-head-92-2026-08-19.v4.inventory.json
+75dfbee2bdee3a258bcd202678e07aa72fc7943322c90bc1545dd9e5f367722d  staging-schema-head-92-2026-08-19.v4.capture-notes.md
+90c1ba12eadc5fff2c5848ca3592b671c09c75c1d7430f17dcb1de9cfb98fffc  f10-runtime-dependency-graph.v4.json
+4ee62488042b77707c6ec4f44bb3f255d449393cbee1f75ab4fcf933d7dbe636  f10-create-time-dependency-graph.json
+6c8308aae422e4f5b61166e14328f474c5aa8d919d5c3a0bbd4f69f8a5cb4a55  v3-v4-semantic-delta.json

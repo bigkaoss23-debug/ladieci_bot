@@ -61,7 +61,12 @@ function verifyStructuralCounts() {
   const legacyBranchIntact = resolverBody.includes("status = 'rolled_over'");
 
   return {
-    pass: tables === 20 && functions === 37 && triggersDistinct === 21 && sequences === 1
+    // 35, not 37: DB-SCHEMA-BASELINE.3R removed is_platform_admin/is_workspace_member
+    // (LANGUAGE sql functions that fail at CREATE time without platform_roles/
+    // workspace_memberships -- see v3-v4-semantic-delta.json). Both were already
+    // excluded_from_minimal_bootstrap for runtime purposes; this only fixes their
+    // still-present CREATE statements, proven by real CI run 32249061176.
+    pass: tables === 20 && functions === 35 && triggersDistinct === 21 && sequences === 1
       && containsForgottenClose && legacyBranchIntact,
     tables, functions, triggers: triggersDistinct, sequences,
     containsForgottenClose, legacyBranchIntact,

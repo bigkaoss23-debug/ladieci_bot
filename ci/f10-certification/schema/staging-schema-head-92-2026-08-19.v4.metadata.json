@@ -1,0 +1,90 @@
+{
+  "artifact_label": "STAGING_RUNTIME_SCHEMA_BASELINE_V4_CREATE_TIME_DEPENDENCY_REPAIR",
+  "artifact_meaning": "V3 (deterministic executable bootstrap) with exactly 2 objects removed, proven necessary by a REAL GitHub Actions CI failure, not by theory. Same status as V3: local artifact, not canonical schema, not migration zero, not approved architecture.",
+  "supersedes_for_ci_use": "staging-schema-head-92-2026-08-19.v3.bootstrap.sql (byte-unmodified, preserved as evidence of failed run 32249061176)",
+
+  "trigger_for_this_repair": {
+    "failed_workflow_run": "https://github.com/bigkaoss23-debug/ladieci_bot/actions/runs/32249061176",
+    "failed_certification_commit": "39f22677824e5edecbf2fbb15abf636701eaa710",
+    "failure_step": "Apply V3 bootstrap (single-pass -- no manual reordering needed)",
+    "exact_error": "psql:.../v3.bootstrap.sql:2155: ERROR:  relation \"public.platform_roles\" does not exist",
+    "concurrency_phase_reached": "NONE -- job failed at 48 seconds, before PostgREST ever started, before any order/recovery/race scenario ran",
+    "classification": "BOOTSTRAP_PACKAGING (not F10_LIFECYCLE_CONCURRENCY)"
+  },
+
+  "root_cause": {
+    "statement": "PostgreSQL validates a LANGUAGE sql function's body against the catalog AT CREATE FUNCTION TIME. LANGUAGE plpgsql defers this (lazy binding, validated only at first execution). This is a real, documented PostgreSQL behavior difference this project's earlier Phase 4/9 analysis did not account for -- it generalized plpgsql's lazy-binding behavior to 'functions can be created in any order', which is true for plpgsql but false for LANGUAGE sql.",
+    "affected_objects": ["public.is_platform_admin()", "public.is_workspace_member(uuid)"],
+    "both_are": "LANGUAGE sql STABLE SECURITY DEFINER, and both reference objects deliberately excluded from the minimal F-10 bootstrap for RUNTIME reasons (public.platform_roles, public.workspace_memberships, auth.uid() -- all reachable ONLY through the one workspaces_member_select RLS policy, which does not even exist as executable SQL in this bootstrap, and which F-10's real BYPASSRLS service_role transport bypasses entirely)."
+  },
+
+  "systematic_audit_performed": {
+    "categories": 14,
+    "list": ["LANGUAGE sql functions", "function argument/return types", "SQL functions called by SQL functions", "CREATE POLICY USING/WITH CHECK", "CHECK constraints", "column DEFAULT expressions", "GENERATED expressions", "partial/expression indexes", "trigger target functions", "constraint triggers", "FK targets", "RLS helper functions", "views/materialized views", "extension-provided functions"],
+    "method": "grep-verified against the actual staging-schema-head-92-2026-08-19.v3.bootstrap.sql text for every category, not assumed from memory or from the original capture notes",
+    "findings_beyond_the_known_failure": "NONE -- is_platform_admin/is_workspace_member (2 objects) are the ONLY create-time dependency violation anywhere in the 289-object catalogue. Full detail: f10-create-time-dependency-graph.json",
+    "create_time_missing_dependencies": 0,
+    "runtime_missing_dependencies": 0
+  },
+
+  "authorization_chain_trace": {
+    "traced": ["is_platform_admin", "is_workspace_member", "workspace_activation_integrity", "workspace_activation_integrity_trg", "platform_roles", "workspace_memberships", "auth.uid()"],
+    "decision_per_object": {
+      "is_platform_admin": "EXCLUDE -- LANGUAGE sql, eagerly validated, orphaned (zero callers anywhere in this bootstrap: grep-verified no other function/trigger/policy references it)",
+      "is_workspace_member": "EXCLUDE -- same reasoning, also orphaned",
+      "workspace_activation_integrity": "INCLUDE, unchanged -- LANGUAGE plpgsql (lazily bound), its own reference to workspace_memberships does not block CREATE",
+      "workspace_activation_integrity_trg": "INCLUDE, unchanged -- its target function (workspace_activation_integrity) is being kept, so no orphan-trigger risk; fires only when workspaces.lifecycle_status transitions to 'active', which F-10's seed workspace (DEFAULT lifecycle_status='provisioning') never does",
+      "platform_roles": "remains OUTSIDE_MINIMAL_F10_CERTIFICATION_SUBGRAPH (unchanged from V3) -- no table for it needed since its only reader (is_platform_admin) is now also excluded",
+      "workspace_memberships": "remains OUTSIDE_MINIMAL_F10_CERTIFICATION_SUBGRAPH (unchanged from V3) -- still referenced (lazily, harmlessly) by workspace_activation_integrity(), but that reference never fires this table's read on F-10's own path",
+      "auth.uid()": "remains OUTSIDE (provider-managed), unchanged from V3 -- its only 2 callers are both now excluded"
+    },
+    "verdict": "No genuine mid-chain requirement found. The correct set to exclude was exactly the 2 originally-scoped-for-runtime-exclusion functions -- nothing broader, nothing narrower."
+  },
+
+  "workspace_seed_safety_reverified": {
+    "claim": "The V3 seed's single workspaces row (slug='f10-ci', DEFAULT lifecycle_status='provisioning') remains sufficient for mesa_singleton_workspace_v1() and the real non-table creaOrdine path after this repair.",
+    "why_still_true": "mesa_singleton_workspace_v1() only ever does SELECT count(*)/SELECT id FROM public.workspaces -- it does not call, and was never coupled to, is_platform_admin/is_workspace_member. Removing those 2 functions has zero effect on this call path. Not re-tested live in this repair pass (no DB access used -- see zero-mutation section); re-verified by direct source inspection only, consistent with this task's read-only constraint.",
+    "seed_sql_changed": false,
+    "seed_sql_sha256_unchanged": "770049b6aaa74e5ab356c244eda63efcc7d40051fa651aee9bb9f37dc2405673"
+  },
+
+  "rls_policy_coherence": {
+    "create_policy_statements_in_bootstrap": 0,
+    "statement": "V2's .sql (and therefore V3's, and therefore V4's) never emitted ENABLE ROW LEVEL SECURITY / CREATE POLICY / GRANT as executable SQL -- confirmed again this pass by direct grep, not merely cited from the V2/V3 record. There is nothing to check coherence against because no policy exists in this bootstrap at all. This CI certifies ONLY the BYPASSRLS service_role path -- explicitly not anon/authenticated RLS behavior, exactly as already stated in f10-ci-role-model.json."
+  },
+
+  "workflow_file_constraint": {
+    "statement": "The frozen, byte-immutable .github/workflows/f10-concurrency-cert.yml hardcodes the literal path ci/f10-certification/schema/staging-schema-head-92-2026-08-19.v3.bootstrap.sql in its psql -f step and was NOT modified in this repair (per explicit instruction). To get V4's corrected content actually executed by that unchanged workflow, the file at that exact v3-suffixed path inside ci/f10-certification/schema/ now contains V4's bytes, with a prominent header disclosing this. The canonically-named .v4.bootstrap.sql (identical bytes) exists both alongside it in ci/f10-certification/schema/ and in the master /Users/bigart/Downloads/ladieci-db-schema-baseline/ record.",
+    "workflow_sha256_before": "d256001cc96c0f7adcbbc9fd5a42d74e0afde616f89a0e25bbeacfe0e82d7ed8",
+    "workflow_sha256_after": "d256001cc96c0f7adcbbc9fd5a42d74e0afde616f89a0e25bbeacfe0e82d7ed8",
+    "workflow_changed": false
+  },
+
+  "counts": {
+    "tables": 20,
+    "constraints": 157,
+    "indexes_in_bootstrap": 46,
+    "functions": 35,
+    "triggers": 21,
+    "sequences": 1
+  },
+
+  "artifacts": {
+    "staging-schema-head-92-2026-08-19.v4.bootstrap.sql": "2281 lines, 35 functions (37 minus is_platform_admin/is_workspace_member), everything else byte-identical to V3",
+    "staging-schema-head-92-2026-08-19.v4.seed.sql": "byte-identical to V3 seed (no change needed)",
+    "f10-create-time-dependency-graph.json": "the new Phase-2 artifact -- all 289 catalogued objects (20 tables+157 constraints+54 indexes+37 functions+21 triggers), full 14-category audit",
+    "f10-runtime-dependency-graph.v4.json": "V3's graph with the 2 now-physically-removed function nodes deleted",
+    "v3-v4-semantic-delta.json": "per-object V3-vs-V4 comparison: 285/287 UNCHANGED, 2 EXCLUDED_UNREACHABLE_FROM_F10_RUNTIME",
+    "staging-schema-head-92-2026-08-19.v4.capture-notes.md": "phase-by-phase repair notes",
+    "checksums.v4.sha256": "external checksum authority for all V4 artifacts except itself"
+  },
+
+  "zero_mutation_this_task": {
+    "staging_db_accessed": false,
+    "staging_db_changed": false,
+    "railway_changed": false,
+    "netlify_changed": false,
+    "live_changed": false,
+    "note": "This entire repair was derived from the preserved GitHub Actions log + local static analysis of the already-downloaded V3 bootstrap.sql text -- zero new STAGING queries were needed or made."
+  }
+}
