@@ -637,6 +637,7 @@ async function creaOrdine(params) {
       // Failing closed here, before ever trying the retry, would wrongly
       // fail a legitimate race-loser order the other contender already fixed.
       if (!recovery || recovery.success !== true) {
+        // language-guard: allow-legacy creaOrdine below is this existing function's own name, used as the log tag, not new vocabulary
         console.warn(`[creaOrdine] forgotten-close recovery reported failure for ${forgotten.staleServiceSessionId} (code=${(recovery && recovery.code) || null}) — retrying original insert once to let it self-resolve`);
       }
       continue; // the one authorized retry of the ORIGINAL order

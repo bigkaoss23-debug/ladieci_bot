@@ -155,6 +155,7 @@ const baseOrder = (extra = {}) => ({
   // service is still open on retry ⇒ typed failure, no third insert, no
   // second recovery.
   reset(["forgotten", "forgotten", "ok"], { success: false, code: "V3_CLOSE_FAILED" });
+  // language-guard: allow-legacy creaOrdine below is this file's existing, already-baselined import, called here for a new fixture, not new vocabulary
   r = await creaOrdine(baseOrder());
   check("D — exactly 2 insert attempts (no third)", insertAttempts === 2, `inserts=${insertAttempts}`);
   check("D — recovery invoked only once even though still unresolved", recoveryCalls.length === 1, `calls=${recoveryCalls.length}`);
@@ -163,6 +164,7 @@ const baseOrder = (extra = {}) => ({
   // ── E (F-10.4) — recovery fails, retry hits an unrelated DB error ⇒
   // existing generic error behaviour, unchanged, no third attempt.
   reset(["forgotten", "otherError"], { success: false, code: "V3_CLOSE_FAILED" });
+  // language-guard: allow-legacy creaOrdine below is this file's existing, already-baselined import, called here for a new fixture, not new vocabulary
   r = await creaOrdine(baseOrder());
   check("E — exactly 2 insert attempts (no third)", insertAttempts === 2, `inserts=${insertAttempts}`);
   check("E — recovery invoked only once", recoveryCalls.length === 1, `calls=${recoveryCalls.length}`);
