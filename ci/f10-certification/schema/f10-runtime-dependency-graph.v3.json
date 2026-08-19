@@ -1,0 +1,752 @@
+{
+  "generated_from": "Derived from f10-runtime-dependency-graph.json (V2, sha256 bba5ce75bd8a084c93376dc8299c9ab9de3383aa0591aa9e7a74ad3b2f060241) + direct re-verification against staging-schema-head-92-2026-08-19.v2.sql (sha256 f41a556f885ef09da24fc469f4da28e447dd8cc4441d330c7dcaa5ff85722595). NO new STAGING access -- purely a local re-derivation from the two already-frozen, hash-verified inputs.",
+  "purpose": "Machine-readable closure of every application-owned database object required to CREATE and functionally exercise the F-10 forgotten-close subsystem in an isolated PostgreSQL environment.",
+  "nodes": [
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "business_days",
+      "why_required": "canonical Business Day row, created/reused by resolve_order_intake_context_v1",
+      "incoming_dependency": "resolve_order_intake_context_v1, order_entity_anchor_v1 (ticket counter)",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "business_day_lifecycle_state",
+      "why_required": "singleton canonical pointer (current_business_day_id/current_period_id)",
+      "incoming_dependency": "resolve_order_intake_context_v1, open_operational_service_v1, close_service_session_v3",
+      "full_definition_captured": true,
+      "bootstrap_row_required": true,
+      "bootstrap_row_reason": "true singleton (PK(singleton), CHECK(singleton)); resolver's UPDATE has no fallback INSERT",
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "service_sessions",
+      "why_required": "the Operational Service / Service Period row itself",
+      "incoming_dependency": "every F-10 function",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "service_session_state",
+      "why_required": "singleton shadow pointer (current_session_id/recent_closed_session_id)",
+      "incoming_dependency": "resolve_order_intake_context_v1, open_operational_service_v1, close_service_session_v3",
+      "full_definition_captured": true,
+      "bootstrap_row_required": true,
+      "bootstrap_row_reason": "true singleton, same reasoning as business_day_lifecycle_state",
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "service_session_audit",
+      "why_required": "append-only event log written by open_operational_service_v1/close_service_session_v3",
+      "incoming_dependency": "open_operational_service_v1, close_service_session_v3",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "service_closeout_attempts",
+      "why_required": "attempt lineage the close engine acquires/completes/supersedes",
+      "incoming_dependency": "close_service_session_v3, acquire/complete/supersede_closeout_attempt",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "service_closeouts",
+      "why_required": "the ONE authoritative, append-only close evidence row",
+      "incoming_dependency": "create_service_closeout, close_service_session_v3",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "service_closeout_snapshots",
+      "why_required": "pre-mutation audit snapshot captured before close",
+      "incoming_dependency": "capture_closeout_snapshot",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "service_incidents",
+      "why_required": "residue classification evidence (operational + financial exposure)",
+      "incoming_dependency": "create_service_incident",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "ordenes",
+      "why_required": "the order row itself -- creaOrdine's INSERT target",
+      "incoming_dependency": "creaOrdine, service_session_assign_order trigger",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "table_sessions",
+      "why_required": "FK target of ordenes/order_entities; V3 engine's carryover-summary read",
+      "incoming_dependency": "ordenes, order_entities, serviceLifecycleEngine carryover read",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "config",
+      "why_required": "creaOrdine reads ORDER_RESET_TS",
+      "incoming_dependency": "agentOrdini.js creaOrdine",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "bootstrap_row_note": "functionally optional -- missing/empty config read defaults fromTs to 0, harmless for CI",
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "clientes",
+      "why_required": "creaOrdine upserts by tel",
+      "incoming_dependency": "agentOrdini.js creaOrdine",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1+V2(identity fix)"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "geo_cache",
+      "why_required": "creaOrdine reads/writes via bumpGeoCacheCreated",
+      "incoming_dependency": "agentOrdini.js creaOrdine",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "manual_giros",
+      "why_required": "creaOrdine references via getManualGiros/autoDissolveIfBelowThreshold; FK target of auth_actors.active_manual_giro_id",
+      "incoming_dependency": "agentOrdini.js, auth_actors",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "ladieci_schema_migrations",
+      "why_required": "migration ledger -- not functionally on the order-intake path, captured for completeness",
+      "incoming_dependency": "none at runtime",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "order_entities",
+      "why_required": "MANDATORY unconditional INSERT target of order_entity_anchor_v1 for EVERY order",
+      "incoming_dependency": "order_entity_anchor_v1 trigger fn on ordenes",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V2"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "workspaces",
+      "why_required": "MANDATORY -- mesa_singleton_workspace_v1() requires exactly 1 row for every non-table order",
+      "incoming_dependency": "order_entity_anchor_v1 -> mesa_singleton_workspace_v1",
+      "full_definition_captured": true,
+      "bootstrap_row_required": true,
+      "bootstrap_row_reason": "mesa_singleton_workspace_v1 RAISEs MESA_WORKSPACE_AMBIGUOUS unless exactly one row exists",
+      "provider_managed": false,
+      "source": "V2"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "auth_actors",
+      "why_required": "FK-constraint-only (manual_giros.assigned_actor, table_sessions.assigned_waiter_actor) -- not functionally read by F-10's own path",
+      "incoming_dependency": "manual_giros FK, table_sessions FK",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V2"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "restaurant_tables",
+      "why_required": "FK-constraint-only (table_sessions.table_id) -- not functionally exercised by F-10's non-table-order certification scenarios",
+      "incoming_dependency": "table_sessions FK",
+      "full_definition_captured": true,
+      "bootstrap_row_required": false,
+      "provider_managed": false,
+      "source": "V2"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "resolve_order_intake_context_v1",
+      "why_required": "the F-10 candidate patch target; canonical Business Day + intake authority",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "get_order_intake_context_v1",
+      "why_required": "read-only UX preflight sibling",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "open_operational_service_v1",
+      "why_required": "opens Service B on the retried order after recovery",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "close_service_session_v3",
+      "why_required": "the real close primitive forgottenCloseRecovery.js reaches via serviceCloseAuthority.js",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "create_service_closeout",
+      "why_required": "writes the one authoritative service_closeouts row",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "acquire_closeout_attempt",
+      "why_required": "mints the active attempt lineage",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "complete_closeout_attempt",
+      "why_required": "marks the attempt completed after close",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "supersede_closeout_attempt",
+      "why_required": "attempt lineage on retry/replay",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "capture_closeout_snapshot",
+      "why_required": "pre-mutation snapshot phase of the JS engine",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "create_service_incident",
+      "why_required": "residue classification writer",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "guard_service_session_closed_v1",
+      "why_required": "BEFORE UPDATE OF status guard on service_sessions -- the residue/table-release check",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "service_session_assign_order",
+      "why_required": "BEFORE INSERT trigger fn on ordenes -- calls resolve_order_intake_context_v1, sets service_session_id",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "business_day_lifecycle_state_guard_v1",
+      "why_required": "BEFORE UPDATE guard on the singleton pointer table",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "service_closeouts_append_only",
+      "why_required": "immutability trigger fn",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "service_closeout_attempts_no_delete",
+      "why_required": "immutability trigger fn",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "service_closeout_snapshots_append_only",
+      "why_required": "immutability trigger fn",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "service_incidents_no_delete",
+      "why_required": "immutability trigger fn",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "service_incidents_immutable_facts",
+      "why_required": "immutability trigger fn",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "service_session_immutable_order",
+      "why_required": "BEFORE UPDATE guard on ordenes.service_session_id",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "service_session_business_day_derive_v1",
+      "why_required": "BEFORE INSERT trigger fn on service_sessions -- derives business_day_id",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "guard_service_sessions_lifecycle_semantics_immutable_v1",
+      "why_required": "BEFORE UPDATE OF lifecycle_semantics guard",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "get_current_service_closeout_session",
+      "why_required": "explicitly listed in the brief's F-10 function set",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "ensure_service_session",
+      "why_required": "explicitly listed; read/reuse-only per F-7",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "ensure_next_service_session_v3",
+      "why_required": "explicitly listed; retired auto-successor path (F-5) but requested for capture",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "roll_service_session_economic_v1",
+      "why_required": "explicitly listed; legacy economic-era path",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "complete_service_session_close",
+      "why_required": "explicitly listed; legacy two-phase close",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "mesa_prepare_table_order_v1",
+      "why_required": "BEFORE INSERT trigger fn on ordenes, fires unconditionally (no-ops for non-table orders); discovered via real trigger firing order, not guessed",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1(discovered)"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "mesa_snapshot_order_lines_v1",
+      "why_required": "AFTER INSERT trigger fn on ordenes, fires unconditionally (no-ops for non-table orders)",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1(discovered)"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "order_entity_anchor_v1",
+      "why_required": "BEFORE INSERT trigger fn on ordenes, fires unconditionally and does REAL work every time (mints ticket, inserts order_entities)",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V1(discovered)"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "mesa_append_only_v1",
+      "why_required": "BEFORE DELETE/UPDATE trigger fn on order_entities",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V2"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "mesa_guard_reserved_table_v1",
+      "why_required": "BEFORE UPDATE OF active trigger fn on restaurant_tables -- not functionally exercised (F-10 never updates restaurant_tables.active) but needed for CREATE TRIGGER",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V2"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "mesa_singleton_workspace_v1",
+      "why_required": "called by order_entity_anchor_v1 for every non-table order",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V2"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "workspace_activation_integrity",
+      "why_required": "AFTER INSERT/UPDATE constraint trigger fn on workspaces -- inert as long as lifecycle_status is never set to 'active'",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V2"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "mesa_complete_reservation_v1",
+      "why_required": "AFTER UPDATE OF status trigger fn on table_sessions -- not functionally exercised by F-10's own certification scenarios (F-10 never creates/closes table orders), captured for completeness only",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V2(Section 10, added to graph in V3)"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "mesa_guard_covers_monotonic_v1",
+      "why_required": "BEFORE UPDATE OF covers_total trigger fn on table_sessions -- same non-exercise reasoning as above",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V2(Section 10, added to graph in V3)"
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "is_workspace_member",
+      "why_required": "ONLY reachable via the workspaces_member_select RLS policy, which F-10's service_role write path bypasses entirely -- needed for CREATE POLICY only, never executed at runtime by F-10",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V2",
+      "excluded_from_minimal_bootstrap": true
+    },
+    {
+      "type": "function",
+      "schema": "public",
+      "name": "is_platform_admin",
+      "why_required": "same as is_workspace_member -- CREATE-time only, never runtime-exercised by F-10",
+      "full_definition_captured": true,
+      "provider_managed": false,
+      "source": "V2",
+      "excluded_from_minimal_bootstrap": true
+    },
+    {
+      "type": "trigger",
+      "name": "service_sessions_business_day_derive_v1 ON service_sessions",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "service_sessions_closed_live_work_guard ON service_sessions",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "service_sessions_lifecycle_semantics_immutable_guard ON service_sessions",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "business_day_lifecycle_state_guard_v1 ON business_day_lifecycle_state",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "ladieci_schema_migrations_immutable_v1 ON ladieci_schema_migrations",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "mesa_prepare_table_order_v1 ON ordenes (BEFORE INSERT)",
+      "full_definition_captured": true,
+      "firing_order_position": 1,
+      "source": "V1(discovered)"
+    },
+    {
+      "type": "trigger",
+      "name": "ordenes_assign_service_session ON ordenes (BEFORE INSERT)",
+      "full_definition_captured": true,
+      "firing_order_position": 2,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "ordenes_order_entity_anchor_v1 ON ordenes (BEFORE INSERT)",
+      "full_definition_captured": true,
+      "firing_order_position": 3,
+      "source": "V1(discovered)"
+    },
+    {
+      "type": "trigger",
+      "name": "mesa_snapshot_order_lines_v1 ON ordenes (AFTER INSERT)",
+      "full_definition_captured": true,
+      "source": "V1(discovered)"
+    },
+    {
+      "type": "trigger",
+      "name": "ordenes_service_session_immutable ON ordenes (BEFORE UPDATE)",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "service_closeout_attempts_guarded_transitions ON service_closeout_attempts",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "service_closeout_attempts_no_delete ON service_closeout_attempts",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "service_closeout_snapshots_no_update_delete ON service_closeout_snapshots",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "service_closeouts_no_update_delete ON service_closeouts",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "service_incidents_facts_immutable ON service_incidents",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "service_incidents_no_delete ON service_incidents",
+      "full_definition_captured": true,
+      "source": "V1"
+    },
+    {
+      "type": "trigger",
+      "name": "mesa_complete_reservation_v1 ON table_sessions",
+      "full_definition_captured": true,
+      "note": "CORRECTED in V3 (see v2_to_v3_correction_disclosed above): body IS present in v2.sql Section 10, contrary to V2 graph's prior flag. Not functionally exercised by F-10's own certification scenarios (fires on a table_sessions.status transition F-10 never triggers) -- captured for completeness, still excluded from the *minimal* bootstrap's functional necessity, but the artifact itself is complete.",
+      "source": "V2(body present, graph-flag corrected in V3)"
+    },
+    {
+      "type": "trigger",
+      "name": "table_sessions_guard_covers_monotonic_v1 ON table_sessions",
+      "full_definition_captured": true,
+      "note": "CORRECTED in V3: same situation as mesa_complete_reservation_v1 above -- body present in v2.sql Section 10.",
+      "source": "V2(body present, graph-flag corrected in V3)"
+    },
+    {
+      "type": "trigger",
+      "name": "order_entities_append_only_v1 ON order_entities",
+      "full_definition_captured": true,
+      "source": "V2"
+    },
+    {
+      "type": "trigger",
+      "name": "mesa_guard_reserved_table_v1 ON restaurant_tables",
+      "full_definition_captured": true,
+      "source": "V2"
+    },
+    {
+      "type": "trigger",
+      "name": "workspace_activation_integrity_trg ON workspaces (CONSTRAINT TRIGGER)",
+      "full_definition_captured": true,
+      "note": "V1's pg_get_constraintdef-based capture for this was MALFORMED (constraint triggers aren't ALTER TABLE ADD CONSTRAINT); corrected in V2 via pg_get_triggerdef",
+      "source": "V2(corrected)"
+    },
+    {
+      "type": "sequence",
+      "name": "public.clientes_id_seq",
+      "owned_by": "clientes.id",
+      "identity_mode": "GENERATED BY DEFAULT AS IDENTITY",
+      "full_definition_captured": true,
+      "source": "V2"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "workspace_memberships",
+      "why_referenced": "read by workspace_activation_integrity (only if lifecycle_status='active') and by is_workspace_member (RLS-only)",
+      "full_definition_captured": false,
+      "excluded_from_minimal_bootstrap": true,
+      "exclusion_reason": "F-10's seed workspace row stays at its DEFAULT lifecycle_status='provisioning' and is never activated, so workspace_activation_integrity_trg never queries this table; is_workspace_member is RLS-policy-only and never executed by F-10's service_role write path"
+    },
+    {
+      "type": "table",
+      "schema": "public",
+      "name": "platform_roles",
+      "why_referenced": "read by is_platform_admin (RLS-only)",
+      "full_definition_captured": false,
+      "excluded_from_minimal_bootstrap": true,
+      "exclusion_reason": "same as workspace_memberships -- RLS-policy-only, never executed by F-10's service_role path"
+    },
+    {
+      "type": "function",
+      "schema": "auth",
+      "name": "auth.uid()",
+      "why_referenced": "called by is_workspace_member/is_platform_admin",
+      "full_definition_captured": false,
+      "provider_managed": true,
+      "exclusion_reason": "Supabase platform auth schema function; only needed if the workspaces_member_select RLS policy is included, which this minimal bootstrap deliberately omits"
+    }
+  ],
+  "unknown_required_for_f10": 0,
+  "excluded_from_minimal_bootstrap_count": 3,
+  "excluded_from_minimal_bootstrap": [
+    "workspace_memberships (table)",
+    "platform_roles (table)",
+    "auth.uid() (provider function)"
+  ],
+  "excluded_but_registered_body_not_captured": [
+    "mesa_complete_reservation_v1 (trigger, table_sessions)",
+    "table_sessions_guard_covers_monotonic_v1 (trigger, table_sessions)"
+  ],
+  "v2_to_v3_correction_disclosed": "While programmatically re-parsing the frozen v2.sql for the V3 bootstrap build, found that V2's own dependency-graph.json understated capture completeness for 2 objects: the trigger nodes 'mesa_complete_reservation_v1 ON table_sessions' and 'table_sessions_guard_covers_monotonic_v1 ON table_sessions' were flagged full_definition_captured:false with a note that their function bodies were 'registered but not captured' -- but v2.sql SECTION 10 (lines 2504-2541) actually DOES contain full, real bodies for both trigger functions (mesa_complete_reservation_v1() and mesa_guard_covers_monotonic_v1()), byte-verified via direct extraction, not assumed. This matches the DB-SCHEMA-BASELINE.2 session's own final report text ('...+ mesa_complete_reservation_v1 and mesa_guard_covers_monotonic_v1 [...] now closed') -- the dependency-graph.json artifact from that session was simply never updated to match after Section 10 was added. V2's own .sql content was always correct; only the separate .json summary of it lagged. V2's files are NOT modified (frozen, hash-pinned); this V3 graph corrects the record going forward.",
+  "v3_recomputed_counts": {
+    "tables_in_minimal_bootstrap": 20,
+    "functions_captured_total (incl. is_workspace_member/is_platform_admin, which are excluded from *minimal* CI role but ARE captured)": 37,
+    "functions_in_minimal_bootstrap (excludes is_workspace_member/is_platform_admin, RLS-only)": 35,
+    "triggers_total": 21,
+    "sequences_total": 1,
+    "note": "37 = total captured functions with real bodies (matches v3.bootstrap.sql PASS D exactly). The task's own PASS CRITERIA text says 'all 34 required functions' -- that number traces to a scalar miscount in V2 metadata.json's counts.full_required_function_count field (34) that never matched V2's own correctly-enumerated 37-name list in v2.inventory.json. V3 uses the programmatically-verified true count (37) throughout, and represents ALL 37 real captured functions -- dropping 3 to artificially hit 34 would mean omitting real, already-captured function bodies from the bootstrap, which is not something this task's own semantic-freeze rules permit."
+  }
+}

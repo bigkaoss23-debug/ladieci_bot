@@ -1,0 +1,25 @@
+{
+  "purpose": "Local manifest only (Phase 8 of DB-SCHEMA-BASELINE.3). Describes the future F-10.3C CI role model. PostgREST is NOT launched by this slice.",
+  "bootstrap_role": {
+    "note": "Applying staging-schema-head-92-2026-08-19.v3.bootstrap.sql / .v3.seed.sql requires whatever admin/owner role the CI Postgres 17 container provides by default (e.g. the container's default superuser, commonly 'postgres'). This is infrastructure plumbing, not an F-10-specific role, and is not further specified here."
+  },
+  "f10_test_role": {
+    "role_name": "f10_ci_runtime",
+    "purpose": "Faithful CI-only equivalent of the real backend's service_role transport authority. NOT a copy of any real Supabase credential -- a disposable role created fresh inside the ephemeral CI Postgres instance.",
+    "login": true,
+    "bypassrls": true,
+    "why_bypassrls": "16 of the 20 F-10-scope tables have relrowsecurity=true with ZERO policies defined (Postgres default-denies all access to non-bypass roles in that state). The real production backend always authenticates as service_role, which bypasses RLS entirely (confirmed via ladieci-messa-staging-backend/.env.example's own comment: SUPABASE_KEY=your_service_role_key). BYPASSRLS is therefore the correct, minimal, faithful reproduction of the real authority level -- not a relaxation and not an over-grant.",
+    "explicitly_not_reproduced": ["anon", "authenticated", "auth.users", "storage.*", "realtime.*"],
+    "why_not_reproduced": "No F-10 dependency (traced in f10-runtime-dependency-graph.v3.json) requires any of these. The one RLS policy that would need 'authenticated' (workspaces_member_select, via is_workspace_member()/auth.uid()) is bypassed entirely by f10_ci_runtime's BYPASSRLS grant and is never exercised by F-10's own code path.",
+    "required_schema_usage": ["public"],
+    "table_privileges": {
+      "statement": "SELECT, INSERT, UPDATE, DELETE on all 20 F-10-scope tables listed in f10-runtime-dependency-graph.v3.json -> tables[]",
+      "note_on_delete": "Several tables (service_closeouts, service_closeout_attempts, service_closeout_snapshots, service_incidents, ladieci_schema_migrations, order_entities) carry append-only/no-delete/no-update triggers that RAISE EXCEPTION at runtime regardless of grants -- the base DELETE/UPDATE grant is still required for Postgres to even reach the trigger (a missing grant fails earlier, with a permission-denied error instead of the intended application-level guard error), so it is listed for completeness even though the trigger, not the grant, is the real enforcement mechanism."
+    },
+    "function_execute_privileges": {
+      "statement": "EXECUTE on all 37 functions listed in f10-runtime-dependency-graph.v3.json -> functions[]",
+      "note": "None of the 37 captured function definitions carry an explicit REVOKE EXECUTE FROM PUBLIC in the captured DDL, so under default Postgres behavior (EXECUTE granted to PUBLIC on function creation) f10_ci_runtime already has this by default; the explicit GRANT is still recommended in the CI setup script for clarity/robustness against a future default-privileges change, not because it is currently required."
+    }
+  },
+  "postgrest_role_deferred_note": "PostgREST itself is out of scope for this slice per the task's explicit 'Do not yet launch PostgREST' instruction. This file only fixes the role f10_ci_runtime should be granted; a future PostgREST config would set db-anon-role / a pre-request auth hook mapping the test JWT to this role, or PostgREST could be configured to authenticate as f10_ci_runtime directly for a CI-only harness -- that wiring decision is left to the F10_3C_EPHEMERAL_CONCURRENCY_CI step, not decided here."
+}

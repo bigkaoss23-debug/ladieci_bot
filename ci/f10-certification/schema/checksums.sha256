@@ -1,0 +1,8 @@
+4b3bda0c5083a8e031a883ae0f0e18b29f26a009cb30bfca6f1d53bf6ee72a9d  staging-schema-head-92-2026-08-19.v3.bootstrap.sql
+770049b6aaa74e5ab356c244eda63efcc7d40051fa651aee9bb9f37dc2405673  staging-schema-head-92-2026-08-19.v3.seed.sql
+cb1ceac90aed253f7201e78ff7c8da85ec836dc3b1429e673084cb8884074f19  staging-schema-head-92-2026-08-19.v3.metadata.json
+1dd87d668a36f4722f82c505ee29b1f5d5e34c10f7b7b0e4596393ffe13cc504  staging-schema-head-92-2026-08-19.v3.inventory.json
+61c8af0777eb1241f860cc72d74a7e05cccccceea3306937d6ad8c6cf868e4f2  staging-schema-head-92-2026-08-19.v3.capture-notes.md
+9141d7805feb45d14f45388b9ffeb51d4e7b1ffaaae5f6aad948f17686565f59  f10-runtime-dependency-graph.v3.json
+54fbae7d1e8ba818af460c848c78f93eb271a4cb57abb0ba034c5f029187cbd8  f10-ci-role-model.json
+1a473205d5a66d0c54a7a000ae90b6a5c59a5567b70d9f1c484176fc984da48e  v2-v3-semantic-equivalence.json
