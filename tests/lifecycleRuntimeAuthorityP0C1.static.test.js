@@ -129,6 +129,13 @@ const readStripped = (rel) => stripComments(read(rel));
   // ── era-aware branch; every other legacy file is still fully unreachable, ─
   // ── exactly as P0-C1 originally required. ────────────────────────────────
   const v3EngineFile = "serviceLifecycleEngine";
+  // F-10.1B — the ONE module permitted to import the engine directly.
+  const v3AuthorityFile = "serviceCloseAuthority";
+  // Explicit allowlists. Deliberately exact relative paths, never globs or
+  // directory exemptions: a new caller must be added here consciously.
+  const AUTHORIZED_DIRECT_ENGINE_IMPORTERS = ["src/serviceSessions/serviceCloseAuthority.js"];
+  const AUTHORIZED_AUTHORITY_CALLERS = ["index.js", "src/serviceSessions/forgottenCloseRecovery.js"];
+
 
   // 2a-2c. The legacy/automatic machinery must still never reach V3 at all —
   // unchanged from the original P0-C1 claim, just no longer including index.js.
@@ -145,10 +152,20 @@ const readStripped = (rel) => stripComments(read(rel));
     );
   }
 
-  // 2d. index.js DOES now require the engine — the F-8 contract itself.
+  // 2d. F-10.1B — index.js reaches V3 through the canonical close authority,
+  // and must NOT import the engine directly any more. F-10 legitimately adds a
+  // SECOND close caller (forgotten-close recovery, driven from order intake,
+  // not from this Finalizar action). Rather than allowlisting two direct
+  // importers — a list that would keep growing — both callers now funnel
+  // through one authority module, so the invariant gets STRONGER: exactly one
+  // file in the entire application imports the engine.
   assert(
-    `index.js: DOES require/import the V3 engine module (F-8 point 1 — the deliberate cutover this test now asserts, not the old blanket containment)`,
-    new RegExp(`require\\([^)]*${v3EngineFile}['"]\\)`).test(indexJs),
+    `index.js: does NOT import the V3 engine directly (F-10.1B — the engine has exactly one direct importer, the canonical authority)`,
+    !new RegExp(`require\\([^)]*${v3EngineFile}['"]\\)`).test(indexJs),
+  );
+  assert(
+    `index.js: DOES require/import the canonical close authority (F-8 point 1 preserved through the F-10.1B facade)`,
+    new RegExp(`require\\([^)]*${v3AuthorityFile}['"]\\)`).test(indexJs),
   );
 
   // 2e. Exactly ONE Finalizar action block exists — no second/parallel
@@ -181,8 +198,8 @@ const readStripped = (rel) => stripComments(read(rel));
 
   const legacyCloseFnCall = "await chiudiServizio("; // language-guard: allow-legacy chiudiServizio is the existing legacy close function name this constant holds for the branch checks below, not new vocabulary
   assert(
-    "new-era branch: calls closeServiceV3( exactly once (F-8 point 2 — V3 reachable here, and only here)",
-    (newEraBody.match(/closeServiceV3\(/g) || []).length === 1,
+    "new-era branch: calls closeServiceSessionV3( exactly once (F-8 point 2 + F-10.1B — V3 reachable here, and only here, now via the canonical close authority)",
+    (newEraBody.match(/closeServiceSessionV3\(/g) || []).length === 1,
   );
   assert(
     "new-era branch: NEVER calls the legacy close function (new-era must never fall back to the legacy close path)",
@@ -206,8 +223,8 @@ const readStripped = (rel) => stripComments(read(rel));
     /closeEligibility\(/.test(legacyBody) && legacyBody.includes(legacyCloseFnCall),
   );
   assert(
-    "legacy/economic_period_v1 branch: NEVER calls closeServiceV3( (F-8 point 6 — economic_period_v1 must never reach V3)",
-    !/closeServiceV3\(/.test(legacyBody),
+    "legacy/economic_period_v1 branch: NEVER calls the V3 close (F-8 point 6 — economic_period_v1 must never reach V3)",
+    !/closeServiceV3\(/.test(legacyBody) && !/closeServiceSessionV3\(/.test(legacyBody),
   );
 
   // 2f. Walk src/ once more, generically, so this guard also catches a new
@@ -223,12 +240,44 @@ const readStripped = (rel) => stripComments(read(rel));
     return out;
   }
   const allSrcFiles = walk(path.join(ROOT, "src"));
-  const requiringFiles = allSrcFiles.filter((f) => new RegExp(`require\\([^)]*${v3EngineFile}['"]\\)`).test(stripComments(fs.readFileSync(f, "utf8"))));
+  const rel = (f) => path.relative(ROOT, f).split(path.sep).join("/");
+
+  // 2f. EXACTLY ONE application module may import the V3 engine directly.
+  const engineImporters = allSrcFiles
+    .filter((f) => new RegExp(`require\\([^)]*${v3EngineFile}['"]\\)`).test(stripComments(fs.readFileSync(f, "utf8"))))
+    .map(rel)
+    .sort();
   assert(
-    "src/**/*.js (excluding the engine's own files): zero files require the V3 engine module — index.js remains the ONLY authorized caller anywhere in application code",
-    requiringFiles.length === 0,
-    JSON.stringify(requiringFiles.map((f) => path.relative(ROOT, f))),
+    "src/**/*.js: the V3 engine has EXACTLY ONE direct importer — the canonical close authority (F-10.1B)",
+    JSON.stringify(engineImporters) === JSON.stringify(AUTHORIZED_DIRECT_ENGINE_IMPORTERS),
+    JSON.stringify(engineImporters),
   );
+  assert(
+    "index.js: still does not import the V3 engine directly (checked again in the generic walk)",
+    !new RegExp(`require\\([^)]*${v3EngineFile}['"]\\)`).test(indexJs),
+  );
+
+  // 2g. Only explicitly certified modules may call the canonical authority.
+  const authorityCallers = allSrcFiles
+    .filter((f) => new RegExp(`require\\([^)]*${v3AuthorityFile}['"]\\)`).test(stripComments(fs.readFileSync(f, "utf8"))))
+    .map(rel)
+    .filter((r) => !r.endsWith(`${v3AuthorityFile}.js`))
+    .concat(new RegExp(`require\\([^)]*${v3AuthorityFile}['"]\\)`).test(indexJs) ? ["index.js"] : [])
+    .sort();
+  assert(
+    "the canonical close authority has EXACTLY the certified callers — index.js (operator Finalizar) and forgottenCloseRecovery.js (system recovery); a third caller must be certified explicitly",
+    JSON.stringify(authorityCallers) === JSON.stringify([...AUTHORIZED_AUTHORITY_CALLERS].sort()),
+    JSON.stringify(authorityCallers),
+  );
+
+  // 2h. The authority is transport only — no lifecycle policy of its own.
+  const authorityBody = stripComments(fs.readFileSync(path.join(ROOT, "src/serviceSessions/serviceCloseAuthority.js"), "utf8"));
+  for (const f of ["abandoned_forgotten_close", "operator_finalizar_v3", "business_date", "rolled_over"]) {
+    assert(
+      `serviceCloseAuthority.js: holds no lifecycle policy of its own (must not contain "${f}")`,
+      !authorityBody.includes(f),
+    );
+  }
 
   console.log("");
   console.log("=== RESULT: " + pass + " passed, " + fail + " failed ===");

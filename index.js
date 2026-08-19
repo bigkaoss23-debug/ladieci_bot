@@ -53,7 +53,10 @@ const riderTrip = require("./src/agents/riderTrip");
 const riderReads = require("./src/agents/riderReads");
 const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceCloseout");
 const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/serviceSessionLifecycle");
-const { closeServiceV3 } = require("./src/serviceSessions/serviceLifecycleEngine");
+// F-10.1B — the V3 engine is reached ONLY through the canonical close
+// authority, so exactly one application module imports the engine itself.
+// Transparent forwarder: identical arguments, identical result.
+const { closeServiceSessionV3 } = require("./src/serviceSessions/serviceCloseAuthority");
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
 const { explicitReopenServiceSession } = require("./src/serviceSessions/explicitReopenServiceSession");
 const { rollEconomicPeriod } = require("./src/serviceSessions/economicBoundaryEngine");
@@ -441,7 +444,7 @@ app.get("/api", async (req, res) => {
           // call. The V3 engine itself never gates on service_kind/clock, is
           // already idempotent on retry (its own CASE B/C/D lineage handling),
           // and creates no successor (F-5) — nothing else is done here.
-          const v3Result = await closeServiceV3({
+          const v3Result = await closeServiceSessionV3({
             serviceSessionId: identity.session.id,
             source: "operator_finalizar_v3",
             actor: actorId,

@@ -61,6 +61,10 @@ const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualG
 // file's first require still takes effect — the same reason risolviIndirizzo and
 // getManualGiros are stubbed the same way in the existing test suite.
 const orderIntakePolicy = require("../serviceSessions/orderIntakePolicy");
+// F-10.1 — forgotten-close recovery support. Referenced through the module
+// object at call time (never destructured at require time) for the same
+// test-double reason as orderIntakePolicy immediately above.
+const forgottenClose = require("../serviceSessions/forgottenCloseRecovery");
 // DRIVER_STATO = telemetria visiva OPZIONALE (best-effort, mai blocca la
 // transizione). Vedi src/utils/driverTelemetry.js per il contratto.
 // S2-1F — only the snapshot-authoritative reconciliation hook is used now; the old
@@ -453,6 +457,12 @@ async function creaOrdine(params) {
   const resetTs  = resetCfg?.[0]?.valore ? parseInt(resetCfg[0].valore) : 0;
   const fromTs   = Math.max(startOfDay.getTime(), resetTs);
 
+  // F-10.1 — at most ONE forgotten-close recovery per order-creation call, and
+  // therefore at most one extra insert attempt. Scoped to this invocation:
+  // never module state, so concurrent orders cannot consume each other's
+  // single retry.
+  let forgottenCloseAttempted = false;
+
   for (let attempt = 0; attempt < 8; attempt++) {
     // Jitter crescente per ridurre la probabilità di collisione ripetuta
     if (attempt > 0) await new Promise(r => setTimeout(r, 40 + attempt * 30 + Math.random() * 80));
@@ -576,6 +586,54 @@ async function creaOrdine(params) {
         }
       }
       continue; // PK collision (id sequenziale) → riprova con un nuovo lastNum
+    }
+
+    // ═══ F-10.1 — FORGOTTEN-CLOSE RECOVERY + EXACTLY ONE RETRY ═══
+    // The canonical DB resolver (resolve_order_intake_context_v1, reached via
+    // the service_session_assign_order trigger inside THIS insert's own
+    // transaction) is the sole authority on whether a previous Business Day's
+    // Operational Service was left open. When it says so, the whole insert
+    // has already rolled back — no order row, no Business Day row, no pointer
+    // write — so recovering and re-inserting is safe, not a partial repair.
+    //
+    // DORMANT until the resolver cutover: the currently-installed resolver
+    // still performs its own legacy status='rolled_over' flip and never emits
+    // this code, so this branch is unreachable in production today.
+    //
+    // Exactly one recovery and exactly one extra insert attempt, enforced by
+    // forgottenCloseAttempted rather than by the ID-collision loop counter. A
+    // second FORGOTTEN_CLOSE_REQUIRED is a typed failure, never a third try.
+    // Nothing here is taken from the client: the stale service identity is
+    // read from the DB exception's structured DETAIL field, and the actor,
+    // close_source and retry permission are all fixed server-side. A partial
+    // match (right code, missing/malformed DETAIL) is NOT a recovery request
+    // and falls through to the ordinary DB-error path.
+    const forgotten = forgottenClose.parseForgottenCloseRequired(result);
+    if (forgotten) {
+      if (forgottenCloseAttempted) {
+        return {
+          success: false,
+          error: "FORGOTTEN_CLOSE_UNRESOLVED",
+          code: "FORGOTTEN_CLOSE_UNRESOLVED",
+          detail: "El servicio anterior sigue abierto tras el intento de recuperación.",
+        };
+      }
+      forgottenCloseAttempted = true;
+      // The stale service UUID comes from the DB exception's own DETAIL field,
+      // never from params/the client, and is never rediscovered by a JS query.
+      const recovery = await forgottenClose.recoverForgottenService({
+        staleServiceSessionId: forgotten.staleServiceSessionId,
+      });
+      if (!recovery || recovery.success !== true) {
+        return {
+          success: false,
+          error: "FORGOTTEN_CLOSE_RECOVERY_FAILED",
+          code: "FORGOTTEN_CLOSE_RECOVERY_FAILED",
+          recoveryCode: (recovery && recovery.code) || null,
+          detail: "No se pudo cerrar automáticamente el servicio anterior.",
+        };
+      }
+      continue; // the one authorized retry of the ORIGINAL order
     }
 
     // Altro errore DB

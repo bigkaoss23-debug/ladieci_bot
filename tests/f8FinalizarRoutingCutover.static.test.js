@@ -29,8 +29,16 @@ assert("0a: chiudiServizio action block found", actionStart > -1 && actionEnd > 
 const BLOCK = INDEX.slice(actionStart, actionEnd);
 
 console.log("\n== A. serviceLifecycleEngine.js is required and unmodified by this slice ==");
-assert("1a: index.js requires closeServiceV3 from serviceLifecycleEngine.js",
-  /const \{ closeServiceV3 \} = require\("\.\/src\/serviceSessions\/serviceLifecycleEngine"\);/.test(INDEX));
+// F-10.1B — index.js now reaches the V3 engine through the canonical close
+// authority (serviceCloseAuthority.js), which is the ONE module permitted to
+// import the engine directly. F-8's contract is unchanged in substance: the
+// Finalizar action still routes the new era to the V3 close and nothing else.
+assert("1a: index.js requires the V3 close through the canonical close authority",
+  /const \{ closeServiceSessionV3 \} = require\("\.\/src\/serviceSessions\/serviceCloseAuthority"\);/.test(INDEX));
+assert("1a-bis: index.js does NOT import serviceLifecycleEngine.js directly (F-10.1B single direct importer)",
+  !/require\("\.\/src\/serviceSessions\/serviceLifecycleEngine"\)/.test(INDEX));
+assert("1a-ter: serviceCloseAuthority.js is the module that imports the engine",
+  /require\("\.\/serviceLifecycleEngine"\)/.test(read("src/serviceSessions/serviceCloseAuthority.js")));
 assert("1b: the engine file still declares zero legacy coupling (F-1..F-5 discipline unchanged)",
   /NO\s*\n\/\/ [\s\S]{0,40}CLOSEOUT: this file never requires src\/utils\/servizio\.js/.test(ENGINE) || /never requires src\/utils\/servizio\.js/.test(ENGINE)); // language-guard: allow-legacy servizio.js is the existing legacy module path this assertion checks the engine does NOT reference, not new vocabulary
 assert("1c: the engine still never CALLS ensureNext/ensure_next_service_session_v3 (F-5 — no successor; the RPC name may still appear in the file's own header prose describing what was retired)",
@@ -62,7 +70,7 @@ assert("3a: actor is the verified req.authCtx.actor, 401s if absent (same discip
   assert("3f: close_source is never a mislabel (rollover/recovery/forgotten-close/test)",
     !/source:\s*"(rolled_over|recovery|forgotten_close|test)"/.test(NEW_ERA_BODY));
   assert("3g: the new-era body calls the V3 engine exactly once",
-    (NEW_ERA_BODY.match(/closeServiceV3\(/g) || []).length === 1);
+    (NEW_ERA_BODY.match(/closeServiceSessionV3\(/g) || []).length === 1);
   assert("3h: the new-era body never calls the legacy chiudiServizio() function", // language-guard: allow-legacy chiudiServizio is the existing legacy close function this assertion checks the new-era body does NOT call, not new vocabulary
     !/\bawait chiudiServizio\(/.test(NEW_ERA_BODY)); // language-guard: allow-legacy chiudiServizio is the same existing legacy function name, restated verbatim in the regex under test, not new vocabulary
   assert("3i: the new-era body never calls ensureNext/ensure_next_service_session_v3 (no successor)",

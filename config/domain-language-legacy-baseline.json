@@ -697,46 +697,6 @@
       "count": 12
     },
     {
-      "file": "src/agents/agenteMiglioramento.js",
-      "term": "archivio",
-      "count": 1
-    },
-    {
-      "file": "src/agents/agenteMiglioramento.js",
-      "term": "consegna",
-      "count": 1
-    },
-    {
-      "file": "src/agents/agenteMiglioramento.js",
-      "term": "oggi",
-      "count": 2
-    },
-    {
-      "file": "src/agents/agenteMiglioramento.js",
-      "term": "ordini",
-      "count": 1
-    },
-    {
-      "file": "src/agents/agenteMiglioramento.js",
-      "term": "settimana",
-      "count": 1
-    },
-    {
-      "file": "src/agents/agenteMiglioramento.js",
-      "term": "storico",
-      "count": 9
-    },
-    {
-      "file": "src/agents/agenteMiglioramento.js",
-      "term": "suggerimenti",
-      "count": 14
-    },
-    {
-      "file": "src/agents/agenteMiglioramento.js",
-      "term": "suggerimento",
-      "count": 2
-    },
-    {
       "file": "src/agents/agentOrdini.js",
       "term": "chiuso",
       "count": 1
@@ -815,6 +775,46 @@
       "file": "src/agents/agentWhatsapp.js",
       "term": "suggerimento",
       "count": 1
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "archivio",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "oggi",
+      "count": 2
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "settimana",
+      "count": 1
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "storico",
+      "count": 9
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "suggerimenti",
+      "count": 14
+    },
+    {
+      "file": "src/agents/agenteMiglioramento.js",
+      "term": "suggerimento",
+      "count": 2
     },
     {
       "file": "src/agents/manualGiros.js",
@@ -2600,6 +2600,21 @@
       "file": "tests/ensureServiceSession.test.js",
       "term": "pranzo",
       "count": 8
+    },
+    {
+      "term": "ordine",
+      "file": "tests/f10CreaOrdineForgottenRetry.test.js",
+      "count": 14
+    },
+    {
+      "term": "ordini",
+      "file": "tests/f10CreaOrdineForgottenRetry.test.js",
+      "count": 2
+    },
+    {
+      "term": "ordine",
+      "file": "tests/f10ForgottenCloseRecovery.test.js",
+      "count": 2
     },
     {
       "file": "tests/f2V3NextServiceOnConflictRepair.static.test.js",
