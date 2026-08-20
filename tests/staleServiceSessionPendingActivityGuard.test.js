@@ -116,44 +116,52 @@ function fakeRolloverEnv({ orders = [] } = {}) {
   assert('precondition: due via the PRIOR_DAY_STALE path, not by coincidentally matching PRANZO\'s own window',
     decision.source === 'cron_stale_rollover', JSON.stringify(decision));
 
-  // ══ A. ensureCurrentServiceSession — the silent auto-entry recovery pre-check ══════
-  // SLICE 3: the stale session with a pending order now ROLLS OVER — the
-  // pending order becomes an incident, the session closes. This is the
-  // intentional opposite of this file's original assertion A ("session is
-  // NOT closed — reused as-is").
-  // F-7 (opening authority cutover): after the rollover, "a fresh session is
-  // established" is no longer true — page load never creates lifecycle.
-  // ensure_service_session (real SQL) now answers purely from DB state, so
-  // the mock below simulates its real post-F-7 contract: no active session,
-  // and (in this scenario) no service history yet for today's Business Day
-  // either → NO_OPEN_SERVICE, session:null. The FIRST real creation for
-  // today happens lazily on the first real order via
-  // resolve_order_intake_context_v1, not from this recovery pre-check.
+  // ══ A. LEGACY WRITER HARDENING — the trigger moved, the behaviour did not ═════════
+  // This section used to drive the scenario through ensureCurrentServiceSession,
+  // because the silent page-load ensure carried the S2-7D6F recovery pre-check
+  // and would close a due session itself. That call site is GONE: a page load
+  // can no longer close, roll or create anything under any configuration.
+  //
+  // The behaviour the pre-check provided is unchanged and still proven -- it is
+  // simply invoked from the incident-safe orchestrator directly (which is what
+  // F-10's forgotten-close path uses), not from a browser refresh. A1 proves
+  // the engine still does the right thing; A2 proves the page load no longer
+  // reaches it.
   {
+    const env = fakeRolloverEnv({ orders: [pendingOrderRow] });
+    const result = await env.performRollover({ session: staleSession, actor: 'system', source: 'ensure_reconcile' });
+
+    // language-guard: allow-legacy chiudiServizio is the existing legacy close function this assertion names, not new vocabulary
+    assert('A1: the canonical close engine (chiudiServizio) is called exactly once — the stale session rolls over, not reused forever', env.closeCalls.length === 1, JSON.stringify(env.closeCalls));
+    assert('A1: called with deleteAttivi=true (the pending order is force-archived, not silently dropped)', env.closeCalls[0].deleteAttivi === true);
+    assert('A1: a snapshot of the pre-close state was captured', env.snapshotRows.length === 1);
+    assert('A1: exactly one incident was persisted for order #724 (EN_ENTREGA)',
+      env.incidentRows.length === 1 && env.incidentRows[0].incidentType === 'DELIVERY_ACTIVE_AT_CLOSE' && env.incidentRows[0].orderId === '#724',
+      JSON.stringify(env.incidentRows));
+    assert('A1: the incident is category operational, not silently dropped or miscategorized', env.incidentRows[0].category === 'operational');
+    assert('A1: the session actually closed despite the pending order', result.success === true, JSON.stringify(result));
+  }
+
+  {
+    // A2 — the page load, faced with the exact same stale session, now does
+    // NOTHING to it. No close engine call, no snapshot, no incident: it hands
+    // the still-open session back and reports it, read-only.
     const env = fakeRolloverEnv({ orders: [pendingOrderRow] });
     const ensure = createEnsureCurrentServiceSession({
       sessionLifecycle: {
         currentCloseout: async () => ({ ok: true, session: staleSession }),
         ensure: async () => ({ ok: false, code: 'NO_OPEN_SERVICE', businessDate: '2026-07-28' }),
       },
-      now: () => NOW,
-      performRollover: env.performRollover,
     });
 
     const res = await ensure({ actor: 'owner', source: 'auto_entry' });
 
-    assert('A: chiudiServizio WAS called exactly once — the stale session rolled over, not reused forever', env.closeCalls.length === 1, JSON.stringify(env.closeCalls));
-    assert('A: called with deleteAttivi=true (the pending order is force-archived, not silently dropped)', env.closeCalls[0].deleteAttivi === true);
-    assert('A: called with the reconcile source', env.closeCalls[0].source === 'ensure_reconcile');
-    assert('A: a snapshot of the pre-close state was captured', env.snapshotRows.length === 1);
-    assert('A: exactly one incident was persisted for order #724 (EN_ENTREGA)',
-      env.incidentRows.length === 1 && env.incidentRows[0].incidentType === 'DELIVERY_ACTIVE_AT_CLOSE' && env.incidentRows[0].orderId === '#724',
-      JSON.stringify(env.incidentRows));
-    assert('A: the incident is category operational, not silently dropped or miscategorized', env.incidentRows[0].category === 'operational');
-    assert('A: the stale session id no longer appears as the CURRENT session in the result',
-      res.session === null || res.session.id !== STALE_SESSION_ID, JSON.stringify(res));
-    assert('A (F-7): after the rollover, NO fresh session is minted — page load reports NO_OPEN_SERVICE, never creates',
-      res.success === false && res.created === false && res.code === 'NO_OPEN_SERVICE' && res.session === null, JSON.stringify(res));
+    assert('A2: page load performed ZERO closes on the stale session', env.closeCalls.length === 0, JSON.stringify(env.closeCalls));
+    assert('A2: page load captured ZERO snapshots', env.snapshotRows.length === 0);
+    assert('A2: page load persisted ZERO incidents', env.incidentRows.length === 0);
+    assert('A2: page load reports the still-open session as REUSED, read-only',
+      res.success === true && res.created === false && res.code === 'REUSED' && res.session && res.session.id === STALE_SESSION_ID,
+      JSON.stringify(res));
   }
 
   // ══ B. The shared engine used identically by serviceCloseTick / catchUpChiusura / ═══
@@ -168,24 +176,15 @@ function fakeRolloverEnv({ orders = [] } = {}) {
   }
 
   // ══ C. Complementary case — an EMPTY stale session closes idempotently, unchanged ═══
+  // Also re-pointed at the orchestrator for the same reason as A.
   {
     const emptySession = Object.freeze({ ...staleSession, id: '00000000-0000-4000-8000-0000000000ee' });
     const env = fakeRolloverEnv({ orders: [] });
-    const ensure = createEnsureCurrentServiceSession({
-      sessionLifecycle: {
-        currentCloseout: async () => ({ ok: true, session: emptySession }),
-        ensure: async (args) => ({ ok: true, created: false, session: { id: 'today-session', service_kind: args.serviceKind, business_date: '2026-07-28' } }),
-      },
-      now: () => NOW,
-      performRollover: env.performRollover,
-    });
-    const res = await ensure({ actor: 'owner', source: 'auto_entry' });
+    const result = await env.performRollover({ session: emptySession, actor: 'system', source: 'ensure_reconcile' });
 
     assert('C: the canonical close engine (chiudiServizio) is called exactly once', env.closeCalls.length === 1, JSON.stringify(env.closeCalls));
-    assert('C: it is called with the reconcile source, not a bespoke one', env.closeCalls[0].source === 'ensure_reconcile');
     assert('C: zero incidents — nothing was pending on the empty session', env.incidentRows.length === 0);
-    assert('C: after reconciling, the window logic resumes for a fresh session — never re-returns the stale id',
-      res.session === null || res.session.id !== emptySession.id);
+    assert('C: the empty stale session closed cleanly', result.success === true, JSON.stringify(result));
   }
 
   // ══ D. Live SQL contract sanity (static assertion on what was read from the DB) ════

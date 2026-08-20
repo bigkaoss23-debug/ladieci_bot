@@ -58,7 +58,6 @@ const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/se
 // Transparent forwarder: identical arguments, identical result.
 const { closeServiceSessionV3 } = require("./src/serviceSessions/serviceCloseAuthority");
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
-const { explicitReopenServiceSession } = require("./src/serviceSessions/explicitReopenServiceSession");
 const { rollEconomicPeriod } = require("./src/serviceSessions/economicBoundaryEngine");
 const { periodConsolidation } = require("./src/serviceSessions/periodConsolidation");
 const { resolveSchedule, closeEligibility, SCHEDULE_STATE, SERVICE_KIND } = require("./src/schedule/serviceSchedule");
@@ -690,22 +689,33 @@ app.post("/api", async (req, res) => {
     }
 
     if (action === "openServiceSession") {
-      // F-9 — the cutover F-7 deliberately deferred. This action is the
-      // ONLY intentional-open UI trigger (useOpenServiceController +
-      // OpenServiceConfirmation, role-gated, confirmed, single-flight-
-      // locked, verified by a post-call state re-read) and now routes to
-      // explicitReopenServiceSession, which resolves REUSED / typed
-      // rejection / a genuine explicit_reopen entirely server-side — the
-      // client sends no arguments and no lifecycle identity of any kind.
-      // Page load (ensureCurrentServiceSession, above) is untouched and
-      // still can never create anything; only THIS explicit, authenticated,
-      // human-triggered action may ever pass 'explicit_reopen' to
-      // open_operational_service_v1.
-      const actorId = req.authCtx?.actor;
-      if (!actorId) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
-      const ensured = await explicitReopenServiceSession({ actor: actorId, source: "manual_recovery" });
-      if (!ensured.success) return res.status(409).json({ error: ensured.code || "SERVICE_SESSION_OPEN_FAILED", detail: ensured });
-      result = { ok: true, ...ensured };
+      // LEGACY WRITER HARDENING — RETIRED, PERMANENTLY AND UNCONDITIONALLY.
+      //
+      // F-9 made this the one intentional-open trigger, routing to
+      // explicitReopenServiceSession -> open_operational_service_v1
+      // ('explicit_reopen'). G-1 removed the reason it existed: the
+      // Operational Service now resumes by itself on the first real order or
+      // table seating after a Finalizar, so there is nothing a manual open
+      // can achieve that the restaurant does not already get for free. The
+      // frontend affordances were deleted in 3eeb24d; this closes the HTTP
+      // surface behind them, which was still reachable by anyone able to
+      // authenticate and POST.
+      //
+      // Refused with 410 Gone, not 404: the action existed, was legitimate,
+      // and was deliberately withdrawn — an operator or integration hitting
+      // it deserves to be told that, not to be left guessing at a typo. No
+      // env flag, because a flag is exactly what this slice exists to remove:
+      // there must be no configuration under which a human can hand-mint an
+      // Operational Service.
+      //
+      // explicitReopenServiceSession.js itself is left on disk, now with zero
+      // callers. Deleting the module is cosmetic; removing its reachability
+      // is the invariant, and that is what is asserted by
+      // tests/legacyWriterHardening.static.test.js.
+      return res.status(410).json({
+        error: "MANUAL_SERVICE_OPEN_RETIRED",
+        detail: "The Operational Service resumes automatically on the first real order or table seating. There is no manual open.",
+      });
     } else if (action === "rollEconomicPeriod") {
       // P0-C2 — explicit, deliberate, non-silent trigger of the non-destructive
       // intraday economic boundary (roll_service_session_economic_v1). Never

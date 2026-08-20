@@ -91,17 +91,27 @@ const creators = Object.entries(latest)
   .map(([name, e]) => ({ name, file: e.file }))
   .sort((a, b) => a.name.localeCompare(b.name));
 
-const EXPECTED_CREATORS = ["ensure_next_service_session_v3", "open_operational_service_v1", "roll_service_session_economic_v1"].sort();
+// H-1 (LEGACY WRITER HARDENING, ledger 97) fail-closed the two legacy
+// creators, so the surface is now exactly ONE function. This is strictly
+// stronger than the previous "exactly these 3" assertion: before H-1 the two
+// legacy creators were held back only by an unset env var
+// (ECONOMIC_PERIOD_ROLLOVER_ENABLED) and by having no caller; now their bodies
+// cannot insert at all.
+const EXPECTED_CREATORS = ["open_operational_service_v1"];
 
-assert("2a: exactly the expected 3 functions can INSERT INTO service_sessions in their LATEST definition -- no more, no fewer",
+assert("2a: EXACTLY ONE function can INSERT INTO service_sessions in its LATEST definition",
   creators.map((c) => c.name).join(",") === EXPECTED_CREATORS.join(","),
   JSON.stringify(creators));
-assert("2b: open_operational_service_v1 is the canonical creator (F-6/F-7)",
-  creators.some((c) => c.name === "open_operational_service_v1"));
-assert("2c: roll_service_session_economic_v1 remains a creator, unchanged by F-7 -- contained via ECONOMIC_PERIOD_ROLLOVER_ENABLED, not cut over in this slice",
-  creators.some((c) => c.name === "roll_service_session_economic_v1"));
-assert("2d: ensure_next_service_session_v3 remains a creator, unchanged by F-7 -- dead code (zero callers since F-5), not touched in this slice",
-  creators.some((c) => c.name === "ensure_next_service_session_v3"));
+assert("2b: and it is the canonical opener (F-6/F-7/G-1)",
+  creators.length === 1 && creators[0].name === "open_operational_service_v1");
+assert("2c (H-1): roll_service_session_economic_v1 is NO LONGER a creator -- fail-closed, not merely env-gated",
+  !creators.some((c) => c.name === "roll_service_session_economic_v1"));
+assert("2d (H-1): ensure_next_service_session_v3 is NO LONGER a creator -- fail-closed, not merely caller-less",
+  !creators.some((c) => c.name === "ensure_next_service_session_v3"));
+assert("2e (H-1): both retired creators return a typed refusal naming the replacement",
+  /LEGACY_PERIOD_ROLLOVER_RETIRED/.test(latest.roll_service_session_economic_v1.body)
+  && /LEGACY_SUCCESSOR_OPENER_RETIRED/.test(latest.ensure_next_service_session_v3.body),
+  JSON.stringify({ roll: latest.roll_service_session_economic_v1.file, next: latest.ensure_next_service_session_v3.file }));
 
 console.log("\n== C. The two F-7 cutover targets are confirmed NON-creators in their latest form ==");
 assert("3a: ensure_service_session's latest body contains NO INSERT INTO service_sessions",

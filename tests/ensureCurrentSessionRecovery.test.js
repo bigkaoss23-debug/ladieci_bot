@@ -1,326 +1,186 @@
 "use strict";
-// S2-7D6F recovery pre-check, hardened by SERVICE CLOSEOUT V2 / SLICE 3 into
-// an incident-safe rollover — fully controllable fake environment
-// (currentCloseout + performRollover + ensure all injectable), driven by an
-// explicit clock.
+// LEGACY WRITER HARDENING — the page-load ensure is INERT.
 //
-// SLICE 3 changed the contract this file locks in: pending operational
-// activity NO LONGER keeps a session that is genuinely due for rollover
-// (PRIOR_DAY_STALE / SAME_DAY_TRANSITION_DUE) current forever (RC-2). This
-// module no longer even asks whether anything is "pending" — that decision
-// now lives entirely inside performIncidentSafeRollover (tested in
-// tests/incidentSafeRollover.test.js). What THIS file verifies is narrower
-// and more mechanical: does ensureServiceSession.js correctly decide WHEN
-// rollover is due, call performRollover exactly then, and react correctly to
-// whatever it returns (success / deferred / hard failure)?
+// WHAT THIS FILE USED TO PROVE. From S2-7D6F until now, the silent page-load
+// ensure carried a "recovery pre-check": it read the current session, decided
+// whether that session was due for rollover, and if so called
+// language-guard: allow-legacy chiudiServizio is the existing legacy close function, named here only to describe the retired call path, not new vocabulary
+// performIncidentSafeRollover -> chiudiServizio, i.e. a REAL, MUTATING CLOSE
+// attributed to whichever operator's browser happened to be open. This file
+// was the mechanical proof that it called the rollover at exactly the right
+// moments and reacted correctly to success / deferred / hard failure.
 //
-// F-7 (opening authority cutover) changes what happens AFTER a rollover
-// succeeds (or when there was never a current session at all): the OLD
-// window-typed refusal (BETWEEN_SERVICES/AFTER_ORDER_CUTOFF/OUTSIDE_WINDOWS)
-// is gone — ensure_service_session no longer creates anything, window or no
-// window, so this module always falls through to a single DB-derived,
-// clock-independent read: sessionLifecycle.ensure({actor, source}) answers
-// REUSED / NO_OPEN_SERVICE / REOPEN_REQUIRED. The recovery-pre-check MECHANICS
-// below (steps 1-4) are entirely UNCHANGED by F-7 — this file's fake ensure()
-// mock is updated only for the scenarios that actually reach it.
+// P0-C1 later put that call behind LEGACY_AUTOMATIC_LIFECYCLE_ENABLED, so the
+// invariant "APP_RELOAD_MUTATES_SERVICE = NO" held only by environment
+// variable. One unset env var in one deploy and a page load could close a live
+// service again. close_source 'ensure_reconcile' in the live staging data is
+// that path having fired for real, once.
 //
-// Approved contract:
-//   1. read the current open/closing session, before ever consulting the
-//      read-only discriminator;
-//   2. genuinely due for rollover (classifySessionForRollover) -> call
-//      performRollover, regardless of what is or isn't pending on it;
-//   3. rollover succeeds -> re-enter the discriminator below from a clean
-//      slate — never auto-open a new session just because the old one just
-//      closed (F-7: it can never auto-open one at all, from here);
-//   4. rollover deferred (e.g. active rider trip) or hard-fails -> hand back
-//      the SAME still-open session, never a dead end;
-//   5. not due at all -> hand back the SAME session, no rollover attempted;
-//   6. only when nothing recoverable exists does the read-only discriminator
-//      (NO_OPEN_SERVICE / REOPEN_REQUIRED) apply — clock-independent (F-7).
+// WHAT THIS FILE PROVES NOW. The call site is gone, not gated. Whatever the
+// clock says, whatever state the current session is in, and under every
+// configuration, a page load performs ZERO lifecycle mutations: it reads, it
+// classifies, it returns. There is no seam left to inject a rollover into and
+// no flag left to flip -- which is the point, and is why the scenario matrix
+// below is expressed as "for every state, zero writes".
+//
+// The rollover ENGINE itself is unchanged and still fully covered:
+//   * tests/incidentSafeRollover.test.js -- the orchestrator's own contract;
+//   * tests/staleServiceSessionPendingActivityGuard.test.js -- the frozen
+//     stale-session-with-pending-activity scenario, now driven through the
+//     orchestrator directly (which is how F-10's forgotten-close path reaches
+//     it) instead of through a browser refresh.
+// Nothing about incident classification, snapshots or the close engine is
+// retired by this change; only the page load's ability to trigger them.
+//
+// Run: node tests/ensureCurrentSessionRecovery.test.js
 const { createEnsureCurrentServiceSession, ENSURE_CODE } = require("../src/serviceSessions/ensureServiceSession");
-const { DEFAULT_SCHEDULE } = require("../src/schedule/serviceSchedule");
 
 let pass = 0, fail = 0;
 const assert = (n, c, d = "") => { if (c) { pass++; console.log("  PASS  " + n); } else { fail++; console.log("  FAIL  " + n + (d ? "  -> " + d : "")); } };
 
-const summer = (h, m = 0, day = 15) => new Date(Date.UTC(2026, 6, day, h - 2, m));
+// language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, used here only as fixture labels on legacy-era sessions, not new vocabulary
+const LUNCH_STALE = Object.freeze({ id: "uuid-lunch", service_kind: "PRANZO", business_date: "2026-07-14", status: "open", opened_at: "x" });
+const DINNER_TODAY = Object.freeze({ id: "uuid-dinner", service_kind: "SERA", business_date: "2026-07-15", status: "open", opened_at: "x" });
+const CLOSING_NOW = Object.freeze({ id: "uuid-closing", service_kind: "SERA", business_date: "2026-07-15", status: "closing", opened_at: "x" });
+const OPERATIONAL = Object.freeze({ id: "uuid-operational", service_kind: null, business_date: "2026-07-15", status: "open", opened_at: "x", lifecycle_semantics: "operational_service_v1" });
 
-function fakeRecoveryDb({ current = null, rolloverResult = { success: true }, hasHistoryToday = false } = {}) {
-  const db = {
-    current, rolloverResultSpec: rolloverResult, hasHistoryToday,
-    inserts: 0, ensureCalls: [], rolloverCalls: [],
-  };
+// A fake DB that RECORDS every write it is asked to perform. Nothing in the
+// production module can reach these any more -- that is exactly what the
+// assertions check.
+function fakeDb({ current = null, hasHistoryToday = false, readThrows = false } = {}) {
+  const db = { current, hasHistoryToday, ensureCalls: [], writes: [] };
   db.lifecycle = {
     async currentCloseout() {
+      if (readThrows) throw new Error("simulated transport failure");
       if (!db.current) return { ok: true, code: "NO_SERVICE_SESSION", session: null };
       return { ok: true, session: db.current };
     },
-    // F-7 — read/reuse only. Never creates, never takes a serviceKind, never
-    // consults the clock. Mirrors the real RPC's new discriminator: an
-    // active session (db.current, set only by something OTHER than this
-    // mock's own ensure — the recovery pre-check, or an external order
-    // intake simulated directly on db.current) is REUSED; otherwise
-    // NO_OPEN_SERVICE or REOPEN_REQUIRED depending on db.hasHistoryToday.
     async ensure({ actor, source }) {
       db.ensureCalls.push({ actor, source });
-      if (db.current) {
-        return { ok: true, code: "REUSED", created: false, session: db.current };
-      }
+      if (db.current) return { ok: true, code: "REUSED", created: false, session: db.current };
       if (db.hasHistoryToday) {
-        return { ok: false, code: "REOPEN_REQUIRED", businessDate: "2026-07-15" };
+        return { ok: false, code: "NO_OPEN_SERVICE", businessDate: "2026-07-15", hadPriorServiceToday: true };
       }
       return { ok: false, code: "NO_OPEN_SERVICE", businessDate: "2026-07-15" };
     },
-  };
-  db.performRollover = async ({ session, actor, source }) => {
-    db.rolloverCalls.push({ sessionId: session.id, actor, source });
-    const result = typeof db.rolloverResultSpec === "function" ? db.rolloverResultSpec() : db.rolloverResultSpec;
-    if (result && result.success === true) db.current = null; // simulate the archive actually completing
-    return result;
+    // Any of these being called at all is a failure of the invariant.
+    async beginClose(args) { db.writes.push({ op: "beginClose", args }); return { ok: true }; },
+    async completeClose(args) { db.writes.push({ op: "completeClose", args }); return { ok: true }; },
+    async openOperational(args) { db.writes.push({ op: "openOperational", args }); return { ok: true }; },
+    async resolveOperationalContext(args) { db.writes.push({ op: "resolveOperationalContext", args }); return { ok: true }; },
   };
   return db;
 }
 
-const make = (db, when) => createEnsureCurrentServiceSession({
-  sessionLifecycle: db.lifecycle, schedule: DEFAULT_SCHEDULE, now: () => when,
-  performRollover: db.performRollover,
-});
-
-// P0-C1 — same wiring as make(), plus an explicit automaticLifecycleEnabled
-// override, for the "silent page-load must not mutate lifecycle while frozen"
-// tests below. The production default (process.env.LEGACY_AUTOMATIC_LIFECYCLE_
-// ENABLED !== "false") is exercised by every OTHER test in this file via
-// make()'s omission of the parameter — proving the new gate is opt-in-to-skip,
-// never opt-in-to-run, and that all pre-existing scenarios above are
-// unaffected by its introduction.
-const makeGated = (db, when, automaticLifecycleEnabled) => createEnsureCurrentServiceSession({
-  sessionLifecycle: db.lifecycle, schedule: DEFAULT_SCHEDULE, now: () => when,
-  performRollover: db.performRollover, automaticLifecycleEnabled,
-});
+const make = (db) => createEnsureCurrentServiceSession({ sessionLifecycle: db.lifecycle });
 
 (async () => {
-  // language-guard: allow-legacy PRANZO is the existing service_kind enum value, used throughout this file only as a fixture label on legacy-era sessions in scenarios unchanged in spirit since before F-7, not new vocabulary
-  console.log("\n══ 1. PRANZO open + due (past 17:30) at 17:45 -> rollover attempted, then read-only NO_OPEN_SERVICE (F-7: clock-independent) ══");
-  {
-    // SLICE 3: this used to be "pending order -> REUSED, no rollover attempted
-    // at all". Now: PRANZO past its own 17:30 boundary is SAME_DAY_TRANSITION_DUE
-    // regardless of what is pending on it — rollover is ALWAYS attempted. On
-    // success the discriminator resumes from a clean slate; F-7 removed the
-    // window concept from that discriminator entirely, so no new session
-    // opens and the answer is NO_OPEN_SERVICE regardless of the clock.
-    const db = fakeRecoveryDb({ current: { id: "uuid-lunch", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } });
-    const r = await make(db, summer(17, 45))({ actor: "operator" });
-    assert("1: rollover WAS attempted (PRANZO past 17:30 is due, regardless of pending activity)", db.rolloverCalls.length === 1 && db.rolloverCalls[0].source === "ensure_reconcile", JSON.stringify(db.rolloverCalls));
-    assert("1 (F-7): rollover succeeded, discriminator resumed and found NO_OPEN_SERVICE — no more window concept", r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE && r.session === null, JSON.stringify(r));
-    assert("1: no new session created", db.inserts === 0);
+  // == 1. THE CORE INVARIANT - every session state, zero writes ==
+  console.log("\n== 1. for EVERY current-session state, a page load performs zero lifecycle writes ==");
+  const states = [
+    ["a stale previous-day session (the classic rollover-due case)", LUNCH_STALE],
+    ["a same-day session past its own close boundary", DINNER_TODAY],
+    ["a session mid-close", CLOSING_NOW],
+    ["a new-era operational service", OPERATIONAL],
+    ["no session at all", null],
+  ];
+  for (const [label, current] of states) {
+    const db = fakeDb({ current });
+    await make(db)({ actor: "owner", source: "auto_entry" });
+    assert("1: " + label + " -> zero lifecycle writes", db.writes.length === 0, JSON.stringify(db.writes));
   }
 
-  console.log("\n══ 2. PRANZO open + due, rollover deferred (active rider trip) -> same session, full access ══");
+  // == 2. The read-only discriminator still answers correctly ==
+  console.log("\n== 2. the read-only outcomes are unchanged ==");
   {
-    const db = fakeRecoveryDb({
-      current: { id: "uuid-lunch2", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" },
-      rolloverResult: { success: false, skipped: true, deferred: true, reason: "active_rider_trip" },
+    const db = fakeDb({ current: LUNCH_STALE });
+    const r = await make(db)({ actor: "owner", source: "auto_entry" });
+    assert("2: a still-open session is REUSED and handed back, never force-closed",
+      r.success === true && r.created === false && r.code === ENSURE_CODE.REUSED && r.session.id === LUNCH_STALE.id, JSON.stringify(r));
+    assert("2: the discriminator is not even consulted when a session is already active", db.ensureCalls.length === 0);
+  }
+  {
+    const db = fakeDb({ current: CLOSING_NOW });
+    const r = await make(db)({ actor: "owner", source: "auto_entry" });
+    assert("2: a 'closing' session is surfaced as its own typed state, not waited on or acted upon",
+      r.success === false && r.code === ENSURE_CODE.SERVICE_SESSION_CLOSING && r.session.id === CLOSING_NOW.id, JSON.stringify(r));
+    assert("2: still zero writes for a closing session", db.writes.length === 0);
+  }
+  {
+    const db = fakeDb({ current: null, hasHistoryToday: true });
+    const r = await make(db)({ actor: "owner", source: "auto_entry" });
+    assert("2 (G-1): a finalized Business Day reads as ordinary idle, not an exception",
+      r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE && r.session === null, JSON.stringify(r));
+    assert("2: the read-only discriminator WAS consulted when nothing is active", db.ensureCalls.length === 1);
+  }
+  {
+    const db = fakeDb({ current: null });
+    const r = await make(db)({ actor: "owner", source: "auto_entry" });
+    assert("2: a virgin Business Day is also NO_OPEN_SERVICE, session null",
+      r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE && r.session === null, JSON.stringify(r));
+  }
+
+  // == 3. Input validation is unchanged and still pre-empts every read ==
+  console.log("\n== 3. invalid actor is refused before anything is read ==");
+  for (const bad of [undefined, null, "", "   ", 42, {}]) {
+    const db = fakeDb({ current: DINNER_TODAY });
+    const r = await make(db)({ actor: bad, source: "auto_entry" });
+    assert("3: actor " + JSON.stringify(bad) + " -> INVALID_ACTOR, nothing read, nothing written",
+      r.success === false && r.code === ENSURE_CODE.INVALID_ACTOR && r.session === null
+        && db.ensureCalls.length === 0 && db.writes.length === 0, JSON.stringify(r));
+  }
+
+  // == 4. A read failure degrades gracefully, and still never writes ==
+  console.log("\n== 4. a currentCloseout() transport failure degrades to the discriminator ==");
+  {
+    const db = fakeDb({ current: null, readThrows: true, hasHistoryToday: true });
+    const r = await make(db)({ actor: "owner", source: "auto_entry" });
+    assert("4: the throw is absorbed - ensure still returns a typed answer",
+      r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE, JSON.stringify(r));
+    assert("4: the read-only discriminator still ran underneath", db.ensureCalls.length === 1);
+    assert("4: zero writes even on the failure path", db.writes.length === 0);
+  }
+
+  // == 5. Idempotency / concurrency - repetition changes nothing ==
+  console.log("\n== 5. repeated and concurrent page loads converge, with zero writes ==");
+  {
+    const db = fakeDb({ current: DINNER_TODAY });
+    const ensure = make(db);
+    const results = await Promise.all([1, 2, 3, 4, 5].map(() => ensure({ actor: "owner", source: "auto_entry" })));
+    assert("5: five concurrent page loads all return the SAME session",
+      results.every((r) => r.success === true && r.session.id === DINNER_TODAY.id), JSON.stringify(results.map((r) => r.code)));
+    assert("5: none of them created anything", results.every((r) => r.created === false));
+    assert("5: zero writes across all five", db.writes.length === 0, JSON.stringify(db.writes));
+  }
+  {
+    const db = fakeDb({ current: null, hasHistoryToday: true });
+    const ensure = make(db);
+    const a = await ensure({ actor: "owner", source: "auto_entry" });
+    const b = await ensure({ actor: "other_operator", source: "auto_entry" });
+    assert("5: a second operator's page load reaches the identical verdict",
+      a.code === b.code && a.session === null && b.session === null, JSON.stringify([a.code, b.code]));
+    assert("5: still zero writes", db.writes.length === 0);
+  }
+
+  // == 6. Structural - the module cannot mutate even if someone tries ==
+  console.log("\n== 6. there is no seam left to inject a mutation into ==");
+  {
+    // The old signature accepted schedule / now / performRollover /
+    // automaticLifecycleEnabled. Passing them now is inert: the factory
+    // ignores unknown options, so a stale caller cannot resurrect the
+    // behaviour by supplying them.
+    const db = fakeDb({ current: LUNCH_STALE });
+    let injectedCalled = false;
+    const ensure = createEnsureCurrentServiceSession({
+      sessionLifecycle: db.lifecycle,
+      performRollover: async () => { injectedCalled = true; return { success: true }; },
+      automaticLifecycleEnabled: () => true,
+      now: () => new Date(),
     });
-    const r = await make(db, summer(17, 45))({ actor: "operator" });
-    assert("2: ALLOWED (REUSED), the SAME session", r.success && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-lunch2", JSON.stringify(r));
-    assert("2: a rollover WAS attempted (due, past 17:30 boundary)...", db.rolloverCalls.length === 1);
-    assert("2: ...but deferred by the trip gate, session untouched", db.current && db.current.id === "uuid-lunch2");
-    assert("2: no duplicate session", db.inserts === 0);
-  }
-
-  console.log("\n══ 3. SERA open + due (past 00:00 cutoff) at 00:05, rollover deferred -> same session ══");
-  {
-    const db = fakeRecoveryDb({
-      current: { id: "uuid-dinner", service_kind: "SERA", business_date: "2026-07-15", status: "open", opened_at: "x" },
-      rolloverResult: { success: false, skipped: true, deferred: true, reason: "active_rider_trip" },
-    });
-    const r = await make(db, summer(0, 5, 16))({ actor: "operator" });
-    assert("3: ALLOWED (REUSED), the SAME session", r.success && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-dinner", JSON.stringify(r));
-    assert("3: a rollover WAS attempted (SERA always due after cutoff)", db.rolloverCalls.length === 1);
-  }
-
-  console.log("\n══ 4. SERA open + active trip at 02:00 -> same session ══");
-  {
-    const db = fakeRecoveryDb({
-      current: { id: "uuid-dinner2", service_kind: "SERA", business_date: "2026-07-15", status: "open", opened_at: "x" },
-      rolloverResult: { success: false, skipped: true, deferred: true, reason: "active_rider_trip" },
-    });
-    const r = await make(db, summer(2, 0, 16))({ actor: "operator" });
-    assert("4: ALLOWED (REUSED), the SAME session", r.success && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-dinner2", JSON.stringify(r));
-    assert("4: a rollover WAS attempted (SERA always due after cutoff)...", db.rolloverCalls.length === 1);
-    assert("4: ...but deferred, session untouched", db.current && db.current.id === "uuid-dinner2");
-  }
-
-  console.log("\n══ 5. stale session rolls over; repeated calls stay idempotent; an external order-intake creation is REUSED, never re-created ══");
-  {
-    // F-7: this module itself never creates. What it must still prove is
-    // idempotency across repeated calls, AND that once something ELSE (a
-    // real order, via resolve_order_intake_context_v1's own first-open path
-    // — simulated here by directly setting db.current, exactly as an
-    // external writer would) has created today's session, ensure() reuses
-    // it rather than re-deciding NO_OPEN_SERVICE.
-    const db = fakeRecoveryDb({ current: { id: "uuid-lunch3", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" }, rolloverResult: { success: true, summary: {} } });
-    const r = await make(db, summer(20, 0))({ actor: "operator" });
-    assert("5: the stale PRANZO was reconciled via performRollover", db.rolloverCalls.length === 1 && db.rolloverCalls[0].source === "ensure_reconcile");
-    assert("5 (F-7): after reconciliation, no fresh session is minted here — NO_OPEN_SERVICE", r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE && r.session === null, JSON.stringify(r));
-    assert("5: zero inserts — this module never creates", db.inserts === 0);
-
-    // A follow-up call in the same state must reach the same read-only
-    // verdict again — no second rollover attempt, no phantom mutation.
-    const r2 = await make(db, summer(20, 5))({ actor: "operator" });
-    assert("5b: a follow-up ensure reaches the same NO_OPEN_SERVICE verdict, no second rollover", r2.success === false && r2.code === ENSURE_CODE.NO_OPEN_SERVICE);
-    assert("5b: still exactly one rollover call, zero inserts", db.rolloverCalls.length === 1 && db.inserts === 0);
-
-    // Now simulate a real order having created today's session externally.
-    db.current = { id: "uuid-external-order-intake", service_kind: null, business_date: "2026-07-15", status: "open", opened_at: "x" };
-    const r3 = await make(db, summer(20, 10))({ actor: "operator" });
-    assert("5c: once an external creation exists, ensure() REUSES it, never re-creates or re-rejects", r3.success === true && r3.code === ENSURE_CODE.REUSED && r3.session.id === "uuid-external-order-intake", JSON.stringify(r3));
-  }
-
-  console.log("\n══ 6. stale session rolls over, no history yet for today -> NO_OPEN_SERVICE, ensure() IS called (clock-independent, F-7) ══");
-  {
-    const db = fakeRecoveryDb({ current: { id: "uuid-dinner3", service_kind: "SERA", business_date: "2026-07-15", status: "open", opened_at: "x" }, rolloverResult: { success: true, summary: {} } });
-    const r = await make(db, summer(5, 0, 16))({ actor: "operator" });
-    assert("6: the stale SERA was rolled over", db.rolloverCalls.length === 1);
-    assert("6 (F-7): NO new session opened, and no window concept determines this — NO_OPEN_SERVICE regardless of clock", r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE && r.session === null, JSON.stringify(r));
-    assert("6 (F-7): the read-only ensure() call IS made after the rollover — there is no more pre-RPC clock gate", db.ensureCalls.length === 1);
-    assert("6: no duplicate/phantom session", db.inserts === 0);
-  }
-
-  console.log("\n══ 7. no session at all -> NO_OPEN_SERVICE, read-only ensure() is called (F-7: no more pre-RPC clock gate) ══");
-  {
-    const db = fakeRecoveryDb({ current: null });
-    const r = await make(db, summer(17, 45))({ actor: "operator" });
-    assert("7 (F-7): NO_OPEN_SERVICE, session:null, nothing created", r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE && r.session === null, JSON.stringify(r));
-    assert("7: no rollover attempted (nothing to reconcile)", db.rolloverCalls.length === 0);
-    assert("7 (F-7): the read-only RPC IS called (it is the sole source of truth now, not a JS clock gate)", db.ensureCalls.length === 1);
-  }
-
-  console.log("\n══ 8. no session at all, a DIFFERENT clock time -> the SAME NO_OPEN_SERVICE (proves the clock no longer matters, F-7) ══");
-  {
-    const db = fakeRecoveryDb({ current: null });
-    const r = await make(db, summer(5, 0, 16))({ actor: "operator" });
-    assert("8 (F-7): NO_OPEN_SERVICE, session:null — identical outcome to test 7 despite a completely different hour", r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE && r.session === null);
-    assert("8: no rollover attempted, no insert", db.rolloverCalls.length === 0 && db.inserts === 0);
-  }
-
-  console.log("\n══ 9. no duplicates under concurrency (due session, rollover deferred) ══");
-  {
-    const db = fakeRecoveryDb({
-      current: { id: "uuid-lunch4", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" },
-      rolloverResult: { success: false, skipped: true, deferred: true, reason: "active_rider_trip" },
-    });
-    const ensure = make(db, summer(17, 45));
-    const [a, b] = await Promise.all([ensure({ actor: "a" }), ensure({ actor: "b" })]);
-    assert("9: both calls see the SAME session", a.session.id === "uuid-lunch4" && b.session.id === "uuid-lunch4");
-    assert("9: no session was ever created", db.inserts === 0);
-  }
-
-  console.log("\n══ 10. no operational dead-end on a genuine rollover error ══");
-  {
-    const db = fakeRecoveryDb({
-      current: { id: "uuid-lunch5", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" },
-      rolloverResult: { success: false, error: "verify_failed" }, // a REAL failure, not a deferral
-    });
-    const r = await make(db, summer(20, 0))({ actor: "operator" });
-    assert("10: never a dead-end exception — the still-open session is handed back", r.success === true && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-lunch5", JSON.stringify(r));
-    assert("10: exactly one rollover attempt was made and tracked", db.rolloverCalls.length === 1);
-  }
-
-  console.log("\n══ 11. a 'closing' session is caught by the pre-check regardless of clock ══");
-  {
-    const db = fakeRecoveryDb({ current: { id: "uuid-c2", service_kind: "SERA", business_date: "2026-07-15", status: "closing", opened_at: "x" } });
-    const r = await make(db, summer(5, 0, 16))({ actor: "operator" });
-    assert("11: SERVICE_SESSION_CLOSING — the pre-check runs unconditionally, before the discriminator", r.success === false && r.code === ENSURE_CODE.SERVICE_SESSION_CLOSING, JSON.stringify(r));
-    assert("11: the conflicting session is reported back", r.session && r.session.id === "uuid-c2");
-    assert("11: no rollover attempted for a session already closing", db.rolloverCalls.length === 0);
-  }
-
-  console.log("\n══ 12. a currentCloseout() read failure degrades gracefully — the pre-check is unavailable, but the read-only ensure() call underneath still sees the real active session ══");
-  {
-    // The pre-check's OWN read fails, but db.current (the mock's real,
-    // independent DB state — an active session that genuinely exists and
-    // was never touched by any rollover here) is untouched. ensure() is a
-    // SEPARATE real DB read: it correctly discovers that active session and
-    // returns REUSED — a graceful degrade means the operator still gets in,
-    // not that a transient read glitch locks them out with NO_OPEN_SERVICE.
-    const db = fakeRecoveryDb({ current: { id: "uuid-x", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } });
-    db.lifecycle.currentCloseout = async () => { throw new Error("transport down"); };
-    const r = await make(db, summer(17, 45))({ actor: "operator" });
-    assert("12 (F-7): never throws, and the underlying ensure() call still finds the real active session -> REUSED", r.success === true && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-x", JSON.stringify(r));
-  }
-
-  console.log("\n══ 13. CURRENT_VALID (not due) session -> REUSED, no rollover attempted at all ══");
-  {
-    // A PRANZO session, today, still well inside its own window (noon) — this
-    // is NOT due for rollover regardless of anything pending on it. Slice 3
-    // must not attempt a rollover just because a session exists; only when it
-    // is actually classified as due.
-    const db = fakeRecoveryDb({ current: { id: "uuid-lunch6", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } });
-    const r = await make(db, summer(12, 0))({ actor: "operator" });
-    assert("13: REUSED, the SAME session", r.success && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-lunch6", JSON.stringify(r));
-    assert("13: no rollover attempted — the session is not due yet", db.rolloverCalls.length === 0);
-  }
-
-  console.log("\n══ P0-C1: 14-18. automatic lifecycle frozen — the silent page-load path must not mutate ══");
-  {
-    // 14: the exact live scenario — PRANZO past 17:30, automatic lifecycle
-    // frozen (LEGACY_AUTOMATIC_LIFECYCLE_ENABLED=false in production terms).
-    // Before P0-C1 this called performRollover unconditionally (test 1 above,
-    // still true for the DEFAULT/enabled case). Frozen, it must not.
-    const db = fakeRecoveryDb({ current: { id: "uuid-frozen1", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } });
-    const r = await makeGated(db, summer(17, 45), () => false)({ actor: "owner" });
-    assert("14: performRollover was NEVER called while frozen", db.rolloverCalls.length === 0, JSON.stringify(db.rolloverCalls));
-    assert("14: the operator still gets full access to the SAME still-open session", r.success === true && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-frozen1", JSON.stringify(r));
-    assert("14: no session was closed or created", db.inserts === 0 && db.current && db.current.status === "open");
-  }
-  {
-    // 15: no actor misattribution — since performRollover is never invoked,
-    // no attempt/incident row of any kind gets created under this actor's
-    // name. Asserting rolloverCalls stays empty IS the proof: the actor
-    // parameter never reaches performRollover (and therefore never reaches
-    // attempts.acquire({actor})) at all while frozen.
-    const db = fakeRecoveryDb({ current: { id: "uuid-frozen2", service_kind: "SERA", business_date: "2026-07-15", status: "open", opened_at: "x" } });
-    const r = await makeGated(db, summer(1, 0, 16), () => false)({ actor: "owner" });
-    assert("15: no rollover call exists to have recorded any actor", db.rolloverCalls.length === 0);
-    assert("15: 'owner' never reaches performRollover while frozen", !db.rolloverCalls.some((c) => c.actor === "owner"));
-    assert("15: still full access to the still-open session", r.success === true && r.session.id === "uuid-frozen2");
-  }
-  {
-    // 16: idempotent under repeated page loads/reloads — simulates an
-    // operator reloading Servicio several times in a row past the boundary
-    // while frozen. Must never call performRollover, never insert, on ANY
-    // call, not just the first.
-    const db = fakeRecoveryDb({ current: { id: "uuid-frozen3", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } });
-    const ensure = makeGated(db, summer(17, 45), () => false);
-    const r1 = await ensure({ actor: "owner" });
-    const r2 = await ensure({ actor: "owner" });
-    const r3 = await ensure({ actor: "owner" });
-    assert("16: three repeated page loads, zero rollover calls", db.rolloverCalls.length === 0);
-    assert("16: zero inserts across all three", db.inserts === 0);
-    assert("16: every call is the identical REUSED session", [r1, r2, r3].every((r) => r.success && r.code === ENSURE_CODE.REUSED && r.session.id === "uuid-frozen3"));
-  }
-  {
-    // 17: a session ALREADY status='closing' (the stuck-attempt shape itself)
-    // must still be reported as SERVICE_SESSION_CLOSING regardless of the
-    // flag — that pre-check runs unconditionally, before the rollover-due
-    // branch the flag gates, and is a different, always-on safety check
-    // (nothing should treat an already-closing session as freely reusable).
-    // Proves the P0-C1 gate is scoped to exactly the "open + due" branch,
-    // not a blanket bypass of every check in this file.
-    const db = fakeRecoveryDb({ current: { id: "uuid-frozen4", service_kind: "SERA", business_date: "2026-07-15", status: "closing", opened_at: "x" } });
-    const r = await makeGated(db, summer(20, 0), () => false)({ actor: "owner" });
-    assert("17: SERVICE_SESSION_CLOSING regardless of the automatic-lifecycle flag", r.success === false && r.code === ENSURE_CODE.SERVICE_SESSION_CLOSING, JSON.stringify(r));
-    assert("17: no rollover attempted for an already-closing session either way", db.rolloverCalls.length === 0);
-  }
-  {
-    // 18: the gate genuinely toggles both ways — explicitly ENABLED still
-    // attempts the rollover exactly like the default (unspecified) case in
-    // test 1, proving this isn't accidentally always-off.
-    const db = fakeRecoveryDb({ current: { id: "uuid-enabled1", service_kind: "PRANZO", business_date: "2026-07-15", status: "open", opened_at: "x" } });
-    const r = await makeGated(db, summer(17, 45), () => true)({ actor: "owner" });
-    assert("18: explicitly enabled -> rollover WAS attempted", db.rolloverCalls.length === 1 && db.rolloverCalls[0].source === "ensure_reconcile", JSON.stringify(db.rolloverCalls));
-    assert("18 (F-7): same NO_OPEN_SERVICE outcome as the default-enabled test 1", r.success === false && r.code === ENSURE_CODE.NO_OPEN_SERVICE);
+    const r = await ensure({ actor: "owner", source: "auto_entry" });
+    assert("6: an injected performRollover is NEVER called - the seam is gone, not merely defaulted off", injectedCalled === false);
+    assert("6: an injected automaticLifecycleEnabled:true changes nothing", db.writes.length === 0);
+    assert("6: the still-open session is simply handed back", r.code === ENSURE_CODE.REUSED, JSON.stringify(r));
   }
 
   console.log("");

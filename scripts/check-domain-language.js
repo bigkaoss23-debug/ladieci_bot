@@ -39,6 +39,15 @@ const ALLOWLIST_PATTERNS = [
   /^tests\/v3iMesaCoversDeferred\.static\.test\.js$/,
   /^tests\/v3jMesaNomenclatureCutover\.static\.test\.js$/,
   /^tests\/v3kMesaTableShapes\.static\.test\.js$/,
+  // H-1's rollback restores four pre-existing function bodies BYTE-IDENTICALLY
+  // -- its own post-conditions assert md5(pg_get_functiondef(...)) equals the
+  // captured pre-H-1 checksums. Two of those bodies legitimately contain the
+  // PRANZO/SERA service_kind literals, and a suppression comment cannot help:
+  // the marker would have to sit INSIDE the function body, which lands in
+  // pg_proc.prosrc and breaks the very byte-identity the file exists to
+  // guarantee. File-level exemption is the only correct resolution, and is
+  // exactly what this allowlist is for.
+  /^migrations\/2026-08-20_h1_legacy_lifecycle_writer_hardening\.ROLLBACK\.sql$/,
   // The guard's own source and its unit tests: they must hold the
   // blocked-term list, allowlist patterns and fixture strings as literal
   // data — that is not domain contamination.

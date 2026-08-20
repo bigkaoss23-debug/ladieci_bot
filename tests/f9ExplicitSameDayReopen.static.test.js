@@ -60,15 +60,24 @@ assert("3k: no clock/schedule read anywhere in this module (reopen eligibility i
   !/new Date\(\)|clock_timestamp|DEFAULT_SCHEDULE|resolveSchedule/.test(REOPEN_MODULE));
 
 console.log("\n== D. index.js — only the intentional openServiceSession action may reach explicit_reopen ==");
-assert("4a: explicitReopenServiceSession is imported",
-  /require\("\.\/src\/serviceSessions\/explicitReopenServiceSession"\)/.test(INDEX));
+// H-1 (LEGACY WRITER HARDENING, ledger 97) RETIRED this HTTP surface. F-9's
+// design is unchanged and still correct -- sections A-C above still prove the
+// module resolves everything server-side and never trusts a client-supplied
+// lifecycle identity -- but G-1 removed the reason for a manual open to exist
+// at all, so index.js no longer routes to it. These three assertions are
+// inverted rather than deleted, so the retirement itself stays gated: if
+// anyone re-wires a manual open into index.js, this file fails.
+assert("4a (H-1): explicitReopenServiceSession is NO LONGER imported by index.js",
+  !/require\("\.\/src\/serviceSessions\/explicitReopenServiceSession"\)/.test(INDEX));
 // Isolate exactly the openServiceSession action's own block text (bounded by
 // the next `} else if (action === "rollEconomicPeriod")`), so window-based
 // matching can never spill into an unrelated action.
 const openActionBlock = INDEX.split('if (action === "openServiceSession")')[1]?.split('} else if (action === "rollEconomicPeriod")')[0] || "";
-assert("4b: the openServiceSession action calls explicitReopenServiceSession",
+assert("4b (H-1): the openServiceSession action refuses unconditionally and calls nothing",
   openActionBlock.length > 0 &&
-  /explicitReopenServiceSession\(\{ actor: actorId, source: "manual_recovery" \}\)/.test(openActionBlock));
+  !/explicitReopenServiceSession\(/.test(openActionBlock) &&
+  /MANUAL_SERVICE_OPEN_RETIRED/.test(openActionBlock) &&
+  /status\(410\)/.test(openActionBlock));
 assert("4c: the openServiceSession action never forwards client body fields as lifecycle identity",
   !/req\.body/.test(openActionBlock));
 // Isolate exactly the ensureCurrentServiceSession action's own block text —
@@ -81,8 +90,8 @@ assert("4d: the ensureCurrentServiceSession action (silent page load) is untouch
   ensureActionBlock.length > 0 &&
   /ensureCurrentServiceSession\(\{ actor: actorId, source: "auto_entry" \}\)/.test(ensureActionBlock) &&
   !/explicitReopenServiceSession/.test(ensureActionBlock));
-assert("4e: exactly one occurrence of explicitReopenServiceSession( as a call (the require doesn't count, it has no trailing paren-call) in index.js",
-  (INDEX.match(/explicitReopenServiceSession\(\{/g) || []).length === 1);
+assert("4e (H-1): ZERO occurrences of explicitReopenServiceSession( as a call in index.js",
+  (INDEX.match(/explicitReopenServiceSession\(\{/g) || []).length === 0);
 
 console.log("\n== E. ensureServiceSession.js (silent page load) never reaches explicit_reopen ==");
 assert("5a: no reference to explicitReopenServiceSession anywhere in the page-load module",

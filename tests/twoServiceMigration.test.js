@@ -86,7 +86,11 @@ assert("G: ensure action routed", /action === "ensureCurrentServiceSession"/.tes
 assert("G: actor comes from verified auth, never the body", /const actorId = req\.authCtx\?\.actor;/.test(INDEX));
 assert("G: the kind is never read from the request", !/req\.body\.(serviceKind|service_kind|kind)/.test(INDEX));
 assert("G: unverified actor → 401", /UNVERIFIED_ACTOR/.test(INDEX));
-assert("G: manual open is now recovery through the SAME ensure", /source: "manual_recovery"/.test(INDEX));
+// H-1 (ledger 97): the manual open surface is retired entirely -- the
+// Operational Service resumes by itself (G-1), so there is no manual recovery
+// route left to share the ensure with.
+assert("G (H-1): the manual open surface is retired, not merely re-routed",
+  !/source: "manual_recovery"/.test(INDEX) && /MANUAL_SERVICE_OPEN_RETIRED/.test(INDEX));
 assert("G: no caller uses the retired kind-less opener", !/serviceSessionLifecycle\.open\(/.test(INDEX));
 
 console.log("\n══ H. authorization ══");

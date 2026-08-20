@@ -102,27 +102,29 @@ const readStripped = (rel) => stripComments(read(rel));
     /if \(LEGACY_AUTOMATIC_LIFECYCLE_ENABLED\) \{\s*schedulaCloseTick\(\);\s*catchUpChiusura\(\);\s*\}/.test(indexJs),
   );
 
-  // ── Claim 1b: ensureServiceSession.js's rollover call is now gated too ───
+  // ── Claim 1b: SUPERSEDED BY LEGACY WRITER HARDENING ──────────────────────
+  // P0-C1 originally proved the page-load ensure's rollover call was GATED by
+  // the same env flag as index.js's three automatic triggers. That is no
+  // longer the invariant, because the call site itself is gone: the silent
+  // ensure can no longer close, roll or create anything under ANY
+  // configuration. The assertions below are strictly stronger than the ones
+  // they replace -- a gate can be switched on by an env var, an absent call
+  // site cannot.
   assert(
-    "ensureServiceSession.js: still exactly ONE call site of performRollover( (the DI-injected performIncidentSafeRollover)",
-    (ensureJs.split("performRollover(").length - 1) === 1,
+    "ensureServiceSession.js: ZERO call sites of performRollover( — the page-load close is removed, not gated",
+    (ensureJs.split("performRollover(").length - 1) === 0,
   );
   assert(
-    "ensureServiceSession.js: automaticLifecycleEnabled is a DI parameter on createEnsureCurrentServiceSession, defaulting to the SAME env var + semantics as index.js's flag",
-    /automaticLifecycleEnabled\s*=\s*\(\)\s*=>\s*process\.env\.LEGACY_AUTOMATIC_LIFECYCLE_ENABLED\s*!==\s*"false"/.test(ensureJs),
+    "ensureServiceSession.js: no automaticLifecycleEnabled seam remains — there is no flag left to flip",
+    !/automaticLifecycleEnabled/.test(ensureJs),
   );
   assert(
-    "ensureServiceSession.js: the rollover-due branch is gated by `isRolloverDue(...) && automaticLifecycleEnabled()` — not a bare isRolloverDue(...) check",
-    /if \(isRolloverDue\(classification\) && automaticLifecycleEnabled\(\)\)/.test(ensureJs),
+    "ensureServiceSession.js: does not import the rollover engine at all",
+    !/require\(["'].*incidentSafeRollover["']\)/.test(ensureJs),
   );
   assert(
-    "ensureServiceSession.js: no OTHER, ungated reference to performRollover slipped in outside that one gated branch",
-    (() => {
-      const idx = ensureJs.indexOf("performRollover(");
-      if (idx === -1) return false;
-      const before = ensureJs.slice(Math.max(0, idx - 400), idx);
-      return /isRolloverDue\(classification\) && automaticLifecycleEnabled\(\)/.test(before);
-    })(),
+    "ensureServiceSession.js: no rollover classification is performed on the read path either",
+    !/isRolloverDue|classifySessionForRollover/.test(ensureJs),
   );
 
   // ── Claim 2 (F-8 contract): V3 reachable from index.js ONLY inside the ───
