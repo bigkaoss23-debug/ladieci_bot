@@ -215,6 +215,51 @@ function aggregate(session, orders, events) {
   };
 }
 
+// ─── UAT-P1-B — FINALIZED SERVICE REPORTING ──────────────────────────────
+// A finalized service has ONE authoritative financial truth: its official
+// service_closeouts snapshot, written by the close engine inside the close
+// transaction. Recomputing money from still-mutable rows after the fact can
+// only ever drift from it, so once a snapshot exists it wins outright.
+const centsToEur = (value) => round((Number(value) || 0) / 100);
+
+// Money-only overlay. Ticket rows, session identity, dates and the economic
+// breakdown all stay exactly as aggregated from THIS service's own rows --
+// only the headline financial figures are re-sourced from the snapshot.
+function withOfficialSnapshot(base, snapshot) {
+  if (!snapshot) return base;
+  const paymentTotals = {
+    efectivo: centsToEur(snapshot.cash_amount_cents),
+    tarjeta: centsToEur(snapshot.card_amount_cents),
+    bizum: centsToEur(snapshot.bizum_amount_cents),
+    other: centsToEur(snapshot.other_amount_cents),
+  };
+  const gross = centsToEur(snapshot.gross_sales_cents);
+  const collected = centsToEur(snapshot.paid_amount_cents);
+  return {
+    ...base,
+    financialSource: "official_closeout",
+    closeoutId: snapshot.id || null,
+    totals: {
+      gross,
+      collected,
+      refunded: centsToEur(snapshot.total_refunds_cents),
+      unpaid: centsToEur(snapshot.unpaid_exposure_cents),
+      // Cancelled/voided value is carried by the snapshot and has no live
+      // equivalent in `totals` -- surfaced so the report can state it.
+      voided: centsToEur(snapshot.total_void_cents),
+      difference: round(gross - collected),
+    },
+    paymentTotals,
+    counts: {
+      ...base.counts,
+      // order_count is the snapshot's own ticket count, authoritative even if
+      // the drill-down rows below are incomplete for any reason.
+      tickets: Number(snapshot.order_count) || 0,
+      incidents: Number(snapshot.incident_count) || 0,
+    },
+  };
+}
+
 function createCurrentServiceCloseout({ select = sbSelect, sessionLifecycle = lifecycle } = {}) {
   return async function getCurrentServiceCloseout() {
     const identity = await sessionLifecycle.currentCloseout();
@@ -226,8 +271,30 @@ function createCurrentServiceCloseout({ select = sbSelect, sessionLifecycle = li
     }
     const closed = session.status === "closed";
     const sessionFilter = `service_session_id=eq.${encodeURIComponent(session.id)}`;
-    const orders = await select(closed ? "storico" : "ordenes", `${sessionFilter}&order=ts.asc`);
-    const list = Array.isArray(orders) ? orders : [];
+    // UAT-P1-B — where a closed service's order rows live depends on WHICH
+    // close ran: the legacy nightly archive moves them to `storico`, while the // language-guard: allow-legacy storico is the existing archive table name this reader already queried, not new vocabulary
+    // V3 operator Finalizar (close_source='operator_finalizar_v3') closes the
+    // service and leaves them in `ordenes`. Reading only `storico` reported a // language-guard: allow-legacy storico is the same existing archive table name, cited to explain the defect, not new vocabulary
+    // real 7-ticket / 143.50 EUR service as zero tickets and 0.00 EUR
+    // (staging service 4f260f1e, 2026-08-20). Both are durable, service-pinned
+    // stores, so a closed service reads BOTH and de-duplicates by order id.
+    // This is not a cross-service fallback: every row is filtered by this one
+    // service_session_id and the mixed-rows guard below still proves it.
+    const orders = closed
+      ? [].concat(
+        (await select("storico", `${sessionFilter}&order=ts.asc`)) || [], // language-guard: allow-legacy storico is the existing archive table name, queried here exactly as this reader already did, not new vocabulary
+        (await select("ordenes", `${sessionFilter}&order=ts.asc`)) || [],
+      )
+      : await select("ordenes", `${sessionFilter}&order=ts.asc`);
+    const deduped = [];
+    const seen = new Set();
+    for (const row of Array.isArray(orders) ? orders : []) {
+      const key = String(row.orden_id || row.id || "");
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      deduped.push(row);
+    }
+    const list = deduped;
     if (list.some((row) => String(row.service_session_id || "") !== String(session.id))) {
       throw Object.assign(new Error("mixed service session rows"), { code: "MIXED_SERVICE_SESSION_ROWS" });
     }
@@ -238,9 +305,20 @@ function createCurrentServiceCloseout({ select = sbSelect, sessionLifecycle = li
     if ((events || []).some((row) => String(row.service_session_id || "") !== String(session.id))) {
       throw Object.assign(new Error("mixed financial session rows"), { code: "MIXED_FINANCIAL_SESSION_ROWS" });
     }
-    return aggregate(session, list, Array.isArray(events) ? events : []);
+    const base = aggregate(session, list, Array.isArray(events) ? events : []);
+    if (!closed) return base;
+    // The snapshot is looked up by THIS service's id, so the money can never
+    // come from a different service than the header and tickets. A closed
+    // service with no snapshot (legacy closes predating the closeout table)
+    // keeps the previous recomputed behaviour rather than reporting zeros.
+    const closeouts = await select("service_closeouts", `${sessionFilter}&limit=1`);
+    const snapshot = Array.isArray(closeouts) ? closeouts[0] : null;
+    if (snapshot && String(snapshot.service_session_id || "") !== String(session.id)) {
+      throw Object.assign(new Error("mixed closeout session row"), { code: "MIXED_CLOSEOUT_SESSION_ROW" });
+    }
+    return withOfficialSnapshot(base, snapshot);
   };
 }
 
 const getCurrentServiceCloseout = createCurrentServiceCloseout();
-module.exports = { createCurrentServiceCloseout, getCurrentServiceCloseout, aggregate };
+module.exports = { createCurrentServiceCloseout, getCurrentServiceCloseout, aggregate, withOfficialSnapshot };

@@ -181,6 +181,16 @@ const LIVE_TRIGGER_SOURCE_PATH = path.join(ROOT, 'migrations', '2026-08-02_v3j_m
     // header). Never INSERTs/UPDATEs the table; the only hits here are that
     // same explanation in comments plus the one SELECT-only query string.
     path.join(ROOT, 'src', 'serviceSessions', 'previousBusinessDayResidue.js'),
+    // UAT-P1-B — currentServiceCloseout.js: read-only lookup of the reported
+    // session's OWN service_closeouts row, so a FINALIZED service reports its
+    // official snapshot instead of recomputing money from rows the close may
+    // have moved. Same shape and same justification as
+    // previousBusinessDayResidue.js above: one SELECT filtered by that single
+    // service_session_id, never an INSERT/UPDATE, and it refuses with
+    // MIXED_CLOSEOUT_SESSION_ROW if the row names any other session. Added
+    // because reading only the archive reported a real 7-ticket / 143.50 EUR
+    // service as zero tickets and 0.00 EUR (staging 4f260f1e, 2026-08-20).
+    path.join(ROOT, 'src', 'closeout', 'currentServiceCloseout.js'),
   ]);
   function walk(dir, out) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
