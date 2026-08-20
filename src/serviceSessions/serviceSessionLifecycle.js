@@ -53,6 +53,28 @@ function createServiceSessionLifecycle({ rpc = sbRpc } = {}) {
     async currentCloseout() {
       return normalize(await rpc("get_current_service_closeout_session", {}));
     },
+    // MESA FIRST-SEATING STALE SERVICE GUARD — the canonical Business Day
+    // advance + current-service resolution, reused EXACTLY as the order path
+    // uses it: same function, unmodified, no logic of its own added here.
+    //
+    // WHY THIS AND NOT openOperational BELOW. open_operational_service_v1
+    // cannot advance the day: it reads business_day_lifecycle_state.
+    // current_business_day_id and either fails with NO_CURRENT_BUSINESS_DAY or
+    // opens a service dated to the STALE pointer's day. Creating the
+    // business_days row and moving the canonical pointer is the exclusive
+    // authority of resolve_order_intake_context_v1, so a caller needing a
+    // genuinely current service after a cross-day recovery must come here.
+    //
+    // The resolver's own intake-window rule still applies and is deliberately
+    // NOT bypassed: outside the schedule it answers ORDER_INTAKE_CLOSED, and
+    // the caller must surface that honestly rather than force a service open.
+    // Returns the resolver's verdict verbatim — {ok:true, periodId,
+    // businessDayId, ...} or a typed {ok:false, code}.
+    async resolveOperationalContext({ actor, source = "backend" }) {
+      return normalize(await rpc("resolve_order_intake_context_v1", {
+        p_actor: actor, p_source: source,
+      }));
+    },
     // F-9 — the sole wrapper for the canonical opener (F-6). p_open_reason is
     // never defaulted here: every caller must state 'first_open_of_business_day'
     // or 'explicit_reopen' explicitly, matching the RPC's own fail-closed

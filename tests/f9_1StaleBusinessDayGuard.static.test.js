@@ -86,8 +86,19 @@ assert("5c: this module never calls open_business_day_v1 or any reconciliation p
 console.log("\n== F. Page load / order intake / first-open remain untouched by this slice ==");
 assert("6a: ensureServiceSession.js (silent page load) does not reference the new stale-guard machinery",
   !/fetchOrderIntakeContext|STALE_BUSINESS_DAY_REOPEN|orderIntakePolicy/.test(ENSURE_MODULE));
-assert("6b: serviceSessionLifecycle.js gained no new RPC method in this slice (openOperational is F-9's, untouched)",
-  (LIFECYCLE.match(/async \w+\(/g) || []).length === 6);
+// Was a bare `=== 6` method count, which any later legitimate slice trips
+// without saying what actually changed. Asserting the exact method SET keeps
+// F-9.1's real intent -- this slice introduced no stale-guard RPC of its own,
+// and openOperational is still F-9's untouched wrapper -- while naming every
+// method a reader has to account for. resolveOperationalContext is the Mesa
+// first-seating stale-service guard's reuse of resolve_order_intake_context_v1
+// (manifest row 97); 6c re-proves it brought no date logic into this module.
+assert("6b: serviceSessionLifecycle.js exposes exactly the expected RPC wrappers (openOperational is F-9's, untouched)",
+  JSON.stringify((LIFECYCLE.match(/async (\w+)\(/g) || []).map((m) => m.slice(6, -1))) ===
+  JSON.stringify(["ensure", "open", "beginClose", "completeClose", "currentCloseout",
+                  "resolveOperationalContext", "openOperational"]));
+assert("6c: serviceSessionLifecycle.js still carries no stale-guard or calendar logic of its own",
+  !/STALE_BUSINESS_DAY|fetchOrderIntakeContext|Europe\/Madrid|CURRENT_DATE/.test(LIFECYCLE));
 
 console.log("\n=== RESULT: " + pass + " passed, " + fail + " failed ===");
 process.exit(fail === 0 ? 0 : 1);

@@ -24,6 +24,13 @@ function safeError(error) {
     'MESA_TABLE_HAS_RESERVATIONS',
     'MESA_COVERS_NOT_SET','MESA_COVERS_IMMUTABLE','MESA_TABLE_HAS_ORDERS',
     'MESA_TABLE_NOT_SETTLED','MESA_TABLE_HAS_ACTIVE_ORDERS',
+    // MESA FIRST-SEATING STALE SERVICE GUARD — a previous-day service still
+    // stale after one full recovery + retry. A genuine lifecycle conflict,
+    // not a malformed request, so it belongs with the other 409s. The
+    // frontend dictionary has no entry for it by design: it is a
+    // should-never-happen diagnostic, and describeMesaError already falls
+    // back to the generic retry message for unknown codes.
+    'MESA_SERVICE_STALE_UNRESOLVED',
   ]);
   const denied = new Set(['MESA_PAYMENT_FORBIDDEN','MESA_OPEN_FORBIDDEN','MESA_LAYOUT_FORBIDDEN','MESA_RESERVATION_FORBIDDEN','MESA_CLOSE_FORBIDDEN']);
   const missing = new Set(['MESA_SESSION_NOT_FOUND','MESA_TABLE_NOT_FOUND','MESA_WORKSPACE_NOT_FOUND','MESA_COMMAND_NOT_FOUND','MESA_RESERVATION_NOT_FOUND']);
