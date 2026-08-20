@@ -59,27 +59,30 @@ const latest = replayLatestFunctionBodies();
 console.log("\n== A. Replay sanity — a non-trivial, real function set was found ==");
 assert("1a: at least 20 distinct functions tracked across migration history (guards against an empty/broken scan)",
   Object.keys(latest).length >= 20, String(Object.keys(latest).length));
-assert("1b: open_operational_service_v1's latest definition is F-6's own migration file",
-  latest.open_operational_service_v1 && latest.open_operational_service_v1.file === "2026-08-18_f6_open_operational_service_primitive.sql");
-// 1c/1d track WHICH migration file most recently (re)defines each cutover
-// target. They are bookkeeping anchors for the replay, not the guard itself —
-// the actual frozen invariant is section B/C below (neither function may be a
-// creator). Both were last updated at F-7; two later slices have legitimately
-// redefined these bodies since, so the anchors move with them:
-//   ensure_service_session          -> F-11 (2026-08-19), stale Business Day
-//                                      classification (REOPEN_REQUIRED
-//                                      downgrades to NO_OPEN_SERVICE when the
-//                                      canonical pointer names a past day).
-//   resolve_order_intake_context_v1 -> F-10 (2026-08-19), forgotten-close
-//                                      resolver cutover, migration row 93.
-// The F-10 anchor had been stale since row 93 was applied (this assertion was
-// already failing before F-11); it is corrected here rather than left red.
-assert("1c: ensure_service_session's latest definition is F-11's own migration file",
-  latest.ensure_service_session && latest.ensure_service_session.file === "2026-08-19_f11_ensure_stale_business_day_classification.sql",
-  latest.ensure_service_session && latest.ensure_service_session.file);
-assert("1d: resolve_order_intake_context_v1's latest definition is F-10's own migration file",
-  latest.resolve_order_intake_context_v1 && latest.resolve_order_intake_context_v1.file === "2026-08-19_f10_forgotten_close_resolver_cutover.sql",
-  latest.resolve_order_intake_context_v1 && latest.resolve_order_intake_context_v1.file);
+// 1b/1c/1d track WHICH migration file most recently (re)defines each of the
+// three lifecycle-authority functions. They are bookkeeping anchors for the
+// replay, not the guard itself — the actual frozen invariant is section B/C
+// below (the creation surface is exactly three functions, and the two F-7
+// cutover targets are non-creators). The anchors move whenever a later slice
+// legitimately redefines a body:
+//   F-6  (2026-08-18) introduced open_operational_service_v1
+//   F-10 (2026-08-19) redefined resolve_order_intake_context_v1, row 93
+//   F-11 (2026-08-19) redefined ensure_service_session, row 94
+//   G-1  (2026-08-20) redefines ALL THREE in one slice, row 96: the
+//        Operational Service now resumes by itself on the first real
+//        activity after a same-day Finalizar
+//        (open_operational_service_v1 gains the
+//        'next_service_of_business_day' reason; the resolver calls it
+//        instead of refusing with REOPEN_REQUIRED; ensure_service_session
+//        reports that state as ordinary NO_OPEN_SERVICE idle).
+const G1 = "2026-08-20_g1_autonomous_resume_operational_service.sql";
+for (const [n, fn] of [["1b", "open_operational_service_v1"],
+                       ["1c", "ensure_service_session"],
+                       ["1d", "resolve_order_intake_context_v1"]]) {
+  assert(`${n}: ${fn}'s latest definition is G-1's own migration file`,
+    latest[fn] && latest[fn].file === G1,
+    latest[fn] && latest[fn].file);
+}
 
 console.log("\n== B. The exact, frozen, expected creation surface ==");
 const INSERT_RE = /INSERT\s+INTO\s+(?:public\.)?service_sessions\b/i;

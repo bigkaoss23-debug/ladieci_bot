@@ -236,14 +236,53 @@ function createMesaService({
   // BUDGET: exactly ONE recovery and exactly ONE retry, enforced by straight-
   // line control flow rather than a loop, so a second stale verdict is a typed
   // failure and never a third attempt.
+  //
+  // ═══ G-1 — SEATING IS LEGITIMATE FIRST ACTIVITY ═══
+  //
+  // Until G-1 this helper required a service to ALREADY be open and refused
+  // outright otherwise, which made seating structurally incapable of being
+  // the first thing that happens: not on a brand-new Business Day nobody had
+  // ordered on yet, and not after the day's own Finalizar. The waiter got
+  // MESA_SERVICE_NOT_OPEN and someone had to go press "Abrir nuevo servicio".
+  //
+  // Step 0 below removes that. When nothing is open, the CANONICAL resolver
+  // opens (or converges on) the current Operational Service -- the exact same
+  // call, with the exact same arguments, that the recovery retry below
+  // already makes. No second engine, no cloned rule, no date computed here,
+  // no service chosen here: resolve_order_intake_context_v1 owns the Business
+  // Day advance, the intake window and the opening, all inside one
+  // advisory-locked transaction, so two waiters (or a waiter and an order)
+  // racing the first activity converge on ONE service.
+  //
+  // The resolver's honest refusals are preserved and are NOT overridden:
+  // outside the intake window it answers ORDER_INTAKE_CLOSED, and that stays
+  // MESA_SERVICE_NOT_OPEN to the waiter -- the same typed 409 and the same UI
+  // copy this helper already returns for an unresolvable successor. A service
+  // is never forced open.
+  //
+  // NOTHING ELSE MOVES. When a service IS open, this function behaves exactly
+  // as before, byte for byte: the stale-service path (seat -> DB raises
+  // FORGOTTEN_CLOSE_REQUIRED -> one recovery -> one pinned retry) is
+  // untouched, and so are mesa_open_session_v1 / mesa_open_reservation_v1.
   async function seatWithStaleServiceRecovery({ actor, source, seat }) {
     const identity = await lifecycle.currentCloseout();
-    if (!identity || !identity.ok || !identity.session || identity.session.status !== 'open') {
-      throw new MesaServiceError('MESA_SERVICE_NOT_OPEN', 409);
+    let serviceSessionId = (identity && identity.ok && identity.session && identity.session.status === 'open')
+      ? identity.session.id
+      : null;
+
+    if (!serviceSessionId) {
+      const resolved = await lifecycle.resolveOperationalContext({ actor, source });
+      if (!resolved || resolved.ok !== true || typeof resolved.periodId !== 'string') {
+        // Includes ORDER_INTAKE_CLOSED and every other typed resolver
+        // refusal. Same meaning to a waiter as before: there is no current
+        // service to seat against. Zero seat attempts, zero mutation.
+        throw new MesaServiceError('MESA_SERVICE_NOT_OPEN', 409);
+      }
+      serviceSessionId = resolved.periodId;
     }
 
     try {
-      return await seat(identity.session.id);
+      return await seat(serviceSessionId);
     } catch (error) {
       // The structured triple (P0001 + FORGOTTEN_CLOSE_REQUIRED + UUID in
       // DETAIL) is re-validated by the shared parser and fails closed on any

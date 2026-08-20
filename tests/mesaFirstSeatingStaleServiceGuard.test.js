@@ -199,17 +199,99 @@ test('CASE E: a service still stale after recovery + retry fails typed, never a 
   assert.equal(calls.recoveries.length, 1, 'budget held: never a second recovery');
 });
 
-test('CASE E: a no-open-service pointer refuses before any seat is attempted', async () => {
-  const calls = { seats: [] };
+// ── G-1 — SEATING IS LEGITIMATE FIRST ACTIVITY ────────────────────────────
+// Before G-1 every one of these states dead-ended the waiter with
+// MESA_SERVICE_NOT_OPEN and required a human to press "Abrir nuevo servicio".
+// Now the canonical resolver opens (or converges on) the current Operational
+// Service and the seat lands on it. Nothing about the stale-service path
+// above changes: it only ever runs when a service IS already open.
+const RESUMED_ID = 'a1b2c3d4-0000-4000-8000-00000000beef';
+
+// Every shape of "nothing is currently open" the lifecycle read can return.
+const NO_OPEN_SERVICE_READS = {
+  'a freshly finalized service (recent_closed_session_id)':
+    { ok: true, code: 'OK', session: { id: STALE_ID, status: 'closed' } },
+  'no service session at all (virgin Business Day)':
+    { ok: true, code: 'NO_SERVICE_SESSION' },
+  'a null session':
+    { ok: true, session: null },
+  'an unreadable lifecycle state':
+    { ok: false, code: 'SERVICE_SESSION_STATE_CORRUPT' },
+};
+
+function resumeService({ seatKey = 'openSession', resolved } = {}) {
+  const calls = { seats: [], recoveries: [], resolutions: [] };
   const service = createMesaService({
-    dao: { openSession: async (args) => { calls.seats.push(args); return { ok: true }; } },
-    lifecycle: { currentCloseout: async () => ({ ok: true, session: null }) },
+    dao: {
+      [seatKey]: async (args) => { calls.seats.push(args); return { ok: true, sessionId: 'ts-resumed' }; },
+    },
+    lifecycle: {
+      currentCloseout: async () => calls.read,
+      resolveOperationalContext: async (args) => {
+        calls.resolutions.push(args);
+        return resolved !== undefined
+          ? resolved
+          : { ok: true, code: 'RESOLVED', periodId: RESUMED_ID, businessDayId: 'bd-today' };
+      },
+    },
+    forgottenCloseRecovery: {
+      parseForgottenCloseRequired: () => null,
+      recoverForgottenService: async () => { calls.recoveries.push(1); return { success: true }; },
+    },
   });
-  await assert.rejects(
-    () => service.open({ context: ctx(), tableId: 'table-1' }),
-    (error) => error instanceof MesaServiceError && error.code === 'MESA_SERVICE_NOT_OPEN',
-  );
-  assert.equal(calls.seats.length, 0);
+  return { service, calls };
+}
+
+for (const [label, read] of Object.entries(NO_OPEN_SERVICE_READS)) {
+  test(`G-1: a walk-in seats after ${label} — the resolver opens the service, no manual step`, async () => {
+    const { service, calls } = resumeService();
+    calls.read = read;
+
+    const result = await service.open({ context: ctx(), tableId: 'table-1' });
+
+    assert.equal(result.sessionId, 'ts-resumed');
+    assert.equal(calls.resolutions.length, 1, 'the canonical resolver is consulted exactly once');
+    assert.deepEqual(calls.resolutions[0], { actor: 'operator_primary', source: 'mesa_first_seating' },
+      'server-verified actor and the seating source, never a client-supplied identity');
+    assert.equal(calls.seats.length, 1, 'exactly one seat attempt');
+    assert.equal(calls.seats[0].serviceSessionId, RESUMED_ID, 'pinned to the resolver verdict, never a re-read pointer');
+    assert.equal(calls.recoveries.length, 0, 'nothing was stale, so no forgotten-close recovery');
+  });
+}
+
+test('G-1: a reservation seats after a finalized service through the same one path', async () => {
+  const { service, calls } = resumeService({ seatKey: 'openReservation' });
+  calls.read = NO_OPEN_SERVICE_READS['a freshly finalized service (recent_closed_session_id)'];
+
+  const result = await service.openReservation({ context: ctx(), reservationId: 'r-9', expectedVersion: 3 });
+
+  assert.equal(result.sessionId, 'ts-resumed');
+  assert.equal(calls.resolutions.length, 1);
+  assert.equal(calls.seats.length, 1);
+  assert.equal(calls.seats[0].serviceSessionId, RESUMED_ID);
+  assert.equal(calls.seats[0].expectedVersion, 3, 'the optimistic version is carried through untouched');
+  assert.equal(calls.recoveries.length, 0);
+});
+
+test('G-1: an honest resolver refusal is surfaced, never overridden — no service is forced open', async () => {
+  for (const refusal of [
+    { ok: false, code: 'ORDER_INTAKE_CLOSED' },
+    { ok: false, code: 'BUSINESS_DAY_UNRESOLVED' },
+    { ok: false, code: 'OPEN_OPERATIONAL_SERVICE_FAILED', reason: 'NO_CURRENT_BUSINESS_DAY' },
+    { ok: true, code: 'RESOLVED' },            // ok but no periodId — never trusted
+    null,
+  ]) {
+    const { service, calls } = resumeService({ resolved: refusal });
+    calls.read = NO_OPEN_SERVICE_READS['a null session'];
+
+    await assert.rejects(
+      () => service.open({ context: ctx(), tableId: 'table-1' }),
+      (error) => error instanceof MesaServiceError && error.code === 'MESA_SERVICE_NOT_OPEN' && error.status === 409,
+      `refusal ${JSON.stringify(refusal)}`,
+    );
+    assert.equal(calls.seats.length, 0, 'zero seat attempts against an unresolved service');
+    assert.equal(calls.recoveries.length, 0, 'a missing service is not a forgotten close');
+  }
 });
 
 // ── CASE F — Business Day 1:N is preserved ────────────────────────────────
