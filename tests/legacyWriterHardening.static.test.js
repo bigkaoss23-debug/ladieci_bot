@@ -115,6 +115,12 @@ test('8: post-conditions pin the creation surface to exactly one function', () =
 test('9: post-conditions pin the close surface to exactly one function', () => {
   assert.match(FWD, /expected exactly close_service_session_v3/);
   assert.match(FWD, /v_closers <> 1/);
+  // The predicate must be scoped to service_sessions. A bare
+  // "mentions status = 'closed'" scan also matches the Mesa TABLE-session
+  // closers and a guard trigger, and made this migration refuse itself on its
+  // first apply. Assert the scoping explicitly so it cannot regress.
+  const closerBlock = FWD.slice(FWD.indexOf('INTO v_closers'), FWD.indexOf('expected exactly close_service_session_v3'));
+  assert.match(closerBlock, /UPDATE\\s\+public\\\.service_sessions/);
 });
 
 test('10: post-conditions assert no lifecycle RPC is reachable by anon/authenticated', () => {

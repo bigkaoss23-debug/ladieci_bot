@@ -232,10 +232,19 @@ BEGIN
   END IF;
 
   -- ── the terminal-transition surface is now exactly ONE function ─────────
+  -- Scoped to functions that actually UPDATE public.service_sessions to
+  -- 'closed'. A bare "mentions status = 'closed'" scan is wrong and was
+  -- caught by this migration refusing itself on the first apply: it also
+  -- matches mesa_close_session_v1 / mesa_release_empty_session_v1 /
+  -- mesa_release_empty_session_auto_v1 / mesa_complete_reservation_v1, which
+  -- close a TABLE session (a different table entirely), and
+  -- guard_service_session_closed_v1, which only compares the value. None of
+  -- those can terminate an Operational Service.
   SELECT count(*), string_agg(p.proname, ', ' ORDER BY p.proname) INTO v_closers, v_names
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public'
      AND p.prolang=(SELECT oid FROM pg_language WHERE lanname='plpgsql')
+     AND p.prosrc ~* 'UPDATE\s+public\.service_sessions'
      AND p.prosrc ~* 'status\s*=\s*''closed''';
   IF v_closers <> 1 OR v_names IS DISTINCT FROM 'close_service_session_v3' THEN
     RAISE EXCEPTION 'H-1 post-condition failed: service close surface is [%] (expected exactly close_service_session_v3)', v_names;
