@@ -174,11 +174,25 @@ const REGISTRY = Object.freeze([
   // serviceSessionLifecycle.js's openOperational(), reachable only from
   // explicitReopenServiceSession.js's own single 'explicit_reopen' call site.
   entry('rpc/open_operational_service_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/serviceSessionLifecycle.js'),
-  // R-DAY3 — read-only intake-schedule preflight mirror. The canonical,
-  // authoritative resolve_order_intake_context_v1() is called ONLY from
-  // inside the service_session_assign_order() DB trigger, never via sbRpc
-  // from this backend, so it deliberately has no registry entry here.
+  // R-DAY3 — read-only intake-schedule preflight mirror.
   entry('rpc/get_order_intake_context_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'serviceSessions/orderIntakePolicy.js'),
+  // The canonical order-intake resolver. R-DAY3's comment here used to assert
+  // it was "called ONLY from inside the service_session_assign_order() DB
+  // trigger, never via sbRpc from this backend, so it deliberately has no
+  // registry entry" -- that stopped being true when the Mesa first-seating
+  // stale-service guard (ledger 95) gave it a JS caller,
+  // serviceSessionLifecycle.js's resolveOperationalContext(). Nothing caught
+  // it, because that caller only ran on the forgotten-close recovery-retry
+  // path, which never executed in production. G-1 (ledger 96) made the same
+  // call the normal route for the first seating after a Finalizar, and it
+  // failed instantly and correctly: the transport refuses an unregistered
+  // resource BEFORE the network, so the request never happened and Mesa
+  // surfaced MESA_INTERNAL_ERROR. Registered here, POST-only, same
+  // sensitivity class as open_operational_service_v1 which it calls.
+  // tests/serviceSessionLifecycleResourceRegistration.test.js is the gate
+  // that now keeps this registry and that wrapper in step.
+  entry('rpc/resolve_order_intake_context_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'serviceSessions/serviceSessionLifecycle.js resolveOperationalContext() — Mesa first-seating recovery (ledger 95) and G-1 first-activity resume (ledger 96)'),
 
   // R-DAY4 — explicit, immutable Service Period consolidation checkpoint.
   // Structurally independent of order-intake authority (period ASSIGNMENT
