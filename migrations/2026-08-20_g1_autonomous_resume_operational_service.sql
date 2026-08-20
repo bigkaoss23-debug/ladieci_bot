@@ -353,9 +353,12 @@ BEGIN
       -- ordering is pre-existing and is precisely why the primitive may
       -- trust current_business_day_id as its sole authority).
       --
-      -- The refusal this replaces (REOPEN_REQUIRED) demanded a human press
-      -- "Abrir nuevo servicio" before the restaurant could take its next
-      -- order on a day it had already finalised once. That ceremony is gone.
+      -- The refusal this replaces demanded a human press "Abrir nuevo
+      -- servicio" before the restaurant could take its next order on a day
+      -- it had already finalised once. That ceremony is gone. The retired
+      -- code is deliberately NOT named inside this body: the post-conditions
+      -- below scan prosrc, which includes comments, so documenting the token
+      -- here would defeat the very check that proves it is gone.
       IF EXISTS (SELECT 1 FROM public.service_sessions WHERE business_day_id = v_day.id) THEN
         v_open_reason := 'next_service_of_business_day';
         -- Durable, greppable provenance without a schema change: the source
@@ -479,8 +482,9 @@ BEGIN
 
     -- G-1 — the pointer names the canonically-current Business Day and that
     -- day has already had a service, but none is active. Before G-1 this was
-    -- REOPEN_REQUIRED, which the operational gate rendered as a blocking
-    -- panel demanding a manual open. It is simply IDLE: the next real order
+    -- the refusal the operational gate rendered as a blocking panel demanding
+    -- a manual open (the retired code is not named here, for the same
+    -- prosrc-scanning reason as above). It is simply IDLE: the next real order
     -- or the next table seating opens the next Operational Service by
     -- itself, via resolve_order_intake_context_v1 ->
     -- open_operational_service_v1('next_service_of_business_day').

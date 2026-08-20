@@ -324,6 +324,65 @@ test('29: the frozen stale-service recovery budget is untouched — one recovery
   assert.equal(recoveries.length, 1, 'still exactly one recovery call site');
 });
 
+// ── 8b. PROSRC REALITY CHECK ──────────────────────────────────────────────
+// Every other assertion in this file reads comment-stripped SQL, which is the
+// right lens for "what does the code do". The migration's own post-conditions
+// do NOT: they scan pg_proc.prosrc, and prosrc keeps the comments. A body
+// comment that merely NAMES a retired code therefore trips an
+// absence-post-condition and makes the whole migration refuse itself.
+//
+// That is not hypothetical: the first real apply of this migration failed on
+// exactly that, because the resolver and ensure bodies documented the
+// REOPEN_REQUIRED refusal they replace. The DB caught it and rolled back. This
+// section is the cheap gate that catches it before the DB has to.
+const RAW_BODIES = (() => {
+  const out = {};
+  const names = ['open_operational_service_v1', 'resolve_order_intake_context_v1', 'ensure_service_session'];
+  const re = /CREATE OR REPLACE FUNCTION public\.([a-z0-9_]+)\([\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/g;
+  let m;
+  while ((m = re.exec(FWD_RAW))) if (names.includes(m[1])) out[m[1]] = m[2];
+  return out;
+})();
+
+test('31: all three bodies were located for the prosrc check', () => {
+  assert.equal(Object.keys(RAW_BODIES).length, 3, Object.keys(RAW_BODIES).join(','));
+  for (const [n, b] of Object.entries(RAW_BODIES)) assert.ok(b.length > 500, `${n} body looks truncated`);
+});
+
+test('32: prosrc absence post-conditions hold on the REAL bodies, comments included', () => {
+  // resolve_order_intake_context_v1: the migration refuses if prosrc still
+  // mentions the retired refusal ANYWHERE, code or comment.
+  assert.doesNotMatch(RAW_BODIES.resolve_order_intake_context_v1, /REOPEN_REQUIRED/,
+    'the resolver body (incl. comments) must not name the retired code — the migration post-condition scans prosrc');
+  assert.doesNotMatch(RAW_BODIES.resolve_order_intake_context_v1, /INSERT\s+INTO\s+public\.service_sessions/i);
+
+  // ensure_service_session: same, plus it must stay non-mutating by the same
+  // comment-inclusive scan the migration performs.
+  assert.doesNotMatch(RAW_BODIES.ensure_service_session, /REOPEN_REQUIRED/,
+    'the ensure body (incl. comments) must not name the retired code');
+  assert.doesNotMatch(RAW_BODIES.ensure_service_session, /INSERT INTO/i);
+  assert.doesNotMatch(RAW_BODIES.ensure_service_session, /UPDATE\s+public\./i);
+  assert.doesNotMatch(RAW_BODIES.ensure_service_session, /DELETE FROM/i);
+});
+
+test('33: prosrc presence post-conditions hold on the REAL bodies too', () => {
+  const o = RAW_BODIES.open_operational_service_v1;
+  assert.match(o, /next_service_of_business_day/);
+  assert.match(o, /explicit_reopen/);
+  assert.match(o, /SERVICE_REOPEN_REQUIRED/);
+  assert.match(o, /NO_PRIOR_SERVICE_TO_REOPEN/);
+  assert.match(o, /IF p_open_reason = 'first_open_of_business_day' THEN/);
+
+  const r = RAW_BODIES.resolve_order_intake_context_v1;
+  for (const re of [/next_service_of_business_day/, /first_open_of_business_day/, /FORGOTTEN_CLOSE_REQUIRED/,
+                    /DETAIL = v_period\.id::text/, /'rolled_over'/, /BUSINESS_DAY_POINTER_MISMATCH/,
+                    /TICKET_EPOCH_MIRROR_MISMATCH/, /ORDER_INTAKE_CLOSED/]) assert.match(r, re);
+
+  const e = RAW_BODIES.ensure_service_session;
+  for (const re of [/hadPriorServiceToday/, /staleBusinessDay/, /currentBusinessDate/,
+                    /get_order_intake_context_v1/]) assert.match(e, re);
+});
+
 // ── 9. the header must not oversell ───────────────────────────────────────
 test('30: the migration documents what it does NOT touch', () => {
   for (const re of [/F-10/, /F-11/, /Mesa first-seating/, /single_active_uq/]) {
