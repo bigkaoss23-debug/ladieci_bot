@@ -80,6 +80,13 @@ const REGISTRY = Object.freeze([
   entry('order_financial_events', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
     'closeout/economiaLedgerAggregate.js (writes to this table happen exclusively via'
     + ' the financial RPCs below, never a direct sbInsert/sbUpsert)'),
+  // I-1 — GET and POST only, deliberately. The table is append-only: no call
+  // site performs PATCH or DELETE, the backend service exposes neither, and
+  // the database refuses both by privilege AND by trigger. Registering those
+  // methods here would be the first crack in that.
+  entry('cash_counts', KIND.TABLE, ['GET', 'POST'], SENSITIVITY.FINANCIAL,
+    'economy/cashCountService.js — GET for the idempotency lookup and the history'
+    + ' list, POST to append one physical cash count'),
   entry('orden_estado_logs', KIND.TABLE, ['POST'], SENSITIVITY.AUDIT,
     'utils/orderStateLogger.js appends sanitized order lifecycle transitions'),
   entry('archivio_conv', KIND.TABLE, ['GET', 'POST'], SENSITIVITY.WHATSAPP_CONTENT,

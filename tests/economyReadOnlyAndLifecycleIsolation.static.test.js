@@ -123,6 +123,41 @@ test("the actor is never taken from the request body", () => {
   }
 });
 
+// ── THE TRANSPORT REGISTRY ────────────────────────────────────────────────
+// H1B's resource registry is a hard gate: an unregistered {resource, method}
+// pair is refused inside sbFetch, BEFORE any network call. This slice shipped
+// with cash_counts unregistered and the live POST failed with a bare
+// ECONOMY_INTERNAL_ERROR and no transport log line at all -- the unit tests
+// could not catch it because they inject their own in-memory select/insert and
+// never touch the real transport. This test closes that gap: it asserts the
+// registry from the same source of truth the runtime uses.
+test("every table the economy module touches is registered for the methods it needs", () => {
+  const { getResourcePolicy, isMethodAllowed } = require("../src/utils/supabaseResourcePolicy");
+  const required = [
+    // language-guard: allow-legacy storico is the existing archive table name the snapshot reads, not new vocabulary
+    ["ordenes", "GET"], ["storico", "GET"], ["order_financial_events", "GET"],
+    ["service_sessions", "GET"],
+    ["cash_counts", "GET"], ["cash_counts", "POST"],
+  ];
+  for (const [resource, method] of required) {
+    const policy = getResourcePolicy(resource);
+    assert.ok(policy, `${resource} is not in the H1B resource registry — every call to it fails closed`);
+    assert.ok(isMethodAllowed(resource, method),
+      `${resource} is registered but ${method} is not allowed — the call fails closed`);
+  }
+});
+
+test("cash_counts is registered for append and read only, never for rewrite", () => {
+  const { getResourcePolicy, isMethodAllowed } = require("../src/utils/supabaseResourcePolicy");
+  const policy = getResourcePolicy("cash_counts");
+  assert.ok(policy, "cash_counts must be registered");
+  for (const method of ["PATCH", "PUT", "DELETE"]) {
+    assert.ok(!isMethodAllowed("cash_counts", method),
+      `cash_counts must not permit ${method}: a recorded count is history`);
+  }
+  assert.deepStrictEqual([...policy.allowedMethods].sort(), ["GET", "POST"]);
+});
+
 // ── THE MIGRATION ─────────────────────────────────────────────────────────
 const MIGRATION = "migrations/2026-08-21_i1_cash_counts_append_only.sql";
 const ROLLBACK = "migrations/2026-08-21_i1_cash_counts_append_only.ROLLBACK.sql";
