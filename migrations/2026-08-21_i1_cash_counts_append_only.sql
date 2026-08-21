@@ -102,9 +102,20 @@ CREATE INDEX IF NOT EXISTS cash_counts_counted_at_idx
   ON public.cash_counts (counted_at DESC);
 
 -- ── APPEND-ONLY (1/2): PRIVILEGE ────────────────────────────────────────────
+-- service_role IS REVOKED FIRST, AND THAT LINE IS NOT REDUNDANT. This project
+-- carries Supabase's stock ALTER DEFAULT PRIVILEGES for schema public, which
+-- grants arwdDxtm -- i.e. ALL, including UPDATE and DELETE -- to anon,
+-- authenticated AND service_role on every newly created table, before any
+-- statement here runs. A GRANT of SELECT,INSERT therefore ADDS nothing and
+-- removes nothing: without the revoke below, service_role would still hold
+-- UPDATE and DELETE and this half of "append-only, enforced twice" would be
+-- entirely vacuous, leaving the trigger as the only real protection.
+-- The first apply of this file caught exactly that, on its own post-condition,
+-- and refused atomically. Do not "tidy away" the revoke.
 REVOKE ALL ON public.cash_counts FROM PUBLIC;
 REVOKE ALL ON public.cash_counts FROM anon;
 REVOKE ALL ON public.cash_counts FROM authenticated;
+REVOKE ALL ON public.cash_counts FROM service_role;
 GRANT SELECT, INSERT ON public.cash_counts TO service_role;
 
 -- RLS on, with no permissive policy for anon/authenticated: the browser holds

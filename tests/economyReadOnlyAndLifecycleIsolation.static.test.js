@@ -127,15 +127,39 @@ test("the actor is never taken from the request body", () => {
 const MIGRATION = "migrations/2026-08-21_i1_cash_counts_append_only.sql";
 const ROLLBACK = "migrations/2026-08-21_i1_cash_counts_append_only.ROLLBACK.sql";
 
+// These migrations explain their own rules in prose, and that prose NAMES the
+// things the rules forbid ("without the revoke below, service_role would still
+// hold UPDATE and DELETE"). Only executable statements may be judged, or the
+// file's own documentation trips the guard that documents it.
+const sqlOnly = (text) => text.split("\n").filter((line) => !/^\s*--/.test(line)).join("\n");
+
 test("the migration is transactional and append-only in both halves", () => {
   const sql = read(MIGRATION);
+  const stmts = sqlOnly(sql);
   assert.ok(/^\s*BEGIN;/m.test(sql) && /COMMIT;\s*$/.test(sql), "wrapped in one transaction");
-  assert.ok(sql.includes("CREATE TRIGGER cash_counts_append_only_trg"), "trigger half");
-  assert.ok(/BEFORE UPDATE OR DELETE ON public\.cash_counts/.test(sql), "covering UPDATE and DELETE");
-  assert.ok(sql.includes("GRANT SELECT, INSERT ON public.cash_counts TO service_role"), "privilege half");
-  assert.ok(!/GRANT[^;]*UPDATE[^;]*ON public\.cash_counts/i.test(sql), "and no UPDATE grant anywhere");
-  assert.ok(!/GRANT[^;]*DELETE[^;]*ON public\.cash_counts/i.test(sql), "and no DELETE grant anywhere");
-  assert.ok(sql.includes("ENABLE ROW LEVEL SECURITY") && sql.includes("FORCE ROW LEVEL SECURITY"));
+  assert.ok(stmts.includes("CREATE TRIGGER cash_counts_append_only_trg"), "trigger half");
+  assert.ok(/BEFORE UPDATE OR DELETE ON public\.cash_counts/.test(stmts), "covering UPDATE and DELETE");
+  assert.ok(stmts.includes("GRANT SELECT, INSERT ON public.cash_counts TO service_role"), "privilege half");
+  assert.ok(!/GRANT[^;]*UPDATE[^;]*ON public\.cash_counts/i.test(stmts), "and no UPDATE grant anywhere");
+  assert.ok(!/GRANT[^;]*DELETE[^;]*ON public\.cash_counts/i.test(stmts), "and no DELETE grant anywhere");
+  assert.ok(stmts.includes("ENABLE ROW LEVEL SECURITY") && stmts.includes("FORCE ROW LEVEL SECURITY"));
+});
+
+test("every role Supabase default-grants ALL to is explicitly revoked", () => {
+  // Supabase's stock ALTER DEFAULT PRIVILEGES hands arwdDxtm on every new
+  // public table to anon, authenticated AND service_role. A GRANT of
+  // SELECT,INSERT neither adds nor removes anything against that, so each of
+  // the three must be revoked by name or the privilege half is vacuous. The
+  // first apply of this migration failed on exactly the missing one.
+  const stmts = sqlOnly(read(MIGRATION));
+  for (const role of ["PUBLIC", "anon", "authenticated", "service_role"]) {
+    assert.ok(stmts.includes(`REVOKE ALL ON public.cash_counts FROM ${role};`),
+      `missing: REVOKE ALL ON public.cash_counts FROM ${role}`);
+  }
+  const revokeAt = stmts.indexOf("REVOKE ALL ON public.cash_counts FROM service_role;");
+  const grantAt = stmts.indexOf("GRANT SELECT, INSERT ON public.cash_counts TO service_role;");
+  assert.ok(revokeAt >= 0 && grantAt > revokeAt,
+    "the revoke must come BEFORE the grant, or it removes the grant it just made");
 });
 
 test("the migration refuses to claim an expected drawer balance", () => {
@@ -147,8 +171,7 @@ test("the migration refuses to claim an expected drawer balance", () => {
     "the post-condition that enforces honest naming is missing");
   // Only real DDL counts: the header comment deliberately NAMES the forbidden
   // names in order to explain why they are forbidden.
-  const ddl = sql.split("-- ── POST-CONDITIONS")[0]
-    .split("\n").filter((line) => !/^\s*--/.test(line)).join("\n");
+  const ddl = sqlOnly(sql.split("-- ── POST-CONDITIONS")[0]);
   for (const dishonest of ["expected_cash", "expected_drawer", "efectivo_esperado", "expected_balance"]) {
     assert.ok(!ddl.includes(dishonest),
       `opening float and drawer movements are unmodelled, so ${dishonest} would be a lie`);
@@ -157,7 +180,7 @@ test("the migration refuses to claim an expected drawer balance", () => {
 
 test("the migration creates no coupling to the service lifecycle", () => {
   const sql = read(MIGRATION);
-  const ddl = sql.split("-- ── POST-CONDITIONS")[0];
+  const ddl = sqlOnly(sql.split("-- ── POST-CONDITIONS")[0]);
   assert.ok(!/REFERENCES\s+public\.service_sessions/i.test(ddl),
     "service_session_id must stay optional provenance, never a foreign key");
   assert.ok(!/UPDATE\s+public\.service_sessions/i.test(sql), "it must not write a service row");
