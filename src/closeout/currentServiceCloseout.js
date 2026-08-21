@@ -321,4 +321,14 @@ function createCurrentServiceCloseout({ select = sbSelect, sessionLifecycle = li
 }
 
 const getCurrentServiceCloseout = createCurrentServiceCloseout();
-module.exports = { createCurrentServiceCloseout, getCurrentServiceCloseout, aggregate, withOfficialSnapshot };
+// I-1 — the money primitives are exported so the timestamp-windowed Economic
+// Snapshot reader (src/economy/economicSnapshot.js) can apply the EXACT same
+// per-ticket rules (ledger-first, legacy-fallback-only-when-no-event, refunds
+// leave the collected total, a voided ticket collects nothing) instead of
+// growing a second, drifting implementation of the same accounting. Nothing
+// below changes behaviour for existing callers: additive export only.
+module.exports = {
+  createCurrentServiceCloseout, getCurrentServiceCloseout, aggregate, withOfficialSnapshot,
+  safeTicket, paymentBucket, eventType, eventAmount, emptyPaymentTotals, addMethodAmount,
+  round, CANCELLED,
+};

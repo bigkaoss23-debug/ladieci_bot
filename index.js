@@ -30,6 +30,7 @@ const { integrateLoginRoute } = require("./src/auth/loginHttpIntegration");
 const { integrateAccountRoutes } = require("./src/account/accountHttpIntegration");
 const { integrateAccessManagementRoutes } = require("./src/auth/accessManagementHttpIntegrationV3");
 const { integrateMesaRoutes } = require("./src/tables/mesaHttpIntegration");
+const { integrateEconomyRoutes } = require("./src/economy/economyHttpIntegration");
 const authDao = require("./src/auth/dao");
 const adminAccessDao = require("./src/auth/adminAccessDao");
 const { createAdminAccessService } = require("./src/auth/adminAccessService");
@@ -131,6 +132,20 @@ console.log(JSON.stringify({
   component: "mesa-v1",
   state: mesaIntegration.enabled ? "enabled" : "disabled",
   routeBase: mesaIntegration.prefix,
+  env: process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV || "unknown",
+}));
+
+// I-1 Economic Snapshot + Cash Count. Mounted here for the same reason Mesa is:
+// ahead of the legacy X-Api-Key proxy, so both routes read their actor from a
+// verified Bearer token and a fresh authoritative actor row rather than from a
+// request body. Two reads and one append-only insert; nothing on this router
+// can open, close or otherwise move the Operational Service lifecycle.
+const economyIntegration = integrateEconomyRoutes(app, { logger: console });
+console.log(JSON.stringify({
+  component: "economy-v1",
+  state: economyIntegration.enabled ? "enabled" : "disabled",
+  routeBase: economyIntegration.prefix,
+  routes: economyIntegration.routes,
   env: process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV || "unknown",
 }));
 
