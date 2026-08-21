@@ -93,6 +93,69 @@ async function getSession(workspaceId, sessionId) {
   return rows[0] || null;
 }
 
+// ACC-01 — READ-ONLY account rows for ONE table session, whatever its status.
+//
+// Deliberately NOT a variant of listFloorRows: that one is keyed on the OPEN
+// sessions of the whole floor. This is keyed on a single session id the caller
+// already resolved and authorised, and it issues GETs only. Same four stores,
+// same columns, so buildClosedAccount can hand them to the very same
+// projectSessionAccount the floor uses.
+async function listSessionAccountRows(tableSessionId) {
+  const scope = `table_session_id=eq.${encodeURIComponent(tableSessionId)}`;
+  const [orders, lines, transactions] = await Promise.all([
+    select('ordenes',
+      `select=id,table_session_id,table_command_number,table_number_snapshot,table_name_snapshot,`
+      // language-guard: allow-legacy nota_cucina is the existing ordenes column name, selected verbatim exactly as listFloorRows already does, not new vocabulary
+      + `service_session_id,service_order_number,estado,items,nota,nota_cucina,hora,totale,ts`
+      + `&${scope}&order=ts.asc`),
+    select('table_order_lines',
+      `select=id,table_session_id,service_session_id,order_id,source_line_id,source_line_index,`
+      + `unit_index,description,product_snapshot,gross_amount,discount_amount,net_amount,created_at`
+      + `&${scope}&order=created_at.asc,order_id.asc,source_line_index.asc,unit_index.asc`),
+    select('payment_transactions',
+      `select=id,table_session_id,service_session_id,kind,mode,amount,payment_method,covers_settled,`
+      + `reverses_transaction_id,by_actor,by_role,created_at`
+      + `&${scope}&order=created_at.asc`),
+  ]);
+  const txFilter = idsFilter(transactions.map((row) => row.id));
+  const allocations = txFilter
+    ? await select('payment_allocations',
+      `select=id,payment_transaction_id,table_order_line_id,order_id,amount,created_at`
+      + `&payment_transaction_id=${txFilter}&order=created_at.asc`)
+    : [];
+  return { orders, lines, transactions, allocations };
+}
+
+// ACC-01 — the most recently closed table sessions, newest first. Bounded by
+// `limit` and by workspace; this is the "the table was just closed and I still
+// need to see what happened" list, never a historical reporting surface.
+async function listRecentClosedSessions(workspaceId, limit = 10) {
+  return select('table_sessions',
+    `select=id,workspace_id,table_id,service_session_id,table_ref,status,assigned_waiter_actor,`
+    + `covers_total,next_command_number,opened_at,settled_at,closed_at,updated_at,updated_by`
+    + `&workspace_id=eq.${encodeURIComponent(workspaceId)}`
+    + `&status=eq.closed&closed_at=not.is.null`
+    + `&order=closed_at.desc&limit=${encodeURIComponent(String(limit))}`);
+}
+
+async function getSessionWithCloseFields(workspaceId, sessionId) {
+  const rows = await select('table_sessions',
+    `select=id,workspace_id,table_id,service_session_id,table_ref,status,assigned_waiter_actor,`
+    + `covers_total,next_command_number,opened_at,settled_at,closed_at,updated_at,updated_by`
+    + `&workspace_id=eq.${encodeURIComponent(workspaceId)}`
+    + `&id=eq.${encodeURIComponent(sessionId)}&limit=1`);
+  return rows[0] || null;
+}
+
+async function getTableById(workspaceId, tableId) {
+  if (!tableId) return null;
+  const rows = await select('restaurant_tables',
+    `select=id,workspace_id,table_number,display_name,capacity`
+    + `&workspace_id=eq.${encodeURIComponent(workspaceId)}`
+    + `&id=eq.${encodeURIComponent(tableId)}&limit=1`);
+  return rows[0] || null;
+}
+
 async function getOrderForSession(tableSessionId, orderId) {
   const rows = await select('ordenes',
     `select=id,table_session_id,estado&table_session_id=eq.${encodeURIComponent(tableSessionId)}`
@@ -218,6 +281,11 @@ const setCovers = (args) => rpc('mesa_set_session_covers_v1', {
 module.exports = {
   listFloorRows,
   getSession,
+  // ACC-01 — read-only closed-account access
+  listSessionAccountRows,
+  listRecentClosedSessions,
+  getSessionWithCloseFields,
+  getTableById,
   getOrderForSession,
   openSession,
   releaseEmptySession,

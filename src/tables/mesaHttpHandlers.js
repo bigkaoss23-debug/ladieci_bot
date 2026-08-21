@@ -102,6 +102,18 @@ function createMesaHandlers({ service = createMesaService(), logger = console } 
       context: req.mesaContext,
       includeInactive: req.query?.includeInactive === 'true',
     })),
+    // ACC-01 — the two READ-ONLY additions. `floor` used to be the only GET in
+    // this router and it returns open sessions only, so a closed table's
+    // account, comandas and payment history became unreachable the moment the
+    // operator closed it.
+    recentClosedSessions: run('recent_closed_sessions', (req) => service.recentClosedSessions({
+      context: req.mesaContext,
+      limit: req.query?.limit,
+    })),
+    sessionAccount: run('session_account', (req) => service.sessionAccount({
+      context: req.mesaContext,
+      tableSessionId: requireId(req.params.sessionId),
+    })),
     open: run('open', (req) => service.open({
       context: req.mesaContext,
       tableId: requireId(req.params.tableId),
@@ -212,6 +224,9 @@ function registerMesaRoutes(router, deps = {}) {
   const handlers = createMesaHandlers(deps);
   const auth = createMesaAuthMiddleware(deps);
   router.get('/floor', auth, handlers.floor);
+  // ACC-01 — read-only. GET only, no RPC underneath, nothing reopened.
+  router.get('/sessions/recent-closed', auth, handlers.recentClosedSessions);
+  router.get('/sessions/:sessionId/account', auth, handlers.sessionAccount);
   router.post('/tables/:tableId/open', auth, handlers.open);
   router.put('/tables/:tableId', auth, handlers.saveTable);
   router.post('/sessions/:sessionId/release', auth, handlers.releaseEmptyTable);
@@ -224,7 +239,8 @@ function registerMesaRoutes(router, deps = {}) {
   router.put('/reservations/:reservationId', auth, handlers.updateReservation);
   router.post('/reservations/:reservationId/status', auth, handlers.setReservationStatus);
   router.post('/reservations/:reservationId/open', auth, handlers.openReservation);
-  return Object.freeze({ routes: 13 });
+  // 13 + ACC-01's two read-only GETs
+  return Object.freeze({ routes: 15 });
 }
 
 module.exports = {

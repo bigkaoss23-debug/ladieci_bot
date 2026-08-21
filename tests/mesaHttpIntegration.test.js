@@ -42,5 +42,6 @@ test('enabled integration mounts exactly thirteen static routes', () => {
     verifyToken: () => ({ sub: 'operator_primary', role: 'operator', sv: 1, sid: 'sid' }),
     getActor: async () => ({ actor: 'operator_primary', role: 'operator', active: true, session_version: 1, workspace_id: 'ws' }),
   });
-  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 13 });
+  // 13 + ACC-01's two read-only GETs (recent-closed list, session account)
+  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 15 });
 });

@@ -31,6 +31,9 @@ const PAYMENT_ROLES = new Set(['admin','operator','owner','cashier','legacy_oper
 const LAYOUT_ROLES = new Set(['admin','owner']);
 const RESERVATION_ROLES = new Set(['admin','operator','owner','cashier','waiter','shift_manager','legacy_operator']);
 const CANCELLED = new Set(['ANULADO','CANCELADO','CANCELLED','CHIUSO_FORZATO']);
+// Same shape mesaHttpHandlers validates path params with — an id that cannot be
+// a table session must never reach a query.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function requireContext(context, allowed) {
   if (!context || typeof context.actor !== 'string' || typeof context.workspaceId !== 'string') {
@@ -69,6 +72,103 @@ function canonicalHash(value) {
   return crypto.createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
 }
 
+// ACC-01 — LINE NORMALISATION, extracted so the floor reader and the closed
+// account reader cannot drift apart. Cancelled orders drop out (their lines are
+// not an obligation), and every surviving line carries amount/paid/remaining
+// derived from payment_allocations, refunds counted negative.
+function normalizeLinesBySession(rows) {
+  const orderById = new Map((rows.orders || []).map((order) => [String(order.id), order]));
+  const txById = new Map((rows.transactions || []).map((tx) => [String(tx.id), tx]));
+  const allocationsByLine = new Map();
+  for (const allocation of rows.allocations || []) {
+    const tx = txById.get(String(allocation.payment_transaction_id));
+    if (!tx) continue;
+    const sign = tx.kind === 'refund' ? -1 : 1;
+    const key = String(allocation.table_order_line_id);
+    allocationsByLine.set(key, (allocationsByLine.get(key) || 0) + sign * cents(allocation.amount));
+  }
+  const linesBySession = new Map();
+  for (const line of rows.lines || []) {
+    const order = orderById.get(String(line.order_id));
+    if (!order || CANCELLED.has(String(order.estado || '').toUpperCase())) continue;
+    const paidCents = Math.max(0, allocationsByLine.get(String(line.id)) || 0);
+    const netCents = cents(line.net_amount);
+    const normalized = {
+      id: line.id,
+      orderId: line.order_id,
+      sourceLineId: line.source_line_id,
+      sourceLineIndex: line.source_line_index,
+      unitIndex: line.unit_index,
+      description: line.description,
+      product: line.product_snapshot,
+      amount: money(netCents),
+      paid: money(Math.min(netCents, paidCents)),
+      remaining: money(Math.max(0, netCents - paidCents)),
+    };
+    const key = String(line.table_session_id);
+    if (!linesBySession.has(key)) linesBySession.set(key, []);
+    linesBySession.get(key).push(normalized);
+  }
+  return linesBySession;
+}
+
+// ACC-01 — THE ONE ACCOUNT PROJECTION. Everything economic about a single table
+// session lives here: total, paid, outstanding, covers, per-method receipts,
+// comandas, lines and the payment history.
+//
+// The open-floor reader and the closed-session reader both call this, so a
+// closed table's account is arithmetically the SAME object the operator was
+// looking at a second before they closed it — not a second implementation that
+// could disagree with it. This function is pure and reads no status: it does
+// not care whether the session is open or closed, which is precisely why it can
+// serve both.
+function projectSessionAccount(session, { lines = [], transactions = [], orders = [] }) {
+  const totalCents = lines.reduce((sum, line) => sum + cents(line.amount), 0);
+  const paidCents = lines.reduce((sum, line) => sum + cents(line.paid), 0);
+  const coversEffect = transactions.reduce((sum, tx) =>
+    sum + (tx.kind === 'refund' ? -1 : 1) * Number(tx.covers_settled || 0), 0);
+  // NULL until the first comanda sets it (walk-in Mesa just opened, no orders yet).
+  const coversTotal = session.covers_total == null ? null : Number(session.covers_total);
+  const coversRemaining = coversTotal == null ? 0 : Math.max(0, coversTotal - coversEffect);
+  const outstanding = money(Math.max(0, totalCents - paidCents));
+  const methodTotals = aggregateByMethod(transactions.map((tx) => ({
+    kind: tx.kind, method: tx.payment_method, amount: tx.amount,
+  })));
+  return {
+    id: session.id,
+    serviceSessionId: session.service_session_id,
+    assignedWaiterActor: session.assigned_waiter_actor,
+    coversTotal,
+    coversRemaining,
+    openedAt: session.opened_at,
+    settledAt: session.settled_at,
+    total: money(totalCents),
+    paid: money(paidCents),
+    outstanding,
+    nextEqualShare: outstanding > 0 && coversRemaining > 0
+      ? nextEqualShare(outstanding, coversRemaining) : 0,
+    paymentTotals: { ...methodTotals },
+    commands: orders.map((order) => ({
+      id: order.id,
+      commandNumber: order.table_command_number,
+      serviceOrderNumber: order.service_order_number,
+      state: order.estado,
+      total: Number(order.totale || 0),
+      time: order.hora,
+      items: order.items,
+      note: order.nota,
+      // language-guard: allow-legacy nota_cucina is the existing ordenes column name, projected verbatim as buildFloor already did, not new vocabulary
+      kitchenNote: order.nota_cucina,
+    })),
+    lines,
+    payments: transactions.map((tx) => ({
+      id: tx.id, kind: tx.kind, mode: tx.mode, amount: Number(tx.amount),
+      method: tx.payment_method, coversSettled: tx.covers_settled,
+      actor: tx.by_actor, createdAt: tx.created_at,
+    })),
+  };
+}
+
 function buildFloor(rows) {
   const reservationsByTable = new Map();
   for (const reservation of rows.reservations || []) {
@@ -96,44 +196,12 @@ function buildFloor(rows) {
     .filter((session) => session.status === 'open')
     .map((session) => [String(session.table_id), session]));
   const ordersBySession = new Map();
-  const orderById = new Map();
   for (const order of rows.orders) {
-    orderById.set(String(order.id), order);
     const key = String(order.table_session_id);
     if (!ordersBySession.has(key)) ordersBySession.set(key, []);
     ordersBySession.get(key).push(order);
   }
-  const txById = new Map(rows.transactions.map((tx) => [String(tx.id), tx]));
-  const allocationsByLine = new Map();
-  for (const allocation of rows.allocations) {
-    const tx = txById.get(String(allocation.payment_transaction_id));
-    if (!tx) continue;
-    const sign = tx.kind === 'refund' ? -1 : 1;
-    const key = String(allocation.table_order_line_id);
-    allocationsByLine.set(key, (allocationsByLine.get(key) || 0) + sign * cents(allocation.amount));
-  }
-  const linesBySession = new Map();
-  for (const line of rows.lines) {
-    const order = orderById.get(String(line.order_id));
-    if (!order || CANCELLED.has(String(order.estado || '').toUpperCase())) continue;
-    const paidCents = Math.max(0, allocationsByLine.get(String(line.id)) || 0);
-    const netCents = cents(line.net_amount);
-    const normalized = {
-      id: line.id,
-      orderId: line.order_id,
-      sourceLineId: line.source_line_id,
-      sourceLineIndex: line.source_line_index,
-      unitIndex: line.unit_index,
-      description: line.description,
-      product: line.product_snapshot,
-      amount: money(netCents),
-      paid: money(Math.min(netCents, paidCents)),
-      remaining: money(Math.max(0, netCents - paidCents)),
-    };
-    const key = String(line.table_session_id);
-    if (!linesBySession.has(key)) linesBySession.set(key, []);
-    linesBySession.get(key).push(normalized);
-  }
+  const linesBySession = normalizeLinesBySession(rows);
   const txBySession = new Map();
   for (const tx of rows.transactions) {
     const key = String(tx.table_session_id);
@@ -151,59 +219,56 @@ function buildFloor(rows) {
       reservations: reservationsByTable.get(String(table.id)) || [],
     };
     const key = String(session.id);
-    const lines = linesBySession.get(key) || [];
-    const transactions = txBySession.get(key) || [];
-    const totalCents = lines.reduce((sum, line) => sum + cents(line.amount), 0);
-    const paidCents = lines.reduce((sum, line) => sum + cents(line.paid), 0);
-    const coversEffect = transactions.reduce((sum, tx) =>
-      sum + (tx.kind === 'refund' ? -1 : 1) * Number(tx.covers_settled || 0), 0);
-    // NULL until the first comanda sets it (walk-in Mesa just opened, no orders yet).
-    const coversTotal = session.covers_total == null ? null : Number(session.covers_total);
-    const coversRemaining = coversTotal == null ? 0 : Math.max(0, coversTotal - coversEffect);
-    const outstanding = money(Math.max(0, totalCents - paidCents));
-    const methodTotals = aggregateByMethod(transactions.map((tx) => ({
-      kind: tx.kind, method: tx.payment_method, amount: tx.amount,
-    })));
     return {
       id: table.id, number: table.table_number, name: table.display_name,
       capacity: table.capacity, x: nullableNumber(table.position_x), y: nullableNumber(table.position_y),
       shape: table.shape, shapePreset: table.shape_preset || 'standard', active: table.active,
       status: 'open',
       reservations: reservationsByTable.get(String(table.id)) || [],
-      session: {
-        id: session.id,
-        serviceSessionId: session.service_session_id,
-        assignedWaiterActor: session.assigned_waiter_actor,
-        coversTotal,
-        coversRemaining,
-        openedAt: session.opened_at,
-        settledAt: session.settled_at,
-        total: money(totalCents),
-        paid: money(paidCents),
-        outstanding,
-        nextEqualShare: outstanding > 0 && coversRemaining > 0
-          ? nextEqualShare(outstanding, coversRemaining) : 0,
-        paymentTotals: { ...methodTotals },
-        commands: (ordersBySession.get(key) || []).map((order) => ({
-          id: order.id,
-          commandNumber: order.table_command_number,
-          serviceOrderNumber: order.service_order_number,
-          state: order.estado,
-          total: Number(order.totale || 0),
-          time: order.hora,
-          items: order.items,
-          note: order.nota,
-          kitchenNote: order.nota_cucina,
-        })),
-        lines,
-        payments: transactions.map((tx) => ({
-          id: tx.id, kind: tx.kind, mode: tx.mode, amount: Number(tx.amount),
-          method: tx.payment_method, coversSettled: tx.covers_settled,
-          actor: tx.by_actor, createdAt: tx.created_at,
-        })),
-      },
+      session: projectSessionAccount(session, {
+        lines: linesBySession.get(key) || [],
+        transactions: txBySession.get(key) || [],
+        orders: ordersBySession.get(key) || [],
+      }),
     };
   });
+}
+
+// ACC-01 — the closed-table account, built from the SAME projection the open
+// floor uses.
+//
+// WHY THIS EXISTS. `GET /floor` was the only read route in the whole Mesa API
+// (one read, twelve writes) and `listFloorRows` filters table_sessions to
+// `status=eq.open`, then scopes orders/lines/transactions/allocations to those
+// session ids. So the instant an operator closed a table, its account, its
+// comandas and its payment history had no surface left to appear on — the table
+// simply reverted to `status:'free', session:null`. The durable rows were
+// always intact and correct (proven by the 2026-08-21 audit: closing a table
+// mutates nothing but table_sessions); they were merely unreachable. This is
+// the missing read, nothing more.
+//
+// It reports the session's real status rather than assuming 'closed', so an
+// operator who opens it on a table that is somehow still open sees the truth.
+function buildClosedAccount(session, rows, table) {
+  const key = String(session.id);
+  const linesBySession = normalizeLinesBySession(rows);
+  const orders = (rows.orders || []).filter((order) => String(order.table_session_id) === key);
+  const transactions = (rows.transactions || []).filter((tx) => String(tx.table_session_id) === key);
+  return {
+    tableSessionId: session.id,
+    status: session.status,
+    closedAt: session.closed_at || null,
+    closedBy: session.updated_by || null,
+    tableRef: session.table_ref || null,
+    table: table ? {
+      id: table.id, number: table.table_number, name: table.display_name, capacity: table.capacity,
+    } : null,
+    account: projectSessionAccount(session, {
+      lines: linesBySession.get(key) || [],
+      transactions,
+      orders,
+    }),
+  };
 }
 
 function createMesaService({
@@ -334,6 +399,51 @@ function createMesaService({
     async floor({ context, includeInactive = false } = {}) {
       const ctx = requireContext(context, FLOOR_ROLES);
       return { ok: true, tables: buildFloor(await dao.listFloorRows(ctx.workspaceId, { includeInactive })) };
+    },
+
+    // ACC-01 — the recently closed table sessions. Same roles as the floor:
+    // reading back the account of a table you just closed is an operational
+    // read, not a financial action, so a waiter who served the table can see
+    // it. GETs only, nothing is mutated and nothing is reopened.
+    async recentClosedSessions({ context, limit = 10 } = {}) {
+      const ctx = requireContext(context, FLOOR_ROLES);
+      const bounded = Math.max(1, Math.min(25, Number(limit) || 10));
+      const sessions = await dao.listRecentClosedSessions(ctx.workspaceId, bounded);
+      return {
+        ok: true,
+        sessions: (sessions || []).map((session) => ({
+          tableSessionId: session.id,
+          tableRef: session.table_ref,
+          tableId: session.table_id,
+          serviceSessionId: session.service_session_id,
+          coversTotal: session.covers_total == null ? null : Number(session.covers_total),
+          openedAt: session.opened_at,
+          closedAt: session.closed_at,
+          closedBy: session.updated_by,
+        })),
+      };
+    },
+
+    // ACC-01 — the full account of ONE table session, open or closed.
+    //
+    // Workspace-scoped through requireContext + the DAO's own workspace filter,
+    // so one workspace can never read another's table. Read-only by
+    // construction: every DAO call it makes is a PostgREST GET, there is no RPC
+    // and no write path anywhere below this line. Reading a closed session does
+    // not reopen it, does not touch settled_at/closed_at, and does not create a
+    // session — it is the missing SELECT, nothing more.
+    async sessionAccount({ context, tableSessionId } = {}) {
+      const ctx = requireContext(context, FLOOR_ROLES);
+      if (typeof tableSessionId !== 'string' || !UUID_RE.test(tableSessionId)) {
+        throw new MesaServiceError('MESA_INVALID_REQUEST', 400);
+      }
+      const session = await dao.getSessionWithCloseFields(ctx.workspaceId, tableSessionId);
+      if (!session) throw new MesaServiceError('MESA_SESSION_NOT_FOUND', 404);
+      const [rows, table] = await Promise.all([
+        dao.listSessionAccountRows(session.id),
+        dao.getTableById(ctx.workspaceId, session.table_id),
+      ]);
+      return { ok: true, ...buildClosedAccount(session, rows, table) };
     },
 
     async open({ context, tableId } = {}) {
@@ -524,4 +634,9 @@ function createMesaService({
   });
 }
 
-module.exports = { createMesaService, MesaServiceError, buildFloor, canonicalHash };
+module.exports = {
+  createMesaService, MesaServiceError, buildFloor, canonicalHash,
+  // ACC-01 — exported so the closed-account projection can be proven to be the
+  // SAME arithmetic the open floor uses, not a second implementation.
+  buildClosedAccount, projectSessionAccount, normalizeLinesBySession,
+};
