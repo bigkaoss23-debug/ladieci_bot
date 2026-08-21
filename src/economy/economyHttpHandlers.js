@@ -17,6 +17,7 @@ const jwt = require('../auth/jwt');
 const { getAuthoritativeActor } = require('../auth/accessManagementHttpDaoV3');
 const { createEconomicSnapshot } = require('./economicSnapshot');
 const { createCashCountService, CashCountError } = require('./cashCountService');
+const { createCloseoutReconciliation, ReconciliationError } = require('./closeoutReconciliation');
 const { EconomicWindowError } = require('./economicWindow');
 
 // ROLE GATE. Both sets are exactly mesaService.js's PAYMENT_ROLES — the set
@@ -31,10 +32,11 @@ const READ_ROLES = new Set(['admin', 'operator', 'owner', 'cashier', 'legacy_ope
 const COUNT_ROLES = new Set(['admin', 'operator', 'owner', 'cashier', 'legacy_operator']);
 
 function safeError(error) {
-  if (error instanceof CashCountError || error instanceof EconomicWindowError) {
+  if (error instanceof CashCountError || error instanceof EconomicWindowError
+      || error instanceof ReconciliationError) {
     return { status: error.status || 400, code: error.code };
   }
-  const code = typeof error?.code === 'string' && /^ECONOMY_[A-Z0-9_]+$/.test(error.code)
+  const code = typeof error?.code === 'string' && /^(ECONOMY|RECONCILIATION)_[A-Z0-9_]+$/.test(error.code)
     ? error.code : 'ECONOMY_INTERNAL_ERROR';
   return { status: code === 'ECONOMY_INTERNAL_ERROR' ? 500 : 400, code };
 }
@@ -78,6 +80,7 @@ function requireRole(allowed, code) {
 function createEconomyHandlers({
   snapshot = createEconomicSnapshot(),
   cashCounts = createCashCountService(),
+  reconciliation = createCloseoutReconciliation(),
   logger = console,
 } = {}) {
   const run = (operation, fn) => async (req, res) => {
@@ -103,6 +106,13 @@ function createEconomyHandlers({
 
   return Object.freeze({
     snapshot: run('snapshot', (req) => snapshot(windowParams(req))),
+    // J-1 — the Finalizar preflight. READ-ONLY: it returns the two scopes
+    // (this service, and its Business Day) side by side plus whichever cash
+    // count is legitimately comparable, and writes nothing. Persisting the
+    // context is the close engine's job, not this route's.
+    reconciliation: run('reconciliation', (req) => reconciliation.build({
+      serviceSessionId: req.query?.serviceSessionId,
+    })),
     listCashCounts: run('cash_counts_list', (req) => cashCounts.list({
       context: req.economyContext,
       from: req.query?.from,
@@ -130,12 +140,13 @@ function registerEconomyRoutes(router, deps = {}) {
   const canRead = requireRole(READ_ROLES, 'ECONOMY_READ_FORBIDDEN');
   const canCount = requireRole(COUNT_ROLES, 'ECONOMY_CASH_COUNT_FORBIDDEN');
   router.get('/snapshot', auth, canRead, handlers.snapshot);
+  router.get('/reconciliation', auth, canRead, handlers.reconciliation);
   router.get('/cash-counts', auth, canRead, handlers.listCashCounts);
   router.post('/cash-counts', auth, canCount, handlers.createCashCount);
   // There is no PUT, PATCH or DELETE on this router, and there must never be:
   // a recorded count is history. A mistaken count is corrected by recording a
   // new one, which is why the table refuses UPDATE and DELETE outright.
-  return Object.freeze({ routes: 3 });
+  return Object.freeze({ routes: 4 });
 }
 
 module.exports = {

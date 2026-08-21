@@ -4,6 +4,11 @@
 // unsupported operator throws rather than silently returning everything —
 // a reader that starts emitting a filter this cannot honour must fail loudly
 // in tests instead of quietly passing against unfiltered data.
+// An ISO-8601 instant, the only shape for which `eq` is compared as a
+// timestamp rather than as text (a uuid or an order id must never take that
+// path).
+const ISO_LIKE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
+
 function createMemorySelect(tables, { onCall = () => {} } = {}) {
   return async function select(table, query = "") {
     onCall({ table, query });
@@ -24,7 +29,18 @@ function createMemorySelect(tables, { onCall = () => {} } = {}) {
       const dot = rest.indexOf(".");
       const op = rest.slice(0, dot);
       const raw = rest.slice(dot + 1);
-      if (op === "in") {
+      if (op === "eq" && ISO_LIKE.test(decodeURIComponent(raw))) {
+        // PostgREST compares a timestamptz column by INSTANT, not by the
+        // string it was written as: "2026-08-20T02:00:00+00:00" and
+        // "2026-08-20T02:00:00.000Z" are the same moment and match. Emulating
+        // that faithfully matters here — a string-only `eq` would make a
+        // window-matching test pass for the wrong reason (or fail for one).
+        const want = new Date(decodeURIComponent(raw)).getTime();
+        out = out.filter((r) => {
+          const got = new Date(r[column]).getTime();
+          return Number.isFinite(got) && got === want;
+        });
+      } else if (op === "in") {
         const set = new Set(raw.replace(/^\(|\)$/g, "").split(",").map((v) => decodeURIComponent(v)));
         out = out.filter((r) => set.has(String(r[column])));
       } else if (op === "eq") {

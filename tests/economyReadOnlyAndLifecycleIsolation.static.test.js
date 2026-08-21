@@ -30,7 +30,8 @@ const WINDOW = "src/economy/economicWindow.js";
 const CASH = "src/economy/cashCountService.js";
 const HTTP = "src/economy/economyHttpHandlers.js";
 const INTEGRATION = "src/economy/economyHttpIntegration.js";
-const ALL = [SNAPSHOT, WINDOW, CASH, HTTP, INTEGRATION];
+const RECONCILIATION = "src/economy/closeoutReconciliation.js";
+const ALL = [SNAPSHOT, WINDOW, CASH, HTTP, INTEGRATION, RECONCILIATION];
 
 // Every mutating helper the Supabase util exposes, plus the RPC door.
 const WRITE_HELPERS = ["sbInsert", "sbUpsert", "sbUpdate", "sbDelete", "sbRpc"];
@@ -100,13 +101,13 @@ test("the economy router exposes no mutating verb beyond the one append", () => 
   assert.strictEqual(posts.length, 1, "exactly one POST: recording a count");
   assert.ok(source.includes("router.post('/cash-counts'"), "and it is the cash count");
   const gets = source.match(/router\.get\(/g) || [];
-  assert.strictEqual(gets.length, 2, "two GETs: the snapshot and the history");
+  assert.strictEqual(gets.length, 3, "three GETs: the snapshot, the reconciliation preflight and the count history");
 });
 
 test("every economy route is authenticated and role-gated", () => {
   const source = code(HTTP);
   const routes = [...source.matchAll(/router\.(get|post)\((.+?)\);/g)].map((m) => m[2]);
-  assert.strictEqual(routes.length, 3);
+  assert.strictEqual(routes.length, 4);
   for (const route of routes) {
     assert.ok(route.includes("auth"), `unauthenticated route: ${route}`);
     assert.ok(/canRead|canCount/.test(route), `ungated route: ${route}`);
@@ -120,6 +121,53 @@ test("the actor is never taken from the request body", () => {
   for (const bad of ["body?.actor", "body.actor", "body?.workspaceId", "body.workspace_id", "body?.role"]) {
     assert.ok(!source.includes(bad),
       `attribution must come from the token, found body-sourced identity: ${bad}`);
+  }
+});
+
+// ── J-1: THE RECONCILIATION SEAM ──────────────────────────────────────────
+const ENGINE = "src/serviceSessions/serviceLifecycleEngine.js";
+
+test("J-1 · the close still has exactly ONE closer, and reconciliation is not it", () => {
+  const engine = code(ENGINE);
+  // The engine's only terminal transition remains the V3 one.
+  const closes = engine.match(/transition\.close\(/g) || [];
+  assert.strictEqual(closes.length, 2, "one on the main path, one on the resume path — no third closer");
+  // The reconciliation module cannot close anything.
+  const rec = code(RECONCILIATION);
+  for (const symbol of ["close_service_session_v3", "transition.close", "closeServiceV3", "serviceLifecycleEngine"]) {
+    assert.ok(!rec.includes(symbol), `${RECONCILIATION} must not reference ${symbol}`);
+  }
+  // And it writes through exactly one RPC, its own.
+  const rpcs = [...rec.matchAll(/rpc\(\s*["']([a-z_0-9]+)["']/g)].map((m) => m[1]);
+  assert.deepStrictEqual([...new Set(rpcs)], ["create_service_closeout_reconciliation_v1"]);
+});
+
+test("J-1 · reconciliation persists BEFORE the terminal transition, so a failure fails closed", () => {
+  const engine = code(ENGINE);
+  // Main path: the persist call and its failure return must both precede the
+  // Phase E transition. Closing first could strand a closed service with no
+  // record of the economy it was closed against — the exact outcome this
+  // slice exists to prevent.
+  const persistAt = engine.indexOf("reconciliation.persist({");
+  const failAt = engine.indexOf("V3_CLOSE_RECONCILIATION_PERSIST_FAILED");
+  const transitionAt = engine.indexOf("const transitionResult = await transition.close({ serviceSessionId, closeoutCorrelationId, actor, source });");
+  assert.ok(persistAt > 0 && failAt > 0 && transitionAt > 0, "all three landmarks present");
+  assert.ok(persistAt < transitionAt, "persist must come before the transition");
+  assert.ok(failAt < transitionAt, "and its fail-closed return must too");
+  // Both close paths are covered.
+  const persists = engine.match(/reconciliation\.persist\(/g) || [];
+  assert.strictEqual(persists.length, 2, "main path and resume path both persist context");
+});
+
+test("J-1 · the reconciliation module performs no economic mutation of any kind", () => {
+  const rec = code(RECONCILIATION);
+  for (const helper of ["sbInsert", "sbUpsert", "sbUpdate", "sbDelete"]) {
+    assert.ok(!rec.includes(helper), `${RECONCILIATION} must not reference ${helper}`);
+  }
+  // It may never write to any money-bearing table directly.
+  for (const table of ["ordenes", "order_financial_events", "payment_transactions", "payment_allocations"]) {
+    assert.ok(!new RegExp(`(insert|update|delete)\\([\\s\\S]{0,40}["']${table}["']`, "i").test(rec),
+      `${RECONCILIATION} must never write ${table}`);
   }
 });
 
@@ -138,6 +186,8 @@ test("every table the economy module touches is registered for the methods it ne
     ["ordenes", "GET"], ["storico", "GET"], ["order_financial_events", "GET"],
     ["service_sessions", "GET"],
     ["cash_counts", "GET"], ["cash_counts", "POST"],
+    ["service_closeout_reconciliations", "GET"],
+    ["rpc/create_service_closeout_reconciliation_v1", "POST"],
   ];
   for (const [resource, method] of required) {
     const policy = getResourcePolicy(resource);
@@ -229,6 +279,60 @@ test("a rollback exists and is honest about what it destroys", () => {
   assert.ok(sql.includes("DROP TABLE IF EXISTS public.cash_counts"));
   assert.ok(sql.includes("DROP FUNCTION IF EXISTS public.cash_counts_append_only_v1"));
   assert.ok(/DESTRUCTIVE/i.test(sql), "a rollback that destroys audit evidence must say so");
+});
+
+const J1 = "migrations/2026-08-22_j1_service_closeout_reconciliations.sql";
+const J1_ROLLBACK = "migrations/2026-08-22_j1_service_closeout_reconciliations.ROLLBACK.sql";
+
+test("J-1 migration · append-only, all four roles revoked, RPC is the sole writer", () => {
+  const sql = read(J1);
+  const stmts = sqlOnly(sql);
+  assert.ok(/^\s*BEGIN;/m.test(sql) && /COMMIT;\s*$/.test(sql), "one transaction");
+  for (const role of ["PUBLIC", "anon", "authenticated", "service_role"]) {
+    assert.ok(stmts.includes(`REVOKE ALL ON public.service_closeout_reconciliations FROM ${role};`),
+      `missing revoke for ${role}`);
+  }
+  // SELECT only: the table is never written directly, only through the RPC.
+  assert.ok(stmts.includes("GRANT SELECT ON public.service_closeout_reconciliations TO service_role;"));
+  assert.ok(!/GRANT[^;]*INSERT[^;]*ON public\.service_closeout_reconciliations/i.test(stmts),
+    "no direct INSERT grant — create_service_closeout_reconciliation_v1 is the only writer");
+  assert.ok(stmts.includes("CREATE TRIGGER scr_no_update_delete"));
+  assert.ok(/BEFORE UPDATE OR DELETE ON public\.service_closeout_reconciliations/.test(stmts));
+  assert.ok(stmts.includes("ENABLE ROW LEVEL SECURITY") && stmts.includes("FORCE ROW LEVEL SECURITY"));
+});
+
+test("J-1 migration · the window-match rule is enforced in the database, not only in JS", () => {
+  const stmts = sqlOnly(read(J1));
+  assert.ok(stmts.includes("RECONCILIATION_CASH_COUNT_WINDOW_MISMATCH"),
+    "the writer must refuse a cash count whose window is not identical");
+  for (const col of ["c.window_from = p_window_from", "c.window_to = p_window_to", "c.window_timezone = p_window_timezone"]) {
+    assert.ok(stmts.includes(col), `the window match must compare ${col}`);
+  }
+  // Sign convention pinned in the schema, matching cash_counts and the
+  // certified UAT row (150.00 - 157.50 = -7.50).
+  assert.ok(stmts.includes("variance_cents = counted_cash_cents - cash_receipts_cents"),
+    "variance = counted - recorded must be a CHECK, not a convention");
+});
+
+test("J-1 migration · it changes no lifecycle authority and asserts the frozen state", () => {
+  const sql = read(J1);
+  const stmts = sqlOnly(sql);
+  for (const forbidden of [/CREATE OR REPLACE FUNCTION public\.close_service_session_v3/i,
+                           /UPDATE\s+public\.service_sessions/i,
+                           /INSERT\s+INTO\s+public\.service_sessions/i,
+                           /DROP\s+FUNCTION[^;]*close_service_session_v3/i]) {
+    assert.ok(!forbidden.test(stmts), `the migration must not touch the lifecycle: ${forbidden}`);
+  }
+  assert.ok(sql.includes("close_service_session_v3 is missing"), "it asserts the closer still exists");
+  assert.ok(sql.includes("the certified UAT cash count changed"), "it asserts the audit evidence is intact");
+  assert.ok(sql.includes("the preserved forensic service is no longer open"));
+});
+
+test("J-1 rollback · exists, is honest, and refuses once a close has used it", () => {
+  const sql = read(J1_ROLLBACK);
+  assert.ok(/DESTRUCTIVE/i.test(sql));
+  assert.ok(sql.includes("DROP TABLE IF EXISTS public.service_closeout_reconciliations"));
+  assert.ok(sql.includes("J-1 rollback refused"), "a PONR guard must stop it after a real close");
 });
 
 console.log(`economyReadOnlyAndLifecycleIsolation: ${passed} passed`);

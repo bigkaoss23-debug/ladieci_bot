@@ -251,6 +251,17 @@ function engineFrom(env) {
     transition: env.transition,
     incidents: env.incidents,
     releaseEmptyTable: env.releaseEmptyTable,
+    // J-1 — the engine persists the close's economic context between Phase D
+    // and Phase E. These are unit tests with no database, so inject a stub
+    // that records the call. A test can override env.reconciliation to prove
+    // the close FAILS CLOSED (service stays open) when context cannot persist.
+    reconciliation: env.reconciliation || {
+      persist: async ({ closeoutCorrelationId }) => ({
+        success: true,
+        created: true,
+        reconciliation: { closeoutCorrelationId, stubbed: true },
+      }),
+    },
   });
 }
 

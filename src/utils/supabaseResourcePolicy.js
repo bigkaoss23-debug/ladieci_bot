@@ -87,6 +87,12 @@ const REGISTRY = Object.freeze([
   entry('cash_counts', KIND.TABLE, ['GET', 'POST'], SENSITIVITY.FINANCIAL,
     'economy/cashCountService.js — GET for the idempotency lookup and the history'
     + ' list, POST to append one physical cash count'),
+  // J-1 — GET only. The table itself grants SELECT to service_role and nothing
+  // else; every write goes through the RPC below, exactly as service_closeouts
+  // is written only by create_service_closeout.
+  entry('service_closeout_reconciliations', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
+    'economy/closeoutReconciliation.js getBySessionId — reads the economic context'
+    + ' a close was made under; the RPC below is the sole writer'),
   entry('orden_estado_logs', KIND.TABLE, ['POST'], SENSITIVITY.AUDIT,
     'utils/orderStateLogger.js appends sanitized order lifecycle transitions'),
   entry('archivio_conv', KIND.TABLE, ['GET', 'POST'], SENSITIVITY.WHATSAPP_CONTENT,
@@ -269,6 +275,12 @@ const REGISTRY = Object.freeze([
     'serviceCloseoutCreation.js create(), called by serviceLifecycleEngine.js — the only writer of service_closeouts'),
   entry('rpc/close_service_session_v3', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'serviceLifecycleV3Transition.js close(), called by serviceLifecycleEngine.js — the V3-native terminal transition'),
+  // J-1 — the ONLY writer of service_closeout_reconciliations. Called by the
+  // V3 close engine between Phase D (closeout persisted) and Phase E (terminal
+  // transition), so a failure leaves the service open rather than closed
+  // without the context this slice promised it would carry.
+  entry('rpc/create_service_closeout_reconciliation_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
+    'serviceLifecycleEngine.js Phase D.2 via economy/closeoutReconciliation.js persist()'),
   // F-5 — SLICE 3.4's next-service-opening primitive. serviceLifecycleEngine.js
   // no longer calls this (the auto-successor step was retired, not adapted
   // to operational_service_v1 — see the F-5 report). serviceLifecycleV3

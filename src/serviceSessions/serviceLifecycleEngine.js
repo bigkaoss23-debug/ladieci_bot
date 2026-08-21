@@ -61,6 +61,7 @@ const { aggregate } = require("../closeout/currentServiceCloseout");
 const { serviceIncidents } = require("../incidents/serviceIncidents");
 const { classifyForV3Close } = require("./v3IncidentPolicy");
 const mesaDao = require("../tables/mesaDao");
+const { closeoutReconciliation } = require("../economy/closeoutReconciliation");
 
 // language-guard: allow-legacy servizio.js is named here only as a cross-reference to where the same literal terminal-state set also lives, not new vocabulary
 // Identical set to guard_service_session_closed_v1 (SQL) / servizio.js /
@@ -90,6 +91,10 @@ function createServiceLifecycleEngine({
   incidents = serviceIncidents,
   releaseEmptyTable = mesaDao.releaseEmptySessionAuto,
   classify = classifyForV3Close,
+  // J-1 — the economic context this close is made under. Injected like every
+  // other collaborator so the engine stays unit-testable without a database,
+  // and so a test can prove the close FAILS CLOSED when this cannot persist.
+  reconciliation = closeoutReconciliation,
   now = () => new Date(),
 } = {}) {
   // SLICE 3.4 — the carryover summary: which tables are STILL open, with
@@ -211,6 +216,25 @@ function createServiceLifecycleEngine({
         // this exact identity — see close_service_session_v3), so the SAME
         // two calls safely finish whichever of B/D actually happened, and
         // NEVER create a second closeout (Phase D is never reached here).
+        // J-1 — the same Phase D.2, on the resume path. CASE B is exactly a
+        // crash between D and E, so the context may legitimately not exist
+        // yet; the RPC is idempotent, so CASE D (already past E) simply gets
+        // the existing row back. Still before the transition, for the same
+        // fail-closed reason as the main path.
+        const resumeReconciliation = await reconciliation.persist({
+          serviceSessionId,
+          closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
+          actor,
+        });
+        if (!resumeReconciliation.success) {
+          return {
+            success: false,
+            code: resumeReconciliation.code || "V3_CLOSE_RECONCILIATION_PERSIST_FAILED",
+            closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
+            closeout: existingCloseout,
+          };
+        }
+
         const transitionResult = await transition.close({
           serviceSessionId, closeoutCorrelationId: existingAttempt.closeoutCorrelationId, actor, source,
         });
@@ -242,6 +266,7 @@ function createServiceLifecycleEngine({
           success: true, code: "V3_CLOSED", idempotent: true,
           closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
           closeout: existingCloseout,
+          reconciliation: resumeReconciliation.reconciliation,
           session: transitionResult.session,
           occupiedTablesAtClose: existingCloseout.operational.occupiedTablesAtClose,
           carryoverSummary,
@@ -504,6 +529,36 @@ function createServiceLifecycleEngine({
       return { success: false, code: createResult.code || "V3_CLOSE_CLOSEOUT_PERSIST_FAILED", closeoutCorrelationId };
     }
 
+    // Phase D.2 (J-1) — persist the ECONOMIC CONTEXT this close was made
+    // under: the Business Day window of THIS service, its snapshot totals, and
+    // the physical cash count if (and only if) one exists for exactly that
+    // window. Deliberately placed AFTER Phase D and BEFORE Phase E:
+    //
+    //   - after D, because create_service_closeout_reconciliation_v1 refuses
+    //     to write context for a closeout row that does not exist yet, which
+    //     makes an orphan reconciliation structurally impossible;
+    //   - before E, because a failure here must leave the service OPEN and the
+    //     attempt ACTIVE. The alternative — closing first — could strand a
+    //     closed service with no record of the economy it was closed against,
+    //     which is precisely the outcome this slice exists to prevent.
+    //
+    // A retry resumes the same closeoutCorrelationId, and the RPC is
+    // idempotent on it, so this never produces a second reconciliation.
+    // This step reads and appends ONE row. It creates no payment, no refund,
+    // no adjustment and no cancellation, and changes no order, event, cash
+    // count or service_closeouts total.
+    const reconciliationResult = await reconciliation.persist({
+      serviceSessionId, closeoutCorrelationId, actor,
+    });
+    if (!reconciliationResult.success) {
+      return {
+        success: false,
+        code: reconciliationResult.code || "V3_CLOSE_RECONCILIATION_PERSIST_FAILED",
+        closeoutCorrelationId,
+        closeout: createResult.closeout,
+      };
+    }
+
     // Phase E — the V3-native terminal transition. occupiedTablesAtClose > 0
     // does NOT block this — see the migration's PART 3 for exactly why that
     // is safe (gated on the service_closeouts row Phase D just created).
@@ -541,6 +596,7 @@ function createServiceLifecycleEngine({
       code: "V3_CLOSED",
       closeoutCorrelationId,
       closeout: createResult.closeout,
+      reconciliation: reconciliationResult.reconciliation,
       session: transitionResult.session,
       occupiedTablesAtClose,
       incidents: persistedIncidents,
