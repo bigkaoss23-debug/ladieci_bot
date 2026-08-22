@@ -25,6 +25,7 @@ const CODE_TO_HTTP = Object.freeze({
   INVALID_STATE: 409,       // wrong source state / invalid transition
   ACTIVE_TRIP_CONFLICT: 409,
   ACTIVE_TRIP_MEMBER_CONFLICT: 409, // hard delete of an active-trip member is refused
+  ORDER_HAS_FINANCIAL_EVIDENCE: 409, // M-1: hard delete of a financially-evidenced order is refused
   INVALID_TRIP_SNAPSHOT: 409, // corrupted active_trip snapshot: no close/log/write
   MISSING_TRIP_MEMBER: 409, // a snapshot member row is gone -> cannot close
   SERVICE_CLOSING: 409,     // no trip may start during service close

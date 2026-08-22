@@ -27,6 +27,10 @@ function check(label, cond) { if (cond) { pass++; console.log("  ✓ " + label);
     ["INVALID_STATE", 409], ["ACTIVE_TRIP_CONFLICT", 409], ["EARLY_CLOSE", 409],
     ["NO_ACTIVE_TRIP", 409], ["INVALID_TRIP_SNAPSHOT", 409], ["MISSING_TRIP_MEMBER", 409],
     ["SERVICE_CLOSING", 409], ["SERVICE_CLOSE_ID_MISMATCH", 409], ["BAD_REQUEST", 400],
+    ["ACTIVE_TRIP_MEMBER_CONFLICT", 409],
+    // M-1 — a financially-evidenced order refuses hard-delete the same way an
+    // active-trip member already did: a structured 409, never a generic 500.
+    ["ORDER_HAS_FINANCIAL_EVIDENCE", 409],
   ];
   for (const [code, http] of cases) {
     const ok = ["OK", "IDEMPOTENT"].includes(code);
@@ -80,6 +84,17 @@ function check(label, cond) { if (cond) { pass++; console.log("  ✓ " + label);
 
   await riderTrip.endServiceClose("close-1");
   check("endServiceClose forwards close_id", lastRpc.fn === "end_service_close" && lastRpc.args.p_close_id === "close-1");
+
+  await riderTrip.deleteOrder("#042");
+  check("deleteOrder -> delete_order_if_not_active(p_order_id)", lastRpc.fn === "delete_order_if_not_active" && lastRpc.args.p_order_id === "#042" && Object.keys(lastRpc.args).length === 1);
+
+  // M-1 — the new refusal code maps through mapResult exactly like the
+  // pre-existing active-trip refusal: 409, error body carries only the code.
+  STUB = () => ({ httpStatus: 200, ok: true, body: { ok: false, code: "ORDER_HAS_FINANCIAL_EVIDENCE" } });
+  const evidenceResult = await riderTrip.deleteOrder("#042");
+  check("deleteOrder financial-evidence refusal -> 409", evidenceResult.status === 409);
+  check("deleteOrder financial-evidence refusal payload", evidenceResult.payload.error === "ORDER_HAS_FINANCIAL_EVIDENCE");
+  STUB = () => ({ httpStatus: 200, ok: true, body: { ok: true, code: "OK" } });
 
   await riderTrip.deleteConversation("wa-1");
   check("deleteConversation -> delete_conversation_if_not_active(wa_id)", lastRpc.fn === "delete_conversation_if_not_active" && lastRpc.args.p_wa_id === "wa-1");
