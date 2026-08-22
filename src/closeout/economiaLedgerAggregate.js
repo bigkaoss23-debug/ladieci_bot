@@ -8,7 +8,7 @@
 // event rule (see safeTicket in currentServiceCloseout.js).
 
 const { sbSelect } = require("../utils/supabase");
-const { aggregate } = require("./currentServiceCloseout");
+const { aggregate, loadSessionOrders } = require("./currentServiceCloseout");
 
 const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
@@ -36,10 +36,15 @@ function addInto(target, source) {
 }
 
 async function aggregateOneSession(session, select) {
-  const closed = session.status === "closed";
   const sessionFilter = `service_session_id=eq.${encodeURIComponent(session.id)}`;
-  const orders = await select(closed ? "storico" : "ordenes", `${sessionFilter}&order=ts.asc`);
-  const list = Array.isArray(orders) ? orders : [];
+  // P0 — same dual-store closed-session read as the live closeout, via the
+  // ONE shared reader (see loadSessionOrders in currentServiceCloseout.js).
+  // Previously this queried only the legacy archive table for closed
+  // sessions, so any service closed by V3 operator Finalizar
+  // (close_source='operator_finalizar_v3', which leaves rows in `ordenes`
+  // and never archives them) reported 0 tickets / 0.00 EUR here even with
+  // real revenue — reproduced against staging service 480eca89 (262.50 EUR).
+  const list = await loadSessionOrders(session, select);
   const ids = list.map((o) => o.orden_id || o.id).filter(Boolean);
   const events = ids.length
     ? await select("order_financial_events", `${sessionFilter}&order_id=in.(${ids.map((id) => encodeURIComponent(String(id))).join(",")})&order=created_at.asc`)

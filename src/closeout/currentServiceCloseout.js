@@ -260,6 +260,44 @@ function withOfficialSnapshot(base, snapshot) {
   };
 }
 
+// UAT-P1-B, generalized for P0 Economía parity — where a closed service's
+// order rows live depends on WHICH close ran: the legacy nightly archive
+// moves them to `storico`, while the V3 operator Finalizar // language-guard: allow-legacy storico is the existing archive table name this reader already queried, not new vocabulary
+// (close_source='operator_finalizar_v3') closes the service and leaves them
+// in `ordenes`. Reading only `storico` reported a real 7-ticket / 153.50 EUR // language-guard: allow-legacy storico is the same existing archive table name, cited to explain the defect, not new vocabulary
+// service as zero tickets and 0.00 EUR (staging service 4f260f1e,
+// 2026-08-20) — the same defect independently reproduced against Economía's
+// own per-session reader for service 480eca89 (262.50 EUR, 2026-08-22).
+// Both are durable, service-pinned stores, so a closed session's rows are
+// read from BOTH and de-duplicated by order id. This is not a cross-service
+// fallback: every row is filtered by this one service_session_id and the
+// mixed-rows guard below still proves it. Exported so every closed-session
+// money reader (the live closeout here AND Economía's multi-session ledger
+// in economiaLedgerAggregate.js) shares this ONE lookup instead of each
+// re-deriving its own, divergence-prone version of it.
+async function loadSessionOrders(session, select) {
+  const closed = session.status === "closed";
+  const sessionFilter = `service_session_id=eq.${encodeURIComponent(session.id)}`;
+  const orders = closed
+    ? [].concat(
+      (await select("storico", `${sessionFilter}&order=ts.asc`)) || [], // language-guard: allow-legacy storico is the existing archive table name, queried here exactly as this reader already did, not new vocabulary
+      (await select("ordenes", `${sessionFilter}&order=ts.asc`)) || [],
+    )
+    : await select("ordenes", `${sessionFilter}&order=ts.asc`);
+  const deduped = [];
+  const seen = new Set();
+  for (const row of Array.isArray(orders) ? orders : []) {
+    const key = String(row.orden_id || row.id || "");
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    deduped.push(row);
+  }
+  if (deduped.some((row) => String(row.service_session_id || "") !== String(session.id))) {
+    throw Object.assign(new Error("mixed service session rows"), { code: "MIXED_SERVICE_SESSION_ROWS" });
+  }
+  return deduped;
+}
+
 function createCurrentServiceCloseout({ select = sbSelect, sessionLifecycle = lifecycle } = {}) {
   return async function getCurrentServiceCloseout() {
     const identity = await sessionLifecycle.currentCloseout();
@@ -271,33 +309,7 @@ function createCurrentServiceCloseout({ select = sbSelect, sessionLifecycle = li
     }
     const closed = session.status === "closed";
     const sessionFilter = `service_session_id=eq.${encodeURIComponent(session.id)}`;
-    // UAT-P1-B — where a closed service's order rows live depends on WHICH
-    // close ran: the legacy nightly archive moves them to `storico`, while the // language-guard: allow-legacy storico is the existing archive table name this reader already queried, not new vocabulary
-    // V3 operator Finalizar (close_source='operator_finalizar_v3') closes the
-    // service and leaves them in `ordenes`. Reading only `storico` reported a // language-guard: allow-legacy storico is the same existing archive table name, cited to explain the defect, not new vocabulary
-    // real 7-ticket / 143.50 EUR service as zero tickets and 0.00 EUR
-    // (staging service 4f260f1e, 2026-08-20). Both are durable, service-pinned
-    // stores, so a closed service reads BOTH and de-duplicates by order id.
-    // This is not a cross-service fallback: every row is filtered by this one
-    // service_session_id and the mixed-rows guard below still proves it.
-    const orders = closed
-      ? [].concat(
-        (await select("storico", `${sessionFilter}&order=ts.asc`)) || [], // language-guard: allow-legacy storico is the existing archive table name, queried here exactly as this reader already did, not new vocabulary
-        (await select("ordenes", `${sessionFilter}&order=ts.asc`)) || [],
-      )
-      : await select("ordenes", `${sessionFilter}&order=ts.asc`);
-    const deduped = [];
-    const seen = new Set();
-    for (const row of Array.isArray(orders) ? orders : []) {
-      const key = String(row.orden_id || row.id || "");
-      if (key && seen.has(key)) continue;
-      if (key) seen.add(key);
-      deduped.push(row);
-    }
-    const list = deduped;
-    if (list.some((row) => String(row.service_session_id || "") !== String(session.id))) {
-      throw Object.assign(new Error("mixed service session rows"), { code: "MIXED_SERVICE_SESSION_ROWS" });
-    }
+    const list = await loadSessionOrders(session, select);
     const ids = list.map((o) => o.orden_id || o.id).filter(Boolean);
     const events = ids.length
       ? await select("order_financial_events", `${sessionFilter}&order_id=in.(${ids.map((id) => encodeURIComponent(String(id))).join(",")})&order=created_at.asc`)
@@ -330,5 +342,5 @@ const getCurrentServiceCloseout = createCurrentServiceCloseout();
 module.exports = {
   createCurrentServiceCloseout, getCurrentServiceCloseout, aggregate, withOfficialSnapshot,
   safeTicket, paymentBucket, eventType, eventAmount, emptyPaymentTotals, addMethodAmount,
-  round, CANCELLED,
+  round, CANCELLED, loadSessionOrders,
 };
