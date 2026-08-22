@@ -48,6 +48,18 @@ const ALLOWLIST_PATTERNS = [
   // guarantee. File-level exemption is the only correct resolution, and is
   // exactly what this allowlist is for.
   /^migrations\/2026-08-20_h1_legacy_lifecycle_writer_hardening\.ROLLBACK\.sql$/,
+  // L-1's privilege+RLS lockdown names nine pre-existing legacy tables
+  // (clientes/ordenes/storico/conv/wa_msgs/archivio_conv/analisi_serata/
+  // suggerimenti/geo_cache) by identifier throughout its grants, policies
+  // and post-condition assertions -- citing existing schema, not introducing
+  // vocabulary. Ledger apply_order 102 already has this exact forward file's
+  // checksum (e21e5c2cbdd82980) recorded as verified; an inline suppression
+  // comment would change those bytes and break that checksum, so -- exactly
+  // like the H-1 ROLLBACK case above -- a file-level exemption is the only
+  // correct resolution. Its paired ROLLBACK is exempted for the same reason
+  // and to stay symmetric with every other forward+ROLLBACK pair above.
+  /^migrations\/2026-08-22_l1_legacy_public_data_lockdown\.sql$/,
+  /^migrations\/2026-08-22_l1_legacy_public_data_lockdown\.ROLLBACK\.sql$/,
   // The guard's own source and its unit tests: they must hold the
   // blocked-term list, allowlist patterns and fixture strings as literal
   // data — that is not domain contamination.
