@@ -83,7 +83,13 @@ function evaluateNewOrderIntake({ ctx = null, sourceChannel = null } = {}) {
     // never a silent bypass, just a less friendly error path.
     return allowedResult(null, sourceChannel);
   }
-  if (ctx.canCreateNewOrder !== true) {
+  // O-2 — canCreateNewOrder is the pure overnight-floor clock fact;
+  // hasValidCurrentService is the continuity fact (a service already open
+  // for TODAY's business date may keep taking orders straight through
+  // 00:00-08:00). Either one is enough. A stale read here can only make the
+  // DB-canonical resolve_order_intake_context_v1 MORE strict, never looser —
+  // it re-derives both facts from scratch under its own lock.
+  if (ctx.canCreateNewOrder !== true && ctx.hasValidCurrentService !== true) {
     return rejection(INTAKE_CODE.ORDER_INTAKE_CLOSED, ctx, sourceChannel);
   }
   return allowedResult(ctx, sourceChannel);

@@ -80,12 +80,18 @@ assert("1a: at least 20 distinct functions tracked across migration history (gua
 //        simplifies to a single overnight-floor check). open_operational_
 //        service_v1/ensure_service_session are untouched by O-1 and stay
 //        pinned to G-1.
+//   O-2  (2026-08-23) redefines resolve_order_intake_context_v1 A THIRD time,
+//        row 108: relocates the pre-existing open/closing lookup before the
+//        intake gate and adds the continuity check (00:00-08:00 no longer
+//        blocks an already-open, same-business-date service). open_
+//        operational_service_v1/ensure_service_session remain untouched and
+//        stay pinned to G-1.
 const G1 = "2026-08-20_g1_autonomous_resume_operational_service.sql";
-const O1 = "2026-08-23_o1_order_intake_buffer_removal.sql";
+const O2 = "2026-08-23_o2_open_service_cross_midnight_continuity.sql";
 for (const [n, fn, expectedFile] of [["1b", "open_operational_service_v1", G1],
                        ["1c", "ensure_service_session", G1],
-                       ["1d", "resolve_order_intake_context_v1", O1]]) {
-  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O1 ? "O-1's" : "G-1's"} own migration file`,
+                       ["1d", "resolve_order_intake_context_v1", O2]]) {
+  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O2 ? "O-2's" : "G-1's"} own migration file`,
     latest[fn] && latest[fn].file === expectedFile,
     latest[fn] && latest[fn].file);
 }

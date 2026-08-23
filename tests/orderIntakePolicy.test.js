@@ -58,6 +58,30 @@ assert("1i: retired codes are not exported (NO_OPEN_SERVICE_SESSION / STALE_SERV
   && !("SERVICE_KIND_MISMATCH" in INTAKE_CODE)
   && !("SERVICE_SESSION_NOT_ORDERABLE" in INTAKE_CODE));
 
+console.log("\n== A2. O-2 — hasValidCurrentService: cross-midnight continuity preflight ==");
+// The full decision truth table: either fact alone is enough to allow. DB-
+// canonical resolve_order_intake_context_v1 re-derives both from scratch
+// under its own lock, so a stale/racy preflight here can only ever make the
+// DB MORE strict, never looser.
+assert("2a2: canCreateNewOrder=true, hasValidCurrentService=false (normal daytime, no gap) -> allowed",
+  evaluateNewOrderIntake({ ctx: { canCreateNewOrder: true, hasValidCurrentService: false, businessDate: "2026-08-23", serviceKind: "SERA" } }).allowed === true);
+assert("2b2: canCreateNewOrder=false, hasValidCurrentService=true (overnight floor, but a service is already open for today) -> allowed",
+  evaluateNewOrderIntake({ ctx: { canCreateNewOrder: false, hasValidCurrentService: true, businessDate: "2026-08-23", serviceKind: "SERA" } }).allowed === true);
+assert("2c2: canCreateNewOrder=true, hasValidCurrentService=true (both true) -> allowed",
+  evaluateNewOrderIntake({ ctx: { canCreateNewOrder: true, hasValidCurrentService: true, businessDate: "2026-08-23", serviceKind: "SERA" } }).allowed === true);
+assert("2d2: canCreateNewOrder=false, hasValidCurrentService=false (overnight floor, no open service) -> STILL blocked — no night-opening bypass",
+  (() => {
+    const r = evaluateNewOrderIntake({ ctx: { canCreateNewOrder: false, hasValidCurrentService: false, businessDate: "2026-08-23", serviceKind: "SERA" } });
+    return r.allowed === false && r.code === INTAKE_CODE.ORDER_INTAKE_CLOSED;
+  })());
+assert("2e2: canCreateNewOrder=false, hasValidCurrentService absent/undefined (legacy-shaped ctx, pre-O-2 RPC body) -> still blocked, no crash",
+  (() => {
+    const r = evaluateNewOrderIntake({ ctx: { canCreateNewOrder: false, businessDate: "2026-08-23", serviceKind: "SERA" } });
+    return r.allowed === false && r.code === INTAKE_CODE.ORDER_INTAKE_CLOSED;
+  })());
+assert("2f2: canCreateNewOrder=true, hasValidCurrentService absent/undefined -> still allowed (unchanged pre-O-2 shape)",
+  evaluateNewOrderIntake({ ctx: { canCreateNewOrder: true, businessDate: "2026-08-23", serviceKind: "SERA" } }).allowed === true);
+
 console.log("\n== B. fetchOrderIntakeContext — RPC read wrapper ==");
 
 async function run() {
