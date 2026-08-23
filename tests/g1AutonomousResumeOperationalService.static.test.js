@@ -316,12 +316,15 @@ test('28: both seating entry points share the one path — table and reservation
   assert.equal(directOpen.length + directResv.length, 0, 'no seating bypasses the helper');
 });
 
-test('29: the frozen stale-service recovery budget is untouched — one recovery, one retry', () => {
-  assert.match(MESA, /parseForgottenCloseRequired\(error && error\.pgError\)/);
-  assert.match(MESA, /if \(!forgotten\) throw error;/);
-  assert.match(MESA, /MESA_SERVICE_STALE_UNRESOLVED/);
-  const recoveries = MESA.match(/recoverForgottenService\(\{/g) || [];
-  assert.equal(recoveries.length, 1, 'still exactly one recovery call site');
+test('29 (O-4, was: the frozen stale-service recovery budget): the recovery machinery stays deleted, not reintroduced', () => {
+  // O-3 (ledger 107) made an open operational_service_v1 unconditional
+  // continuity regardless of Business Day; O-4 (ledger 108) then deleted the
+  // FORGOTTEN_CLOSE_REQUIRED raise itself plus this recovery machinery as
+  // dead code. Anti-reintroduction, not a frozen-behaviour check any more.
+  assert.doesNotMatch(MESA, /parseForgottenCloseRequired\(/);
+  assert.doesNotMatch(MESA, /recoverForgottenService\(/);
+  assert.doesNotMatch(MESA, /require\([^)]*forgottenCloseRecovery['"]\)/);
+  assert.doesNotMatch(MESA, /MESA_SERVICE_STALE_UNRESOLVED/);
 });
 
 // ── 8b. PROSRC REALITY CHECK ──────────────────────────────────────────────

@@ -1383,10 +1383,13 @@ function schedula2340() {
 // N-2 — the automatic close-tick, boot catch-up, external-cron backup, and
 // bounded deferred-close retry that used to live here (behind the retired
 // LEGACY_AUTOMATIC_LIFECYCLE_ENABLED flag) are deleted, not frozen: every
-// close now goes through V3 Finalizar (operator, manual) or F-10
-// forgotten-close recovery (event-driven, from order intake). See
-// src/serviceSessions/serviceLifecycleEngine.js and
-// src/serviceSessions/forgottenCloseRecovery.js.
+// close now goes through V3 Finalizar (operator, manual) — see
+// src/serviceSessions/serviceLifecycleEngine.js. O-4 (ledger 108) retired the
+// other close path this comment used to name (F-10's event-driven
+// forgotten-close recovery): O-3 (ledger 107) made an open
+// operational_service_v1 unconditional continuity regardless of Business
+// Day, which left that recovery path with nothing left to recover from, and
+// O-4 deleted it — the raise, the recovery module, and both callers.
 if (require.main === module) {
   schedula2340();          // 23:40 preventive backup — kept: useful, and it never
                            // touches session identity or closes the cash session.

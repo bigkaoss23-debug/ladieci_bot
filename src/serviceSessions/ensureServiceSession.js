@@ -34,12 +34,16 @@
 //
 // The call site is now GONE, not gated. This module reads and returns; it
 // cannot close, roll, or create under any configuration. The two legitimate
-// jobs the pre-check used to cover are already owned elsewhere, by certified
-// code that this module must never duplicate:
-//   * a forgotten cross-day service -> F-10, from the order/seating intake
-//     boundary (forgottenCloseRecovery.js), never from a page load;
+// jobs the pre-check used to cover:
+//   * a forgotten cross-day service -> was F-10's job, from the order/
+//     seating intake boundary. O-3 (ledger 107) made an open
+//     operational_service_v1 unconditional continuity regardless of
+//     Business Day, so nothing can go forgotten this way any more; O-4
+//     (ledger 108) deleted F-10's now-dead raise and its recovery module
+//     (forgottenCloseRecovery.js) outright. There is no forgotten-service
+//     job left to own.
 //   * a stale canonical Business Day pointer -> F-11, inside
-//     ensure_service_session's own read-only classification.
+//     ensure_service_session's own read-only classification, unchanged.
 // Nothing else was ever recovered here.
 // ===============================================================
 

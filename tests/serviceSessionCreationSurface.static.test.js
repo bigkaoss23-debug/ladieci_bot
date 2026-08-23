@@ -94,12 +94,19 @@ assert("1a: at least 20 distinct functions tracked across migration history (gua
 //        f10b, so it still sorts lexically after o1/o2 for this replay.
 //        open_operational_service_v1/ensure_service_session remain
 //        untouched and stay pinned to G-1.
+//   O-4  (2026-08-23) redefines resolve_order_intake_context_v1 A FIFTH
+//        time, row 110: post-O-3 dead-code purge — deletes the now-
+//        structurally-unreachable FORGOTTEN_CLOSE_REQUIRED raise and the
+//        unconsumed crossesBusinessDay field. No contract change; see this
+//        file's own header for the reachability proof. open_operational_
+//        service_v1/ensure_service_session remain untouched and stay
+//        pinned to G-1.
 const G1 = "2026-08-20_g1_autonomous_resume_operational_service.sql";
-const O3 = "2026-08-23_o3_operational_service_until_finalizar.sql";
+const O4 = "2026-08-23_o4_forgotten_close_dead_code_purge.sql";
 for (const [n, fn, expectedFile] of [["1b", "open_operational_service_v1", G1],
                        ["1c", "ensure_service_session", G1],
-                       ["1d", "resolve_order_intake_context_v1", O3]]) {
-  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O3 ? "O-3's" : "G-1's"} own migration file`,
+                       ["1d", "resolve_order_intake_context_v1", O4]]) {
+  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O4 ? "O-4's" : "G-1's"} own migration file`,
     latest[fn] && latest[fn].file === expectedFile,
     latest[fn] && latest[fn].file);
 }

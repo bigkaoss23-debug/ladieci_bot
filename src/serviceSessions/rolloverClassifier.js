@@ -8,7 +8,9 @@
 // both were deleted in the application-wide legacy/dead-code purge once that
 // orchestrator was proven to have zero reachable production callers (V3's
 // serviceLifecycleEngine.js + F-10's forgottenCloseRecovery.js never used
-// them — both go through the V3 engine exclusively).
+// them — both go through the V3 engine exclusively). forgottenCloseRecovery.js
+// itself was later deleted too, by O-4 (ledger 108), once O-3 (ledger 107)
+// made its recovery job structurally impossible to ever be needed.
 //
 // What survives here is the one export other live modules still depend on:
 // the terminal-order-state set, shared with currentOperationalSession.js so

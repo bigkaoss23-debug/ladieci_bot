@@ -22,16 +22,6 @@ async function rpc(name, body) {
       ? response.body.message.trim() : '';
     const error = new AuthDaoError(rawCode || 'MESA_DATA_WRITE_FAILED', 'Mesa RPC failed');
     error.status = response.status;
-    // MESA FIRST-SEATING STALE SERVICE GUARD — preserve the PostgREST error
-    // body VERBATIM alongside the flattened code. AuthDaoError keeps only
-    // `message`, which drops PostgreSQL's DETAIL field, and DETAIL is exactly
-    // where the seating guard puts the stale service UUID. Without this the
-    // structured FORGOTTEN_CLOSE_REQUIRED contract could not be parsed at all
-    // and a recoverable stale-service refusal would surface as a bare, dead
-    // error code. Nothing reads this except
-    // forgottenCloseRecovery.parseForgottenCloseRequired, which re-validates
-    // every field and fails closed on any partial match.
-    error.pgError = response.body && typeof response.body === 'object' ? response.body : null;
     throw error;
   }
   return response.body;

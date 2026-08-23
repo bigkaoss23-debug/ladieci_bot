@@ -169,8 +169,16 @@ const readStripped = (rel) => stripComments(read(rel));
   // Explicit allowlists. Deliberately exact relative paths, never globs or
   // directory exemptions: a new caller must be added here consciously.
   const AUTHORIZED_DIRECT_ENGINE_IMPORTERS = ["src/serviceSessions/serviceCloseAuthority.js"];
-  const AUTHORIZED_AUTHORITY_CALLERS = ["index.js", "src/serviceSessions/forgottenCloseRecovery.js"];
-
+  // O-4 (ledger 108) — forgottenCloseRecovery.js, the second certified caller
+  // F-10 added, is deleted: O-3 (ledger 107) made an open
+  // operational_service_v1 unconditional continuity regardless of Business
+  // Day, so the recovery it existed to perform can no longer be triggered.
+  // index.js (operator Finalizar) is once again the ONLY certified caller.
+  const AUTHORIZED_AUTHORITY_CALLERS = ["index.js"];
+  assert(
+    "O-4: src/serviceSessions/forgottenCloseRecovery.js file no longer exists",
+    !fs.existsSync(path.join(ROOT, "src/serviceSessions/forgottenCloseRecovery.js")),
+  );
 
   // 2a-2c. The legacy/automatic machinery must still never reach V3 at all —
   // unchanged from the original P0-C1 claim, just no longer including index.js.
@@ -190,12 +198,12 @@ const readStripped = (rel) => stripComments(read(rel));
   }
 
   // 2d. F-10.1B — index.js reaches V3 through the canonical close authority,
-  // and must NOT import the engine directly any more. F-10 legitimately adds a
-  // SECOND close caller (forgotten-close recovery, driven from order intake,
-  // not from this Finalizar action). Rather than allowlisting two direct
-  // importers — a list that would keep growing — both callers now funnel
-  // through one authority module, so the invariant gets STRONGER: exactly one
-  // file in the entire application imports the engine.
+  // and must NOT import the engine directly any more. F-10 legitimately added
+  // a SECOND close caller (forgotten-close recovery, driven from order
+  // intake) which O-4 (ledger 108) later retired once O-3 (ledger 107) made
+  // that recovery structurally unreachable. The facade stays regardless of
+  // caller count: exactly one file in the entire application imports the
+  // engine.
   assert(
     `index.js: does NOT import the V3 engine directly (F-10.1B — the engine has exactly one direct importer, the canonical authority)`,
     !new RegExp(`require\\([^)]*${v3EngineFile}['"]\\)`).test(indexJs),
@@ -313,7 +321,7 @@ const readStripped = (rel) => stripComments(read(rel));
     .concat(new RegExp(`require\\([^)]*${v3AuthorityFile}['"]\\)`).test(indexJs) ? ["index.js"] : [])
     .sort();
   assert(
-    "the canonical close authority has EXACTLY the certified callers — index.js (operator Finalizar) and forgottenCloseRecovery.js (system recovery); a third caller must be certified explicitly",
+    "the canonical close authority has EXACTLY the certified caller — index.js (operator Finalizar); a second caller must be certified explicitly",
     JSON.stringify(authorityCallers) === JSON.stringify([...AUTHORIZED_AUTHORITY_CALLERS].sort()),
     JSON.stringify(authorityCallers),
   );

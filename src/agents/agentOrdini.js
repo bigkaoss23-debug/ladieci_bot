@@ -61,10 +61,6 @@ const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualG
 // file's first require still takes effect — the same reason risolviIndirizzo and
 // getManualGiros are stubbed the same way in the existing test suite.
 const orderIntakePolicy = require("../serviceSessions/orderIntakePolicy");
-// F-10.1 — forgotten-close recovery support. Referenced through the module
-// object at call time (never destructured at require time) for the same
-// test-double reason as orderIntakePolicy immediately above.
-const forgottenClose = require("../serviceSessions/forgottenCloseRecovery");
 // DRIVER_STATO = telemetria visiva OPZIONALE (best-effort, mai blocca la
 // transizione). Vedi src/utils/driverTelemetry.js per il contratto.
 // S2-1F — only the snapshot-authoritative reconciliation hook is used now; the old
@@ -457,12 +453,6 @@ async function creaOrdine(params) {
   const resetTs  = resetCfg?.[0]?.valore ? parseInt(resetCfg[0].valore) : 0;
   const fromTs   = Math.max(startOfDay.getTime(), resetTs);
 
-  // F-10.1 — at most ONE forgotten-close recovery per order-creation call, and
-  // therefore at most one extra insert attempt. Scoped to this invocation:
-  // never module state, so concurrent orders cannot consume each other's
-  // single retry.
-  let forgottenCloseAttempted = false;
-
   for (let attempt = 0; attempt < 8; attempt++) {
     // Jitter crescente per ridurre la probabilità di collisione ripetuta
     if (attempt > 0) await new Promise(r => setTimeout(r, 40 + attempt * 30 + Math.random() * 80));
@@ -588,62 +578,16 @@ async function creaOrdine(params) {
       continue; // PK collision (id sequenziale) → riprova con un nuovo lastNum
     }
 
-    // ═══ F-10.1 — FORGOTTEN-CLOSE RECOVERY + EXACTLY ONE RETRY ═══
-    // The canonical DB resolver (resolve_order_intake_context_v1, reached via
-    // the service_session_assign_order trigger inside THIS insert's own
-    // transaction) is the sole authority on whether a previous Business Day's
-    // Operational Service was left open. When it says so, the whole insert
-    // has already rolled back — no order row, no Business Day row, no pointer
-    // write — so recovering and re-inserting is safe, not a partial repair.
-    //
-    // LIVE since the resolver cutover: the installed resolver raises this
-    // exact code (re-verified directly against the live staging body,
-    // language-guard: allow-legacy creaOrdine is this existing function's own name, not new vocabulary
-    // 2026-08-23), so this branch is production-reachable from creaOrdine
-    // today.
-    //
-    // Exactly one recovery and exactly one extra insert attempt, enforced by
-    // forgottenCloseAttempted rather than by the ID-collision loop counter. A
-    // second FORGOTTEN_CLOSE_REQUIRED is a typed failure, never a third try.
-    // Nothing here is taken from the client: the stale service identity is
-    // read from the DB exception's structured DETAIL field, and the actor,
-    // close_source and retry permission are all fixed server-side. A partial
-    // match (right code, missing/malformed DETAIL) is NOT a recovery request
-    // and falls through to the ordinary DB-error path.
-    const forgotten = forgottenClose.parseForgottenCloseRequired(result);
-    if (forgotten) {
-      if (forgottenCloseAttempted) {
-        return {
-          success: false,
-          error: "FORGOTTEN_CLOSE_UNRESOLVED",
-          code: "FORGOTTEN_CLOSE_UNRESOLVED",
-          detail: "El servicio anterior sigue abierto tras el intento de recuperación.",
-        };
-      }
-      forgottenCloseAttempted = true;
-      // The stale service UUID comes from the DB exception's own DETAIL field,
-      // never from params/the client, and is never rediscovered by a JS query.
-      const recovery = await forgottenClose.recoverForgottenService({
-        staleServiceSessionId: forgotten.staleServiceSessionId,
-      });
-      // F-10.4 — a reported recovery failure here does NOT prove the stale
-      // service is still open: a concurrent contender racing the SAME stale
-      // session can legitimately close it first, and this call then
-      // convergently observes a non-fresh outcome (e.g. V3_CLOSE_SESSION_
-      // ALREADY_CLOSED_NOT_RECOVERABLE) rather than a fresh success. The
-      // already-budgeted single retry below is what actually discriminates:
-      // if the stale service is truly still open, the retried insert hits
-      // FORGOTTEN_CLOSE_REQUIRED a second time and forgottenCloseAttempted
-      // (already true) turns that into the typed FORGOTTEN_CLOSE_UNRESOLVED
-      // failure below — never a second recovery, never a third insert.
-      // Failing closed here, before ever trying the retry, would wrongly
-      // fail a legitimate race-loser order the other contender already fixed.
-      if (!recovery || recovery.success !== true) {
-        // language-guard: allow-legacy creaOrdine below is this existing function's own name, used as the log tag, not new vocabulary
-        console.warn(`[creaOrdine] forgotten-close recovery reported failure for ${forgotten.staleServiceSessionId} (code=${(recovery && recovery.code) || null}) — retrying original insert once to let it self-resolve`);
-      }
-      continue; // the one authorized retry of the ORIGINAL order
-    }
+    // O-4 — the FORGOTTEN_CLOSE_REQUIRED recovery-and-retry branch that used
+    // to live here is REMOVED, not merely dormant: since O-3 (ledger 107) an
+    // open operational_service_v1 is unconditional continuity regardless of
+    // Business Day, and O-4 (ledger 108) deleted the raise itself from
+    // resolve_order_intake_context_v1 (the resolver the ordenes_assign_
+    // service_session trigger calls inside this insert's own transaction).
+    // The DB can no longer answer this insert with that code, so this
+    // language-guard: allow-legacy creaOrdine below is this existing function's own name, not new vocabulary
+    // branch (and the forgottenCloseRecovery.js module it called) is dead
+    // code, deleted alongside it.
 
     // Altro errore DB
     return { success: false, error: "errore DB", detail: JSON.stringify(result) };

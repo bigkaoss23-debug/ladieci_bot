@@ -3,10 +3,6 @@
 const crypto = require('node:crypto');
 const defaultDao = require('./mesaDao');
 const { lifecycle: defaultLifecycle } = require('../serviceSessions/serviceSessionLifecycle');
-// MESA FIRST-SEATING STALE SERVICE GUARD — the ONE forgotten-close executor,
-// shared verbatim with the order path. Mesa imports it rather than reaching
-// for the V3 engine directly, preserving F-8's single-direct-importer rule.
-const forgottenClose = require('../serviceSessions/forgottenCloseRecovery');
 const { creaOrdine: defaultCreateOrder, cambiaStato: defaultChangeOrderState } = require('../agents/agentOrdini');
 const { nextEqualShare, aggregateByMethod } = require('./billingMath');
 const { sidHash: defaultSidHash } = require('../auth/sidHash');
@@ -277,31 +273,7 @@ function createMesaService({
   createOrder = defaultCreateOrder,
   changeOrderState = defaultChangeOrderState,
   hashSid = defaultSidHash,
-  // MESA FIRST-SEATING STALE SERVICE GUARD — injectable purely so the recovery
-  // budget can be asserted in tests. Production always gets the one real
-  // shared executor; this seam never selects a different engine.
-  forgottenCloseRecovery = forgottenClose,
 } = {}) {
-  // ═══ MESA FIRST-SEATING STALE SERVICE GUARD ═══
-  //
-  // Seating a table is legitimate operational activity that may happen BEFORE
-  // the day's first order. Until that first order exists, the canonical
-  // pointer still names the PREVIOUS day's still-open Operational Service, so
-  // a naive seat binds the new table session to yesterday -- which F-10 then
-  // closes underneath it. The DB primitives now refuse that bind structurally
-  // and raise the same typed condition the order path already raises; this is
-  // the one place that answers it.
-  //
-  // AUTHORITY BOUNDARY. This helper decides nothing on its own. It never
-  // computes a date, never judges staleness, never picks a service. The DB
-  // makes the verdict and names the stale service in the exception's DETAIL;
-  // the existing recovery executor closes it; the canonical resolver names the
-  // successor. No second engine, no cloned logic, no frontend involvement.
-  //
-  // BUDGET: exactly ONE recovery and exactly ONE retry, enforced by straight-
-  // line control flow rather than a loop, so a second stale verdict is a typed
-  // failure and never a third attempt.
-  //
   // ═══ G-1 — SEATING IS LEGITIMATE FIRST ACTIVITY ═══
   //
   // Until G-1 this helper required a service to ALREADY be open and refused
@@ -310,25 +282,31 @@ function createMesaService({
   // ordered on yet, and not after the day's own Finalizar. The waiter got
   // MESA_SERVICE_NOT_OPEN and someone had to go press "Abrir nuevo servicio".
   //
-  // Step 0 below removes that. When nothing is open, the CANONICAL resolver
-  // opens (or converges on) the current Operational Service -- the exact same
-  // call, with the exact same arguments, that the recovery retry below
-  // already makes. No second engine, no cloned rule, no date computed here,
-  // no service chosen here: resolve_order_intake_context_v1 owns the Business
-  // Day advance, the intake window and the opening, all inside one
-  // advisory-locked transaction, so two waiters (or a waiter and an order)
-  // racing the first activity converge on ONE service.
+  // The block below removes that. When nothing is open, the CANONICAL
+  // resolver opens (or converges on) the current Operational Service. No
+  // second engine, no cloned rule, no date computed here, no service chosen
+  // here: resolve_order_intake_context_v1 owns the Business Day advance, the
+  // intake window and the opening, all inside one advisory-locked
+  // transaction, so two waiters (or a waiter and an order) racing the first
+  // activity converge on ONE service.
   //
   // The resolver's honest refusals are preserved and are NOT overridden:
   // outside the intake window it answers ORDER_INTAKE_CLOSED, and that stays
-  // MESA_SERVICE_NOT_OPEN to the waiter -- the same typed 409 and the same UI
-  // copy this helper already returns for an unresolvable successor. A service
-  // is never forced open.
+  // MESA_SERVICE_NOT_OPEN to the waiter. A service is never forced open.
   //
-  // NOTHING ELSE MOVES. When a service IS open, this function behaves exactly
-  // as before, byte for byte: the stale-service path (seat -> DB raises
-  // FORGOTTEN_CLOSE_REQUIRED -> one recovery -> one pinned retry) is
-  // untouched, and so are mesa_open_session_v1 / mesa_open_reservation_v1.
+  // O-4 — REMOVED, not merely dormant: the stale-service recovery path this
+  // helper used to run (seat -> DB raises FORGOTTEN_CLOSE_REQUIRED -> one
+  // recovery -> one pinned retry) can no longer fire. O-3 (ledger 107) made
+  // an open operational_service_v1 unconditional continuity regardless of
+  // Business Day, which already stopped mesa_open_session_v1 /
+  // mesa_open_reservation_v1 from ever seeing a stale service through this
+  // path; O-4 (ledger 108) then deleted the FORGOTTEN_CLOSE_REQUIRED raise
+  // itself from resolve_order_intake_context_v1, and this helper's dead
+  // catch/recover/retry with it, along with the forgottenCloseRecovery.js
+  // module both call sites shared with agentOrdini.js's creaOrdine (deleted -- language-guard: allow-legacy agentOrdini.js/creaOrdine are the existing module filename and function name being cross-referenced, not new vocabulary
+  // outright — its only callers were this one and creaOrdine's own retry
+  // loop, also removed). What remains is a plain seat against whatever
+  // service the resolver names.
   async function seatWithStaleServiceRecovery({ actor, source, seat }) {
     const identity = await lifecycle.currentCloseout();
     let serviceSessionId = (identity && identity.ok && identity.session && identity.session.status === 'open')
@@ -346,53 +324,7 @@ function createMesaService({
       serviceSessionId = resolved.periodId;
     }
 
-    try {
-      return await seat(serviceSessionId);
-    } catch (error) {
-      // The structured triple (P0001 + FORGOTTEN_CLOSE_REQUIRED + UUID in
-      // DETAIL) is re-validated by the shared parser and fails closed on any
-      // partial match, so a look-alike error falls through untouched.
-      const forgotten = forgottenCloseRecovery.parseForgottenCloseRequired(error && error.pgError);
-      if (!forgotten) throw error;
-
-      // The stale identity comes from the DB's own DETAIL field, never from
-      // the caller, the pointer, or a follow-up "what looks stale now" query.
-      const recovery = await forgottenCloseRecovery.recoverForgottenService({
-        staleServiceSessionId: forgotten.staleServiceSessionId,
-      });
-      // A reported failure does NOT prove the stale service is still open: a
-      // concurrent seat or order racing the SAME service can legitimately
-      // close it first, and this call then observes a non-fresh outcome. The
-      // budgeted retry below is what actually discriminates -- failing closed
-      // here would wrongly reject a race loser the winner already fixed. Same
-      // convergence rule the certified order path uses.
-      if (!recovery || recovery.success !== true) {
-        console.warn(`[mesa] stale-service recovery reported failure for ${forgotten.staleServiceSessionId} (code=${(recovery && recovery.code) || null}) — retrying seat once to let it self-resolve`);
-      }
-
-      // The successor is resolved by the canonical authority, which advances
-      // the Business Day and opens today's service in one locked transaction.
-      // The retry is PINNED to that confirmed id rather than re-reading the
-      // pointer, so a concurrent writer cannot slip a different service under
-      // this seat between resolution and insert.
-      const resolved = await lifecycle.resolveOperationalContext({ actor, source });
-      if (!resolved || resolved.ok !== true || typeof resolved.periodId !== 'string') {
-        // Includes the honest out-of-schedule answer (ORDER_INTAKE_CLOSED) and
-        // REOPEN_REQUIRED. Both mean the same thing to a waiter -- there is no
-        // current service to seat against -- and map to the code the Mesa UI
-        // already explains, rather than forcing a service open.
-        throw new MesaServiceError('MESA_SERVICE_NOT_OPEN', 409);
-      }
-
-      try {
-        return await seat(resolved.periodId);
-      } catch (retryError) {
-        if (forgottenCloseRecovery.parseForgottenCloseRequired(retryError && retryError.pgError)) {
-          throw new MesaServiceError('MESA_SERVICE_STALE_UNRESOLVED', 409);
-        }
-        throw retryError;
-      }
-    }
+    return await seat(serviceSessionId);
   }
 
   return Object.freeze({
