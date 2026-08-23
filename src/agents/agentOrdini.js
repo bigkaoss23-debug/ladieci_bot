@@ -596,9 +596,11 @@ async function creaOrdine(params) {
     // has already rolled back — no order row, no Business Day row, no pointer
     // write — so recovering and re-inserting is safe, not a partial repair.
     //
-    // DORMANT until the resolver cutover: the currently-installed resolver
-    // still performs its own legacy status='rolled_over' flip and never emits
-    // this code, so this branch is unreachable in production today.
+    // LIVE since the resolver cutover: the installed resolver raises this
+    // exact code (re-verified directly against the live staging body,
+    // language-guard: allow-legacy creaOrdine is this existing function's own name, not new vocabulary
+    // 2026-08-23), so this branch is production-reachable from creaOrdine
+    // today.
     //
     // Exactly one recovery and exactly one extra insert attempt, enforced by
     // forgottenCloseAttempted rather than by the ID-collision loop counter. A

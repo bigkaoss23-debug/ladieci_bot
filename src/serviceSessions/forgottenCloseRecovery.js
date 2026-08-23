@@ -1,19 +1,21 @@
 "use strict";
 // ===============================================================
-// forgottenCloseRecovery.js — F-10.1B (JS SUPPORT, DORMANT ON ARRIVAL)
+// forgottenCloseRecovery.js — F-10.1B (JS SUPPORT — PRODUCTION-REACHABLE)
 //
 // The stale-Operational-Service recovery executor. It exists so that a
 // restaurant which forgot to press Finalizar servicio cannot black out the
 // next Business Day, WITHOUT the system pretending an operator closed the
 // service.
 //
-// DORMANT UNTIL THE RESOLVER CUTOVER. The currently-installed
-// public.resolve_order_intake_context_v1 still performs the legacy
-// status='rolled_over' flip itself, and does not emit the structured contract
-// below. Nothing in this file can run until that resolver is replaced in a
-// separate, separately-authorized migration. Shipping the support first is
-// deliberate: the reverse order would open a window in which the DB refuses
-// an order that no deployed code knows how to recover from.
+// LIVE SINCE THE RESOLVER CUTOVER. The installed public.
+// resolve_order_intake_context_v1 raises the structured FORGOTTEN_CLOSE_
+// REQUIRED contract this file consumes (RAISE EXCEPTION ... USING ERRCODE =
+// 'P0001', DETAIL = v_period.id::text, guarded on lifecycle_semantics =
+// 'operational_service_v1') — re-verified directly against the live
+// staging body, 2026-08-23. This file is reachable from both real callers,
+// language-guard: allow-legacy agentOrdini.js is the existing module path this line cites, not new vocabulary
+// src/tables/mesaService.js and src/agents/agentOrdini.js (N-2 application-
+// wide legacy/dead-code purge audit).
 //
 // AUTHORITY BOUNDARY — this module has NONE of its own:
 //   * it never computes a business date (no Madrid 04:00 rule, no
