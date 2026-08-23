@@ -14,7 +14,8 @@ const readActions = require("./src/utils/readActions");
 const { previewOrderTiming } = require("./src/agents/previewTiming");
 const { invia, emitDynamicMenuShadowDiagnostic } = require("./src/agents/agentWhatsapp");
 const { runWhatsappMenuShadow } = require("./src/menu/whatsappMenuShadow");
-const { chiudiServizio, scanServizio, backupSerata } = require("./src/utils/servizio");
+// language-guard: allow-legacy servizio/scanServizio/backupSerata are the existing module path and export names, unchanged by removing chiudiServizio from this same destructure, not new vocabulary
+const { scanServizio, backupSerata } = require("./src/utils/servizio");
 const { rigeneraSuggerimenti, approvaSuggerimento } = require("./src/agents/agenteMiglioramento");
 const { getCanonicalMenu } = require("./src/menu/menuFacade");
 const {
@@ -61,9 +62,6 @@ const { closeServiceSessionV3 } = require("./src/serviceSessions/serviceCloseAut
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
 const { rollEconomicPeriod } = require("./src/serviceSessions/economicBoundaryEngine");
 const { periodConsolidation } = require("./src/serviceSessions/periodConsolidation");
-const { resolveSchedule, closeEligibility, SCHEDULE_STATE, SERVICE_KIND } = require("./src/schedule/serviceSchedule");
-const { computeAutoCloseDecision } = require("./src/serviceSessions/autoCloseDecision");
-const { performIncidentSafeRollover } = require("./src/serviceSessions/incidentSafeRollover");
 const { getCurrentOperationalSession, serviceSessionQuery, getOperationalSessionIds, serviceSessionsQuery } = require("./src/serviceSessions/currentOperationalSession");
 const { getPreviousCloseoutIncidentSummary } = require("./src/closeout/previousCloseoutIncidentSummary");
 const { serviceIncidents } = require("./src/incidents/serviceIncidents");
@@ -218,17 +216,6 @@ async function routeRiderTripAction(action, body) {
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || "ladieci_webhook_2026";
 const PORT = process.env.PORT || 3000;
-
-// SAFETY FREEZE (2026-08-09, ported from safety/legacy-lifecycle-freeze-2026-08-09
-// commit 8f44493 — that branch diverged from this one at the commit currently
-// deployed to staging; V3.5 reconciles the same protection here rather than
-// merging that branch) — kill switch for every automatic (no-human)
-// service-close/rollover path: the internal close-tick timer, boot-time
-// catch-up (which may itself chain into a deferred-close retry), and the
-// external-cron "triggerCloseIfNeeded" HTTP action. Defaults to "on" so any
-// env where it's unset (prod) is byte-for-byte unaffected; staging sets it
-// false while Service Lifecycle V3 is developed against the same shared DB.
-const LEGACY_AUTOMATIC_LIFECYCLE_ENABLED = process.env.LEGACY_AUTOMATIC_LIFECYCLE_ENABLED !== "false";
 
 function trustedClientIp(req) {
   if (req && typeof req.ip === "string" && req.ip) return req.ip;
@@ -468,46 +455,25 @@ app.get("/api", async (req, res) => {
             : { success: false, error: v3Result.code || "V3_CLOSE_FAILED", ...v3Result };
         }
       } else {
-        const gate = closeEligibility(kind, new Date());
-        if (!gate.eligible && req.query.force !== "true") {
-          const label = kind || "servicio";
-          result = { success: false, error: `Cierre de ${label} permitido solo a partir de las ${gate.boundary} Madrid. Para forzar añadir &force=true.` };
-        } else {
-          // Sempre via Guarded: idempotente, non si ripete nello stesso giorno
-          // language-guard: allow-legacy chiudiServizio is the existing legacy close function (src/utils/servizio.js), unchanged by F-8, restated here only because this whole branch was re-indented, not new vocabulary
-          result = await chiudiServizio(req.query.deleteAttivi === "true", "operator", req.authCtx?.actor || "operator");
-          // S2-1G — a service close deferred by an active rider trip is an operational
-          // conflict: surface a stable 409 for the operator UI (schedulers consume the same
-          // structured body without treating it as a crash).
-          if (result && result.deferred && result.reason === "active_rider_trip") {
-            return res.status(409).json({ error: "ACTIVE_RIDER_TRIP", message: "Chiusura rinviata: giro rider in corso. Attendere il rientro o chiudere il giro.", data: result.data });
-          }
-        }
+        // N-2 — LEGACY CLOSE PATH RETIRED (application-wide dead-code purge).
+        // This branch is structurally unreachable: open_operational_service_v1
+        // is the ONLY primitive that ever creates a service_sessions row, and
+        // it hardcodes lifecycle_semantics='operational_service_v1' — no
+        // economic_period_v1 session can be newly opened, and the live DB has
+        // zero open ones (verified 2026-08-23). It is kept, not removed
+        // entirely, only so a corrupted/impossible session identity fails
+        // closed with a clear code instead of silently doing nothing.
+        result = { success: false, error: "legacy_session_kind_unsupported" };
       }
     } else if (action === "triggerCloseIfNeeded") {
-      // Endpoint per cron esterno (es. cron-job.org) — backup del cron interno.
-      // S2-7D6D — passa dallo STESSO motore di decisione del tick/boot: mai un
-      // force-close implicito se pingato fuori finestra (es. a metà pranzo).
-      // SAFETY FREEZE (2026-08-09) — this is reachable by an external cron with
-      // no human pressing anything, same as the internal tick/boot catch-up, so
-      // it shares the same LEGACY_AUTOMATIC_LIFECYCLE_ENABLED gate.
-      const identity = LEGACY_AUTOMATIC_LIFECYCLE_ENABLED ? await serviceSessionLifecycle.currentCloseout() : null;
-      if (!LEGACY_AUTOMATIC_LIFECYCLE_ENABLED) {
-        result = { success: true, skipped: true, reason: "legacy_automatic_lifecycle_frozen" };
-      } else if (!identity?.ok || identity.code === "NO_SERVICE_SESSION" || !identity.session || identity.session.status === "closed") {
-        result = { success: true, skipped: true, reason: "no_active_session" };
-      } else {
-        const decision = computeAutoCloseDecision({ now: new Date(), session: identity.session });
-        if (!decision.due) {
-          result = { success: true, skipped: true, reason: decision.reason || "not_due" };
-        } else {
-          // SERVICE CLOSEOUT V2 / SLICE 3 — RC-2 fix: pending operational
-          // activity no longer skips a DUE rollover forever. It becomes a
-          // persisted incident instead; the session still closes via the
-          // same chiudiServizio engine performIncidentSafeRollover delegates to.
-          result = await performIncidentSafeRollover({ session: identity.session, source: "external", actor: "system" });
-        }
-      }
+      // N-2 — the automatic (no-human) close scheduler this external-cron
+      // backup endpoint fed (serviceCloseTick/catchUpChiusura/incident-safe
+      // rollover, behind the retired LEGACY_AUTOMATIC_LIFECYCLE_ENABLED flag)
+      // has been deleted: every close now goes through V3 Finalizar (operator,
+      // manual) or F-10 forgotten-close recovery (event-driven, from order
+      // intake). Endpoint kept registered in case an external cron still
+      // pings this URL; permanently inert.
+      result = { success: true, skipped: true, reason: "legacy_automatic_lifecycle_retired" };
     } else if (action === "scanServizio") {
       result = await scanServizio();
     } else if (action === "backupSerata") {
@@ -1388,40 +1354,7 @@ if (require.main === module) {
     .catch(e => console.error(`[S4 boot check] migration status read failed: ${String(e?.message || e).slice(0, 200)}`));
 }
 
-// ─── Messaggio operatore di fine chiusura (summary completa) ────────────────
-function buildCloseSummaryMsg(res, ctx) {
-  if (res?.skipped) return null;
-  if (!res?.success) {
-    return `⚠️ *Chiusura ${ctx} — ERRORE*\n\n${res?.error || "fallita"}\n\n${JSON.stringify(res?.details || res).slice(0, 400)}\n\nIl backup raw è in backup_serata, nessun dato perso. Riprova manualmente.`;
-  }
-  const s = res.summary || {};
-  const eur = n => `${(Number(n)||0).toFixed(2)}€`;
-  const cassaLines = [];
-  if (s.cassa_efectivo > 0)        cassaLines.push(`  💵 Efectivo  ${eur(s.cassa_efectivo)}`);
-  if (s.cassa_tarjeta > 0)         cassaLines.push(`  💳 Tarjeta   ${eur(s.cassa_tarjeta)}`);
-  if (s.cassa_bizum > 0)           cassaLines.push(`  📱 Bizum     ${eur(s.cassa_bizum)}`);
-  if (s.cassa_non_specificato > 0) cassaLines.push(`  ❓ Non spec. ${eur(s.cassa_non_specificato)}`);
-  const zonaLines = Object.entries(s.per_zona || {}).map(([z, v]) => `  ${z}: ${v.n}× · ${eur(v.eur)}`);
-  return [
-    `🌙 *Serata chiusa* (${ctx})`,
-    ``,
-    `📊 ${s.n_ordini} ordini · 🍕 ${s.n_pizze} pizze · 🥤 ${s.n_bevande} bevande${s.n_dessert ? ` · 🍰 ${s.n_dessert} dolci` : ""}`,
-    `🛵 ${s.n_delivery} delivery · 🏠 ${s.n_ritiro} ritiro`,
-    `👥 ${s.n_clienti_unici} clienti${s.n_clienti_nuovi ? ` (${s.n_clienti_nuovi} nuovi)` : ""}`,
-    `💬 ${s.n_domande_gestite || 0} domande gestite`,
-    ``,
-    `💰 *Cassa ${eur(s.cassa_totale)}*` + (s.delivery_fee_totale > 0 ? ` (di cui ${eur(s.delivery_fee_totale)} delivery fee)` : ""),
-    ...cassaLines,
-    ``,
-    zonaLines.length > 0 ? `🗺️ *Per zona:*` : "",
-    ...zonaLines,
-    ``,
-    res.backupOk ? `✅ Backup raw OK` : `⚠️ Backup raw fallito (chiusura comunque OK)`,
-    `Buonanotte! 🍕`
-  ].filter(Boolean).join("\n");
-}
-
-// ─── CRON AUTOMATICO: backup + chiudi serata (ora di Madrid) ────────────────
+// ─── CRON AUTOMATICO: backup preventivo (ora di Madrid) ─────────────────────
 function msUntilMadridHM(h, m) {
   const now = new Date();
   const madridNow = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Madrid" }));
@@ -1447,166 +1380,16 @@ function schedula2340() {
   }, delay);
 }
 
-// S2-1G — bounded deferred-close retry. When a scheduled close is deferred by an active
-// rider trip, retry on a fixed interval up to a max, so the service does not stay open until
-// the next day once the trip finally closes. Pure decision (testable) + a single-timer
-// scheduler that never overlaps and never tight-loops.
-const CLOSE_RETRY_INTERVAL_MS = 10 * 60 * 1000; // 10 min
-const CLOSE_RETRY_MAX_ATTEMPTS = 9;             // ~90 min window after the scheduled close
-function deferredCloseRetryPlan(result, attempt) {
-  const deferred = !!(result && result.deferred && result.reason === "active_rider_trip");
-  if (!deferred) return { retry: false };
-  if (attempt >= CLOSE_RETRY_MAX_ATTEMPTS) return { retry: false, reason: "max_attempts" };
-  return { retry: true, delayMs: CLOSE_RETRY_INTERVAL_MS, attempt: attempt + 1 };
-}
-let _closeRetryTimer = null;
-function scheduleDeferredCloseRetry(source, attempt) {
-  if (_closeRetryTimer) return; // never overlap
-  _closeRetryTimer = setTimeout(async () => {
-    _closeRetryTimer = null;
-    let res;
-    try { res = await chiudiServizio(true, source); }
-    catch (e) { console.error(`[close-retry ${source}] errore:`, e); return; }
-    console.log(`[close-retry ${source}] attempt ${attempt} ->`, JSON.stringify(res));
-    const plan = deferredCloseRetryPlan(res, attempt);
-    if (plan.retry) scheduleDeferredCloseRetry(source, plan.attempt);
-  }, CLOSE_RETRY_INTERVAL_MS);
-  if (_closeRetryTimer && _closeRetryTimer.unref) _closeRetryTimer.unref();
-}
-
-// ── S2-7D6B — the service close tick ────────────────────────────────────────
-// The old cron fired ONCE at 23:50 and force-closed "the evening". That is wrong
-// on both ends now: a 23:50 order is a perfectly normal order (intake runs to
-// 00:00), and lunch needs its own close from 17:30 with no evening cron in
-// sight. So instead of two hardcoded alarms there is one periodic tick that asks
-// the schedule and the live session what is due.
-//
-// It never forces anything. chiudiServizio remains the ONE close implementation:
-// the active-rider-trip gate, the archive/verify contract and the idempotent
-// lifecycle are all unchanged and are the reason this can safely run on a timer.
-const CLOSE_TICK_INTERVAL_MS = 10 * 60 * 1000;
-
-async function serviceCloseTick() {
-  let identity;
-  try { identity = await serviceSessionLifecycle.currentCloseout(); }
-  catch (e) { console.error("[close-tick] identity read failed:", e?.message || e); return; }
-  if (!identity?.ok || identity.code === "NO_SERVICE_SESSION") return;
-  const session = identity.session;
-  if (!session || session.status === "closed") return;
-
-  const decision = computeAutoCloseDecision({ now: new Date(), session });
-  if (!decision.due) return;
-
-  if (decision.escalate) {
-    // Past 04:00 with a live service: the operator must know. We do NOT skip the
-    // close attempt, but we never let it silently destroy in-flight work either
-    // — the rider gate inside chiudiServizio still defers if a trip is open.
-    console.error(`[close-tick] ESCALATION — ${decision.kind} session ${session.id} still active past 04:00 Madrid`);
-  }
-
-  // SERVICE CLOSEOUT V2 / SLICE 3 — RC-2 fix: a pending non-terminal order no
-  // longer skips this tick forever. performIncidentSafeRollover classifies it
-  // (kitchen/LISTO/delivery/unpaid -> a persisted incident) and still calls
-  // chiudiServizio; the rider-trip gate inside chiudiServizio is unchanged and
-  // still defers the close if a trip is genuinely active.
-  console.log(`[close-tick] closing ${decision.kind} session ${session.id} (${decision.source})`);
-  let res;
-  try { res = await performIncidentSafeRollover({ session, source: decision.source, actor: "system" }); }
-  catch (e) { console.error(`[close-tick ${decision.source}] errore:`, e); return; }
-  console.log(`[close-tick ${decision.source}] risultato:`, JSON.stringify(res));
-
-  const plan = deferredCloseRetryPlan(res, 0);
-  if (plan.retry) scheduleDeferredCloseRetry(`${decision.source}-retry`, plan.attempt);
-
-  if (res && res.success) {
-    try {
-      const cfg = await getConfig();
-      const msg = buildCloseSummaryMsg(res, `${decision.kind} automática`);
-      if (msg) for (const waId of ["41767011848", "34614267535"]) await invia(waId, msg, cfg).catch(() => {});
-    } catch (_) { /* notification is best-effort, never blocks the close */ }
-  }
-}
-
-function schedulaCloseTick() {
-  const t = setInterval(() => { serviceCloseTick().catch((e) => console.error("[close-tick]", e)); }, CLOSE_TICK_INTERVAL_MS);
-  if (t.unref) t.unref();
-  console.log(`[close-tick] attivo — verifica ogni ${CLOSE_TICK_INTERVAL_MS / 60000} minuti (PRANZO da 17:30, SERA da 00:00)`);
-  return t;
-}
-
-// Catch-up all'avvio del server — S2-7D6D. Il vecchio catch-up ragionava solo su una
-// finestra oraria fissa (23:00-05:59) e sul marker LAST_CLOSE_DATE, che è scritto SOLO
-// dalle chiusure SERA (servizio.js chiudiServizio) — un PRANZO rimasto aperto a riavvio
-// non veniva mai recuperato al boot, solo dal tick periodico (fino a ~10 min di ritardo).
-// Ora usa lo STESSO motore di decisione del tick (computeAutoCloseDecision), letto sulla
-// sessione realmente attiva: kind-agnostic, nessuna finestra oraria ad hoc, nessun
-// force-close implicito (chiudiServizio resta l'unica implementazione, con lo stesso
-// gate rider-trip e la stessa idempotenza).
-async function catchUpChiusura() {
-  try {
-    let identity;
-    try { identity = await serviceSessionLifecycle.currentCloseout(); }
-    catch (e) { console.error("[catchUp] identity read failed:", e?.message || e); return; }
-    if (!identity?.ok || identity.code === "NO_SERVICE_SESSION") {
-      console.log("[catchUp] nessuna sessione attiva — skip");
-      return;
-    }
-    const session = identity.session;
-    if (!session || session.status === "closed") {
-      console.log("[catchUp] sessione già chiusa — skip");
-      return;
-    }
-
-    const decision = computeAutoCloseDecision({ now: new Date(), session });
-    if (!decision.due) {
-      console.log(`[catchUp] non ancora dovuta (${decision.reason || "n/a"}) — skip`);
-      return;
-    }
-
-    if (decision.escalate) {
-      console.error(`[catchUp] ESCALATION — ${decision.kind} session ${session.id} ancora attiva oltre le 04:00 Madrid al riavvio`);
-    }
-
-    // SERVICE CLOSEOUT V2 / SLICE 3 — RC-2 fix: pending orders no longer skip
-    // boot recovery forever; they become persisted incidents instead.
-    console.log(`[catchUp] chiusura mancante — chiudo ${decision.kind} session ${session.id} (boot recovery)`);
-    const res = await performIncidentSafeRollover({ session, source: "catchUp", actor: "system" });
-    console.log("[catchUp] risultato:", JSON.stringify(res));
-
-    const plan = deferredCloseRetryPlan(res, 0);
-    if (plan.retry) scheduleDeferredCloseRetry("catchUp-retry", plan.attempt);
-
-    if (res && res.success && !res.skipped) {
-      const cfgAll = await getConfig();
-      const msg = buildCloseSummaryMsg(res, "Recupero post-restart");
-      if (msg) for (const waId of ["41767011848", "34614267535"]) await invia(waId, msg, cfgAll).catch(() => {});
-    }
-  } catch (e) {
-    console.error("[catchUp] errore:", e);
-  }
-}
-
+// N-2 — the automatic close-tick, boot catch-up, external-cron backup, and
+// bounded deferred-close retry that used to live here (behind the retired
+// LEGACY_AUTOMATIC_LIFECYCLE_ENABLED flag) are deleted, not frozen: every
+// close now goes through V3 Finalizar (operator, manual) or F-10
+// forgotten-close recovery (event-driven, from order intake). See
+// src/serviceSessions/serviceLifecycleEngine.js and
+// src/serviceSessions/forgottenCloseRecovery.js.
 if (require.main === module) {
   schedula2340();          // 23:40 preventive backup — kept: useful, and it never
                            // touches session identity or closes the cash session.
-  if (LEGACY_AUTOMATIC_LIFECYCLE_ENABLED) {
-    schedulaCloseTick();     // S2-7D6B — replaces the single 23:50 forced close.
-    catchUpChiusura();
-  } else {
-    console.log("[lifecycle-freeze] LEGACY_AUTOMATIC_LIFECYCLE_ENABLED=false — close-tick and boot catch-up frozen");
-  }
 }
 
 module.exports = { app };
-// S2-1G — additional testable exports attached separately so the accepted B7 assertion
-// `module.exports = { app }` remains byte-exact.
-module.exports.deferredCloseRetryPlan = deferredCloseRetryPlan;
-module.exports.CLOSE_RETRY_MAX_ATTEMPTS = CLOSE_RETRY_MAX_ATTEMPTS;
-module.exports.CLOSE_RETRY_INTERVAL_MS = CLOSE_RETRY_INTERVAL_MS;
-// S2-7D6D — exported so cron/boot/external parity is provable without a live server:
-// serviceCloseTick/catchUpChiusura both delegate their "is it due" decision to the
-// same computeAutoCloseDecision (see src/serviceSessions/autoCloseDecision.js); these
-// exports let a test drive each trigger end-to-end against a stubbed lifecycle/chiudiServizio.
-module.exports.serviceCloseTick = serviceCloseTick;
-module.exports.catchUpChiusura = catchUpChiusura;
-module.exports.CLOSE_TICK_INTERVAL_MS = CLOSE_TICK_INTERVAL_MS;

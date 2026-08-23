@@ -55,8 +55,22 @@ assert("6b: rollback restores the grant on the 2-arg overload", /REVOKE ALL ON F
 console.log("\n== JS wiring: preserveActiveOrders flows from the close engine through beginClose to the RPC, mirroring completeClose exactly ==");
 assert("7a: serviceSessionLifecycle.beginClose accepts preserveActiveOrders (default false)", /async beginClose\(\{ actor, source = "backend", preserveActiveOrders = false \}\)/.test(LIFECYCLE));
 assert("7b: beginClose forwards it as p_preserve_active_orders on the RPC call", /p_closed_by: actor, p_source: source, p_preserve_active_orders: preserveActiveOrders,/.test(LIFECYCLE));
-// language-guard: allow-legacy servizio.js is the existing close-engine module path this assertion names, not new vocabulary
-assert("7c: servizio.js's beginClose call site passes preserveActiveOrders through", /serviceSessionLifecycle\.beginClose\(\{ actor, source, preserveActiveOrders \}\)/.test(SERVIZIO));
+// language-guard: allow-legacy chiudiServizio is the existing deleted function name this paragraph cites for audit history, not new vocabulary
+// N-2 — chiudiServizio (its only caller) was deleted in the application-wide
+// legacy/dead-code purge (proved zero reachable callers: the manual HTTP
+// action's legacy branch is structurally unreachable — every session is now
+// lifecycle_semantics='operational_service_v1' — and incidentSafeRollover.js,
+// its only other caller, was itself unreachable and deleted too). Nothing
+// anywhere in the codebase now calls serviceSessionLifecycle.beginClose( at
+// all — V3 (serviceLifecycleEngine.js) never required this wrapper (see
+// tests/serviceLifecycleV3EngineLegacyNonInterference.static.test.js). The
+// wrapper itself (asserted intact above, 7a/7b) and the RPC it forwards to
+// are orphaned as a direct consequence, not touched by this purge — removing
+// them is a DB-RPC question of its own, flagged as follow-up in the purge's
+// report, not resolved here.
+// language-guard: allow-legacy chiudiServizio/SERVIZIO are the existing deleted-function name and this file's own source-text variable, cited below, not new vocabulary
+const noBeginCloseCaller = !/\.beginClose\(/.test(SERVIZIO) && !/\.beginClose\(/.test(read("index.js"));
+assert("7c: no caller anywhere invokes serviceSessionLifecycle.beginClose( — orphaned along with the deleted legacy close function, its only caller", noBeginCloseCaller);
 
 console.log("\n== both halves of the close transition express the identical policy, no contradictory gate remains ==");
 assert("8a: begin and complete both use the exact parameter name p_preserve_active_orders", (MIGRATION.match(/p_preserve_active_orders/g) || []).length >= 3);

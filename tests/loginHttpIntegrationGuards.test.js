@@ -88,7 +88,13 @@ assert('in-memory enabled: exactly 1 POST + 1 error handler, enabled=true', a.po
 // ── RUNTIME ENTRYPOINT PROOF (NC17) ──────────────────────────────────────────
 const PKG = require('../package.json');
 assert('start script is `node index.js` (index.js is the runtime entrypoint)', PKG.scripts && PKG.scripts.start === 'node index.js' && PKG.main === 'index.js');
-assert('index.js starts server + schedulers under require.main === module', /if \(require\.main === module\) \{[\s\S]*?app\.listen\(PORT/.test(IDX) && /if \(require\.main === module\) \{[\s\S]*?schedula2340\(\);[\s\S]*?schedulaCloseTick\(\);[\s\S]*?catchUpChiusura\(\)/.test(IDX));
+// N-2 — schedulaCloseTick/catchUpChiusura (the automatic close-tick + boot
+// catch-up scheduler) were deleted in the application-wide legacy/dead-code
+// purge: proved zero reachable production value (V3 Finalizar + F-10
+// forgotten-close recovery replaced them entirely). schedula2340 (the 23:40
+// preventive backup) is untouched — it never closes anything.
+assert('index.js starts server + the preventive-backup scheduler under require.main === module', /if \(require\.main === module\) \{[\s\S]*?app\.listen\(PORT/.test(IDX) && /if \(require\.main === module\) \{[\s\S]*?schedula2340\(\);/.test(IDX));
+assert('index.js no longer schedules the deleted automatic close-tick/catch-up', !/schedulaCloseTick\(\)|catchUpChiusura\(\)/.test(IDX));
 assert('index.js exports app (importable, side-effect-free when required)', /module\.exports = \{ app \}/.test(IDX));
 assert('no deployment artifact overrides the start command', ['Procfile', 'railway.json', 'railway.toml', 'nixpacks.toml', 'Dockerfile'].every((f) => !fs.existsSync(path.join(__dirname, '..', f))));
 // entrypoint side-effect-free import: the module was already required above for other tests

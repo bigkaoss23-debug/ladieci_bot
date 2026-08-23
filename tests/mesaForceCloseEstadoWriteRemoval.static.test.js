@@ -205,23 +205,21 @@ function extractFn(src, name) {
   // helpers (src/utils/supabase.js) -- raw UPDATE SQL is never issued from
   // JS. So the precise, meaningful check is: no sbUpdate/sbUpsert call
   // targeting 'ordenes' carries the legacy literal anywhere in its payload.
-  // KNOWN, ALREADY-AUDITED EXCLUSION: src/utils/servizio.js's chiudiServizio -- language-guard: allow-legacy servizio.js/chiudiServizio are the existing legacy filename/function this exclusion documents, not new vocabulary
-  // builds `{ ...o, estado: "CHIUSO_FORZATO" }` as a plain in-memory object -- language-guard: allow-legacy CHIUSO_FORZATO is the same existing terminal-state literal, cited to explain what this exclusion covers, not new vocabulary
-  // (this session's own audit traced it end-to-end) -- it is used only to
-  // compute the archived storico row's/summary's classification, is NEVER -- language-guard: allow-legacy storico is the existing archive table name this exclusion's rationale cites, not new vocabulary
-  // passed to sbUpdate/sbUpsert against `ordenes`, and the whole call path
-  // is unreachable today (LEGACY_AUTOMATIC_LIFECYCLE_ENABLED=false live;
-  // zero economic_period_v1 sessions open, none can be newly opened). It
-  // predates this migration, is not a `ordenes.estado` writer by the
-  // definition FASE 1 cares about, and is explicitly out of this slice's
-  // scope to touch -- excluding it here is a documented, narrow exception,
-  // not a blanket loophole (any OTHER file matching the write-shaped
-  // pattern below still fails this test).
-  const KNOWN_NON_WRITER_EXCLUSIONS = new Set(['src/utils/servizio.js']); // language-guard: allow-legacy servizio.js is the same existing legacy filename this exclusion set names, not new vocabulary
+  // language-guard: allow-legacy servizio.js/chiudiServizio are the existing module path and deleted function name this paragraph cites for audit history, not new vocabulary
+  // N-2 — the exclusion this test used to carry for src/utils/servizio.js's
+  // language-guard: allow-legacy chiudiServizio/CHIUSO_FORZATO are the same existing deleted function name and literal, not new vocabulary
+  // chiudiServizio (which built `{ ...o, estado: "CHIUSO_FORZATO" }` as an
+  // language-guard: allow-legacy storico is the existing archive table name this line cites, not new vocabulary
+  // in-memory object en route to the archived storico row) is gone because
+  // language-guard: allow-legacy chiudiServizio is the same existing deleted function name, not new vocabulary
+  // chiudiServizio itself is gone: the application-wide legacy/dead-code
+  // purge deleted it (zero reachable callers — proven, not just frozen).
+  // language-guard: allow-legacy servizio.js is the same existing module path, not new vocabulary
+  // src/utils/servizio.js no longer contains the literal at all, so it needs
+  // no exception anymore; it passes this check like any other file.
   const writeAttempts = [];
   for (const f of appFiles) {
     const rel = path.relative(ROOT, f);
-    if (KNOWN_NON_WRITER_EXCLUSIONS.has(rel)) continue;
     const text = fs.readFileSync(f, 'utf8');
     // sbUpdate('ordenes', ...) / sbUpsert('ordenes', ...) with the legacy
     // literal appearing within the same call (a generous 400-char window

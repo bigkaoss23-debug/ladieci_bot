@@ -17,11 +17,24 @@ const servizioSrc = fs.readFileSync(path.join(ROOT, "src/utils/servizio.js"), "u
 
 const CONFLICT_TARGET = "service_session_id,orden_id";
 
-test("backend still upserts storico on the (service_session_id, orden_id) conflict target", () => {
+// language-guard: allow-legacy storico/chiudiServizio are the existing archive table name and deleted function name this whole test's title/body cites, not new vocabulary
+test("the archive table has no application writer left (its sole writer was deleted) — index contract below still guards the historical schema", () => {
+  // N-2 — the sole writer of the archive table (via this exact
+  // on_conflict=service_session_id,orden_id upsert) was deleted in the
+  // application-wide legacy/dead-code purge: proved zero reachable callers
+  // (the manual HTTP action's legacy branch is structurally unreachable —
+  // every session is now lifecycle_semantics='operational_service_v1' — and
+  // the incident-safe rollover orchestrator, its only other caller, was
+  // itself unreachable and deleted too). Pre-existing gap made visible, not
+  // a new regression — that writer was already unreachable before this
+  // purge; flagged in the purge's own report, not fixed here (out of scope).
+  // The migration-side index-shape assertions below are untouched: they
+  // guard the historical schema/data regardless of whether a live JS writer
+  // exists.
   const usesTarget = new RegExp(
     `sbUpsert\\(\\s*["'\`]storico["'\`]\\s*,[^;]*["'\`]${CONFLICT_TARGET}["'\`]`
   ).test(servizioSrc);
-  assert.ok(usesTarget, "storico upsert conflict target changed — revisit the index contract");
+  assert.equal(usesTarget, false, "an archive-table writer reappeared in the legacy close module — if this is intentional, revisit this test's expectations");
 });
 
 test("the net effect of all forward migrations leaves storico_session_order_uq NON-partial", () => {

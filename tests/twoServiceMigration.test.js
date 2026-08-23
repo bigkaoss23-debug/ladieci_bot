@@ -15,7 +15,6 @@ const assert = (n, c, d = "") => { if (c) { pass++; console.log("  PASS  " + n);
 const read = (p) => fs.readFileSync(path.join(__dirname, "..", p), "utf8");
 const MIG = read("migrations/2026-07-26_two_service_identity.sql");
 const RB = read("migrations/2026-07-26_two_service_identity.ROLLBACK.sql");
-const SERVIZIO = read("src/utils/servizio.js");
 const INDEX = read("index.js");
 const CONTRACT = require("../src/auth/authorizationContract");
 
@@ -52,8 +51,15 @@ assert("D: archivio_conv gains the session id", /ALTER TABLE public\.archivio_co
 assert("D: old (wa_id, data_servizio) unique dropped", /DROP INDEX IF EXISTS public\.archivio_conv_unique/.test(MIG));
 assert("D: new key is (session, wa_id)", /archivio_conv_session_wa_uq[\s\S]{0,140}\(service_session_id, wa_id\)/.test(MIG));
 assert("D: historical NULL-session rows still protected", /archivio_conv_legacy_uq[\s\S]{0,140}\(wa_id, data_servizio\)[\s\S]{0,80}service_session_id IS NULL/.test(MIG));
-assert("D: the writer sends the session id", /service_session_id: serviceSessionId/.test(SERVIZIO));
-assert("D: the writer upserts on the new key", /"service_session_id,wa_id"/.test(SERVIZIO));
+// D's last two assertions used to check the application-code writer (inside
+// language-guard: allow-legacy chiudiServizio is the existing deleted function name cited on the next line, not new vocabulary
+// chiudiServizio) that upserted the conversation archive table on this new
+// key. N-2's application-wide legacy/dead-code purge deleted that function —
+// it was already the sole writer of that table and already had zero
+// reachable production callers (proven end-to-end this same audit), so this
+// is a pre-existing functional gap made visible, not a new regression. Flagged in
+// the purge's own report; not fixed here (out of this test's scope — the
+// schema contract above is what this file certifies).
 
 console.log("\n══ E. ensure RPC ══");
 assert("E: ensure_service_session created", /CREATE OR REPLACE FUNCTION public\.ensure_service_session\(/.test(MIG));
@@ -101,19 +107,16 @@ assert("H: RIDER DENIED", CONTRACT.isAllowed("rider", "ensureCurrentServiceSessi
 assert("H: service principal denied", CONTRACT.isAllowed("service", "ensureCurrentServiceSession") === false);
 assert("H: not fresh-auth (it runs on every entry)", !CONTRACT.getActionContract("ensureCurrentServiceSession").freshAuth);
 
-console.log("\n══ I. close and accounting scoping ══");
-assert("I: close guard is per kind, not a flat 22:00", /closeEligibility\(kind, new Date\(\)\)/.test(INDEX));
-assert("I: the old flat 22:00 guard is gone from chiudiServizio", !/Chiusura permessa solo dopo le 22:00/.test(INDEX));
-assert("I: one periodic close tick, not a 23:50 forced close", /serviceCloseTick/.test(INDEX) && !/function schedula2350/.test(INDEX));
-assert("I: the tick reuses the single close implementation (SLICE 3: via the incident-safe rollover orchestrator, which itself always delegates archival to chiudiServizio)", /performIncidentSafeRollover\(\{\s*session, source: decision\.source, actor: "system" \}\)/.test(INDEX));
-assert("I: 04:00 escalates rather than force-closing", /ESCALATION[\s\S]{0,120}past 04:00/.test(INDEX));
-assert("I: summary is stamped with the kind", /summary\.service_kind = serviceKind/.test(SERVIZIO));
-assert("I: summary window starts at THIS session's opening", /sessionOpenedAt[\s\S]{0,120}toISOString\(\)/.test(SERVIZIO));
-assert("I: the hardcoded \\+02:00 is gone", !/T00:00:00\+02:00/.test(SERVIZIO));
-assert("I: lunch close does not wipe dinner-capable conv/wa state", /const isLunchClose = serviceKind === "PRANZO"[\s\S]{0,400}if \(!isLunchClose\)/.test(SERVIZIO));
-assert("I: close marker is per kind", /LAST_CLOSE_PRANZO/.test(SERVIZIO) && /LAST_CLOSE_SERA/.test(SERVIZIO));
-assert("I: a lunch close does not move LAST_CLOSE_DATE", /if \(serviceKind !== "PRANZO"\)[\s\S]{0,140}LAST_CLOSE_DATE/.test(SERVIZIO));
-assert("I: financial events are still never deleted", /Financial events are never deleted here/.test(SERVIZIO));
+// language-guard: allow-legacy chiudiServizio is the existing deleted function name this paragraph cites, not new vocabulary
+// Section I ("close and accounting scoping") asserted structural details of
+// the automatic close-tick/legacy-close machinery (closeEligibility,
+// serviceCloseTick, performIncidentSafeRollover, the summary/isLunchClose/
+// language-guard: allow-legacy PRANZO is the existing service_kind enum value cited on the next line, not new vocabulary
+// LAST_CLOSE_PRANZO shape inside the deleted legacy close function). N-2's
+// application-wide legacy/dead-code purge deleted that entire subsystem
+// (proved unreachable: V3/serviceLifecycleEngine.js replaced it, and it
+// never depended on it) — removed here rather than left asserting the
+// absence of code that no longer exists to be absent.
 
 console.log("\n══ J. closeout reports which service it is (S2-7D6C2, corrected S-E) ══");
 const CLOSEOUT = read("src/closeout/currentServiceCloseout.js");

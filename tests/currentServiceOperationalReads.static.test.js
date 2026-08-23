@@ -33,12 +33,23 @@ test("close preview scopes orders, tables, and legacy conversations to the curre
   assert.match(block, /conversationWindow = `ts=gte\.\$\{openedAtMs\}`/);
 });
 
-test("service backup is scoped and the close passes its immutable session id", () => {
+test("service backup is scoped by an explicit session id when one is given", () => {
   const source = read("src/utils/servizio.js");
   assert.match(source, /async function backupSerata\(\{ serviceSessionId = null \} = \{\}\)/);
   assert.match(source, /serviceSessionQuery\(targetSessionId, "select=\*"\)/);
-  assert.match(source, /backupSerata\(\{ serviceSessionId \}\)/);
   assert.doesNotMatch(source, /sbSelect\("ordenes", "select=\*"\)/);
+  // language-guard: allow-legacy backupSerata/chiudiServizio are the existing function names this paragraph cites for audit history, not new vocabulary
+  // N-2 — "the close passes its immutable session id" (backupSerata({
+  // language-guard: allow-legacy chiudiServizio is the same existing deleted function name, not new vocabulary
+  // serviceSessionId })) used to be chiudiServizio's own call, at PASSO 2.
+  // language-guard: allow-legacy chiudiServizio is the same existing deleted function name, not new vocabulary
+  // The application-wide legacy/dead-code purge deleted chiudiServizio
+  // language-guard: allow-legacy backupSerata is the same existing function name, not new vocabulary
+  // (proved zero reachable callers); backupSerata's own signature and
+  // session-scoping still work exactly as asserted above, they're just
+  // currently invoked with the default/current session by every real caller
+  // language-guard: allow-legacy backupSerata is the same existing function name, not new vocabulary
+  // (index.js's 23:40 preventive backup + the manual backupSerata action).
 });
 
 // P0-C3 — widened from the single-session getCurrentOperationalSession()/

@@ -72,7 +72,15 @@ for (const file of PROD_FILES) {
       hasBoth(list), 'has only one completed spelling');
   }
 }
-assert('[P1] discovered the known ordenes completed-filter surface', part1Candidates >= 7,
+// N-2 — threshold lowered from 7 to 6: the application-wide legacy/dead-code
+// purge deleted the sole legacy close function this codebase used to have,
+// language-guard: allow-legacy servizio.js is the existing module path this line cites, not new vocabulary
+// which lived in src/utils/servizio.js and contributed one of the 7
+// candidate filters (its own completed-order read, proved to have zero
+// reachable callers). The remaining 6 are unchanged and still each
+// recognize both spellings — checked individually above, this is only a
+// floor on how many exist.
+assert('[P1] discovered the known ordenes completed-filter surface', part1Candidates >= 6,
   `only ${part1Candidates} candidates`);
 
 // ── PART 2: JS terminal/inactive ordenes.estado collections ──────────────────
@@ -131,24 +139,39 @@ for (const file of PROD_FILES) {
   assert('[P4.1b] index.js getOrdenes is scoped to the current service session (P0-C2: multi-id carryover-aware)',
     /action === "getOrdenes"\)[\s\S]{0,1200}?serviceSessionsQuery\(/.test(src));
 }
-// 4.2 service-close COMPLETED selections (scan + close read + close delete) → both.
+// 4.2 the surviving read-only pre-flight scan's COMPLETED selection → both.
+// N-2 — narrowed from "close + scan" to "scan" only: the application-wide
+// legacy/dead-code purge deleted the sole legacy close function this
+// language-guard: allow-legacy servizio.js is the existing module path this line cites, not new vocabulary
+// codebase used to have, in src/utils/servizio.js (proved zero reachable
+// callers — the manual HTTP action's legacy branch is structurally
+// unreachable, and its only other caller was itself unreachable and deleted
+// too). Its own completed-SELECT and completed-DELETE are gone with it; the
+// read-only pre-flight scan (still fully reachable) is the sole survivor
+// and still recognizes both spellings.
 {
+  // language-guard: allow-legacy servizio.js is the same existing module path this local variable cites, not new vocabulary
   const src = read('src/utils/servizio.js');
-  const completedSelects = src.match(/ordenes",\s*["`][^"`]*estado=in\.\(RETIRADO,[^)]*\)/g) || [];
-  // S2-6A3B: ordenes deletions go through sbDeleteVerified (the delete result is checked);
-  // the terminal-spelling guard must cover the verified wrapper as well as the raw call.
-  const completedDeletes = src.match(/sbDelete(?:Verified)?\("ordenes",\s*["`][^"`]*estado=in\.\(RETIRADO,[^)]*\)/g) || [];
-  assert('[P4.2a] servizio close/scan completed SELECTs recognize both (>=2)',
-    completedSelects.length >= 2 && completedSelects.every(hasBoth), completedSelects.join(' | '));
-  assert('[P4.2b] servizio close completed DELETE recognizes both (>=1)',
-    completedDeletes.length >= 1 && completedDeletes.every(hasBoth), completedDeletes.join(' | '));
+  // N-2 — the surviving scan wraps its query in a helper call rather than
+  // the deleted close function's own inline template-string shape, so the
+  // regex no longer anchors on a quote immediately after `ordenes",`; it
+  // just looks for the completed-order filter text itself within a read.
+  const completedSelects = src.match(/ordenes",\s*[^)]*estado=in\.\(RETIRADO,[^)]*\)/g) || [];
+  assert('[P4.2a] the surviving scan\'s completed SELECT recognizes both (>=1)',
+    completedSelects.length >= 1 && completedSelects.every(hasBoth), completedSelects.join(' | '));
+  assert('[P4.2b] the legacy close module has no completed-order DELETE left (its close function was deleted; the surviving scan is read-only)',
+    (src.match(/sbDelete(?:Verified)?\("ordenes",/g) || []).length === 0);
 }
-// 4.3 service-close ACTIVE selections (read + delete) exclude both completed.
+// 4.3 N-2 — the deleted close function's ACTIVE selections (its own PASSO
+// 3/PASSO 10 not.in queries) are gone along with it; the surviving scan
+// never used a not.in shape (it reads active orders via a positive
+// in.(...) allowlist instead — see [P4.1]-style discipline). Zero
+// candidates is the correct, compatible state now, not a regression.
 {
   const src = read('src/utils/servizio.js');
   const activeOrdenes = src.match(/ordenes",\s*["`][^"`]*estado=not\.in\.\(RETIRADO,[^)]*\)/g) || [];
-  assert('[P4.3] servizio close active SELECT/DELETE exclude both completed (>=2)',
-    activeOrdenes.length >= 2 && activeOrdenes.every(hasBoth), activeOrdenes.join(' | '));
+  assert('[P4.3] the legacy close module has zero active not.in(RETIRADO,...) selectors left (its close function was deleted)',
+    activeOrdenes.length === 0);
 }
 // 4.4 archive read recognizes both completed spellings.
 {
@@ -216,8 +239,16 @@ for (const file of PROD_FILES) {
     /upsertWaMsg\([^)]*"COMPLETATO"/.test(read('src/agents/orchestrator.js')));
   assert('[P6b] wa_msgs COMPLETATO dedup filter preserved (helpers)',
     /wa_msgs[^;]*stato=not\.in\.\(COMPLETATO,COCINA\)/.test(read('src/utils/helpers.js')));
-  assert('[P6c] wa_msgs COMPLETATO delete preserved (servizio)',
-    /sbDelete\("wa_msgs", "stato=in\.\(COMPLETATO,COCINA\)"\)/.test(read('src/utils/servizio.js')));
+  // N-2 — this delete lived exclusively inside the deleted legacy close
+  // function's own PASSO 10 cleanup step, deleted along with it (proved zero
+  // reachable callers). The sole survivor in this module is read-only and
+  // never deleted wa_msgs rows. Pre-existing gap made visible, not a new
+  // regression — that function was already unreachable before this purge;
+  // flagged in the purge's own report, not fixed here (out of scope).
+  // language-guard: allow-legacy servizio.js is the existing module path cited on the next line, not new vocabulary
+  const legacyCloseModuleSrc = read('src/utils/servizio.js');
+  assert('[P6c] the legacy close module has no wa_msgs delete left (its close function was deleted; the surviving scan is read-only)',
+    !/sbDelete\("wa_msgs"/.test(legacyCloseModuleSrc));
   assert('[P6d] wa_msgs stato filters were NOT contaminated with COMPLETADO',
     !/stato=[^"'&\s]*COMPLETADO/.test(PROD_FILES.map(read).join('\n')));
 }

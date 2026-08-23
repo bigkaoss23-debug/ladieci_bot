@@ -34,29 +34,26 @@ const riderTrip = require("../src/agents/riderTrip");
   r = await riderTrip.beginServiceCloseIfIdle();
   check("resetIfIdle -> 409 on active-trip conflict (never erases)", r.status === 409 && r.payload.error === "ACTIVE_TRIP_CONFLICT");
 
-  // ── servizio routes through the RPC with no direct write / no fallback ──
+  // language-guard: allow-legacy servizio.js/chiudiServizio are the existing module path and deleted function name this section header cites, not new vocabulary
+  // ── servizio.js's own rider-trip gate (chiudiServizio's PASSO 1b) is gone ──
+  // language-guard: allow-legacy chiudiServizio is the same existing deleted function name, not new vocabulary
+  // N-2 — the application-wide legacy/dead-code purge deleted chiudiServizio
+  // in its entirety (zero reachable callers, proven end-to-end): the manual
+  // HTTP action's legacy branch is structurally unreachable (every session is
+  // now lifecycle_semantics='operational_service_v1'), and its only other
+  // caller, incidentSafeRollover.js, was itself unreachable and deleted too.
+  // The gate this section used to certify (beginServiceCloseIfIdle call,
+  // ACTIVE_TRIP_CONFLICT deferral, rider_state_gate_failed fail-closed path)
+  // language-guard: allow-legacy chiudiServizio is the same existing deleted function name cited on the next line, not new vocabulary
+  // lived exclusively inside chiudiServizio and went with it. The RPC-level
+  // contract above (begin_service_close_if_idle itself) is untouched and
+  // still fully covered by this file's first section.
+  // language-guard: allow-legacy servizio.js is the existing module path this local variable name and the checks below cite, not new vocabulary
   const servizio = fs.readFileSync(path.join(__dirname, "..", "src", "utils", "servizio.js"), "utf8").replace(/\/\/.*$/gm, "");
-  check("servizio gate calls beginServiceCloseIfIdle", /beginServiceCloseIfIdle\(\{ serviceDate: oggi, source \}\)/.test(servizio));
-  check("servizio has no direct DRIVER_STATO sbUpsert", !/sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(servizio));
-  // STALE_SERVICE_SESSION_SELF_HEAL (2026-08-15) — window widened 200->1200:
-  // the ACTIVE_TRIP_CONFLICT branch now documents+implements
-  // allowActiveRiderTripAcrossBoundary (a conditional cross-boundary bypass,
-  // language-guard: allow-legacy servizio.js is the existing close-engine module this comment references, not new vocabulary
-  // scoped to incidentSafeRollover.js only — see servizio.js/
-  // incidentSafeRollover.js for the full contract and
-  // serviceCloseGate.test.js's own 4C.3 block for the runtime behavior this
-  // static check can't exercise). The DEFAULT path this assertion pins —
-  // no flag set -> still deferred, no fallback write — is completely
-  // unchanged; only the source distance to the literal grew, from the
-  // added conditional and its explanation.
-  // language-guard: allow-legacy servizio is the local variable holding servizio.js's source text, checked on the next two lines, not new vocabulary
-  check("servizio DEFERS on active-trip conflict by default (no fallback write)",
-    // language-guard: allow-legacy servizio is the local variable holding servizio.js's source text, checked on this and the next line, not new vocabulary
-    /ACTIVE_TRIP_CONFLICT[\s\S]{0,1200}deferred: true/.test(servizio) &&
-    !/resetIfIdle[\s\S]*sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(servizio));
-  // language-guard: allow-legacy servizio is the same local variable, holding servizio.js's source text, not new vocabulary
-  check("servizio fails closed on gate error (no destructive continue)",
-    /rider_state_gate_failed/.test(servizio));
+  // language-guard: allow-legacy servizio.js/chiudiServizio are the existing module path and deleted function name cited in this assertion label, not new vocabulary
+  check("servizio.js no longer references chiudiServizio at all (deleted, not just this gate)", !/chiudiServizio/.test(servizio));
+  // language-guard: allow-legacy servizio.js is the existing module path cited in this assertion label, not new vocabulary
+  check("servizio.js has no direct DRIVER_STATO sbUpsert", !/sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(servizio));
 
   console.log(`\nlifecycleReset: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

@@ -40,8 +40,18 @@ assert("4b: the exemption inside the order check requires v_incident_safe AND a 
 console.log("\n== JS wiring: preserveActiveOrders flows from the close engine through to the RPC ==");
 assert("5a: serviceSessionLifecycle.completeClose accepts preserveActiveOrders (default false)", /async completeClose\(\{ sessionId, actor, source = "backend", preserveActiveOrders = false \}\)/.test(LIFECYCLE));
 assert("5b: completeClose forwards it as p_preserve_active_orders on the RPC call", /p_preserve_active_orders: preserveActiveOrders,/.test(LIFECYCLE));
-// language-guard: allow-legacy servizio.js is the existing close-engine module path this assertion names, not new vocabulary
-assert("5c: servizio.js's completeClose call site passes preserveActiveOrders through", /serviceSessionLifecycle\.completeClose\(\{ sessionId: serviceSessionId, actor, source, preserveActiveOrders \}\)/.test(SERVIZIO));
+// language-guard: allow-legacy chiudiServizio is the existing deleted function name this paragraph cites for audit history, not new vocabulary
+// N-2 — chiudiServizio (its only caller) was deleted in the application-wide
+// legacy/dead-code purge (proved zero reachable callers). Nothing anywhere in
+// the codebase now calls serviceSessionLifecycle.completeClose( at all — see
+// the sibling beginClose finding in
+// tests/beginServiceSessionCloseIncidentSafeExemption.static.test.js (7c) for
+// the full reasoning; same conclusion applies here. The wrapper (asserted
+// intact above, 5a/5b) and the RPC it forwards to are orphaned, not touched
+// by this purge — flagged as follow-up, not resolved here.
+// language-guard: allow-legacy SERVIZIO is this file's own existing source-text variable, cited below, not new vocabulary
+const noCompleteCloseCaller = !/\.completeClose\(/.test(SERVIZIO) && !/\.completeClose\(/.test(read("index.js"));
+assert("5c: no caller anywhere invokes serviceSessionLifecycle.completeClose( — orphaned along with the deleted legacy close function, its only caller", noCompleteCloseCaller);
 
 console.log("\n== ROLLBACK: refuses if drifted, restores both bodies without the new marker/parameter ==");
 assert("6a: rollback refuses if complete_service_session_close no longer references the new parameter", /v_body1 NOT LIKE '%p_preserve_active_orders%'/.test(ROLLBACK));

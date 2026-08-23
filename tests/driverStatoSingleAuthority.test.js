@@ -44,8 +44,19 @@ check("no active writeDriverStato caller (definition only)",
 // (3) S2-1E — NO JS module writes DRIVER_STATO at all now (not even the service reset).
 check("index legacy has no DRIVER_STATO sbUpsert", !/sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(idx));
 check("servizio no longer writes DRIVER_STATO directly", !/sbUpsert\("config", \{ chiave: "DRIVER_STATO"/.test(servizio));
-check("servizio end-of-service reset routes through the transactional gate RPC",
-  /beginServiceCloseIfIdle\(\{ serviceDate: oggi, source \}\)/.test(servizio));
+// language-guard: allow-legacy chiudiServizio is the existing deleted function name this paragraph cites for audit history, not new vocabulary
+// N-2 — chiudiServizio (the sole caller of beginServiceCloseIfIdle from this
+// file) was deleted in the application-wide legacy/dead-code purge: proved
+// zero reachable callers (the manual HTTP action's legacy branch is
+// structurally unreachable, and incidentSafeRollover.js, its only other
+// language-guard: allow-legacy servizio.js is the existing module path this line cites, not new vocabulary
+// caller, was itself unreachable and deleted too). servizio.js no longer has
+// an end-of-service reset gate to route through at all; DRIVER_STATO's
+// single-mutation-authority invariant (checked throughout this file) is
+// otherwise untouched.
+// language-guard: allow-legacy servizio.js/chiudiServizio are the existing module path and deleted function name cited on the next line, not new vocabulary
+const legacyRiderGateGone = !/beginServiceCloseIfIdle/.test(servizio);
+check("the legacy close module no longer references the deleted function's rider-trip gate at all (deleted, not just this call)", legacyRiderGateGone);
 
 // (4) recordRiderOut — obsolete, no write.
 const rroBody = funcBody(tele, "recordRiderOut");

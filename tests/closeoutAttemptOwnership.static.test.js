@@ -89,7 +89,14 @@ const ROLLBACK_PATH = path.join(ROOT, 'migrations', '2026-08-08_service_closeout
     path.join(ROOT, 'src', 'closeout', 'closeoutAttempts.js'),
   ]);
   const CALLER_ALLOWED_FILES = new Set([
-    path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'),
+    // N-2 — incidentSafeRollover.js (the orchestrator this allowlist entry
+    // used to name) was deleted in the application-wide legacy/dead-code
+    // purge (proved zero reachable callers). V3 (serviceLifecycleEngine.js)
+    // is the real caller now, via closeoutAttempts.js's JS-level
+    // attempts.acquire/complete — but it never mentions the raw RPC name
+    // strings in its own source (no comment cites them, unlike
+    // incidentSafeRollover.js's did), so it never matches RPC_PATTERNS and
+    // needs no entry here.
     // SLICE 4C.2A — the H1B transport allowlist registers these RPC names by
     // string (never calls them) so the real sbRpc default can reach them at
     // all; see supabaseResourcePolicy.js's own comment at this entry.
@@ -122,8 +129,12 @@ const ROLLBACK_PATH = path.join(ROOT, 'migrations', '2026-08-08_service_closeout
       if (re.test(text)) unexpectedHits.push(path.relative(ROOT, f) + ' matches ' + re);
     }
   }
-  assert('8a: no application module OTHER than closeoutAttempts.js (the wrapper) and incidentSafeRollover.js (the orchestrator) references these RPC names directly', unexpectedHits.length === 0, JSON.stringify(unexpectedHits));
-  assert('8b: incidentSafeRollover.js DOES call attempts.acquire/supersede/complete — confirms the intended wiring actually landed', ['attempts.acquire(', 'attempts.supersede(', 'attempts.complete('].every((needle) => fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'), 'utf8').includes(needle)));
+  assert('8a: no application module OTHER than closeoutAttempts.js (the wrapper) references these RPC names directly', unexpectedHits.length === 0, JSON.stringify(unexpectedHits));
+  // N-2 — the orchestrator that used to call attempts.acquire/supersede/
+  // complete (incidentSafeRollover.js) was deleted (zero reachable callers,
+  // proven). V3 (serviceLifecycleEngine.js) is the real, live caller now —
+  // confirms the intended wiring still lands, just through a different file.
+  assert('8b: serviceLifecycleEngine.js DOES call attempts.acquire/complete — confirms the intended wiring actually landed', ['attempts.acquire(', 'attempts.complete('].every((needle) => fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'serviceLifecycleEngine.js'), 'utf8').includes(needle)));
   assert('8c: index.js has no new HTTP route for attempt acquisition/supersession/completion', !RPC_PATTERNS.some((re) => re.test(fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8'))));
   assert('8d: the scan actually walked a non-trivial number of files (guards against a broken walk silently passing)', candidateFiles.length > 20, String(candidateFiles.length));
 

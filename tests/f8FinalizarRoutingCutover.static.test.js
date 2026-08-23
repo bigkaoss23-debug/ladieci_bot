@@ -79,18 +79,27 @@ assert("3a: actor is the verified req.authCtx.actor, 401s if absent (same discip
     !/open_operational_service_v1/.test(NEW_ERA_BODY));
 }
 
-console.log("\n== D. Legacy branch is untouched — byte-identical shape to pre-F-8 ==");
+console.log("\n== D. Legacy branch — N-2 SUPERSEDED: deleted, not left byte-identical ==");
+// F-8 originally pinned this branch as untouched (closeEligibility + the
+// language-guard: allow-legacy chiudiServizio is the existing legacy close function cited on the next line, not new vocabulary
+// legacy chiudiServizio() call + its 409 ACTIVE_RIDER_TRIP surface). The
+// application-wide legacy/dead-code purge (N-2) proved the branch
+// structurally unreachable — open_operational_service_v1 is the only
+// session-creating primitive and always stamps operational_service_v1, so no
+// session can ever again take this path — and replaced its body with a
+// minimal fail-closed fallback rather than leaving it calling into deleted
+// language-guard: allow-legacy chiudiServizio is the same existing legacy close function cited on the next line, not new vocabulary
+// functions (chiudiServizio, closeEligibility's caller here).
 {
   const elseStart = BLOCK.indexOf("\n      } else {");
   const LEGACY_BODY = BLOCK.slice(elseStart);
-  assert("4a: legacy branch still calls closeEligibility(kind, new Date())",
-    /const gate = closeEligibility\(kind, new Date\(\)\);/.test(LEGACY_BODY));
-  assert("4b: legacy branch still honors req.query.force to override the clock gate",
-    /req\.query\.force !== "true"/.test(LEGACY_BODY));
-  assert("4c: legacy branch still calls the legacy chiudiServizio() function with deleteAttivi", // language-guard: allow-legacy chiudiServizio is the existing legacy close function this assertion checks the legacy body STILL calls, not new vocabulary
-    /await chiudiServizio\(req\.query\.deleteAttivi === "true", "operator", req\.authCtx\?\.actor \|\| "operator"\)/.test(LEGACY_BODY)); // language-guard: allow-legacy chiudiServizio is the same existing legacy function name, restated verbatim in the regex under test, not new vocabulary
-  assert("4d: legacy branch still surfaces ACTIVE_RIDER_TRIP as a 409 exactly as before",
-    /return res\.status\(409\)\.json\(\{ error: "ACTIVE_RIDER_TRIP"/.test(LEGACY_BODY));
+  assert("4a: legacy branch no longer calls closeEligibility( — deleted along with the unreachable path",
+    !/closeEligibility\(/.test(LEGACY_BODY));
+  // language-guard: allow-legacy chiudiServizio is the same existing legacy close function cited on the next line, not new vocabulary
+  const legacyBranchDoesNotCallTheDeletedCloseFn = !/\bchiudiServizio\(/.test(LEGACY_BODY);
+  assert("4c: legacy branch no longer calls the deleted legacy close function — deleted (zero reachable callers, proven)", legacyBranchDoesNotCallTheDeletedCloseFn);
+  assert("4e: legacy branch fails closed with a clear code instead (legacy_session_kind_unsupported)",
+    /legacy_session_kind_unsupported/.test(LEGACY_BODY));
 }
 
 console.log("\n== E. Scope discipline ==");

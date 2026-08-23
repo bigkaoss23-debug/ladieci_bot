@@ -198,8 +198,16 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   // The one module this slice deliberately wires as the "future lifecycle
   // orchestrator" — allowed to create/capture, but still checked against the
   // RESOLUTION-only patterns below like everything else.
+  //
+  // N-2 — incidentSafeRollover.js (the orchestrator this allowlist entry
+  // used to name) was deleted in the application-wide legacy/dead-code purge
+  // (proved zero reachable callers). V3 (serviceLifecycleEngine.js) is the
+  // real caller now, via dependency-injected local names (`incidents.report(`
+  // /`.resolve(`, `snapshots.capture(`, not the literal `serviceIncidents.`/
+  // `closeoutSnapshots.` this allowlist's patterns match) — so it never
+  // matches CREATION_PATTERNS/RESOLUTION_PATTERNS below and needs no entry
+  // here; see 10d2/10d4 below for the check against its actual call shape.
   const CREATION_WIRING_ALLOWED_FILES = new Set([
-    path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'),
     // SLICE 4C.2A — the H1B transport allowlist registers these RPC names by
     // string (never calls them) so the real sbRpc default can reach them at
     // all; see supabaseResourcePolicy.js's own comment at this entry.
@@ -226,8 +234,9 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
   // comment and serviceIncidents.js's updated header. This allowlist's job
   // is now "prove ONLY this reviewed action calls resolve(), nothing else
   // does it uncontrolled" rather than "prove nothing calls it at all".
+  // N-2 — incidentSafeRollover.js dropped from this list too, same reasoning
+  // as CREATION_WIRING_ALLOWED_FILES above.
   const RESOLUTION_WIRING_ALLOWED_FILES = new Set([
-    path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'),
     path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js'),
     path.join(ROOT, 'index.js'),
   ]);
@@ -267,10 +276,17 @@ const ROLLBACK_PATH = path.join(__dirname, '..', 'migrations', '2026-08-08_servi
     }
   }
   assert('10d: no application module OTHER than the explicitly-allowlisted creators references the creation/capture RPCs or wrappers', unexpectedCreationHits.length === 0, JSON.stringify(unexpectedCreationHits));
-  assert('10d2: the Slice-3 lifecycle orchestrator DOES reference them — confirms the intended wiring actually landed, not just permitted', CREATION_PATTERNS.some((re) => re.test(fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'), 'utf8'))));
+  // N-2 — incidentSafeRollover.js was deleted; V3 (serviceLifecycleEngine.js)
+  // is the real, live creation caller now, via its own dependency-injected
+  // local names (incidents.report(/snapshots.capture(), not the literal
+  // serviceIncidents./closeoutSnapshots. this file's CREATION_PATTERNS match
+  // — checked against its actual call shape instead.
+  assert('10d2: V3 (serviceLifecycleEngine.js) DOES reference creation/capture (incidents.report(/snapshots.capture() — confirms the intended wiring actually landed, not just permitted',
+    ['incidents.report(', 'snapshots.capture('].every((needle) => fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'serviceLifecycleEngine.js'), 'utf8').includes(needle)));
   assert('10d1b: previousBusinessDayResidue.js (P0-C3) DOES reference the creation wrapper too — confirms that wiring landed, not just permitted', CREATION_PATTERNS.some((re) => re.test(fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'previousBusinessDayResidue.js'), 'utf8'))));
   assert('10d3: no application module OTHER than the explicitly-allowlisted resolvers references the RESOLUTION RPC/wrapper — zero UNREVIEWED HTTP path', resolutionHits.length === 0, JSON.stringify(resolutionHits));
-  assert('10d4: the orchestrator DOES reference resolution now (SLICE 4C.2C) — confirms the intended post-confirmation wiring actually landed, not just permitted', RESOLUTION_PATTERNS.some((re) => re.test(fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'incidentSafeRollover.js'), 'utf8'))));
+  assert('10d4: V3 (serviceLifecycleEngine.js) DOES reference resolution (incidents.resolve() — confirms the intended post-confirmation wiring actually landed, not just permitted',
+    fs.readFileSync(path.join(ROOT, 'src', 'serviceSessions', 'serviceLifecycleEngine.js'), 'utf8').includes('incidents.resolve('));
   assert('10d5: index.js IS in the resolution-allowed set (P0-C3, deliberate) AND does reference resolve() — exactly one reviewed HTTP route exists, not an accidental one', RESOLUTION_WIRING_ALLOWED_FILES.has(path.join(ROOT, 'index.js')) && RESOLUTION_PATTERNS.some((re) => re.test(fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8'))));
   assert('10d6: that index.js reference is scoped to the resolveServiceIncident action block, not some other handler', (() => {
     const text = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8');

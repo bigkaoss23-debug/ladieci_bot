@@ -85,22 +85,55 @@ const readStripped = (rel) => stripComments(read(rel));
   const indexJs = readStripped("index.js");
   const ensureJs = readStripped("src/serviceSessions/ensureServiceSession.js");
 
-  // ── Claim 1a: index.js's 3 automatic entry points are still gated ────────
-  const callSites = indexJs.split("performIncidentSafeRollover(").length - 1;
-  assert("index.js: exactly 3 real call sites of performIncidentSafeRollover( (unchanged count — no new automatic entry point silently added)", callSites === 3, `found ${callSites}`);
-
-  const flagDefLine = indexRaw.match(/const LEGACY_AUTOMATIC_LIFECYCLE_ENABLED\s*=\s*process\.env\.LEGACY_AUTOMATIC_LIFECYCLE_ENABLED\s*!==\s*"false";/);
-  assert("index.js: LEGACY_AUTOMATIC_LIFECYCLE_ENABLED is still defined with default-true (\"!== false\") semantics", !!flagDefLine);
-
+  // ── Claim 1a: SUPERSEDED BY N-2 (application-wide legacy/dead-code purge) ─
+  // P0-C1 originally proved the 3 automatic entry points (close-tick, boot
+  // catch-up, external-cron triggerCloseIfNeeded) were GATED by the same env
+  // flag. That invariant no longer applies, because the whole subsystem is
+  // gone, not gated: performIncidentSafeRollover/incidentSafeRollover.js had
+  // zero reachable production callers (V3/serviceLifecycleEngine.js and F-10/
+  // forgottenCloseRecovery.js both replaced it and never depended on it), and
+  // its own call sites in index.js (serviceCloseTick, catchUpChiusura,
+  // scheduleDeferredCloseRetry) were deleted along with it. The assertions
+  // below are strictly stronger than the ones they replace — a gate can be
+  // switched on by an env var, a deleted file/call site cannot.
   assert(
-    "index.js: triggerCloseIfNeeded's call site is still literally inside an `if (!LEGACY_AUTOMATIC_LIFECYCLE_ENABLED)` skip guard",
-    /if \(!LEGACY_AUTOMATIC_LIFECYCLE_ENABLED\) \{[\s\S]{0,400}?skipped: true, reason: "legacy_automatic_lifecycle_frozen"/.test(indexJs),
+    "index.js: ZERO call sites of performIncidentSafeRollover( — the automatic scheduler is removed, not gated",
+    (indexJs.split("performIncidentSafeRollover(").length - 1) === 0,
   );
-
   assert(
-    "index.js: close-tick + boot catch-up registration is still gated by `if (LEGACY_AUTOMATIC_LIFECYCLE_ENABLED) { schedulaCloseTick(); catchUpChiusura(); }`",
-    /if \(LEGACY_AUTOMATIC_LIFECYCLE_ENABLED\) \{\s*schedulaCloseTick\(\);\s*catchUpChiusura\(\);\s*\}/.test(indexJs),
+    "index.js: LEGACY_AUTOMATIC_LIFECYCLE_ENABLED is gone — no flag left to flip (comment-stripped: explanatory prose may still name the retired flag to say why it's absent, per this file's own established convention)",
+    !/LEGACY_AUTOMATIC_LIFECYCLE_ENABLED/.test(indexJs),
   );
+  assert(
+    "index.js: serviceCloseTick/schedulaCloseTick/catchUpChiusura/scheduleDeferredCloseRetry/deferredCloseRetryPlan are not defined anywhere",
+    !/function serviceCloseTick|function schedulaCloseTick|function catchUpChiusura|function scheduleDeferredCloseRetry|function deferredCloseRetryPlan/.test(indexJs),
+  );
+  assert(
+    "index.js: triggerCloseIfNeeded is still registered (an external cron may still ping this URL) but is unconditionally, permanently inert",
+    /action === "triggerCloseIfNeeded"\) \{[\s\S]{0,400}?result = \{ success: true, skipped: true, reason: "legacy_automatic_lifecycle_retired" \};/.test(indexJs),
+  );
+  assert(
+    "src/serviceSessions/incidentSafeRollover.js: file no longer exists",
+    !fs.existsSync(path.join(ROOT, "src/serviceSessions/incidentSafeRollover.js")),
+  );
+  assert(
+    "src/serviceSessions/autoCloseDecision.js: file no longer exists",
+    !fs.existsSync(path.join(ROOT, "src/serviceSessions/autoCloseDecision.js")),
+  );
+  assert(
+    "src/serviceSessions/sessionRolloverClassification.js: file no longer exists",
+    !fs.existsSync(path.join(ROOT, "src/serviceSessions/sessionRolloverClassification.js")),
+  );
+  assert(
+    "src/serviceSessions/pendingActivityGuard.js: file no longer exists",
+    !fs.existsSync(path.join(ROOT, "src/serviceSessions/pendingActivityGuard.js")),
+  );
+  // language-guard: allow-legacy servizio.js/chiudiServizio are the existing module path and deleted function name cited on the next line, not new vocabulary
+  const legacyCloseFunctionGone = !/\bchiudiServizio\b/.test(readStripped("src/utils/servizio.js"));
+  assert("the legacy close module has its deleted close function gone — not required/exported anywhere", legacyCloseFunctionGone);
+  // language-guard: allow-legacy chiudiServizio/servizio are the same existing deleted function name and module path cited on the next line, not new vocabulary
+  const indexNeverRequiresLegacyCloseFunction = !/\{[^}]*\bchiudiServizio\b[^}]*\}\s*=\s*require\(["']\.\/src\/utils\/servizio["']\)/.test(indexJs);
+  assert("index.js does not require the deleted legacy close function from the legacy close module", indexNeverRequiresLegacyCloseFunction);
 
   // ── Claim 1b: SUPERSEDED BY LEGACY WRITER HARDENING ──────────────────────
   // P0-C1 originally proved the page-load ensure's rollover call was GATED by
@@ -141,9 +174,11 @@ const readStripped = (rel) => stripComments(read(rel));
 
   // 2a-2c. The legacy/automatic machinery must still never reach V3 at all —
   // unchanged from the original P0-C1 claim, just no longer including index.js.
+  // incidentSafeRollover.js dropped from this list — N-2 deleted the file
+  // entirely rather than leaving it to scan (see the file-existence
+  // assertions in Claim 1a above).
   const legacyOnlyScanTargets = [ // language-guard: allow-legacy servizio.js is the existing legacy module path in this fixture list, not new vocabulary
     "src/utils/servizio.js",
-    "src/serviceSessions/incidentSafeRollover.js",
     "src/serviceSessions/ensureServiceSession.js",
   ];
   for (const rel of legacyOnlyScanTargets) {
@@ -220,9 +255,20 @@ const readStripped = (rel) => stripComments(read(rel));
     !/ensureNext\(/.test(newEraBody) && !/ensure_next_service_session_v3/.test(newEraBody) && !/open_operational_service_v1/.test(newEraBody),
   );
 
+  // N-2 — the legacy/economic_period_v1 branch used to exclusively use the
+  // language-guard: allow-legacy chiudiServizio is the existing legacy close function cited on the next line, not new vocabulary
+  // legacy close gate + its close function (F-8 point 3, "transitional path
+  // untouched"). That transitional path is retired: the branch is now
+  // structurally unreachable (open_operational_service_v1 is the only
+  // session-creating primitive and always stamps operational_service_v1;
+  // live DB has zero economic_period_v1 sessions open, none can be newly
+  // opened), so it was replaced with a minimal fail-closed fallback rather
+  // than left calling into deleted functions.
+  const legacyBranchNoLongerCallsLegacyClose = !/closeEligibility\(/.test(legacyBody) && !legacyBody.includes(legacyCloseFnCall);
+  assert("legacy/economic_period_v1 branch: no longer calls the clock gate or the deleted legacy close function — both deleted", legacyBranchNoLongerCallsLegacyClose);
   assert(
-    "legacy/economic_period_v1 branch: still exclusively uses closeEligibility( + the legacy close function (F-8 point 3 — transitional path untouched)",
-    /closeEligibility\(/.test(legacyBody) && legacyBody.includes(legacyCloseFnCall),
+    "legacy/economic_period_v1 branch: fails closed with a clear code instead (legacy_session_kind_unsupported)",
+    /legacy_session_kind_unsupported/.test(legacyBody),
   );
   assert(
     "legacy/economic_period_v1 branch: NEVER calls the V3 close (F-8 point 6 — economic_period_v1 must never reach V3)",

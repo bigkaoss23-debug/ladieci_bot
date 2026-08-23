@@ -52,17 +52,17 @@ const check = (l, c) => { if (c) { pass++; console.log("  ✓ " + l); } else { f
   check("eliminaConversazione no raw JS deletes", !/action === "eliminaConversazione"[\s\S]{0,260}sbDelete\("(conv|wa_msgs|ordenes)"/.test(src));
   check("rider denied eliminaConversazione by role map", !roles.isAllowed("rider", "eliminaConversazione"));
 
-  // Bounded deferred-close retry decision (pure).
-  const deferred = { deferred: true, reason: "active_rider_trip" };
-  const p0 = idx.deferredCloseRetryPlan(deferred, 0);
-  check("deferred -> retry with delay + next attempt", p0.retry === true && p0.delayMs === idx.CLOSE_RETRY_INTERVAL_MS && p0.attempt === 1);
-  check("non-deferred success -> no retry", idx.deferredCloseRetryPlan({ success: true }, 0).retry === false);
-  check("skipped(already closed) -> no retry", idx.deferredCloseRetryPlan({ skipped: true, reason: "already_closed_today" }, 0).retry === false);
-  check("at max attempts -> no retry (bounded, no tight loop)", idx.deferredCloseRetryPlan(deferred, idx.CLOSE_RETRY_MAX_ATTEMPTS).retry === false);
-  check("retry attempts are monotonic (attempt increments)", idx.deferredCloseRetryPlan(deferred, 3).attempt === 4);
-
-  // §9 manual conflict is surfaced as a stable 409.
-  check("manual close deferred -> 409 ACTIVE_RIDER_TRIP", /deferred && result\.reason === "active_rider_trip"[\s\S]{0,140}status\(409\)[\s\S]{0,80}ACTIVE_RIDER_TRIP/.test(src));
+  // N-2 — the "bounded deferred-close retry decision" section (§9 manual
+  // conflict 409 included) tested scheduleDeferredCloseRetry/
+  // language-guard: allow-legacy chiudiServizio is the existing deleted legacy action's function name cited on the next line, not new vocabulary
+  // deferredCloseRetryPlan and the manual chiudiServizio action's
+  // ACTIVE_RIDER_TRIP 409 handler. Both were deleted in the application-wide
+  // legacy/dead-code purge: the retry mechanism was structurally unreachable
+  // (its only feeder, performIncidentSafeRollover, always suppressed the
+  // exact signal it waited for) and the manual action's legacy branch is
+  // gone (every session is now lifecycle_semantics='operational_service_v1').
+  // index.js no longer exports deferredCloseRetryPlan/CLOSE_RETRY_*.
+  check("index.js no longer exports the deleted deferred-close retry machinery", idx.deferredCloseRetryPlan === undefined && idx.CLOSE_RETRY_INTERVAL_MS === undefined && idx.CLOSE_RETRY_MAX_ATTEMPTS === undefined);
 
   console.log(`\nsnapshotDeleteAndRetry: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
