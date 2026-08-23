@@ -75,12 +75,18 @@ assert("1a: at least 20 distinct functions tracked across migration history (gua
 //        'next_service_of_business_day' reason; the resolver calls it
 //        instead of refusing with REOPEN_REQUIRED; ensure_service_session
 //        reports that state as ordinary NO_OPEN_SERVICE idle).
+//   O-1  (2026-08-23) redefines resolve_order_intake_context_v1 AGAIN, row
+//        107: removes the 17:30-18:00 order-intake blackout (canCreateNewOrder
+//        simplifies to a single overnight-floor check). open_operational_
+//        service_v1/ensure_service_session are untouched by O-1 and stay
+//        pinned to G-1.
 const G1 = "2026-08-20_g1_autonomous_resume_operational_service.sql";
-for (const [n, fn] of [["1b", "open_operational_service_v1"],
-                       ["1c", "ensure_service_session"],
-                       ["1d", "resolve_order_intake_context_v1"]]) {
-  assert(`${n}: ${fn}'s latest definition is G-1's own migration file`,
-    latest[fn] && latest[fn].file === G1,
+const O1 = "2026-08-23_o1_order_intake_buffer_removal.sql";
+for (const [n, fn, expectedFile] of [["1b", "open_operational_service_v1", G1],
+                       ["1c", "ensure_service_session", G1],
+                       ["1d", "resolve_order_intake_context_v1", O1]]) {
+  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O1 ? "O-1's" : "G-1's"} own migration file`,
+    latest[fn] && latest[fn].file === expectedFile,
     latest[fn] && latest[fn].file);
 }
 

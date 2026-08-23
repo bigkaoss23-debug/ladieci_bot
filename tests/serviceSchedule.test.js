@@ -32,7 +32,9 @@ assert("04:00 → OUTSIDE_WINDOWS (rollover)", state(summer(4, 0, 16)) === S.SCH
 console.log("\n══ B. ensure permission ══");
 assert("lunch may ensure", S.resolveSchedule(summer(12)).canEnsureSession === true);
 assert("dinner may ensure", S.resolveSchedule(summer(20)).canEnsureSession === true);
-assert("BUFFER may NOT ensure", S.resolveSchedule(summer(17, 45)).canEnsureSession === false);
+// O-1 — the buffer may now ensure too (2026-08-22 incident: a genuine order
+// on an already-open service was blocked purely by the clock).
+assert("BUFFER may ensure (O-1)", S.resolveSchedule(summer(17, 45)).canEnsureSession === true);
 assert("after cutoff may NOT ensure", S.resolveSchedule(summer(1, 0, 16)).canEnsureSession === false);
 assert("outside windows may NOT ensure", S.resolveSchedule(summer(6)).canEnsureSession === false);
 assert("lunch kind is PRANZO", kind(summer(12)) === "PRANZO");
@@ -45,13 +47,14 @@ assert("expectedServiceKind inline is null outside an ensure window", S.resolveS
 console.log("\n══ C. order intake — canCreateNewOrder is the ONE decision every consumer reads ══");
 assert("23:50 accepts new orders", S.resolveSchedule(summer(23, 50)).canCreateNewOrder === true);
 assert("00:00 stops new orders", S.resolveSchedule(summer(0, 0, 16)).canCreateNewOrder === false);
-// S2-7D6B3 — CORRECTED: the buffer accepts NO brand-new order of either kind,
-// even if a lunch session is still technically open. An order already created
-// before 17:30 is not new intake and keeps moving under canContinueExistingOrders
-// — see section E below. The previous "lunch stragglers" exception documented
-// here (and asserted true) silently contradicted the approved product policy
-// and has been removed, not layered over.
-assert("buffer accepts NO brand-new order (no stragglers exception)", S.resolveSchedule(summer(17, 45)).canCreateNewOrder === false);
+// O-1 — CORRECTED AGAIN: the buffer now accepts brand-new orders too. The
+// S2-7D6B3 "no stragglers exception" rule above was itself found to violate
+// a stronger, later-stated contract: an Operational Service runs
+// continuously from open to an explicit Finalizar, never interrupted by a
+// lunch/dinner label change. A real production incident (2026-08-22) proved
+// this blocked a genuine comanda on an already-open Mesa purely on the
+// clock. See migrations/2026-08-23_o1_order_intake_buffer_removal.sql.
+assert("buffer accepts new orders too (O-1)", S.resolveSchedule(summer(17, 45)).canCreateNewOrder === true);
 assert("PRANZO_WINDOW accepts new orders", S.resolveSchedule(summer(12)).canCreateNewOrder === true);
 assert("AFTER_ORDER_CUTOFF accepts no new orders", S.resolveSchedule(summer(1, 0, 16)).canCreateNewOrder === false);
 assert("OUTSIDE_WINDOWS accepts no new orders", S.resolveSchedule(summer(6)).canCreateNewOrder === false);

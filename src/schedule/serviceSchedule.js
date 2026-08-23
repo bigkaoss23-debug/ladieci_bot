@@ -37,7 +37,9 @@ const DEFAULT_SCHEDULE = Object.freeze({
   // Automatic ensure window for PRANZO.
   lunchEnsureStartMin: HM(8, 0),      // 08:00 inclusive
   lunchBoundaryMin: HM(17, 30),       // 17:30 exclusive — also lunch close-eligibility
-  // 17:30-18:00 is the BUFFER: lunch may finish, dinner must not open over it.
+  // 17:30-18:00 is the BETWEEN_SERVICES window: still the lunch/dinner label
+  // edge (17:30 stays the classification cutover), but since O-1 it is no
+  // longer an intake/ensure blackout — see resolveSchedule()'s own comment.
   dinnerEnsureStartMin: HM(18, 0),    // 18:00 inclusive
   // Dinner intake ends at midnight; a 23:50 order is still perfectly valid.
   dinnerOrderCutoffMin: HM(24, 0),    // 00:00 (expressed as 1440 on the opening day)
@@ -55,7 +57,7 @@ const SERVICE_KIND = Object.freeze({ PRANZO: "PRANZO", SERA: "SERA" });
 
 const SCHEDULE_STATE = Object.freeze({
   PRANZO_WINDOW: "PRANZO_WINDOW",             // lunch may be ensured
-  BETWEEN_SERVICES: "BETWEEN_SERVICES",       // 17:30-18:00 buffer — no new session
+  BETWEEN_SERVICES: "BETWEEN_SERVICES",       // 17:30-18:00, unlabeled service-kind window — O-1: intake/ensure allowed, only the lunch/dinner label is undetermined
   SERA_WINDOW: "SERA_WINDOW",                 // dinner may be ensured, intake open
   AFTER_ORDER_CUTOFF: "AFTER_ORDER_CUTOFF",   // 00:00-04:00 — no new session, close attempts run
   OUTSIDE_WINDOWS: "OUTSIDE_WINDOWS",         // 04:00-08:00 — nothing automatic
@@ -173,15 +175,26 @@ function resolveSchedule(now = new Date(), schedule = DEFAULT_SCHEDULE) {
     });
   }
   if (min < schedule.dinnerEnsureStartMin) {
-    // The buffer. Lunch may finish and close safely; dinner must NOT open over
-    // it. No brand-new order of EITHER kind is accepted here — an order already
-    // created before 17:30 is not new intake and keeps moving normally under
-    // canContinueExistingOrders, but nothing new may start in this gap.
+    // O-1 — the buffer no longer blocks order intake or session ensure. It
+    // used to: lunch may finish and close safely, and this window WAS a
+    // brand-new-order/session blackout so dinner couldn't open over it. A
+    // real production incident (2026-08-22) proved that rule also blocked a
+    // genuine new comanda on an ALREADY-OPEN Operational Service, purely on
+    // the clock, with zero awareness of the service already running — and
+    // an Operational Service is meant to run continuously from open to an
+    // explicit Finalizar, never interrupted by a lunch/dinner label change
+    // (those stay pure classification/reporting; serviceKind below is still
+    // null here on purpose — this window straddles both labels). The DB-
+    // canonical resolve_order_intake_context_v1/get_order_intake_context_v1
+    // (migrations/2026-08-23_o1_order_intake_buffer_removal.sql) carry the
+    // exact same removal; this branch is their JS mirror, kept in parity by
+    // tests/rDay3ScheduleParity.test.js. canAttemptClose stays true: lunch
+    // remains close-eligible through this window regardless of intake.
     return frozen({
       state: SCHEDULE_STATE.BETWEEN_SERVICES,
       serviceKind: null,
-      canEnsureSession: false,
-      canCreateNewOrder: false,
+      canEnsureSession: true,
+      canCreateNewOrder: true,
       canAttemptClose: true,           // lunch is now close-eligible
       canContinueExistingOrders: true,
       isEscalationBoundary: false,
