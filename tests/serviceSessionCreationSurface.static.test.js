@@ -101,12 +101,23 @@ assert("1a: at least 20 distinct functions tracked across migration history (gua
 //        file's own header for the reachability proof. open_operational_
 //        service_v1/ensure_service_session remain untouched and stay
 //        pinned to G-1.
+//   O-4.1 (2026-08-23) redefines resolve_order_intake_context_v1 A SIXTH
+//        time, row 111: deletes the legacy-rollover UPDATE (SET status=
+//        'rolled_over'), the one piece of the same dead-code shape O-4's
+//        own report flagged but had not yet removed — proven structurally
+//        unreachable by a closed creation surface (open_operational_
+//        service_v1 hardcodes lifecycle_semantics) plus an immutability
+//        trigger (F-4B) on that same column, so O-4's continuity fast-path
+//        always returns first. No contract change. Filename is o4b, not
+//        o4_1, so it still sorts lexically after o4_forgotten_close_
+//        dead_code_purge.sql for this replay. open_operational_service_v1/
+//        ensure_service_session remain untouched and stay pinned to G-1.
 const G1 = "2026-08-20_g1_autonomous_resume_operational_service.sql";
-const O4 = "2026-08-23_o4_forgotten_close_dead_code_purge.sql";
+const O4B = "2026-08-23_o4b_legacy_rollover_dead_branch_removal.sql";
 for (const [n, fn, expectedFile] of [["1b", "open_operational_service_v1", G1],
                        ["1c", "ensure_service_session", G1],
-                       ["1d", "resolve_order_intake_context_v1", O4]]) {
-  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O4 ? "O-4's" : "G-1's"} own migration file`,
+                       ["1d", "resolve_order_intake_context_v1", O4B]]) {
+  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O4B ? "O-4.1's" : "G-1's"} own migration file`,
     latest[fn] && latest[fn].file === expectedFile,
     latest[fn] && latest[fn].file);
 }
