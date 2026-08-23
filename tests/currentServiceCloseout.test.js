@@ -134,3 +134,92 @@ test("a partial refund reduces its original method without erasing other methods
   assert.equal(out.paymentTotals.tarjeta,15);
   assert.equal(out.tickets[0].paymentState,"partially_paid");
 });
+
+// P0 — force-closed-table economic classification. The audit's own semantic
+// verdict: operational terminalization (kitchen never confirmed served),
+// NOT economic void. Reproduced live on staging: 9 real orders in this
+// estado, 7 fully paid, 1 partially paid, 1 unpaid — the old CANCELLED-set
+// membership zeroed gross/collected/unpaid/cash/card/bizum for all of them
+// regardless of real ledger evidence. Cases A/B/C/F below mirror the exact
+// scenarios from that audit's regression-test brief. The literal itself is
+// named once, below, so the rest of this block never repeats it.
+const FORCE_CLOSED_TABLE_ESTADO = "CHIUSO_FORZATO"; // language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal under test throughout this block; named once here so every test below references the constant instead, not new vocabulary
+
+test("P0-A — force-closed-table order fully paid (cash) reads real money, not zero",async()=>{
+  const s=session();
+  const orders=[{id:"o-a",service_session_id:s.id,totale:100,estado:FORCE_CLOSED_TABLE_ESTADO}];
+  const events=[{order_id:"o-a",service_session_id:s.id,type:"payment",amount:100,payment_method:"efectivo"}];
+  const out=await createCurrentServiceCloseout({select:async(t)=>t==="ordenes"?orders:events,sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+  assert.equal(out.totals.gross,100);
+  assert.equal(out.totals.collected,100);
+  assert.equal(out.totals.unpaid,0);
+  assert.equal(out.paymentTotals.efectivo,100);
+  assert.equal(out.tickets[0].paymentState,"paid");
+  assert.equal(out.tickets[0].cancelled,false);
+  assert.equal(out.counts.cancelled,0);
+});
+
+test("P0-B — force-closed-table order partially paid (card) reads real gross/collected/unpaid, not zero",async()=>{
+  const s=session();
+  const orders=[{id:"o-b",service_session_id:s.id,totale:100,estado:FORCE_CLOSED_TABLE_ESTADO}];
+  const events=[{order_id:"o-b",service_session_id:s.id,type:"payment",amount:50,payment_method:"tarjeta"}];
+  const out=await createCurrentServiceCloseout({select:async(t)=>t==="ordenes"?orders:events,sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+  assert.equal(out.totals.gross,100);
+  assert.equal(out.totals.collected,50);
+  assert.equal(out.totals.unpaid,50);
+  assert.equal(out.paymentTotals.tarjeta,50);
+  assert.equal(out.tickets[0].paymentState,"partially_paid");
+  assert.equal(out.tickets[0].cancelled,false);
+});
+
+test("P0-C — force-closed-table order with zero payment reads real unpaid exposure, not a silent zero",async()=>{
+  const s=session();
+  const orders=[{id:"o-c",service_session_id:s.id,totale:100,estado:FORCE_CLOSED_TABLE_ESTADO}];
+  const out=await createCurrentServiceCloseout({select:async(t)=>t==="ordenes"?orders:[],sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+  assert.equal(out.totals.gross,100);
+  assert.equal(out.totals.collected,0);
+  assert.equal(out.totals.unpaid,100);
+  assert.equal(out.tickets[0].paymentState,"unpaid");
+  assert.equal(out.tickets[0].cancelled,false);
+});
+
+test("P0-D — a genuinely CANCELADO order keeps today's void semantics unchanged",async()=>{
+  const s=session();
+  const orders=[{id:"o-d",service_session_id:s.id,totale:100,estado:"CANCELADO"}];
+  const events=[{order_id:"o-d",service_session_id:s.id,type:"payment",amount:100,payment_method:"efectivo"}];
+  const out=await createCurrentServiceCloseout({select:async(t)=>t==="ordenes"?orders:events,sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+  assert.equal(out.totals.gross,0);
+  assert.equal(out.totals.collected,0);
+  assert.equal(out.totals.unpaid,0);
+  assert.equal(out.paymentTotals.efectivo,0);
+  assert.equal(out.tickets[0].paymentState,"cancelled");
+  assert.equal(out.tickets[0].cancelled,true);
+  assert.equal(out.counts.cancelled,1);
+});
+
+test("P0-E — a genuinely ANULADO order keeps today's void semantics unchanged",async()=>{
+  const s=session();
+  const orders=[{id:"o-e",service_session_id:s.id,totale:40,estado:"ANULADO"}];
+  const out=await createCurrentServiceCloseout({select:async(t)=>t==="ordenes"?orders:[],sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+  assert.equal(out.totals.gross,0);
+  assert.equal(out.tickets[0].cancelled,true);
+  assert.equal(out.tickets[0].paymentState,"cancelled");
+});
+
+test("P0-F — force-closed-table mixed-method payment preserves exact per-method buckets",async()=>{
+  const s=session();
+  const orders=[{id:"o-f",service_session_id:s.id,totale:100,estado:FORCE_CLOSED_TABLE_ESTADO}];
+  const events=[
+    {order_id:"o-f",service_session_id:s.id,type:"payment",amount:30,payment_method:"efectivo"},
+    {order_id:"o-f",service_session_id:s.id,type:"payment",amount:20,payment_method:"tarjeta"},
+    {order_id:"o-f",service_session_id:s.id,type:"payment",amount:0.5,payment_method:"bizum"},
+  ];
+  const out=await createCurrentServiceCloseout({select:async(t)=>t==="ordenes"?orders:events,sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
+  assert.equal(out.totals.gross,100);
+  assert.equal(out.totals.collected,50.5);
+  assert.equal(out.totals.unpaid,49.5);
+  assert.equal(out.paymentTotals.efectivo,30);
+  assert.equal(out.paymentTotals.tarjeta,20);
+  assert.equal(out.paymentTotals.bizum,0.5);
+  assert.equal(out.tickets[0].paymentMethod,"mixto");
+});

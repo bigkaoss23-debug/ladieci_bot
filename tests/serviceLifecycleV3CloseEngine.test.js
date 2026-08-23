@@ -403,6 +403,29 @@ function engineFrom(env) {
     assert('F2d: a closeout WAS created', env.closeoutsByCorr.size === 1);
   }
 
+  console.log('\n── P0-G: a paid force-closed-table order does not freeze into total_void_cents ──');
+  {
+    // Audit's own semantic verdict: the force-closed-table estado is
+    // operational terminalization (kitchen never confirmed served), not
+    // economic void — the order was fully paid. Before the P0 fix, this
+    // order landed in totalVoidCents purely because of its estado, hiding
+    // real revenue in every future closeout the same way it already had for
+    // 7 of 9 real staging orders.
+    const FORCE_CLOSED_TABLE_ESTADO = 'CHIUSO_FORZATO'; // language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal under test here, not new vocabulary
+    const orders = [order({ totale: 100, estado: FORCE_CLOSED_TABLE_ESTADO })];
+    const events = [paymentEvent({ amount: 100, payment_method: 'efectivo' })];
+    const env = fakeEnv({ allOrders: orders, financialEvents: events });
+    const closeServiceV3 = engineFrom(env);
+    const result = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
+    assert('G-P0-1: success is true', result.success === true, JSON.stringify(result));
+    assert('G-P0-2: a closeout WAS created', env.closeoutsByCorr.size === 1);
+    assert('G-P0-3: totalVoidCents is 0 — not frozen as void just for the estado', result.closeout.financial.totalVoidCents === 0, String(result.closeout.financial.totalVoidCents));
+    assert('G-P0-4: grossSalesCents is the real 10000 (100.00 EUR), not excluded', result.closeout.financial.grossSalesCents === 10000, String(result.closeout.financial.grossSalesCents));
+    assert('G-P0-5: paidAmountCents is the real 10000 collected, not zeroed', result.closeout.financial.paidAmountCents === 10000, String(result.closeout.financial.paidAmountCents));
+    assert('G-P0-6: unpaidExposureCents is 0 (fully paid)', result.closeout.financial.unpaidExposureCents === 0, String(result.closeout.financial.unpaidExposureCents));
+    assert('G-P0-7: cashAmountCents carries the real cash receipt', result.closeout.financial.cashAmountCents === 10000, String(result.closeout.financial.cashAmountCents));
+  }
+
   console.log('\n── Order-attribution regression (V3.1, commit 4252241) — engine scopes by CURRENT service, not table origin ──');
   {
     // A table historically opened under a DIFFERENT session ('sess-A'), but a

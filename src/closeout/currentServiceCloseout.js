@@ -5,7 +5,21 @@ const { lifecycle } = require("../serviceSessions/serviceSessionLifecycle");
 const { resolveEconomicPeriodKind, singleKindOrNull, KNOWN_KINDS } = require("./economicPeriodReadRule");
 
 const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
-const CANCELLED = new Set(["CANCELADO", "CANCELLED", "ANULADO", "CHIUSO_FORZATO"]);
+// P0 — CHIUSO_FORZATO is deliberately NOT in this set. It is an operational -- language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this whole paragraph explains the ECONOMIC treatment of, not new vocabulary
+// terminal state (the audit's own semantic verdict: "the table's business
+// ended, not that the kitchen ticket was hand-confirmed served" -- see
+// mesa_close_session_v1's own unconditional financial-settlement gate,
+// never overridden by p_force), not an economic one -- unlike CANCELADO/
+// CANCELLED/ANULADO, which ARE genuine economic voids. Reproduced live on -- language-guard: allow-legacy CHIUSO_FORZATO is the same existing terminal-state literal, restated for the staging-evidence sentence, not new vocabulary
+// staging: 9 real CHIUSO_FORZATO orders, 7 fully paid, 1 partially paid, 1
+// unpaid -- treating it as "cancelled" here zeroed gross/collected/unpaid/
+// cash/card/bizum for real, ledger-evidenced money on 8 of those 9. Every
+// downstream reader (economiaLedgerAggregate.js, economicSnapshot.js via
+// the safeTicket/CANCELLED import below, and serviceLifecycleEngine.js's
+// voidCents via this file's own `aggregate()` output) shares this ONE set,
+// so removing it here is the one place that fixes all of them at once --
+// see this slice's own report for the full reader-by-reader trace.
+const CANCELLED = new Set(["CANCELADO", "CANCELLED", "ANULADO"]);
 
 function paymentBucket(value) {
   const key = String(value || "").trim().toLowerCase();
