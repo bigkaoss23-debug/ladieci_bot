@@ -86,12 +86,20 @@ assert("1a: at least 20 distinct functions tracked across migration history (gua
 //        blocks an already-open, same-business-date service). open_
 //        operational_service_v1/ensure_service_session remain untouched and
 //        stay pinned to G-1.
+//   O-3  (2026-08-23, task label F-10B) redefines resolve_order_intake_
+//        context_v1 A FOURTH time, row 109: an open operational_service_v1
+//        is now unconditional continuity regardless of business_date — the
+//        Business Day boundary itself no longer hard-stops a still-open
+//        service, only an explicit Finalizar does. Filename is o3, not
+//        f10b, so it still sorts lexically after o1/o2 for this replay.
+//        open_operational_service_v1/ensure_service_session remain
+//        untouched and stay pinned to G-1.
 const G1 = "2026-08-20_g1_autonomous_resume_operational_service.sql";
-const O2 = "2026-08-23_o2_open_service_cross_midnight_continuity.sql";
+const O3 = "2026-08-23_o3_operational_service_until_finalizar.sql";
 for (const [n, fn, expectedFile] of [["1b", "open_operational_service_v1", G1],
                        ["1c", "ensure_service_session", G1],
-                       ["1d", "resolve_order_intake_context_v1", O2]]) {
-  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O2 ? "O-2's" : "G-1's"} own migration file`,
+                       ["1d", "resolve_order_intake_context_v1", O3]]) {
+  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O3 ? "O-3's" : "G-1's"} own migration file`,
     latest[fn] && latest[fn].file === expectedFile,
     latest[fn] && latest[fn].file);
 }
