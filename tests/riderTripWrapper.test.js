@@ -31,6 +31,9 @@ function check(label, cond) { if (cond) { pass++; console.log("  ✓ " + label);
     // M-1 — a financially-evidenced order refuses hard-delete the same way an
     // active-trip member already did: a structured 409, never a generic 500.
     ["ORDER_HAS_FINANCIAL_EVIDENCE", 409],
+    // N-1 — same contract for the conversation-bulk-delete path.
+    ["INVALID_WA_ID", 400],
+    ["CONVERSATION_HAS_FINANCIAL_EVIDENCE", 409],
   ];
   for (const [code, http] of cases) {
     const ok = ["OK", "IDEMPOTENT"].includes(code);
@@ -98,6 +101,27 @@ function check(label, cond) { if (cond) { pass++; console.log("  ✓ " + label);
 
   await riderTrip.deleteConversation("wa-1");
   check("deleteConversation -> delete_conversation_if_not_active(wa_id)", lastRpc.fn === "delete_conversation_if_not_active" && lastRpc.args.p_wa_id === "wa-1");
+
+  // N-1 — the financial-evidence refusal maps through mapResult exactly like
+  // M-1's order-level refusal: 409, error body carries only the code.
+  STUB = () => ({ httpStatus: 200, ok: true, body: { ok: false, code: "CONVERSATION_HAS_FINANCIAL_EVIDENCE" } });
+  const convEvidenceResult = await riderTrip.deleteConversation("wa-protected");
+  check("deleteConversation financial-evidence refusal -> 409", convEvidenceResult.status === 409);
+  check("deleteConversation financial-evidence refusal payload", convEvidenceResult.payload.error === "CONVERSATION_HAS_FINANCIAL_EVIDENCE");
+  STUB = () => ({ httpStatus: 200, ok: true, body: { ok: true, code: "OK" } });
+
+  // N-1 — application-layer wa_id validation short-circuits BEFORE the RPC is
+  // ever called: a null/blank/whitespace-only wa_id never reaches the network.
+  for (const bad of [null, undefined, "", "   ", "\t\n"]) {
+    lastRpc = null;
+    const r = await riderTrip.deleteConversation(bad);
+    check(`deleteConversation(${JSON.stringify(bad)}) rejected without calling the RPC`, lastRpc === null);
+    check(`deleteConversation(${JSON.stringify(bad)}) -> 400 INVALID_WA_ID`, r.status === 400 && r.payload.error === "INVALID_WA_ID");
+  }
+  // A real wa_id still reaches the RPC exactly as before (regression guard for the loop above).
+  lastRpc = null;
+  await riderTrip.deleteConversation("wa-1");
+  check("deleteConversation(real wa_id) still calls the RPC", lastRpc !== null && lastRpc.fn === "delete_conversation_if_not_active");
 
   console.log(`\nriderTripWrapper: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
