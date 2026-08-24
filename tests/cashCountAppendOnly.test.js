@@ -143,8 +143,12 @@ const EVENING = { preset: "personalizado", from: "2026-08-20T17:06:44.000Z", to:
     // Every table it READ is a declared economic-fact table. Nothing lifecycle.
     const readTables = [...new Set(reads.map((r) => r.table))];
     for (const t of readTables) {
+      // N-2 — order_obligations joins this allowlist as a declared economic-fact
+      // table: it is the canonical obligation ledger the snapshot reader now
+      // consults for gross (append-only, trigger-written, UPDATE/DELETE refused
+      // at row level). Read-only here, exactly like order_financial_events.
       // language-guard: allow-legacy storico is the existing archive table name in the allowed read set, not new vocabulary
-      assert.ok(["ordenes", "storico", "order_financial_events", "service_sessions", "cash_counts"].includes(t),
+      assert.ok(["ordenes", "storico", "order_financial_events", "order_obligations", "service_sessions", "cash_counts"].includes(t),
         `unexpected table: ${t}`);
     }
     // service_sessions is read for PROVENANCE (business_date, kind fallback)

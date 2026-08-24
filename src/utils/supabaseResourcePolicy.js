@@ -157,6 +157,8 @@ const REGISTRY = Object.freeze([
     'tables/mesaDao.js reads the persisted floor; writes are RPC-only'),
   entry('table_order_lines', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
     'tables/mesaDao.js reads immutable per-unit bill charges; writes are trigger-only'),
+  entry('order_obligations', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
+    'N-2 canonical obligation ledger: currentServiceCloseout.js / economiaLedgerAggregate.js / economicSnapshot.js read it; writes are trigger-only and UPDATE/DELETE are refused at row level'),
   entry('payment_transactions', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,
     'tables/mesaDao.js reads posted Mesa money movements; writes are RPC-only'),
   entry('payment_allocations', KIND.TABLE, ['GET'], SENSITIVITY.FINANCIAL,

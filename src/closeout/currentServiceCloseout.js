@@ -44,9 +44,40 @@ function addMethodAmount(target, method, amount) {
   target[key] = round(target[key] + amount);
 }
 
-function safeTicket(order, events, session) {
+// N-2 — canonical obligation precedence, in ONE place so every reader that
+// imports safeTicket inherits it. `obligations` is a list of order_obligations
+// rows; the current obligation for an order is its HIGHEST revision (revision 1
+// is written in the order's own INSERT transaction, and every later change to
+// ordenes.totale appends a new immutable revision in the same transaction as
+// that UPDATE, so the top revision always names the accepted total).
+//
+// The map is keyed exactly like the event map in aggregate() below -- on the
+// order's display id -- because that is the key the callers already fold on.
+// The composite (order_uid) identity is what the DB enforces uniqueness with;
+// here we only need to pick a winner per order the caller already scoped.
+function latestObligationsByOrder(obligations) {
+  const byOrder = new Map();
+  for (const row of obligations || []) {
+    const id = String(row.order_id || "");
+    if (!id) continue;
+    const prev = byOrder.get(id);
+    if (!prev || Number(row.revision || 0) > Number(prev.revision || 0)) byOrder.set(id, row);
+  }
+  return byOrder;
+}
+
+function safeTicket(order, events, session, obligation = null) {
   const state = String(order.estado || order.state || "");
-  const amount = round(order.totale ?? order.total ?? 0);
+  // N-2 PRECEDENCE, explicit and exclusive:
+  //   canonical obligation row present -> its gross_amount is the obligation
+  //   absent (every order created before N-2) -> the legacy ordenes.totale
+  // Never both, so an order can never be counted twice, and a historical row
+  // keeps reporting exactly what it always reported.
+  const amount = round(
+    obligation && obligation.gross_amount != null
+      ? obligation.gross_amount
+      : (order.totale ?? order.total ?? 0)
+  );
   const refunds = events.filter((event) => eventType(event) === "refund");
   const payments = events.filter((event) => ["payment", "payment_imported"].includes(eventType(event)));
   const voided = events.some((event) => eventType(event) === "void") || CANCELLED.has(state.toUpperCase());
@@ -147,7 +178,7 @@ function safeTicket(order, events, session) {
   });
 }
 
-function aggregate(session, orders, events) {
+function aggregate(session, orders, events, obligations) {
   const status = session ? session.status : "none";
   const byOrder = new Map();
   for (const event of events || []) {
@@ -155,9 +186,13 @@ function aggregate(session, orders, events) {
     if (!byOrder.has(id)) byOrder.set(id, []);
     byOrder.get(id).push(event);
   }
+  // N-2 — optional by design: a caller that passes nothing keeps the exact
+  // pre-N-2 legacy behaviour for every ticket, so no reader breaks on the day
+  // this ships and each one can adopt the canonical facts on its own commit.
+  const obligationByOrder = latestObligationsByOrder(obligations);
   const tickets = (orders || []).map((order) => {
     const id = String(order.orden_id || order.id || "");
-    return safeTicket(order, byOrder.get(id) || [], session);
+    return safeTicket(order, byOrder.get(id) || [], session, obligationByOrder.get(id) || null);
   });
   const paymentTotals = emptyPaymentTotals();
   for (const ticket of tickets) {
@@ -331,7 +366,13 @@ function createCurrentServiceCloseout({ select = sbSelect, sessionLifecycle = li
     if ((events || []).some((row) => String(row.service_session_id || "") !== String(session.id))) {
       throw Object.assign(new Error("mixed financial session rows"), { code: "MIXED_FINANCIAL_SESSION_ROWS" });
     }
-    const base = aggregate(session, list, Array.isArray(events) ? events : []);
+    // N-2 — canonical obligations for this service, scoped exactly like the
+    // events above. Orders created before N-2 simply have no row here and fall
+    // through to the legacy `totale` inside safeTicket.
+    const obligations = ids.length
+      ? await select("order_obligations", `${sessionFilter}&order_id=in.(${ids.map((id) => encodeURIComponent(String(id))).join(",")})&order=revision.asc`)
+      : [];
+    const base = aggregate(session, list, Array.isArray(events) ? events : [], Array.isArray(obligations) ? obligations : []);
     if (!closed) return base;
     // The snapshot is looked up by THIS service's id, so the money can never
     // come from a different service than the header and tickets. A closed
@@ -357,4 +398,7 @@ module.exports = {
   createCurrentServiceCloseout, getCurrentServiceCloseout, aggregate, withOfficialSnapshot,
   safeTicket, paymentBucket, eventType, eventAmount, emptyPaymentTotals, addMethodAmount,
   round, CANCELLED, loadSessionOrders,
+  // N-2 — exported so the timestamp-windowed reader applies the SAME
+  // canonical-obligation precedence instead of re-deriving it.
+  latestObligationsByOrder,
 };

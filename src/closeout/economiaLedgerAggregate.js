@@ -49,7 +49,14 @@ async function aggregateOneSession(session, select) {
   const events = ids.length
     ? await select("order_financial_events", `${sessionFilter}&order_id=in.(${ids.map((id) => encodeURIComponent(String(id))).join(",")})&order=created_at.asc`)
     : [];
-  return aggregate(session, list, Array.isArray(events) ? events : []);
+  // N-2 — canonical obligations, fetched and scoped exactly like the events
+  // above so this reader keeps sharing ONE accounting implementation with the
+  // live closeout instead of growing a second, drifting one. Pre-N-2 orders
+  // have no row here and fall through to the legacy `totale`.
+  const obligations = ids.length
+    ? await select("order_obligations", `${sessionFilter}&order_id=in.(${ids.map((id) => encodeURIComponent(String(id))).join(",")})&order=revision.asc`)
+    : [];
+  return aggregate(session, list, Array.isArray(events) ? events : [], Array.isArray(obligations) ? obligations : []);
 }
 
 // Returns per-session-day ledger totals for service_sessions with business_date in
