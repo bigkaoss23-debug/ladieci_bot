@@ -80,6 +80,9 @@ const {
   isEconomicMutationRefusal,
   economicMutationRefusal,
 } = require("../financial/paidOrderEconomicGuard");
+// N-3 — recognising a refused canonical initial payment in the INSERT's error body. The order
+// never existed when this fires, so it is a creation failure, never a partial success.
+const { describeInitialPaymentFailure } = require("../financial/initialPaymentIntent");
 
 // Ora attuale di Madrid in minuti dalla mezzanotte. proposeForNewOrder usa nowMin
 // per il pavimento "minPart" della slot-search: se non lo passiamo, ricade su
@@ -292,6 +295,14 @@ async function creaOrdine(params) {
   const desc = aplicarDescuento(totaleBase, descTipo, descValor);
   const totale = desc.totale;
   const descuentoImporte = desc.importe;
+
+  // N-3 — the ephemeral initial-payment intent, already built and verified by the caller
+  // (index.js, from req.authCtx). It is never derived from the request body here, and it is
+  // never accepted from the bot or from Mesa: both simply pass nothing. Note the ORDER that
+  // matters for N-5 — `totale` above is the FINAL accepted amount, discount included, and it
+  // is written in the same INSERT that triggers the payment, so money is never recorded
+  // against a total that is still moving.
+  const initialPaymentIntent = params.initial_payment_intent || null;
 
   // ── Step 2 anti-cerotto: geo/durata autoritativi (dashboard operatore) ──
   // Per ordini operatore (operatorManual:true) il backend NON si fida di
@@ -520,8 +531,17 @@ async function creaOrdine(params) {
       durata_haversine_min: geoFields.durata_haversine_min ?? null,
       geo_source:           geoFields.geo_source           || null,
       forzado:        params.forzado        || false,
-      ya_pagado:      params.ya_pagado      || false,
-      metodo_pago:    params.metodo_pago    || "",
+      // N-3 — PAY-AT-CREATION LEGACY IS RETIRED. `ya_pagado` is no longer accepted from any
+      // caller: money is an EVENT, and declaring it with a boolean is exactly what produced
+      // #999024 (EUR 14.50 "paid" with zero rows in order_financial_events). Both legacy
+      // fields are now written ONLY by the canonical payment writer, as compatibility mirrors
+      // of the event it records. When an initial payment is requested the operator's method
+      // travels in `initial_payment_intent` instead, and the AFTER INSERT trigger settles it
+      // through order_mark_paid in THIS transaction -- so a refused payment takes the whole
+      // order down with it rather than committing an order the operator believes is paid.
+      ya_pagado:      false,
+      metodo_pago:    initialPaymentIntent ? "" : (params.metodo_pago || ""),
+      initial_payment_intent: initialPaymentIntent,
       descuento_tipo:    (descTipo && descuentoImporte > 0) ? descTipo  : null,
       descuento_valor:   (descTipo && descuentoImporte > 0) ? descValor : null,
       descuento_importe: descuentoImporte > 0 ? descuentoImporte : null,
@@ -569,6 +589,22 @@ async function creaOrdine(params) {
     // l'ordine concorrentemente — recuperiamo il suo id invece di sbagliare a creare un duplicato.
     const errCode = result?.code || result?.[0]?.code || "";
     const errDetails = (result?.details || result?.message || "") + "";
+
+    // N-3 — a refused initial payment took the ENTIRE insert down with it, which is the
+    // contract: no order, no obligation, no money. It must NOT be reported as "errore DB",
+    // and above all it must NOT fall through to the 23505 branch below and be retried with a
+    // fresh order id — that would keep re-attempting a payment the ledger has already refused,
+    // once per attempt. Checked BEFORE the collision branch for exactly that reason.
+    const paymentRefusal = describeInitialPaymentFailure(result);
+    if (paymentRefusal) {
+      return {
+        success: false,
+        error: paymentRefusal.code,
+        code: paymentRefusal.code,
+        message: paymentRefusal.message,
+      };
+    }
+
     if (errCode === "23505") {
       if (clientReqId && errDetails.includes("client_req_id")) {
         const existing = await sbSelect("ordenes",

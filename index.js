@@ -52,6 +52,11 @@ const {
   OPERATOR_MESSAGE: PAID_ORDER_ECONOMIC_MESSAGE,
   collectionWouldMutateEconomicBasis,
 } = require("./src/financial/paidOrderEconomicGuard");
+// N-3 — "☑ Pagado" at creation is now a REQUEST for a canonical payment, not a boolean that
+// declares one. The intent is built HERE because this is the only place holding the verified
+// session identity (req.authCtx) and the trusted client IP; the DB trigger then settles it
+// through order_mark_paid inside the order's own INSERT transaction.
+const { buildInitialPaymentIntent } = require("./src/financial/initialPaymentIntent");
 // A real collection is one of the three canonical methods. Markers like "manual" (the
 // "Driver volvió" operator override) are NOT payments and must not enter the ledger nor
 // be blocked by it — they keep the pre-existing legacy behaviour untouched.
@@ -857,7 +862,24 @@ app.post("/api", async (req, res) => {
       // Dashboard operatore: niente blocco hard orario chiusura (vedi creaOrdine).
       // S2-7D6E3 — actor_id override AFTER the spread: whatever the client put in the
       // body is discarded, the verified actor always wins.
-      result = await creaOrdine({ ...req.body, actor_id: req.authCtx?.actor || null, operatorManual: true });
+      // N-3 — same rule for the money: the paid-at-creation intent is built from the VERIFIED
+      // context, never from the body, and a context we cannot verify refuses the creation
+      // outright instead of quietly producing an unpaid order the operator thinks is paid.
+      const intentA = buildInitialPaymentIntent({
+        body: req.body, authCtx: req.authCtx, ipHash, trustedClientIp: trustedClientIp(req),
+      });
+      if (!intentA.ok) {
+        return res.status(409).json({
+          success: false, error: intentA.code, code: intentA.code, message: intentA.message,
+        });
+      }
+      // language-guard: allow-legacy creaOrdine is the existing JS order-creation function being called, not new vocabulary
+      result = await creaOrdine({
+        ...req.body,
+        actor_id: req.authCtx?.actor || null,
+        initial_payment_intent: intentA.intent,
+        operatorManual: true,
+      });
     } else if (action === "modificaOrdine") {
       // Dashboard operatore: geo/durata ri-risolti server-side, hora preservata.
       result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });
@@ -1097,7 +1119,24 @@ app.post("/api", async (req, res) => {
       const d = req.body.data || req.body;
       if (!d.waId && d.wa_id) d.waId = d.wa_id;
       // Dashboard operatore: niente blocco hard orario chiusura (vedi creaOrdine).
-      result = await creaOrdine({ ...d, operatorManual: true });
+      // N-3 — THE Nuevo Pedido path. `actor_id` is now threaded here too: it was already
+      // being passed by the sibling creation action above, so its absence here left every
+      // order created from the modal with an unattributed `created` transition log.
+      const intentB = buildInitialPaymentIntent({
+        body: d, authCtx: req.authCtx, ipHash, trustedClientIp: trustedClientIp(req),
+      });
+      if (!intentB.ok) {
+        return res.status(409).json({
+          success: false, error: intentB.code, code: intentB.code, message: intentB.message,
+        });
+      }
+      // language-guard: allow-legacy creaOrdine is the same existing JS order-creation function, called here for the Nuevo Pedido path, not new vocabulary
+      result = await creaOrdine({
+        ...d,
+        actor_id: req.authCtx?.actor || null,
+        initial_payment_intent: intentB.intent,
+        operatorManual: true,
+      });
     } else if (action === "updateNotaCucina") {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { nota_cucina: req.body.nota_cucina });
       result = { success: true };
