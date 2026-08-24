@@ -61,6 +61,7 @@
 const { sbSelect } = require("../utils/supabase");
 const {
   safeTicket, paymentBucket, eventType, eventAmount, emptyPaymentTotals, addMethodAmount, round, CANCELLED,
+  latestObligationsByOrder,
 } = require("../closeout/currentServiceCloseout");
 const { resolveEconomicPeriodKind } = require("../closeout/economicPeriodReadRule");
 const {
@@ -137,6 +138,24 @@ async function selectEventsForOrders(select, ids, { before = null } = {}) {
     if (before) parts.push(`created_at=lt.${enc(before)}`);
     parts.push("order=created_at.asc");
     const rows = await select("order_financial_events", parts.join("&"));
+    if (Array.isArray(rows)) out.push(...rows);
+  }
+  return out;
+}
+
+// N-2 — canonical obligation rows for the given orders, batched exactly like
+// selectEventsForOrders above. Every revision is fetched; safeTicket's caller
+// folds them to the highest revision per order. Orders created before N-2
+// return nothing here and fall through to the legacy `totale`.
+async function selectObligationsForOrders(select, ids) {
+  if (!ids.length) return [];
+  const out = [];
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const parts = [
+      `order_id=in.(${batch.map((id) => enc(String(id))).join(",")})`,
+      "order=revision.asc",
+    ];
+    const rows = await select("order_obligations", parts.join("&"));
     if (Array.isArray(rows)) out.push(...rows);
   }
   return out;
@@ -230,6 +249,12 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
     // ALL of each obligation's events up to asOf — settlement is a property of
     // the whole order, not of the slice of it that happens to fall in-window.
     const obligationEvents = await selectEventsForOrders(select, obligationIds, { before: settleAt.toISOString() });
+    // N-2 — the canonical obligation rows for those same orders. Deliberately
+    // NOT windowed by created_at: an obligation revision belongs to its order,
+    // and the order is already the thing this window selected. Windowing the
+    // revisions too would drop a later revision out of view and silently
+    // report a stale gross.
+    const obligationRecords = await selectObligationsForOrders(select, obligationIds);
 
     // ── 3. RECEIPTS: events recorded inside the window ──────────────────────
     const receiptEvents = (await (async () => {
@@ -270,9 +295,18 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
       if (!eventsByOrder.has(key)) eventsByOrder.set(key, []);
       eventsByOrder.get(key).push(event);
     }
+    // N-2 — fold to the highest revision per order, then apply the same
+    // canonical-first / legacy-fallback precedence safeTicket enforces for the
+    // service-scoped readers. One shared rule, two scopes.
+    const obligationByOrderId = latestObligationsByOrder(obligationRecords);
     const obligations = obligationRows.map((row) => {
       const key = orderKey(row);
-      const ticket = safeTicket(row, eventsByOrder.get(key) || [], sessionOf(row));
+      const ticket = safeTicket(
+        row,
+        eventsByOrder.get(key) || [],
+        sessionOf(row),
+        obligationByOrderId.get(orderId(row)) || null,
+      );
       return Object.freeze({
         ...ticket,
         orderKey: key,

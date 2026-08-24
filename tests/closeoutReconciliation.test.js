@@ -214,8 +214,12 @@ const FORENSIC = fx.S.FORENSIC;
     assert.strictEqual(rpcCalls.length, 0, "no RPC — no payment, refund, adjustment or cancellation");
     const tables = [...new Set(reads.map((r) => r.table))];
     for (const t of tables) {
+      // N-2 — order_obligations joins this allowlist as a declared economic-fact
+      // table: the canonical obligation ledger the reconciliation's own reader
+      // now consults for gross. Still read-only, and this test's real assertion
+      // (zero writes, zero RPC) is unchanged and still passing.
       // language-guard: allow-legacy storico is the existing archive table name in the allowed read set, not new vocabulary
-      assert.ok(["ordenes", "storico", "order_financial_events", "service_sessions", "cash_counts"].includes(t),
+      assert.ok(["ordenes", "storico", "order_financial_events", "order_obligations", "service_sessions", "cash_counts"].includes(t),
         `unexpected table read: ${t}`);
     }
   });
