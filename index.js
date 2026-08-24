@@ -45,6 +45,13 @@ const { createPinStepUpVerifier } = require("./src/auth/pinStepUp");
 const { createFinancialDao } = require("./src/auth/financialDao");
 const { createFinancialService } = require("./src/auth/financialService");
 const { createOperatorPaymentRegistrar, PAYMENT_METHODS, buildIdemScopeKey } = require("./src/financial/registerOperatorPayment");
+// N-5 — a request may not collect money and then move the economic basis of the order it
+// just collected on. See the two call sites below and src/financial/paidOrderEconomicGuard.js.
+const {
+  PAID_ORDER_ECONOMIC_MUTATION_FORBIDDEN,
+  OPERATOR_MESSAGE: PAID_ORDER_ECONOMIC_MESSAGE,
+  collectionWouldMutateEconomicBasis,
+} = require("./src/financial/paidOrderEconomicGuard");
 // A real collection is one of the three canonical methods. Markers like "manual" (the
 // "Driver volvió" operator override) are NOT payments and must not enter the ledger nor
 // be blocked by it — they keep the pre-existing legacy behaviour untouched.
@@ -959,6 +966,20 @@ app.post("/api", async (req, res) => {
       // deterministic, so the retry replays instead of double-charging.
       const collecting = String(req.body.estado || "") === "RETIRADO"
         && isCollectionMethod(extras.metodo_pago);
+      // N-5 — BEFORE any money moves. "Money first, state second" collects on the CURRENT
+      // total, so a discount carried by the same request would be applied AFTER the charge:
+      // the ledger would record the undiscounted amount and the order's total would then
+      // drop below it. The DB guard refuses that second write — but by then the money is
+      // already recorded and the order is stranded mid-transition. Refusing here means
+      // nothing is charged and nothing is stuck. Applying a discount and collecting are two
+      // operations: discount the order first (still unpaid, still editable), then collect.
+      if (collecting && collectionWouldMutateEconomicBasis(extras)) {
+        return res.status(409).json({
+          success: false, error: PAID_ORDER_ECONOMIC_MUTATION_FORBIDDEN,
+          code: PAID_ORDER_ECONOMIC_MUTATION_FORBIDDEN,
+          message: PAID_ORDER_ECONOMIC_MESSAGE,
+        });
+      }
       if (collecting) {
         const pay = await operatorPayments.registerPayment({
           orderId: req.body.id,
@@ -1006,6 +1027,15 @@ app.post("/api", async (req, res) => {
       // `cobrado` to TRUE while updateEstado left it untouched: the same operator concept
       // produced two different accounting outcomes depending on which action fired. The
       // ledger is now the single authority whenever a real method is supplied.
+      // N-5 — same rule as updateEstado above, same reason: this path accepts a discount
+      // too, and it would land after the charge. Refuse before the money moves.
+      if (isCollectionMethod(extras.metodo_pago) && collectionWouldMutateEconomicBasis(extras)) {
+        return res.status(409).json({
+          success: false, error: PAID_ORDER_ECONOMIC_MUTATION_FORBIDDEN,
+          code: PAID_ORDER_ECONOMIC_MUTATION_FORBIDDEN,
+          message: PAID_ORDER_ECONOMIC_MESSAGE,
+        });
+      }
       if (isCollectionMethod(extras.metodo_pago)) {
         const pay = await operatorPayments.registerPayment({
           orderId: req.body.id,

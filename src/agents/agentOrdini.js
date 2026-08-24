@@ -72,6 +72,14 @@ const {
   stateEventType,
 } = require("../utils/orderStateLogger");
 const { validateTransition } = require("../utils/orderStateMachine");
+// N-5 — the DB refuses an economic rewrite of an order that already carries payment
+// evidence. sbUpdate never throws on a non-2xx (it returns the PostgREST error body), so
+// every writer below MUST inspect its result: without this the DB would correctly refuse
+// the edit while the operator was told the order had been updated.
+const {
+  isEconomicMutationRefusal,
+  economicMutationRefusal,
+} = require("../financial/paidOrderEconomicGuard");
 
 // Ora attuale di Madrid in minuti dalla mezzanotte. proposeForNewOrder usa nowMin
 // per il pavimento "minPart" della slot-search: se non lo passiamo, ricade su
@@ -752,7 +760,11 @@ async function modificaOrdine(ordenId, updates) {
     if (!finalHoraGuard.success) return finalHoraGuard;
   }
 
-  await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
+  // N-5 — if the DB refused this as a paid-order economic mutation, return the typed
+  // failure and run NO side effects: the row did not move, so re-syncing the giro off a
+  // patch that was never applied would push the schedule off a phantom edit.
+  const modRes = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
+  if (isEconomicMutationRefusal(modRes)) return economicMutationRefusal(ordenId);
   if (upd.forno_out !== undefined) {
     const zonaSync = upd.zona !== undefined ? upd.zona : undefined;
     const horaSync = upd.hora !== undefined ? upd.hora : undefined;
@@ -868,7 +880,12 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     extras,
   }));
 
-  await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
+  // N-5 — a refused write means the state did NOT change either: this is one atomic
+  // statement carrying estado + the economic columns. Returning before the transition log
+  // and the DRIVER_STATO reconciliation is what keeps the audit trail honest — logging a
+  // transition that the DB rejected would be inventing history.
+  const stateRes = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
+  if (isEconomicMutationRefusal(stateRes)) return economicMutationRefusal(ordenId);
 
   // No-op (self-loop): nessun log di transizione — non c'è transizione. Evita
   // log terminali duplicati che corromperebbero le metriche giro/lifecycle.
@@ -983,11 +1000,14 @@ async function aggiungiItems(ordenId, newItems) {
   const cleanedNew = normalizeItemsForPersist(newItems);
   const merged = mergeItemsBevande((rows[0].items || []).filter(i => i.n !== "Entrega a domicilio"), cleanedNew);
   const tipoConsegna = rows[0].tipo_consegna || "RITIRO";
-  await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, {
+  // N-5 — adding items to an order that has already been paid moves what is owed. The
+  // conversational flow must be told, not handed a merged item list that was never stored.
+  const addRes = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, {
     items: merged,
     delivery_fee: deliveryFeeFor(tipoConsegna),
     totale:       calcolaTotaleOrdine(merged, tipoConsegna)
   });
+  if (isEconomicMutationRefusal(addRes)) return economicMutationRefusal(ordenId);
   return { success: true, items: merged };
 }
 
