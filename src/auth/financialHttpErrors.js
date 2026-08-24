@@ -47,6 +47,11 @@ const STATUS_BY_CODE = Object.freeze({
   AUTH_VOID_STATE_FORBIDDEN: 409,
   AUTH_REFUND_BASIS_INTEGRITY: 409,
   AUTH_VOID_REPLAY_INTEGRITY: 409,
+  // N-6 — the target order has no service session, so its financial ownership cannot be
+  // proven and refund/void/import refuse to touch money. A state conflict, not a bad
+  // request: the caller sent nothing wrong, the order is simply not in a state where
+  // money can be attributed.
+  ORDER_WITHOUT_SERVICE_SESSION: 409,
   // ── 500 ─────────────────────────────────────────────────────────────────────
   [INTERNAL_ERROR_CODE]: 500,       // FINANCIAL_INTERNAL_ERROR
 });

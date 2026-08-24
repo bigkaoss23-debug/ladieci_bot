@@ -37,6 +37,9 @@ const EXPECT = {
   AUTH_VOID_STATE_FORBIDDEN: 409,
   AUTH_REFUND_BASIS_INTEGRITY: 409,
   AUTH_VOID_REPLAY_INTEGRITY: 409,
+  // N-6 — refund/void/import refuse an order whose financial ownership cannot be proven.
+  // 409 like its sibling state conflicts: nothing about the request is malformed.
+  ORDER_WITHOUT_SERVICE_SESSION: 409,
 };
 
 // completeness: every recognized domain code is explicitly mapped

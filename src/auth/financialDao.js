@@ -31,6 +31,12 @@ const RECOGNIZED_DOMAIN_CODES = Object.freeze([
   'AUTH_NOT_LEGACY_PAID', 'AUTH_NO_PAYMENT_BASIS', 'AUTH_ORDER_NOT_FOUND',
   'AUTH_REASON_BLANK', 'AUTH_REFUND_BASIS_INTEGRITY', 'AUTH_SESSION_STALE',
   'AUTH_VOID_REPLAY_INTEGRITY', 'AUTH_VOID_STATE_FORBIDDEN',
+  // N-6 — refund/void/import now refuse an order whose financial ownership cannot be
+  // proven (no service session). Without this entry the refusal would collapse into the
+  // opaque FINANCIAL_INTERNAL_ERROR; it is the SAME code the ledger's own
+  // service-assignment trigger already raises, and the frontend already renders a
+  // Spanish sentence for it, so no new vocabulary and no frontend change.
+  'ORDER_WITHOUT_SERVICE_SESSION',
 ]);
 const DOMAIN_SET = new Set(RECOGNIZED_DOMAIN_CODES);
 const INTERNAL_ERROR_CODE = 'FINANCIAL_INTERNAL_ERROR';
