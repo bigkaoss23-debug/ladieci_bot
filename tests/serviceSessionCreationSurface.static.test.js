@@ -112,12 +112,22 @@ assert("1a: at least 20 distinct functions tracked across migration history (gua
 //        o4_1, so it still sorts lexically after o4_forgotten_close_
 //        dead_code_purge.sql for this replay. open_operational_service_v1/
 //        ensure_service_session remain untouched and stay pinned to G-1.
+//   O-4.2 (2026-08-24) redefines resolve_order_intake_context_v1 A SEVENTH
+//        time, row 112: deletes the outer same-business-day-reuse branch
+//        and its dedicated advancement flag (v_period_needs_advance) —
+//        O-4.1's own report flagged this exact branch as structurally
+//        unreachable too (same closed-creation-surface proof), so its
+//        ELSE arm's body now runs unconditionally and the slow path's
+//        'advanced' field is the literal true. No contract change. Dated
+//        2026-08-24, so it sorts after every 2026-08-23 file on filename
+//        alone. open_operational_service_v1/ensure_service_session remain
+//        untouched and stay pinned to G-1.
 const G1 = "2026-08-20_g1_autonomous_resume_operational_service.sql";
-const O4B = "2026-08-23_o4b_legacy_rollover_dead_branch_removal.sql";
+const O4C = "2026-08-24_o4c_resolver_dead_control_flow_simplification.sql";
 for (const [n, fn, expectedFile] of [["1b", "open_operational_service_v1", G1],
                        ["1c", "ensure_service_session", G1],
-                       ["1d", "resolve_order_intake_context_v1", O4B]]) {
-  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O4B ? "O-4.1's" : "G-1's"} own migration file`,
+                       ["1d", "resolve_order_intake_context_v1", O4C]]) {
+  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O4C ? "O-4.2's" : "G-1's"} own migration file`,
     latest[fn] && latest[fn].file === expectedFile,
     latest[fn] && latest[fn].file);
 }
