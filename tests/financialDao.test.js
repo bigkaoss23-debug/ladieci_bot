@@ -103,12 +103,25 @@ const okResult = (over = {}) => Object.assign({
   assert('default transport: transport failure → internal', err && err.code === INTERNAL_ERROR_CODE);
 
   // ── recognized-code list matches the committed migration markers exactly ─────
-  const MIGS = ['migrations/2026-07-15_b7_payment_basis_rpcs.sql', 'migrations/2026-07-15_b7_refund_void_rpcs.sql', 'migrations/2026-07-16_b7_void_digest_replay_fix.sql', 'migrations/2026-07-17_b7_financial_session_version_guard.sql'];
+  // N-6 added the slice that session-scopes refund/void/import, and with it one NON-AUTH_
+  // marker (ORDER_WITHOUT_SERVICE_SESSION). Two consequences for this assertion:
+  //   1. that migration must be scanned too, or the whitelist would look over-broad;
+  //   2. matching on the `AUTH_` prefix is no longer sufficient AND is no longer safe --
+  //      the N-6 header cites the env flag AUTH_V2_FINANCIAL_HTTP_ENABLED in prose, which
+  //      a prefix match would wrongly harvest as a domain code.
+  // So the set is now derived from what SQL can actually RAISE, which is the real
+  // contract this assertion is about, and is immune to anything written in a comment.
+  const MIGS = ['migrations/2026-07-15_b7_payment_basis_rpcs.sql', 'migrations/2026-07-15_b7_refund_void_rpcs.sql', 'migrations/2026-07-16_b7_void_digest_replay_fix.sql', 'migrations/2026-07-17_b7_financial_session_version_guard.sql', 'migrations/2026-08-24_n6_financial_basis_session_scoping.sql'];
   const fromSql = new Set();
   for (const m of MIGS) {
     const txt = fs.readFileSync(path.join(__dirname, '..', m), 'utf8');
-    (txt.match(/AUTH_[A-Z_]+/g) || []).forEach((x) => fromSql.add(x));
+    (txt.match(/RAISE EXCEPTION '([A-Z_]+)'/g) || [])
+      .map((x) => x.replace(/RAISE EXCEPTION '|'/g, ''))
+      .forEach((x) => fromSql.add(x));
   }
+  // Migration-scaffolding raises (predecessor guards / post-conditions) cannot be
+  // harvested by that regex: they are prose messages like 'N-6 refused: ...', which the
+  // bare-marker pattern deliberately does not match.
   const listed = new Set(RECOGNIZED_DOMAIN_CODES);
   assert('recognized-code list == exact SQL markers', fromSql.size === listed.size && [...fromSql].every((c) => listed.has(c)) && [...listed].every((c) => fromSql.has(c)), `sql=${[...fromSql].sort().join(',')}`);
 
