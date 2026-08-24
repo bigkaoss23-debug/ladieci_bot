@@ -26,6 +26,8 @@ const CODE_TO_HTTP = Object.freeze({
   ACTIVE_TRIP_CONFLICT: 409,
   ACTIVE_TRIP_MEMBER_CONFLICT: 409, // hard delete of an active-trip member is refused
   ORDER_HAS_FINANCIAL_EVIDENCE: 409, // M-1: hard delete of a financially-evidenced order is refused
+  INVALID_WA_ID: 400, // N-1: conversation hard-delete refuses a null/blank/whitespace-only wa_id
+  CONVERSATION_HAS_FINANCIAL_EVIDENCE: 409, // N-1: hard delete of a conversation owning a financially-evidenced order is refused
   INVALID_TRIP_SNAPSHOT: 409, // corrupted active_trip snapshot: no close/log/write
   MISSING_TRIP_MEMBER: 409, // a snapshot member row is gone -> cannot close
   SERVICE_CLOSING: 409,     // no trip may start during service close
@@ -121,8 +123,18 @@ async function deleteOrder(orderId) {
 }
 
 // deleteConversation(waId) — transactional conversation hard-delete guard.
+// N-1 — application-layer wa_id validation, ahead of the network call: a
+// null/blank/whitespace-only wa_id is rejected here too, so an invalid
+// request never even reaches the RPC. This is defense in depth, not the
+// authority — the DB function (migrations/2026-08-24_n1_...) enforces the
+// identical rule independently and is what actually protects the data if
+// this check is ever bypassed, forgotten, or has its own bug.
 async function deleteConversation(waId) {
-  const r = await sbRpc("delete_conversation_if_not_active", { p_wa_id: String(waId) });
+  const normalized = waId == null ? "" : String(waId);
+  if (normalized.trim() === "") {
+    return { status: CODE_TO_HTTP.INVALID_WA_ID, payload: { error: "INVALID_WA_ID" } };
+  }
+  const r = await sbRpc("delete_conversation_if_not_active", { p_wa_id: normalized });
   return mapResult(r);
 }
 
