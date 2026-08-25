@@ -88,16 +88,24 @@ console.log("\n-- 3. normal future order unaffected --");
 }
 
 // ── 4. buildPlan non-regression vs the pre-port committed planner ──────────
-console.log("\n-- 4. buildPlan unregressed vs HEAD (pre-port) --");
+// The reference is PINNED to e07a29d — the commit that was live on staging when
+// this port started, i.e. the last planner.js WITHOUT the D1 guard. It is
+// deliberately NOT `HEAD`: a working-tree-vs-HEAD comparison stops meaning
+// anything the moment the port is committed, and the anti-no-op controls below
+// would flip from "proves the guard is new" to "fails forever". (That exact
+// design flaw is why tests/getOrdenesArchivadosSesionAuthorizationParity.test.js
+// is permanently red on this line — this file must not repeat it.)
+const PRE_PORT_REF = "e07a29d";
+console.log(`\n-- 4. buildPlan unregressed vs ${PRE_PORT_REF} (pre-port) --`);
 {
   const rel = "src/core/delivery/planner.js";
-  const tmp = path.join(ROOT, "src/core/delivery/planner.PORT55HEAD.tmp.js");
+  const tmp = path.join(ROOT, "src/core/delivery/planner.PORT55PRE.tmp.js");
   let headMod = null;
   try {
-    fs.writeFileSync(tmp, execFileSync("git", ["show", `HEAD:${rel}`], { cwd: ROOT, encoding: "utf8" }));
+    fs.writeFileSync(tmp, execFileSync("git", ["show", `${PRE_PORT_REF}:${rel}`], { cwd: ROOT, encoding: "utf8" }));
     headMod = require(tmp);
   } catch (e) {
-    check("could load HEAD planner for comparison", false, String(e.message || e));
+    check(`could load ${PRE_PORT_REF} planner for comparison`, false, String(e.message || e));
   }
   if (headMod) {
     const snapshots = [
@@ -118,14 +126,14 @@ console.log("\n-- 4. buildPlan unregressed vs HEAD (pre-port) --");
       const b = JSON.stringify(headMod.buildPlan(JSON.parse(JSON.stringify(snap))));
       if (a !== b) { same = false; if (!firstBad) firstBad = `snapshot #${i}`; }
     });
-    check("buildPlan output identical to HEAD on 4 snapshots", same, firstBad);
+    check(`buildPlan output identical to ${PRE_PORT_REF} on 4 snapshots`, same, firstBad);
     // And prove the comparison is not vacuous: evaluateNewOrder MUST differ.
     const impossible = ord({ id: "#new", zona: "Q1", hora: "20:02", andata_min: 5 });
     const mine = sep(evaluateNewOrder({ now: "20:00", orders: [] }, impossible));
     const theirs = sep(headMod.evaluateNewOrder({ now: "20:00", orders: [] }, impossible));
-    check("anti-no-op: HEAD evaluateNewOrder lacked the guard", !!(mine.too_early && !theirs.too_early),
-      `mine=${mine.too_early} head=${theirs.too_early}`);
-    check("anti-no-op: HEAD would have said valid (the bug)", theirs.status === "valid", theirs.status);
+    check(`anti-no-op: ${PRE_PORT_REF} evaluateNewOrder lacked the guard`, !!(mine.too_early && !theirs.too_early),
+      `mine=${mine.too_early} pre=${theirs.too_early}`);
+    check(`anti-no-op: ${PRE_PORT_REF} would have said valid (the bug)`, theirs.status === "valid", theirs.status);
     try { fs.unlinkSync(tmp); } catch (_) {}
     delete require.cache[require.resolve(tmp)];
   }
