@@ -37,6 +37,11 @@
 // writes. The snapshot stays exactly as the close engine wrote it; a late payment moves
 // the CURRENT figure only.
 
+// N-11 — a pure status predicate, so this module stays pure: no I/O, no clock, no DB.
+// The status vocabulary is owned in one place rather than re-spelled as a string literal
+// here, which is how the 'rolled_over' exclusion got lost in the first place.
+const { isRolledOverServiceStatus } = require("../economy/serviceStatusReporting");
+
 const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
 const centsToEur = (value) => round((Number(value) || 0) / 100);
 
@@ -118,16 +123,37 @@ function describeDivergence({ current, snapshot } = {}) {
 //
 // OPEN SERVICES HAVE NO SNAPSHOT AUTHORITY YET and must never be given a fabricated one:
 // closeoutSnapshot is null and divergence is null, which is a statement, not a gap.
+//
+// N-11 — A ROLLED-OVER PERIOD IS A THIRD SITUATION, and gets its own reason. Since N-11
+// these sessions are economically reportable, so they reach this function for the first
+// time. `rolled_over` means the period stopped being the attribution target at an
+// intraday economic boundary — NOT that an operator finalized it: service_sessions_check
+// enforces `(status='closed') = (closed_at IS NOT NULL)`, so such a row structurally
+// cannot carry closed_at, and there was no Finalizar to snapshot.
+//
+// Some rolled-over sessions DO have a row in the official closeout store (staging session
+// 9746dfdd carries one written by close_source='p0c2_controlled_recovery'). That row is a
+// real roll-boundary record — it is NOT the operator-signed Finalizar figure this module's
+// `closeoutSnapshot` is defined to mean, so presenting it as one would be a false
+// statement dressed as a number. It stays out, and the absence is explained rather than
+// papered over. Widening `closeoutSnapshot` to admit roll records is a separate,
+// deliberate decision, not a side-effect of making history visible.
+//
+// (This module names the closeout STORE, never the table — it is deliberately not a
+// sanctioned reader of it, and tests/serviceLifecycleV3Foundation.static.test.js enforces
+// that by whole-file text match, comments included.)
 function describeServiceEconomicTruth({ status, current, snapshot } = {}) {
   const isClosed = status === 'closed';
   const snap = isClosed ? snapshotToEconomicShape(snapshot) : null;
   return Object.freeze({
     // Named so no caller can mistake one for the other.
     closeoutSnapshot: snap,
-    // Why there is no snapshot, when there is none — an open service and a legacy close
-    // that predates the closeout table are different situations and must not look alike.
+    // Why there is no snapshot, when there is none — an open service, a legacy close that
+    // predates the closeout table, and a rolled-over historical period are three different
+    // situations and must not look alike.
     closeoutSnapshotAbsentReason: snap ? null
-      : (isClosed ? 'no_closeout_row' : 'service_not_closed'),
+      : (isClosed ? 'no_closeout_row'
+        : (isRolledOverServiceStatus(status) ? 'service_rolled_over' : 'service_not_closed')),
     divergesFromCloseout: snap ? describeDivergence({ current, snapshot }) !== null : false,
     divergence: snap ? describeDivergence({ current, snapshot }) : null,
   });
