@@ -12,6 +12,10 @@ const { aggregate, loadSessionOrders } = require("./currentServiceCloseout");
 // N-8 -- the ONE definition of "closeout snapshot vs current reconciled". This file
 // deliberately does not re-derive it: the live closeout reader uses the same module.
 const { describeServiceEconomicTruth } = require("./closedServiceEconomicTruth");
+// N-11 -- the ONE definition of which statuses carry reportable economic history.
+// Imported, never restated: an inline status array here is exactly how 'rolled_over'
+// went missing from Economía in the first place.
+const { isEconomicallyReportableServiceStatus } = require("../economy/serviceStatusReporting");
 
 const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
@@ -64,6 +68,12 @@ async function aggregateOneSession(session, select) {
   // keeps recomputing current truth (that is its whole purpose and it does not change);
   // the snapshot is attached ALONGSIDE so the two stop being silently interchangeable.
   // Looked up by THIS session's id, so the snapshot can never come from another service.
+  //
+  // N-11 -- this gate stays 'closed' DELIBERATELY, and is not widened to the new
+  // reportable set. A rolled-over period never had a Finalizar, so there is no snapshot
+  // authority to attach; describeServiceEconomicTruth says so explicitly with
+  // closeoutSnapshotAbsentReason='service_rolled_over' rather than leaving a bare null.
+  // Its CURRENT reconciled economics are returned in full, which is the whole point.
   if (session.status !== "closed") {
     return { agg, truth: describeServiceEconomicTruth({ status: session.status, current: agg, snapshot: null }) };
   }
@@ -84,8 +94,13 @@ async function getEconomiaLedgerAggregate({ desde, hasta, select = sbSelect } = 
   if (hasta) filters.push(`business_date=lte.${encodeURIComponent(hasta)}`);
   filters.push("order=business_date.asc");
   const sessions = await select("service_sessions", filters.join("&"));
+  // N-11 -- the status gate is a named decision, not an inline list. It used to read
+  // `["open","closing","closed"].includes(s.status)` which -- given the DB CHECK allows
+  // exactly four values -- excluded 'rolled_over', and with it every euro of real
+  // history underneath it. The predicate fails closed on any status it has not been
+  // taught, so a future fifth value cannot quietly join these totals.
   const sessionList = (Array.isArray(sessions) ? sessions : [])
-    .filter((s) => s && s.id && ["open", "closing", "closed"].includes(s.status));
+    .filter((s) => s && s.id && isEconomicallyReportableServiceStatus(s.status));
 
   const perDay = new Map();
   const sessionSummaries = [];

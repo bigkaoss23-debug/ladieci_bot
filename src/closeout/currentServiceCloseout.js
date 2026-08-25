@@ -5,6 +5,8 @@ const { lifecycle } = require("../serviceSessions/serviceSessionLifecycle");
 const { resolveEconomicPeriodKind, singleKindOrNull, KNOWN_KINDS } = require("./economicPeriodReadRule");
 // N-8 -- the shared definition of the two economic truths a closed service has.
 const { snapshotToEconomicShape, describeDivergence } = require("./closedServiceEconomicTruth");
+// N-11 -- the ONE definition of which statuses are historical (orders may be archived).
+const { isHistoricalServiceStatus } = require("../economy/serviceStatusReporting");
 
 const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
 // P0 — CHIUSO_FORZATO is deliberately NOT in this set. It is an operational -- language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this whole paragraph explains the ECONOMIC treatment of, not new vocabulary
@@ -328,10 +330,18 @@ function withOfficialSnapshot(base, snapshot) {
 // money reader (the live closeout here AND Economía's multi-session ledger
 // in economiaLedgerAggregate.js) shares this ONE lookup instead of each
 // re-deriving its own, divergence-prone version of it.
+//
+// N-11 — the dual-store read is keyed on HISTORICAL, not on 'closed' specifically.
+// A rolled-over period is historical in exactly the same sense: it is no longer the
+// attribution target, so nothing stops its rows having been archived, and reading only
+// the live table would reproduce the very same zero-reporting defect described above.
+// Today this widening is provably inert — zero archived rows point at a rolled_over
+// session on staging — which is exactly why it is safe to make correct now rather than
+// after someone rediscovers it as a third instance of the same bug.
 async function loadSessionOrders(session, select) {
-  const closed = session.status === "closed";
+  const historical = isHistoricalServiceStatus(session.status);
   const sessionFilter = `service_session_id=eq.${encodeURIComponent(session.id)}`;
-  const orders = closed
+  const orders = historical
     ? [].concat(
       (await select("storico", `${sessionFilter}&order=ts.asc`)) || [], // language-guard: allow-legacy storico is the existing archive table name, queried here exactly as this reader already did, not new vocabulary
       (await select("ordenes", `${sessionFilter}&order=ts.asc`)) || [],
