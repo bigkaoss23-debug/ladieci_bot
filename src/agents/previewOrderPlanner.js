@@ -1,0 +1,396 @@
+// src/agents/previewOrderPlanner.js
+// ===============================================================
+// Nuevo Pedido Premium planner preview v1.
+//
+// Minimal read-only contract adapter. All runtime dependencies are injected so
+// tests can guard side effects and the frontend can consume planner decisions
+// without owning delivery scheduling.
+// ===============================================================
+"use strict";
+
+const { loadPlannerSnapshot } = require("../core/delivery/plannerSnapshot");
+const { evaluateNewOrder, _internal: plannerInternal } = require("../core/delivery/planner");
+const { resolveDeliveryFieldsReadOnly } = require("./resolveDeliveryFieldsReadOnly");
+// Riuso (read-only, puro) del cervello anchor del motore strategico: stessa
+// allowlist stati (EN_COCINA/LISTO), stesso filtro DOMICILIO + anti-stale, stesso
+// orologio night-service. Serve SOLO a derivare l'hint "Próximo giro" — NON tocca
+// ranking/proposals/popup.
+const { buildAnchorsFromSnapshot, toClockMin } = require("./previewStrategicOpportunities");
+
+const CONTRACT = "nuevo-pedido-planner-preview-v1";
+const SOURCE = "planner";
+const MODE = "read_only";
+
+// Margen de cocción para RITIRO: una pizza no está lista hasta now + cocción.
+// Coherente con previewTiming.PREP_PIZZA_MIN y planner.DEFAULTS.margineCotturaMin.
+const PICKUP_COOK_MIN = 5;
+
+function isValidHora(value) {
+  if (typeof value !== "string") return false;
+  const m = value.trim().match(/^(\d{1,2}):([0-5]\d)$/);
+  if (!m) return false;
+  const h = Number(m[1]);
+  return Number.isInteger(h) && h >= 0 && h <= 23;
+}
+
+function normalizeTipo(value) {
+  const v = String(value || "").trim().toUpperCase();
+  if (v === "DOMICILIO" || v === "RITIRO") return v;
+  return null;
+}
+
+function arrayOrEmpty(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function safeInput(params, tipoConsegna) {
+  return {
+    tipo_consegna: tipoConsegna || null,
+    requested_hora: typeof params.hora === "string" ? params.hora : null,
+    pizzas_count: Number.isFinite(Number(params.pizzas_count)) ? Number(params.pizzas_count) : 0,
+  };
+}
+
+function basePayload(params, tipoConsegna) {
+  return {
+    contract: CONTRACT,
+    source: SOURCE,
+    mode: MODE,
+    input: safeInput(params || {}, tipoConsegna),
+    geo: {},
+    recommendation: {},
+    driver: {},
+    giro: {},
+    // Hint logistico secondario (additivo): il primo giro futuro operativo utile,
+    // anche se distante dall'ora/primo slot. null se non esiste. NON è una proposta,
+    // NON applica nulla: la UI ci aggancia una riga "Próximo giro · Ver propuestas".
+    nextGiroOpportunity: null,
+    alternatives: [],
+    availability_rows: [],
+    warnings: [],
+    blockers: [],
+    explanation: [],
+    safety: {
+      readOnly: true,
+      writesEnabled: false,
+      piiIncluded: false,
+    },
+  };
+}
+
+function safeError(params, tipoConsegna, code, message) {
+  return {
+    ...basePayload(params, tipoConsegna),
+    ok: false,
+    error: {
+      code,
+      message,
+      safe: true,
+    },
+    blockers: [{ code, message }],
+  };
+}
+
+function mapWarnings(values) {
+  return arrayOrEmpty(values).map((item) => {
+    if (typeof item === "string") return { code: "planner_warning", message: item };
+    return {
+      code: item && item.code ? String(item.code) : "planner_warning",
+      message: item && item.message ? String(item.message) : String(item && item.reason ? item.reason : "Planner warning"),
+    };
+  });
+}
+
+function mapAvailabilityRows(options) {
+  return arrayOrEmpty(options).map((option) => ({
+    type: option.type || "planner_option",
+    hora: option.hora || option.anchor || null,
+    label: option.label || option.reason || option.status || "Planner option",
+    status: option.status || "info",
+    reason: option.reason || null,
+    giro_id: option.giro_id || null,
+    can_attach: option.type === "join_giro" && (option.status === "valid" || option.status === "recommended"),
+  }));
+}
+
+function mapAlternatives(options) {
+  return arrayOrEmpty(options)
+    .filter((option) => option && option.type === "join_giro")
+    .map((option) => ({
+      type: "giro",
+      label: option.status === "recommended" ? "Giro recomendado" : "Giro",
+      hora: option.hora || option.anchor || null,
+      giro_id: option.giro_id || null,
+      can_attach: option.status === "valid" || option.status === "recommended",
+      reason: option.reason || null,
+    }));
+}
+
+function mapBlockers(options) {
+  return arrayOrEmpty(options)
+    .filter((option) => option && option.status === "blocked")
+    .map((option) => ({
+      code: option.type || "planner_blocker",
+      message: option.reason || "Planner blocker",
+      giro_id: option.giro_id || null,
+    }));
+}
+
+// ── Próximo giro hint ───────────────────────────────────────────────────────
+// Sceglie il PRIMO giro futuro operativo utile (nearest) tra gli anchor già
+// derivati (EN_COCINA/LISTO, DOMICILIO, non-stale), rispetto al primo slot/direct
+// corrente (`refHora`). Regole (task 44B):
+//   - NON scartare per gap alto: se l'unico è Q5 22:00, mostrarlo comunque;
+//   - se ci sono Q1 20:30 e Q5 22:00 → mostra il nearest (Q1 20:30);
+//   - solo anchor con ora >= refHora (futuri rispetto al primo slot). Se refHora
+//     non è nota, si considerano tutti e si prende il più vicino.
+// È un hint informativo: status sempre "info", nessun giudizio di compatibilità.
+function pickNextGiroOpportunity(anchors, refHora) {
+  const list = Array.isArray(anchors) ? anchors : [];
+  if (!list.length) return null;
+  const ref = toClockMin(refHora);
+  const scored = list
+    .map((a) => ({ a, m: toClockMin(a.promised) }))
+    .filter((x) => x.m != null);
+  if (!scored.length) return null;
+  const future = ref == null ? scored : scored.filter((x) => x.m >= ref);
+  if (!future.length) return null; // nessun giro futuro rispetto al primo slot
+  future.sort((x, y) => x.m - y.m); // nearest first
+  const best = future[0].a;
+  return {
+    kind: "future_giro",
+    zone: best.zone,
+    hora: best.promised,
+    anchorOrderId: best.id,
+    label: `Próximo giro ${best.zone} ${best.promised}`,
+    cta: "Ver propuestas",
+    status: "info",
+    source: "operational_anchor",
+  };
+}
+
+function mapPlannerResult(params, geo, plannerResult, anchors) {
+  const selected = plannerResult && plannerResult.selected ? plannerResult.selected : {};
+  const options = arrayOrEmpty(plannerResult && plannerResult.options);
+  const recommended = plannerResult && plannerResult.recommended ? plannerResult.recommended : null;
+  const selectedHora = selected.hora || params.hora || null;
+  const selectedForno = selected.forno_out || selected.required_forno_out || null;
+  const salida = selected.salida || null;
+
+  // ── Hora pedida físicamente imposible (forno_out en el pasado) ──────────────
+  // El motor (evaluateNewOrder) marca la separada `too_early` cuando la entrega
+  // pedida exige una salida del horno anterior a now + cocción. En ese caso la
+  // hora pedida NO es confirmable, NUNCA exponemos un forno_out pasado y la
+  // recomendación cae a un valor realista (giro compatible si lo hay, si no el
+  // mínimo físico now + cocción + andata).
+  const sepOption = options.find((o) => o && o.type === "separate") || null;
+  const requestedTooEarly = !!(sepOption && sepOption.too_early);
+  const minHora = sepOption && sepOption.min_hora ? sepOption.min_hora : null;
+  let recommendedHora = selectedHora || plannerResult.proximo_slot || null;
+  if (requestedTooEarly) {
+    recommendedHora = (selected.type && selected.type !== "separate")
+      ? (selectedHora || minHora || plannerResult.proximo_slot || null)
+      : (minHora || plannerResult.proximo_slot || null);
+  }
+  const canConfirm = requestedTooEarly
+    ? false
+    : (selected.status === "valid" || selected.status === "recommended");
+
+  return {
+    ...basePayload(params, "DOMICILIO"),
+    ok: true,
+    geo: {
+      resolved: true,
+      zona: geo.zona || null,
+      zona_lat: geo.zona_lat ?? null,
+      zona_lon: geo.zona_lon ?? null,
+      durata_andata_min: geo.durata_andata_min ?? null,
+      duracion_andata_min: geo.durata_andata_min ?? null,
+      durata_google_min: geo.durata_google_min ?? null,
+      durata_haversine_min: geo.durata_haversine_min ?? null,
+      source: geo.geo_source || null,
+    },
+    recommendation: {
+      requested_hora: params.hora || null,
+      recommended_hora: recommendedHora,
+      can_confirm_requested_hora: canConfirm,
+      forno_out: requestedTooEarly ? null : selectedForno,
+      salida_driver: requestedTooEarly ? null : salida,
+      entrega_estimada: recommendedHora,
+      reason: requestedTooEarly ? "requested_hora_too_soon" : (selected.reason || selected.status || null),
+    },
+    driver: {
+      required: true,
+      available: true,
+      has_conflict: false,
+      message: null,
+    },
+    giro: recommended && recommended.type === "join_giro"
+      ? {
+          recommended: true,
+          giro_id: recommended.giro_id || null,
+          zona: geo.zona || null,
+          slot_hora: recommended.hora || recommended.anchor || null,
+          salida_driver: recommended.required_forno_out || null,
+          entrega_estimada: recommended.hora || recommended.anchor || null,
+          reason: recommended.reason || null,
+          can_attach: true,
+        }
+      : {
+          recommended: false,
+          giro_id: null,
+          zona: geo.zona || null,
+          slot_hora: null,
+          salida_driver: null,
+          entrega_estimada: null,
+          reason: null,
+          can_attach: false,
+        },
+    // Hint "Próximo giro": nearest giro futuro >= primo slot/direct (recommendedHora).
+    nextGiroOpportunity: pickNextGiroOpportunity(anchors, recommendedHora || params.hora || null),
+    alternatives: mapAlternatives(options),
+    availability_rows: mapAvailabilityRows(options),
+    warnings: [
+      ...mapWarnings(geo.warnings),
+      ...mapWarnings(plannerResult && plannerResult.warnings),
+      ...(requestedTooEarly
+        ? [{ code: "requested_hora_too_soon", message: sepOption.reason || "Hora pedida muy pronta" }]
+        : []),
+    ],
+    blockers: mapBlockers(options),
+    explanation: ["Planner source of truth", "Read-only preview"],
+  };
+}
+
+async function previewOrderPlanner(params = {}, deps = {}) {
+  const tipoConsegna = normalizeTipo(params.tipo_consegna);
+  if (!tipoConsegna) {
+    return safeError(params, null, "missing_tipo_consegna", "Selecciona tipo de entrega");
+  }
+  if (!isValidHora(params.hora)) {
+    return safeError(params, tipoConsegna, "invalid_hora", "Selecciona una hora valida");
+  }
+
+  if (tipoConsegna === "RITIRO") {
+    // Guard físico pickup: la pizza no puede estar lista en el pasado. Mínimo
+    // forno_out = now + cocción (sin andata, sin driver). Coherente con
+    // previewOrderTiming.earliest_hora. Si no hay `now` inyectado, se conserva el
+    // comportamiento previo (confirmable) para no romper a quien no pasa reloj.
+    const nowStr = typeof deps.now === "function" ? deps.now() : (params.now || null);
+    const toSvc = plannerInternal && plannerInternal.toSvc;
+    const fromSvc = plannerInternal && plannerInternal.fromSvc;
+    const nowSvc = toSvc ? toSvc(nowStr) : null;
+    const reqSvc = toSvc ? toSvc(params.hora) : null;
+    const minFornoSvc = nowSvc != null ? nowSvc + PICKUP_COOK_MIN : null;
+    const pickupTooEarly = minFornoSvc != null && reqSvc != null && reqSvc < minFornoSvc;
+    if (pickupTooEarly) {
+      const minHora = fromSvc ? fromSvc(minFornoSvc) : null;
+      const msg = `Hora pedida muy pronta · mínimo ${minHora} (cocina)`;
+      return {
+        ...basePayload(params, tipoConsegna),
+        ok: true,
+        geo: { resolved: false, zona: null },
+        recommendation: {
+          requested_hora: params.hora,
+          recommended_hora: minHora,
+          can_confirm_requested_hora: false,
+          forno_out: null,
+          salida_driver: null,
+          entrega_estimada: minHora,
+          reason: "requested_hora_too_soon",
+        },
+        driver: { required: false, available: true, status: "not_required", has_conflict: false, message: null },
+        giro: { recommended: false, giro_id: null, zona: null, slot_hora: null, salida_driver: null, entrega_estimada: null, reason: "pickup_no_giro_required", can_attach: false },
+        warnings: [{ code: "requested_hora_too_soon", message: msg }],
+        blockers: [{ code: "requested_hora_too_soon", message: msg }],
+      };
+    }
+    return {
+      ...basePayload(params, tipoConsegna),
+      ok: true,
+      geo: { resolved: false, zona: null },
+      recommendation: {
+        requested_hora: params.hora,
+        recommended_hora: params.hora,
+        can_confirm_requested_hora: true,
+        forno_out: params.hora,
+        salida_driver: null,
+        entrega_estimada: params.hora,
+        reason: "pickup_no_driver_required",
+      },
+      driver: {
+        required: false,
+        available: true,
+        status: "not_required",
+        has_conflict: false,
+        message: null,
+      },
+      giro: {
+        recommended: false,
+        giro_id: null,
+        zona: null,
+        slot_hora: null,
+        salida_driver: null,
+        entrega_estimada: null,
+        reason: "pickup_no_giro_required",
+        can_attach: false,
+      },
+    };
+  }
+
+  if (!params.direccion) {
+    return safeError(params, tipoConsegna, "missing_direccion", "Falta direccion para domicilio");
+  }
+  // Resolver geo: injected override se presente, altrimenti il wrapper
+  // read-only/no-cache di default (mai scrive geo_cache). Le deps vengono
+  // inoltrate così il wrapper può ricevere sbSelect/geocoder iniettabili nei
+  // test; ignora qualsiasi writer.
+  const resolveGeo = typeof deps.resolveDeliveryFields === "function"
+    ? deps.resolveDeliveryFields
+    : resolveDeliveryFieldsReadOnly;
+  try {
+    const geo = await resolveGeo(params, deps);
+    if (!geo || !geo.zona || geo.durata_andata_min == null) {
+      return safeError(params, tipoConsegna, "unresolved_geo", "No se pudo resolver la direccion");
+    }
+
+    const loadSnapshot = typeof deps.loadPlannerSnapshot === "function"
+      ? deps.loadPlannerSnapshot
+      : loadPlannerSnapshot;
+    const runPlanner = typeof deps.evaluateNewOrder === "function"
+      ? deps.evaluateNewOrder
+      : evaluateNewOrder;
+    const snapshot = await loadSnapshot({
+      db: deps.db,
+      date: params.date,
+      now: typeof deps.now === "function" ? deps.now() : params.now,
+      includePii: false,
+    });
+    const newOrder = {
+      id: params.id || "__preview_new_order__",
+      tipo_consegna: "DOMICILIO",
+      estado: "NUEVO",
+      zona: geo.zona,
+      hora: params.hora,
+      andata_min: geo.durata_andata_min,
+      n_pizze: Number.isFinite(Number(params.pizzas_count)) ? Number(params.pizzas_count) : 0,
+      items: arrayOrEmpty(params.items),
+    };
+    const plannerResult = runPlanner(snapshot, newOrder);
+    // Anchor futuri operativi (read-only) per l'hint "Próximo giro". Esclude la
+    // bozza corrente; anti-stale via `now`. Non influenza ranking/proposals.
+    const nowRef = typeof deps.now === "function" ? deps.now() : params.now;
+    const futureAnchors = buildAnchorsFromSnapshot(snapshot, {
+      currentOrderId: newOrder.id,
+      now: nowRef,
+    });
+    return mapPlannerResult(params, geo, plannerResult || {}, futureAnchors);
+  } catch (e) {
+    if (e && /db_client|snapshot/i.test(String(e.code || e.message || ""))) {
+      return safeError(params, tipoConsegna, "snapshot_unavailable", "Snapshot no disponible");
+    }
+    return safeError(params, tipoConsegna, "planner_unavailable", "Planner no disponible");
+  }
+}
+
+module.exports = { previewOrderPlanner };

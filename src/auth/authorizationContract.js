@@ -53,6 +53,8 @@ const CANONICAL_ACTIONS = Object.freeze([
   'updateWaStato', 'updateOrden', 'updateEstado', 'marcarEnEntrega', 'marcarEntregado',
   'asignarRepartidor', 'registrarSalidaDriver', 'chiudiGiro', 'marcarLlegado', 'setUiOffset',
   'resolveAddress', 'previewOrderTiming', 'createOrden', 'updateNotaCucina', 'eliminaOrdine',
+  // PORT-55 — premium planner previews (read-only, operator_shared).
+  'previewOrderPlanner', 'previewStrategicOpportunities', 'previewManualGiroRoute',
   'eliminaConversazione', 'upsertCliente', 'parseOrdineDaRisposta', 'createManualGiro',
   'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro',
   'getAuthActors', 'setActorPin', 'verifyOwnPin', 'openServiceSession', 'ensureCurrentServiceSession',

@@ -12,6 +12,18 @@ const { getDriverStatus, closeGiroInternal } = require("./src/utils/driverTeleme
 // no generic table access. Reachable only behind the shared X-Api-Key (trusted proxy).
 const readActions = require("./src/utils/readActions");
 const { previewOrderTiming } = require("./src/agents/previewTiming");
+// PORT-55 — premium planner preview actions, restored from the V1 planner line
+// (backup/v2-planner-rider-conflict-compatible-giro-2026-06-17). All three are
+// STRICTLY read-only: no DB write, no WhatsApp, no state transition, no apply.
+// The DB handed to them is a select-only allowlisted adapter.
+const { previewOrderPlanner } = require("./src/agents/previewOrderPlanner");
+const { previewStrategicOpportunities } = require("./src/agents/previewStrategicOpportunities");
+const { previewManualGiroRoute } = require("./src/agents/previewManualGiroRoute");
+const { createReadOnlyRestDb } = require("./src/core/delivery/readOnlyRestDb");
+const { loadPlannerSnapshot } = require("./src/core/delivery/plannerSnapshot");
+// This line's 04:00 Business Day, NOT the donor's 06:00 service day — see the
+// header of plannerClock.js for why that difference is deliberate.
+const { nowMadridHHMM, plannerBusinessDate } = require("./src/core/delivery/plannerClock");
 const { invia, emitDynamicMenuShadowDiagnostic } = require("./src/agents/agentWhatsapp");
 const { runWhatsappMenuShadow } = require("./src/menu/whatsappMenuShadow");
 // language-guard: allow-legacy servizio/scanServizio/backupSerata are the existing module path and export names, unchanged by removing chiudiServizio from this same destructure, not new vocabulary
@@ -1115,6 +1127,70 @@ app.post("/api", async (req, res) => {
       // Fonte unica per zona/durata/forno_out/hora/warning/giro destinata alla
       // dashboard. NON si fida di durata/zona calcolate dal client.
       result = await previewOrderTiming(req.body || {});
+    } else if (action === "previewOrderPlanner") {
+      // PORT-55 — Nuevo Pedido Premium -> backend planner (read-only). Single
+      // source for availability/lead-time/giros. NO write: DB read-only via
+      // sbSelect, geo resolver read-only/no-cache by default inside
+      // previewOrderPlanner. `now` is the server-authoritative Madrid clock:
+      // without it the snapshot fell back to defaultNow() ("19:00") and the D1
+      // physical guard (forno_out in the past) could not apply.
+      result = await previewOrderPlanner(req.body || {}, {
+        db: createReadOnlyRestDb({ sbSelect }),
+        now: () => nowMadridHHMM(),
+      });
+    } else if (action === "previewStrategicOpportunities") {
+      // PORT-55 — Premium Planner strategic preview (read-only). Exposes the
+      // offline chain -> contract `premium-planner-strategic-preview-v1`.
+      // PREVIEW ONLY: no write, no apply, no manual_giros, no PII.
+      //
+      // loadSnapshot is injected via a read-only closure (loadPlannerSnapshot +
+      // createReadOnlyRestDb): the adapter stays pure with no default loader and
+      // the DB is `select` only (allowlist, no PII, no wildcard). startTime stays
+      // an EXPLICIT input — the adapter returns `missing_start_time` when absent;
+      // nothing here invents rider availability.
+      //
+      // Input safety: `snapshot`/`anchors` are NOT forwarded from the client —
+      // anchors derive ONLY from the read-only snapshot (no order injection).
+      const sp = req.body || {};
+      // Anti-staleness: the operator flow does not send date/now. Without them the
+      // snapshot would full-scan ordenes and anchors would have no time reference.
+      // Derived HERE (backend boundary) on this line's Business Day calendar.
+      result = await previewStrategicOpportunities({
+        currentOrderDraft: sp.currentOrderDraft,
+        startTime: sp.startTime,
+        date: sp.serviceDate || sp.date || plannerBusinessDate(),
+        now: sp.now || nowMadridHHMM(),
+        includeCrossZone: sp.includeCrossZone,
+        capacity: sp.capacity,
+        toleranceMin: sp.toleranceMin,
+      }, {
+        loadSnapshot: (args) => loadPlannerSnapshot({
+          ...args,
+          db: createReadOnlyRestDb({ sbSelect }),
+        }),
+      });
+    } else if (action === "previewManualGiroRoute") {
+      // PORT-55 — Premium Planner manual giro route preview (read-only). The
+      // operator proposes a SEQUENCE of stops (selectedStops) and the backend
+      // computes the v2 `routeTimeline` from the PURE bricks (deliveryChannels +
+      // deliveryLegs + routeImpact + buildRouteTimeline) -> contract
+      // `premium-planner-manual-giro-route-preview-v1`. PREVIEW ONLY: no write,
+      // no apply, no manual_giros, no PII, no Date.now.
+      //
+      // No DB here: the action is pure over its input. Input safety: only the
+      // proposed route's fields are forwarded (no snapshot/anchors injection, no
+      // PII). startTime stays EXPLICIT -> `missing_start_time` when absent.
+      const mg = req.body || {};
+      result = previewManualGiroRoute({
+        startTime: mg.startTime,
+        currentOrderDraft: mg.currentOrderDraft,
+        selectedStops: mg.selectedStops,
+        selectedZones: mg.selectedZones,
+        includeReturn: mg.includeReturn,
+        includeCrossZone: mg.includeCrossZone,
+        capacity: mg.capacity,
+        toleranceMin: mg.toleranceMin,
+      });
     } else if (action === "createOrden") {
       const d = req.body.data || req.body;
       if (!d.waId && d.wa_id) d.waId = d.wa_id;

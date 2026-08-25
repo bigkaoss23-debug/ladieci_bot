@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-20T08:07:54.536Z",
+  "generatedAt": "2026-08-25T07:28:44.410Z",
   "entries": [
     {
       "file": "index.js",
@@ -3524,6 +3524,241 @@
     {
       "file": "tests/whatsappIntakePolicy.test.js",
       "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "src/agents/previewManualGiroRoute.js",
+      "term": "consegna",
+      "count": 4
+    },
+    {
+      "file": "src/agents/previewManualGiroRoute.js",
+      "term": "ordine",
+      "count": 4
+    },
+    {
+      "file": "src/agents/previewManualGiroRoute.js",
+      "term": "pizze",
+      "count": 3
+    },
+    {
+      "file": "src/agents/previewManualGiroRoute.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "src/agents/previewOrderPlanner.js",
+      "term": "consegna",
+      "count": 20
+    },
+    {
+      "file": "src/agents/previewOrderPlanner.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/agents/previewOrderPlanner.js",
+      "term": "ritiro",
+      "count": 3
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "chiuso",
+      "count": 3
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "cucina",
+      "count": 9
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "oggi",
+      "count": 1
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "ordine",
+      "count": 11
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "ordini",
+      "count": 8
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "pizze",
+      "count": 3
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "src/agents/resolveDeliveryFieldsReadOnly.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryChannels.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryChannels.js",
+      "term": "ordine",
+      "count": 3
+    },
+    {
+      "file": "src/core/delivery/deliveryLegs.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryProposalSelector.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryProposalSelector.js",
+      "term": "oggi",
+      "count": 2
+    },
+    {
+      "file": "src/core/delivery/deliveryProposalSelector.js",
+      "term": "ordine",
+      "count": 3
+    },
+    {
+      "file": "src/core/delivery/deliveryProposalSelector.js",
+      "term": "storico",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/plannerClock.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "chiuso",
+      "count": 4
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "pizze",
+      "count": 3
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/premiumPlannerBridge.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/premiumPlannerBridge.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/premiumPlannerOpportunities.js",
+      "term": "oggi",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/readOnlyRestDb.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/routeImpact.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/routeImpact.js",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "src/core/delivery/routeImpact.js",
+      "term": "pizze",
+      "count": 7
+    },
+    {
+      "file": "src/core/delivery/routeImpact.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/routeTimeline.js",
+      "term": "consegna",
+      "count": 4
+    },
+    {
+      "file": "src/core/delivery/strategicOpportunities.js",
+      "term": "ordine",
+      "count": 6
+    },
+    {
+      "file": "src/core/delivery/strategicOpportunities.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/strategicOpportunities.js",
+      "term": "pizze",
+      "count": 2
+    },
+    {
+      "file": "tests/port55PlannerD1SafetyParity.test.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "tests/port55PlannerD1SafetyParity.test.js",
+      "term": "pizze",
       "count": 1
     }
   ]

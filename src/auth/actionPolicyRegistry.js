@@ -71,6 +71,11 @@ const ACTION_POLICY_REGISTRY = Object.freeze([
   { action: 'setUiOffset', acceptedCapabilities: ['orders.general'], legacyStatus: 'operator_shared', v3Phase: 'V3-A', note: 'Source-verified (index.js:711-716): cosmetic DOMICILIO countdown snooze only, explicitly excluded from the historical archive by its own comment.' },
   { action: 'resolveAddress', acceptedCapabilities: ['orders.general'], legacyStatus: 'operator_shared', v3Phase: 'V3-A' },
   { action: 'previewOrderTiming', acceptedCapabilities: ['orders.general'], legacyStatus: 'operator_shared', v3Phase: 'V3-A' },
+  // PORT-55 — premium planner previews. Classified exactly like previewOrderTiming:
+  // same read-only surface, same operator_shared status, no new capability invented.
+  { action: 'previewOrderPlanner', acceptedCapabilities: ['orders.general'], legacyStatus: 'operator_shared', v3Phase: 'V3-A', note: 'PORT-55: read-only planner preview; DB access is a select-only allowlisted adapter (readOnlyRestDb).' },
+  { action: 'previewStrategicOpportunities', acceptedCapabilities: ['orders.general'], legacyStatus: 'operator_shared', v3Phase: 'V3-A', note: 'PORT-55: read-only strategic preview; no apply, no manual_giros write, anchors derived only from the read-only snapshot.' },
+  { action: 'previewManualGiroRoute', acceptedCapabilities: ['orders.general'], legacyStatus: 'operator_shared', v3Phase: 'V3-A', note: 'PORT-55: pure function over its input; touches no DB at all.' },
   { action: 'createOrden', acceptedCapabilities: ['orders.general'], legacyStatus: 'operator_shared', v3Phase: 'V3-A' },
   { action: 'upsertCliente', acceptedCapabilities: ['orders.general'], legacyStatus: 'operator_shared', v3Phase: 'V3-A' },
   { action: 'eliminaConversazione', acceptedCapabilities: ['orders.general.delete'], legacyStatus: 'operator_shared', v3Phase: 'V3-A', note: 'B4 draft classifies admin-only; legacyActionRoles.js (live) grants operator too — followed live, NOT tightened (only eliminaOrdine was explicitly frozen stricter this round).' },

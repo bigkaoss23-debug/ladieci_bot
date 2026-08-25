@@ -77,8 +77,8 @@ targets, and be added here + to the module + to the tests explicitly.
 
 | Principal | Allowed actions |
 |---|---|
-| `admin` | 68 (every routed action except `triggerCloseIfNeeded`) |
-| `operator` | 49 (every action except `triggerCloseIfNeeded` + the admin-only set) |
+| `admin` | 71 (every routed action except `triggerCloseIfNeeded`) |
+| `operator` | 52 (every action except `triggerCloseIfNeeded` + the admin-only set) |
 | `rider` | 7 (the rider-enabled actions) |
 | `service` | 1 (`triggerCloseIfNeeded`) |
 
@@ -111,7 +111,7 @@ change B3 JWT/login/PIN behavior.
 
 ```
 PRINCIPALS: admin, operator, rider, service
-CANONICAL_COUNT: 69
+CANONICAL_COUNT: 72
 SERVICE_ONLY: triggerCloseIfNeeded
 ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, debugMenuShadow, getStorico, getOrdenesArchivio, getEconomiaLedger, getServiceIncidents, resolveServiceIncident, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione, getAuthActors, setActorPin, verifyOwnPin
 RIDER_ENABLED: getDriverStatus, updateEstado, marcarEnEntrega, marcarEntregado, registrarSalidaDriver, chiudiGiro, marcarLlegado
@@ -124,8 +124,8 @@ PREDICATE registrarSalidaDriver: RIDER_REGISTER_SALIDA_SCOPE
 PREDICATE chiudiGiro: RIDER_CLOSE_GIRO_SCOPE
 PREDICATE marcarLlegado: RIDER_MARK_LLEGADO_SCOPE
 ALIAS_MAP: EMPTY
-TOTAL admin: 68
-TOTAL operator: 49
+TOTAL admin: 71
+TOTAL operator: 52
 TOTAL rider: 7
 TOTAL service: 1
 ```
