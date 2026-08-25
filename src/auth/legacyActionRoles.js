@@ -71,6 +71,9 @@ const ALL_ACTIONS = Object.freeze([
   "rispondiWA", "updateWaStato", "updateOrden", "updateEstado", "marcarEnEntrega",
   "marcarEntregado", "asignarRepartidor", "registrarSalidaDriver", "chiudiGiro",
   "marcarLlegado", "setUiOffset", "resolveAddress", "previewOrderTiming",
+  // PORT-55 — premium planner previews. Read-only siblings of previewOrderTiming:
+  // admin + operator, never rider, never admin-only. No write reaches the DB.
+  "previewOrderPlanner", "previewStrategicOpportunities", "previewManualGiroRoute",
   "createOrden", "updateNotaCucina", "eliminaOrdine", "eliminaConversazione",
   "upsertCliente", "parseOrdineDaRisposta", "createManualGiro", "addOrderToManualGiro",
   "removeOrderFromManualGiro", "dissolveManualGiro",

@@ -682,19 +682,32 @@ function evaluateNewOrder(snapshot, newOrder) {
     const snap2 = withOrder(snapshot, { ...newOrder, manual_giro_id: null });
     const plan = buildPlan(snap2);
     const proj = plan.orders[newOrder.id];
-    const status = proj && proj.retraso === 0 ? "valid" : "blocked";
+    // Guard físico (D1): una pizza no puede salir del horno en el pasado. El mínimo
+    // forno_out factible = now + margen de cocción → la entrega mínima = now +
+    // cocción + andata. Sin esto buildPlan agendaba el reparto en el pasado (no hay
+    // suelo "now" en la Stage 3) y la separada se marcaba "valid" con forno_out ya
+    // pasado → el operador podía confirmar una entrega imposible (bug crítico
+    // can_confirm). Coherente con previewOrderTiming ("muy pronta · mínimo …").
+    const projFornoSvc = proj ? toSvc(proj.forno_out) : null;
+    const minFornoSvc = nowSvc != null ? nowSvc + cfg.margineCotturaMin : null;
+    const tooEarly = minFornoSvc != null && projFornoSvc != null && projFornoSvc < minFornoSvc;
+    const minHora = minFornoSvc != null ? fromSvc(minFornoSvc + andata) : null;
+    const status = (!tooEarly && proj && proj.retraso === 0) ? "valid" : "blocked";
     options.push({
       type: "separate",
       hora: proj ? proj.entrega : newOrder.hora,
       anchor: fromSvc(slotStart(toSvc(proj ? proj.entrega : newOrder.hora), cfg.promiseSlotMin)),
-      required_forno_out: proj ? proj.forno_out : null,
-      salida: proj ? proj.salida : null,
+      required_forno_out: tooEarly ? null : (proj ? proj.forno_out : null),
+      salida: tooEarly ? null : (proj ? proj.salida : null),
       retraso: proj ? proj.retraso : null,
       status,
+      ...(tooEarly ? { too_early: true, min_hora: minHora } : {}),
       ...(hitBlock ? { after_block: hitBlock.id, blocked_by_rider_block: true } : {}),
-      reason: hitBlock
-        ? `dentro rider block ${hitBlock.id}: propuesta tras el block (${hitBlock.block_end})`
-        : (status === "valid" ? "prima separata libera" : "no llega a la hora pedida"),
+      reason: tooEarly
+        ? `Hora pedida muy pronta · mínimo ${minHora} (cocina + andata)`
+        : hitBlock
+          ? `dentro rider block ${hitBlock.id}: propuesta tras el block (${hitBlock.block_end})`
+          : (status === "valid" ? "prima separata libera" : "no llega a la hora pedida"),
     });
   }
 
