@@ -24,6 +24,11 @@
 
 const { sbSelect } = require("./supabase");
 const { getEconomiaLedgerAggregate } = require("../closeout/economiaLedgerAggregate");
+// N-9 — the ONE window authority. Economía must never resolve a reporting period
+// from the browser's clock, and this layer must not grow a second definition of
+// one: the resolver lives in economicWindow.js with every other window in the
+// system, and is imported, never restated.
+const { resolveEconomiaLedgerWindow } = require("../economy/economicWindow");
 
 // SERVICE CLOSEOUT V2 / SLICE 4A vocabulary — mirrors the DB CHECK constraints
 // on service_incidents exactly (migrations/2026-08-08_service_closeout_
@@ -151,11 +156,23 @@ async function getOrdenesArchivio({ limit } = {}) {
 // S2-7D6E3 — Economía's ONE money source: per-service-session-day ledger totals, built
 // by calling the SAME aggregate() the live closeout and the archived serata_summary use
 // (see src/closeout/economiaLedgerAggregate.js). Opt. desde/hasta=YYYY-MM-DD (inclusive).
+// N-9 — the resolved reporting period, stated on the wire.
+//
+// WHY. `porGiorno` is keyed by `service_sessions.business_date`, which is a
+// Europe/Madrid BUSINESS date (the day turns over at 04:00 Madrid, per
+// serviceSchedule.DEFAULT_SCHEDULE.rolloverMin), not a browser calendar date.
+// Before N-9 the frontend had no way to know that: it compared those keys
+// against `new Date()` midnight in whatever timezone the operator's laptop
+// happened to be in, and between 00:00 and 04:00 Madrid it asked for the wrong
+// day entirely. Returning the interval the server actually resolved removes the
+// guess — the client renders this, it never recomputes it.
 async function getEconomiaLedger({ desde, hasta } = {}) {
   const d = validFecha(desde);
   const h = validFecha(hasta);
   try {
-    return await getEconomiaLedgerAggregate({ desde: d, hasta: h, select: safeSelect });
+    const aggregate = await getEconomiaLedgerAggregate({ desde: d, hasta: h, select: safeSelect });
+    // Additive only: every pre-N-9 field is returned byte-identical.
+    return { ...aggregate, ...resolveEconomiaLedgerWindow({ desde: d, hasta: h }) };
   } catch (e) {
     if (e instanceof ReadBackendError || e instanceof ReadParamError) throw e;
     console.warn("[readActions] getEconomiaLedger failed:", e?.message || e);

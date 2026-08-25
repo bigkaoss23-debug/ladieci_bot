@@ -228,6 +228,31 @@ function windowForServiceSession(session, { asOf = new Date(), schedule = DEFAUL
   });
 }
 
+// ── N-9: the ledger reader's window ────────────────────────────────────────
+// getEconomiaLedger is a BUSINESS-DATE-scoped, service-scoped reader (it walks
+// service_sessions by business_date), not a timestamp-window reader, and that
+// is deliberate -- see the module header above and N-8. What it lacked was any
+// statement of WHICH calendar those `business_date` keys belong to, so the
+// frontend filled the gap with the operator's browser clock.
+//
+// This resolves the inclusive business-date pair the action was asked for into
+// the same half-open [from, to) instants every other window here uses: `to` is
+// the NEXT business day's 04:00 Madrid, never 23:59:59.999, and both boundaries
+// go through the DST-correct madridInstant().
+function resolveEconomiaLedgerWindow({ desde, hasta, now = new Date(), schedule = DEFAULT_SCHEDULE } = {}) {
+  const timezone = schedule.timezone || TIMEZONE;
+  const window = Object.freeze({
+    timezone,
+    businessDateFrom: desde || null,
+    businessDateTo: hasta || null,
+    businessDateToday: businessDateFor(now, schedule),
+    from: desde ? businessDayStart(desde, schedule).toISOString() : null,
+    to: hasta ? businessDayStart(shiftBusinessDate(hasta, 1), schedule).toISOString() : null,
+    bounds: "[from,to)",
+  });
+  return { window, generatedAt: now.toISOString() };
+}
+
 module.exports = {
   PRESET,
   PRESET_VALUES,
@@ -235,6 +260,7 @@ module.exports = {
   MAX_WINDOW_DAYS,
   EconomicWindowError,
   resolveEconomicWindow,
+  resolveEconomiaLedgerWindow,
   windowForServiceSession,
   madridInstant,
   shiftBusinessDate,
