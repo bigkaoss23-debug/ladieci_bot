@@ -191,6 +191,18 @@ const LIVE_TRIGGER_SOURCE_PATH = path.join(ROOT, 'migrations', '2026-08-02_v3j_m
     // because reading only the archive reported a real 7-ticket / 143.50 EUR
     // service as zero tickets and 0.00 EUR (staging 4f260f1e, 2026-08-20).
     path.join(ROOT, 'src', 'closeout', 'currentServiceCloseout.js'),
+    // N-8 — economiaLedgerAggregate.js: the SAME read-only, single-session lookup the
+    // line above sanctions, for the same reason and with the same guard. A closed
+    // service has two economic truths -- the immutable snapshot AT Finalizar and the
+    // current reconciled figure -- and this reader recomputes the second while never
+    // having been able to see the first, so the two were silently interchangeable.
+    // Proven live: service 33174121 registered collected 82.00 / unpaid 57.50 at close,
+    // then took exactly 57.50 in later payments, so Economia reports 139.50 collected
+    // for a service whose closeout says 82.00. It now attaches that closeout ALONGSIDE
+    // its own figures instead of replacing them. Still one SELECT filtered by a single
+    // service_session_id, never an INSERT/UPDATE, and it refuses with
+    // MIXED_CLOSEOUT_SESSION_ROW if the row names any other session.
+    path.join(ROOT, 'src', 'closeout', 'economiaLedgerAggregate.js'),
   ]);
   function walk(dir, out) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

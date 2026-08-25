@@ -3,6 +3,8 @@
 const { sbSelect } = require("../utils/supabase");
 const { lifecycle } = require("../serviceSessions/serviceSessionLifecycle");
 const { resolveEconomicPeriodKind, singleKindOrNull, KNOWN_KINDS } = require("./economicPeriodReadRule");
+// N-8 -- the shared definition of the two economic truths a closed service has.
+const { snapshotToEconomicShape, describeDivergence } = require("./closedServiceEconomicTruth");
 
 const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
 // P0 — CHIUSO_FORZATO is deliberately NOT in this set. It is an operational -- language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this whole paragraph explains the ECONOMIC treatment of, not new vocabulary
@@ -269,43 +271,45 @@ function aggregate(session, orders, events, obligations) {
 // service_closeouts snapshot, written by the close engine inside the close
 // transaction. Recomputing money from still-mutable rows after the fact can
 // only ever drift from it, so once a snapshot exists it wins outright.
-const centsToEur = (value) => round((Number(value) || 0) / 100);
+// N-8 — the cents->euros normalization and the snapshot-vs-current comparison now live
+// in ONE place (closedServiceEconomicTruth.js) so this reader and Economia's
+// multi-session ledger cannot grow two drifting definitions of what a snapshot means.
 
 // Money-only overlay. Ticket rows, session identity, dates and the economic
 // breakdown all stay exactly as aggregated from THIS service's own rows --
 // only the headline financial figures are re-sourced from the snapshot.
+//
+// N-8 -- ADDITIVELY, the recomputed figures this overlay replaces are preserved under
+// `currentReconciled`, and any disagreement is stated outright. The headline stays the
+// SNAPSHOT and that is deliberate: this is the Finalizar record, the number the operator
+// signed off on, and a late payment must never rewrite it. What changes is only that the
+// other truth stops being discarded silently.
 function withOfficialSnapshot(base, snapshot) {
   if (!snapshot) return base;
-  const paymentTotals = {
-    efectivo: centsToEur(snapshot.cash_amount_cents),
-    tarjeta: centsToEur(snapshot.card_amount_cents),
-    bizum: centsToEur(snapshot.bizum_amount_cents),
-    other: centsToEur(snapshot.other_amount_cents),
-  };
-  const gross = centsToEur(snapshot.gross_sales_cents);
-  const collected = centsToEur(snapshot.paid_amount_cents);
+  const snap = snapshotToEconomicShape(snapshot);
+  const divergence = describeDivergence({ current: base, snapshot });
   return {
     ...base,
     financialSource: "official_closeout",
-    closeoutId: snapshot.id || null,
-    totals: {
-      gross,
-      collected,
-      refunded: centsToEur(snapshot.total_refunds_cents),
-      unpaid: centsToEur(snapshot.unpaid_exposure_cents),
-      // Cancelled/voided value is carried by the snapshot and has no live
-      // equivalent in `totals` -- surfaced so the report can state it.
-      voided: centsToEur(snapshot.total_void_cents),
-      difference: round(gross - collected),
-    },
-    paymentTotals,
+    closeoutId: snap.closeoutId,
+    totals: { ...snap.totals },
+    paymentTotals: { ...snap.paymentTotals },
     counts: {
       ...base.counts,
       // order_count is the snapshot's own ticket count, authoritative even if
       // the drill-down rows below are incomplete for any reason.
-      tickets: Number(snapshot.order_count) || 0,
-      incidents: Number(snapshot.incident_count) || 0,
+      tickets: snap.counts.tickets,
+      incidents: snap.counts.incidents,
     },
+    // The same service as it stands NOW, including anything recorded after the close.
+    // NEVER summed with the headline above -- they are two descriptions of one service.
+    currentReconciled: {
+      totals: base.totals,
+      paymentTotals: base.paymentTotals,
+      counts: base.counts,
+    },
+    divergesFromCloseout: divergence !== null,
+    divergence,
   };
 }
 

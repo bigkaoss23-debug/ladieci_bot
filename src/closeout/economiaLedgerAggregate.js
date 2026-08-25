@@ -9,6 +9,9 @@
 
 const { sbSelect } = require("../utils/supabase");
 const { aggregate, loadSessionOrders } = require("./currentServiceCloseout");
+// N-8 -- the ONE definition of "closeout snapshot vs current reconciled". This file
+// deliberately does not re-derive it: the live closeout reader uses the same module.
+const { describeServiceEconomicTruth } = require("./closedServiceEconomicTruth");
 
 const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
@@ -56,7 +59,20 @@ async function aggregateOneSession(session, select) {
   const obligations = ids.length
     ? await select("order_obligations", `${sessionFilter}&order_id=in.(${ids.map((id) => encodeURIComponent(String(id))).join(",")})&order=revision.asc`)
     : [];
-  return aggregate(session, list, Array.isArray(events) ? events : [], Array.isArray(obligations) ? obligations : []);
+  const agg = aggregate(session, list, Array.isArray(events) ? events : [], Array.isArray(obligations) ? obligations : []);
+  // N-8 -- for a CLOSED session, also read what was registered at Finalizar. This reader
+  // keeps recomputing current truth (that is its whole purpose and it does not change);
+  // the snapshot is attached ALONGSIDE so the two stop being silently interchangeable.
+  // Looked up by THIS session's id, so the snapshot can never come from another service.
+  if (session.status !== "closed") {
+    return { agg, truth: describeServiceEconomicTruth({ status: session.status, current: agg, snapshot: null }) };
+  }
+  const closeouts = await select("service_closeouts", `${sessionFilter}&limit=1`);
+  const snapshot = Array.isArray(closeouts) ? closeouts[0] : null;
+  if (snapshot && String(snapshot.service_session_id || "") !== String(session.id)) {
+    throw Object.assign(new Error("mixed closeout session row"), { code: "MIXED_CLOSEOUT_SESSION_ROW" });
+  }
+  return { agg, truth: describeServiceEconomicTruth({ status: session.status, current: agg, snapshot }) };
 }
 
 // Returns per-session-day ledger totals for service_sessions with business_date in
@@ -74,8 +90,10 @@ async function getEconomiaLedgerAggregate({ desde, hasta, select = sbSelect } = 
   const perDay = new Map();
   const sessionSummaries = [];
 
+  let anyDivergence = false;
   for (const session of sessionList) {
-    const agg = await aggregateOneSession(session, select);
+    const { agg, truth } = await aggregateOneSession(session, select);
+    if (truth.divergesFromCloseout) anyDivergence = true;
     sessionSummaries.push({
       serviceSessionId: session.id,
       businessDate: session.business_date,
@@ -87,9 +105,15 @@ async function getEconomiaLedgerAggregate({ desde, hasta, select = sbSelect } = 
       // still genuinely single-kind (all real data, as of S-E).
       serviceKind: agg.serviceKind,
       status: session.status,
+      // CURRENT RECONCILED truth -- unchanged semantics, unchanged field names, so every
+      // existing consumer of this reader keeps reading exactly what it read before.
       paymentTotals: agg.paymentTotals,
       totals: agg.totals,
       economicBreakdown: agg.economicBreakdown,
+      // N-8 -- what was registered AT Finalizar, and whether it disagrees. null for an
+      // open service (no snapshot authority exists yet) and for a legacy close that
+      // predates the closeout table -- told apart by closeoutSnapshotAbsentReason.
+      ...truth,
     });
 
     const day = session.business_date;
@@ -116,6 +140,15 @@ async function getEconomiaLedgerAggregate({ desde, hasta, select = sbSelect } = 
 
   return {
     ok: true,
+    // N-8 -- every figure below (porGiorno, the grand totals) is CURRENT RECONCILED
+    // truth, by design: an arbitrary date window is a question about real receipt
+    // instants, and substituting frozen closeout figures into it would misdate money.
+    // The per-service Finalizar record lives on `sessions[]`, never mixed into these.
+    economicSemantic: "current_reconciled",
+    // True when at least one CLOSED service in range now reads differently from what
+    // its own closeout registered -- i.e. money moved after Finalizar. A flag, never a
+    // correction: nothing here rewrites a snapshot.
+    divergesFromCloseout: anyDivergence,
     porGiorno,
     sessions: sessionSummaries,
     paymentTotals: grandPaymentTotals,
