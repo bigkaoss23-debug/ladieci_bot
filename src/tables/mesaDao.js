@@ -239,6 +239,23 @@ const postRefund = (args) => rpc('mesa_post_refund_v1', {
   p_meta: args.meta || {},
 });
 
+// AJUSTE COMERCIAL V1 — moves the OBLIGATION, never money. `newGross` is the absolute
+// new obligation (not a delta) and V1 is reduction-only. `expectedCurrentGross` is optional
+// optimistic concurrency: the operator approved a reduction FROM a number they saw.
+const postCommercialAdjustment = (args) => rpc('mesa_post_commercial_adjustment_v1', {
+  p_workspace_id: args.workspaceId,
+  p_by_actor: args.byActor,
+  p_by_sid_hash: args.bySidHash,
+  p_table_session_id: args.tableSessionId,
+  p_order_uid: args.orderUid,
+  p_new_gross: args.newGross,
+  p_reason: args.reason,
+  p_client_request_id: args.clientRequestId,
+  p_request_hash: args.requestHash,
+  p_expected_current_gross: args.expectedCurrentGross ?? null,
+  p_meta: args.meta || {},
+});
+
 const saveReservation = (args) => rpc('mesa_save_reservation_v1', {
   p_workspace_id: args.workspaceId,
   p_by_actor: args.byActor,
@@ -301,6 +318,7 @@ module.exports = {
   saveTable,
   postPayment,
   postRefund,
+  postCommercialAdjustment,
   saveReservation,
   setReservationStatus,
   openReservation,

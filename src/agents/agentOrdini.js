@@ -72,6 +72,7 @@ const {
   stateEventType,
 } = require("../utils/orderStateLogger");
 const { validateTransition } = require("../utils/orderStateMachine");
+const { isEconomicCancellation, cancelOrderCanonical } = require("../financial/cancelOrder");
 // N-5 — the DB refuses an economic rewrite of an order that already carries payment
 // evidence. sbUpdate never throws on a non-2xx (it returns the PostgREST error body), so
 // every writer below MUST inspect its result: without this the DB would correctly refuse
@@ -916,12 +917,53 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     extras,
   }));
 
-  // N-5 — a refused write means the state did NOT change either: this is one atomic
-  // statement carrying estado + the economic columns. Returning before the transition log
-  // and the DRIVER_STATO reconciliation is what keeps the audit trail honest — logging a
-  // transition that the DB rejected would be inventing history.
-  const stateRes = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
-  if (isEconomicMutationRefusal(stateRes)) return economicMutationRefusal(ordenId);
+  // AJUSTE COMERCIAL V1 (DB ledger 118) — a genuine ECONOMIC cancellation is no longer a
+  // bare PATCH. CANCELADO/CANCELLED/ANULADO must carry an obligation revision to 0 with
+  // them, atomically, or `estado` stays the economic authority and every reader keeps
+  // deriving money from a mutable column. The force-close state is deliberately NOT in that
+  // set: it is operational, and must keep flowing through the ordinary path below untouched.  // language-guard: allow-legacy CHIUSO_FORZATO is named in cancelOrder.js's own ECONOMIC_CANCEL_STATES comment as the state excluded here, not new vocabulary
+  // `!_isNoop` is load-bearing: an order ALREADY in the target cancel state has nothing
+  // economic left to do, and routing that self-loop through a financial writer would demand
+  // an actor and a reason for a transition that is not happening. It stays the pure no-op it
+  // has always been (and the RPC would refuse it as idempotent anyway).
+  if (!_isNoop && isEconomicCancellation(nuovoStato)) {
+    // Two operations, never one. Collecting/discounting and cancelling in the same request
+    // would ask the DB to move money and revoke the obligation in one statement, and the
+    // N-5 guard would refuse the second half AFTER the first had been recorded. Same rule
+    // index.js already applies to a discount carried by a collection.
+    const economicExtras = ["metodo_pago", "cobrado", "ya_pagado", "descuento_tipo", "descuento_valor"]
+      .filter((k) => extras[k] !== undefined);
+    if (economicExtras.length > 0) {
+      return {
+        success: false,
+        error: "cancellation_with_economic_extras",
+        reason: "economic_fields_must_be_applied_separately",
+        campos: economicExtras,
+      };
+    }
+
+    const cancelled = await cancelOrderCanonical({
+      orderId: ordenId,
+      targetEstado: nuovoStato,
+      extras,
+    });
+    if (!cancelled.ok) {
+      // The DB refused: the order did NOT change state, so no transition is logged and no
+      // downstream hook runs. Reporting success here would invent history.
+      return { success: false, error: cancelled.code, code: cancelled.code, estado_actual: estadoActual };
+    }
+    // estado + cancelado_at + the obligation revision were all written inside the RPC's own
+    // transaction. Fall through to the SAME transition log, giro dissolve and DRIVER_STATO
+    // reconciliation every other terminal state already uses — this slice changes where the
+    // state is written, not what happens around it.
+  } else {
+    // N-5 — a refused write means the state did NOT change either: this is one atomic
+    // statement carrying estado + the economic columns. Returning before the transition log
+    // and the DRIVER_STATO reconciliation is what keeps the audit trail honest — logging a
+    // transition that the DB rejected would be inventing history.
+    const stateRes = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
+    if (isEconomicMutationRefusal(stateRes)) return economicMutationRefusal(ordenId);
+  }
 
   // No-op (self-loop): nessun log di transizione — non c'è transizione. Evita
   // log terminali duplicati che corromperebbero le metriche giro/lifecycle.

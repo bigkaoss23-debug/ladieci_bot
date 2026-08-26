@@ -27,6 +27,17 @@ const PAYMENT_ROLES = new Set(['admin','operator','owner','cashier','legacy_oper
 // REFUND V1 SLICE A — narrower than PAYMENT_ROLES on purpose: the role that takes
 // money should not be the one that can silently return it (contract §10/§I.5).
 const REFUND_ROLES = new Set(['admin','owner']);
+// AJUSTE COMERCIAL V1 — a MANUAL commercial adjustment reduces what the house is owed,
+// which is at least as sensitive as returning money: same set as REFUND_ROLES, and
+// deliberately narrower than PAYMENT_ROLES. `cashier` is excluded on the same
+// segregation-of-duties grounds Refund V1 already froze; `shift_manager` is out for V1.
+// NOTE the structural fact behind the pair: auth_actors_actor_role_map makes role 'owner'
+// unreachable (actor='owner' <=> role='admin'), so this set is really the single `owner`
+// actor -- 'owner' is kept for symmetry with the refund gate, not because a second tier
+// exists. A CANCELLATION-caused adjustment is NOT gated here: it is a constrained
+// side-effect of a cancellation the actor is already authorised to perform, and the
+// server -- not the caller -- derives the resulting obligation. See order_cancel_v1.
+const ADJUSTMENT_ROLES = new Set(['admin','owner']);
 const LAYOUT_ROLES = new Set(['admin','owner']);
 const RESERVATION_ROLES = new Set(['admin','operator','owner','cashier','waiter','shift_manager','legacy_operator']);
 // OVER-COLLECTED SLICE A — the force-closed-table terminal state is removed -- language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this paragraph explains the removal of, not new vocabulary
@@ -575,6 +586,42 @@ function createMesaService({
         reason: trimmedReason,
       };
       return dao.postRefund({
+        workspaceId: ctx.workspaceId, byActor: ctx.actor, bySidHash,
+        ...semantic, clientRequestId, requestHash: canonicalHash(semantic),
+        meta: { source: 'mesa_dashboard' },
+      });
+    },
+
+    // AJUSTE COMERCIAL V1 — changes the OBLIGATION only. It never creates, alters or
+    // reverses a payment_transactions row, so Caja is untouched by construction: only a
+    // real refund moves physical money. Target is the PERMANENT order_uid, never the
+    // recycled display #NNN. Reduction-only in V1 (an increase is a new comanda).
+    async commercialAdjustment({
+      context, tableSessionId, orderUid, newGross, reason, expectedCurrentGross, clientRequestId,
+    } = {}) {
+      const ctx = requireContext(context, ADJUSTMENT_ROLES);
+      if (typeof ctx.sid !== 'string' || !ctx.sid) throw new MesaServiceError('MESA_RELOGIN_REQUIRED', 401);
+      const bySidHash = hashSid(ctx.sid);
+      if (typeof bySidHash !== 'string' || !/^[0-9a-f]{64}$/.test(bySidHash)) {
+        throw new MesaServiceError('MESA_RELOGIN_REQUIRED', 401);
+      }
+      const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
+      if (!trimmedReason) throw new MesaServiceError('MESA_ADJUSTMENT_REASON_REQUIRED', 400);
+      if (typeof orderUid !== 'string' || !orderUid) {
+        throw new MesaServiceError('ORDER_WITHOUT_STABLE_IDENTITY', 400);
+      }
+      const gross = Number(newGross);
+      if (!Number.isFinite(gross) || gross < 0) {
+        throw new MesaServiceError('MESA_ADJUSTMENT_INVALID', 400);
+      }
+      const semantic = {
+        tableSessionId,
+        orderUid,
+        newGross: gross,
+        reason: trimmedReason,
+        expectedCurrentGross: expectedCurrentGross == null ? null : Number(expectedCurrentGross),
+      };
+      return dao.postCommercialAdjustment({
         workspaceId: ctx.workspaceId, byActor: ctx.actor, bySidHash,
         ...semantic, clientRequestId, requestHash: canonicalHash(semantic),
         meta: { source: 'mesa_dashboard' },

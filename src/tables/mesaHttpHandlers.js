@@ -11,7 +11,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 // deploy-order note in mesaService.js.
 function safeError(error) {
   if (error instanceof MesaServiceError) return { status: error.status, code: error.code };
-  const code = typeof error?.code === 'string' && /^MESA_[A-Z0-9_]+$/.test(error.code)
+  // AJUSTE COMERCIAL V1 — ORDER_* is admitted alongside MESA_*: the shared obligation
+  // primitive is not Mesa-scoped (order_cancel_v1 serves non-table orders too) and its
+  // fail-closed identity refusals are client-fixable 400s, not internal errors. Without
+  // this they would all collapse into MESA_INTERNAL_ERROR/500 and tell the operator
+  // nothing.
+  const code = typeof error?.code === 'string' && /^(MESA|ORDER)_[A-Z0-9_]+$/.test(error.code)
     ? error.code : 'MESA_INTERNAL_ERROR';
   const conflict = new Set([
     'MESA_TABLE_NOT_RELEASED','MESA_TABLE_ACCOUNT_OPEN',
@@ -28,14 +33,19 @@ function safeError(error) {
     'MESA_REFUND_TRANSACTION_MISMATCH','MESA_REFUND_NOT_REFUNDABLE',
     'MESA_REFUND_EXCEEDS_REMAINING','MESA_REFUND_ALREADY_FULL',
     'MESA_REFUND_IDEMPOTENCY_CONFLICT',
+    // AJUSTE COMERCIAL V1 — the obligation moved (or refused to move) under the operator.
+    'MESA_ADJUSTMENT_STALE_OBLIGATION','MESA_ADJUSTMENT_NO_CHANGE',
+    'MESA_ADJUSTMENT_IDEMPOTENCY_CONFLICT',
   ]);
   const denied = new Set([
     'MESA_PAYMENT_FORBIDDEN','MESA_OPEN_FORBIDDEN','MESA_LAYOUT_FORBIDDEN','MESA_RESERVATION_FORBIDDEN','MESA_CLOSE_FORBIDDEN',
     'MESA_REFUND_FORBIDDEN',
+    'MESA_ADJUSTMENT_FORBIDDEN','ORDER_CANCEL_FORBIDDEN',
   ]);
   const missing = new Set([
     'MESA_SESSION_NOT_FOUND','MESA_TABLE_NOT_FOUND','MESA_WORKSPACE_NOT_FOUND','MESA_COMMAND_NOT_FOUND','MESA_RESERVATION_NOT_FOUND',
     'MESA_TRANSACTION_NOT_FOUND',
+    'MESA_ADJUSTMENT_ORDER_NOT_FOUND','ORDER_CANCEL_NOT_FOUND',
   ]);
   // REFUND V1 SLICE A — MESA_REFUND_ALLOCATION_MISMATCH is an invariant breach
   // (§L.3), never a client mistake: 500, fail closed, no SQL detail forwarded.
@@ -181,6 +191,17 @@ function createMesaHandlers({ service = createMesaService(), logger = console } 
       reason: req.body?.reason,
       clientRequestId: requestId(req.body),
     })),
+    // AJUSTE COMERCIAL V1 -- orderUid is the PERMANENT identity; a recycled display
+    // #NNN is never accepted here or by the RPC.
+    commercialAdjustment: run('commercial_adjustment', (req) => service.commercialAdjustment({
+      context: req.mesaContext,
+      tableSessionId: requireId(req.params.sessionId),
+      orderUid: requireId(req.body?.orderUid),
+      newGross: req.body?.newGross,
+      reason: req.body?.reason,
+      expectedCurrentGross: req.body?.expectedCurrentGross,
+      clientRequestId: requestId(req.body),
+    })),
     saveTable: run('save_table', (req) => service.saveTable({
       context: req.mesaContext,
       table: {
@@ -254,12 +275,15 @@ function registerMesaRoutes(router, deps = {}) {
   router.post('/sessions/:sessionId/payments', auth, handlers.pay);
   // REFUND V1 SLICE A
   router.post('/sessions/:sessionId/refunds', auth, handlers.refund);
+  // AJUSTE COMERCIAL V1 (ledger 118)
+  router.post('/sessions/:sessionId/adjustments', auth, handlers.commercialAdjustment);
   router.post('/tables/:tableId/reservations', auth, handlers.createReservation);
   router.put('/reservations/:reservationId', auth, handlers.updateReservation);
   router.post('/reservations/:reservationId/status', auth, handlers.setReservationStatus);
   router.post('/reservations/:reservationId/open', auth, handlers.openReservation);
   // 13 + ACC-01's two read-only GETs + REFUND V1's one refunds POST
-  return Object.freeze({ routes: 16 });
+  // + AJUSTE COMERCIAL V1's one adjustments POST
+  return Object.freeze({ routes: 17 });
 }
 
 module.exports = {

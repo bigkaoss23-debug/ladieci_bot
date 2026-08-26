@@ -343,6 +343,14 @@ const REGISTRY = Object.freeze([
   entry('rpc/mesa_post_payment_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'tables/mesaDao.js'),
   // REFUND V1 SLICE A — canonical transaction-centric Mesa refund writer.
   entry('rpc/mesa_post_refund_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'tables/mesaDao.js'),
+  // AJUSTE COMERCIAL V1 (ledger 118) — moves what the customer OWES, never money.
+  entry('rpc/mesa_post_commercial_adjustment_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
+    'tables/mesaDao.js'),
+  // AJUSTE COMERCIAL V1 (ledger 118) — canonical atomic cancellation: operational state
+  // AND the mandatory obligation revision to 0, in one transaction. Registered here or the
+  // DAO call is rejected before it reaches Supabase, with NO transport log line at all.
+  entry('rpc/order_cancel_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
+    'agents/agentOrdini.js cambiaStato'),  // language-guard: allow-legacy agentOrdini is the existing module filename being cross-referenced, not new vocabulary
   entry('rpc/mesa_save_reservation_v1', KIND.RPC, ['POST'], SENSITIVITY.PII, 'tables/mesaDao.js'),
   entry('rpc/mesa_set_reservation_status_v1', KIND.RPC, ['POST'], SENSITIVITY.PII, 'tables/mesaDao.js'),
   entry('rpc/mesa_open_reservation_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/mesaDao.js'),

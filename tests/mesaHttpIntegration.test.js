@@ -45,6 +45,6 @@ test('enabled integration mounts exactly thirteen static routes', () => {
     getActor: async () => ({ actor: 'operator_primary', role: 'operator', active: true, session_version: 1, workspace_id: 'ws' }),
   });
   // 13 + ACC-01's two read-only GETs (recent-closed list, session account) +
-  // REFUND V1 SLICE A's one refunds POST
-  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 16 });
+  // REFUND V1 SLICE A's one refunds POST + AJUSTE COMERCIAL V1's one adjustments POST
+  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 17 });
 });
