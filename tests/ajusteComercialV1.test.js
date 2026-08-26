@@ -134,6 +134,31 @@ assert('lock order is actor -> table_session -> order (a subsequence of the Mesa
   cancelFn.indexOf('FROM public.auth_actors') < cancelFn.indexOf('FROM public.table_sessions')
   && cancelFn.indexOf('FROM public.table_sessions') < cancelFn.indexOf('FROM public.ordenes WHERE id = p_order_id FOR UPDATE'));
 
+section('CANCELLATION — netCollected reads the UNIVERSAL ledger, not the Mesa-only one');
+// PRE-DEPLOY GATE FINDING (2026-08-26): the first draft summed payment_allocations/
+// payment_transactions for netCollected/unpaid/overCollected. That pair is Mesa-only
+// (payment_transactions.table_session_id is NOT NULL) -- _ledger_write_payment, the
+// writer every Retiro/Banco/Domicilio payment actually goes through, never inserts
+// there. Proven live (rollback-forced, #999029, 14.50 EUR paid via the legacy path):
+// the old query returned netCollected=0/overCollected=0 after cancelling a fully-paid
+// non-Mesa order. Worse, because ordenes.id is a RECYCLED display number and the old
+// predicate collapsed to unconditionally-true whenever table_session_id was NULL, it
+// could also attribute a COMPLETELY UNRELATED order's Mesa payment to the one being
+// cancelled (reproduced live on #370/#999003/#999004: old query 40.00/20.00/5.00,
+// correct answer 0.00). The fix mirrors order_refund/order_void/_ledger_write_payment's
+// own N-6 pattern verbatim: order_financial_events scoped by service_session_id, the
+// SAME bridge ledger mesa_post_payment_v1 and mesa_post_refund_v1 already write into
+// for every Mesa allocation -- verified against all 39 live orders with allocations to
+// carry zero regression on the Mesa side.
+assert('netCollected no longer sources from payment_allocations/payment_transactions',
+  !/FROM public\.payment_allocations|JOIN public\.payment_transactions/.test(cancelFn));
+assert('netCollected reads order_financial_events (the universal bridge ledger)',
+  (cancelFn.match(/FROM public\.order_financial_events e/g) || []).length === 2);
+assert('netCollected is scoped by service_session_id, the N-6 pattern, not table_session_id',
+  (cancelFn.match(/e\.service_session_id IS NOT DISTINCT FROM v_ord\.service_session_id/g) || []).length === 2);
+assert('netCollected includes payment, payment_imported and refund event types',
+  (cancelFn.match(/e\.type IN \('payment','payment_imported','refund'\)/g) || []).length === 2);
+
 section('order_void — ANULADO is an economic cancellation too');
 const voidFn = fnBody(MIG, 'order_void');
 assert('order_void now appends an obligation revision to 0',

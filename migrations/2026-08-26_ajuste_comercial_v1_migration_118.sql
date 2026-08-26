@@ -665,11 +665,16 @@ BEGIN
   -- Matches validateTransition's own CANCELADO->CANCELADO noop semantics.
   IF upper(COALESCE(v_ord.estado,'')) = v_target THEN
     v_current := public.order_canonical_obligation_v1(v_ord.order_uid);
-    SELECT COALESCE(sum(CASE WHEN t.kind = 'refund' THEN -a.amount ELSE a.amount END), 0)
-      INTO v_net FROM public.payment_allocations a
-      JOIN public.payment_transactions t ON t.id = a.payment_transaction_id
-     WHERE a.order_id = v_ord.id
-       AND (v_ord.table_session_id IS NULL OR t.table_session_id = v_ord.table_session_id);
+    -- order_financial_events, scoped by service_session_id, is the universal bridge
+    -- ledger BOTH channels write into (mesa_post_payment_v1/mesa_post_refund_v1 bridge
+    -- every Mesa allocation here too; _ledger_write_payment/order_refund never touch
+    -- payment_allocations at all). The predicate is N-6's, verbatim: order_id alone is
+    -- the RECYCLED display number, never financial identity on its own.
+    SELECT COALESCE(sum(CASE WHEN e.type = 'refund' THEN -e.amount ELSE e.amount END), 0)
+      INTO v_net FROM public.order_financial_events e
+     WHERE e.order_id = v_ord.id
+       AND e.type IN ('payment','payment_imported','refund')
+       AND e.service_session_id IS NOT DISTINCT FROM v_ord.service_session_id;
     RETURN jsonb_build_object(
       'ok', true, 'idempotent', true, 'orderId', v_ord.id, 'orderUid', v_ord.order_uid,
       'estado', v_ord.estado, 'currentObligation', round(v_current, 2),
@@ -707,11 +712,12 @@ BEGIN
     'reason', btrim(p_reason), 'byRole', v_actor.role,
     'clientRequestId', p_client_request_id));
 
-  SELECT COALESCE(sum(CASE WHEN t.kind = 'refund' THEN -a.amount ELSE a.amount END), 0)
-    INTO v_net FROM public.payment_allocations a
-    JOIN public.payment_transactions t ON t.id = a.payment_transaction_id
-   WHERE a.order_id = v_ord.id
-     AND (v_ord.table_session_id IS NULL OR t.table_session_id = v_ord.table_session_id);
+  -- Same universal-ledger source as the replay branch above -- see that comment.
+  SELECT COALESCE(sum(CASE WHEN e.type = 'refund' THEN -e.amount ELSE e.amount END), 0)
+    INTO v_net FROM public.order_financial_events e
+   WHERE e.order_id = v_ord.id
+     AND e.type IN ('payment','payment_imported','refund')
+     AND e.service_session_id IS NOT DISTINCT FROM v_ord.service_session_id;
 
   v_current := (v_res->>'currentObligation')::numeric;
 
