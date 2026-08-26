@@ -322,6 +322,14 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
 
     // ── 5. RECEIPT SIDE — events in window, by their own instant ────────────
     const receiptTotals = emptyPaymentTotals();
+    // REFUND V1 SLICE C — byMethod stays NET (unchanged, still the ONLY thing
+    // cashCountService/closeoutReconciliation's existing byMethod consumers
+    // read). These two are purely additive siblings: gross accumulates ONLY
+    // payment events, refunds accumulates ONLY refund events, both unsigned
+    // -- so for every method, byMethod === byMethodGross - byMethodRefunds by
+    // construction (proven in economicSnapshot.refundReporting.test.js).
+    const receiptGrossTotals = emptyPaymentTotals();
+    const receiptRefundTotals = emptyPaymentTotals();
     const receiptEra = EMPTY_ERA();
     let collected = 0;
     let refunded = 0;
@@ -341,8 +349,8 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
       const signed = isRefund ? -amount : amount;
       if (!cancelled) {
         addMethodAmount(receiptTotals, event.payment_method, signed);
-        if (isPayment) collected = round(collected + amount);
-        if (isRefund) refunded = round(refunded + amount);
+        if (isPayment) { addMethodAmount(receiptGrossTotals, event.payment_method, amount); collected = round(collected + amount); }
+        if (isRefund) { addMethodAmount(receiptRefundTotals, event.payment_method, amount); refunded = round(refunded + amount); }
         const eraSession = (!event.event_service_session_id
           || String(event.event_service_session_id) === String(order?.service_session_id || ""))
           ? sessionOf(order) : sessions.get(String(event.event_service_session_id)) || null;
@@ -379,6 +387,12 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
       if (hasEvidence || ticket.cancelled) continue;
       if (!(row?.cobrado === true || row?.ya_pagado === true)) continue;
       addMethodAmount(receiptTotals, row.metodo_pago, ticket.amount);
+      // A legacy fallback receipt is always a PAYMENT (it exists precisely
+      // because an order was marked paid with no refund/event ledger at
+      // all) -- it contributes to gross exactly as it already contributes
+      // to the net total, keeping byMethod === byMethodGross - byMethodRefunds
+      // true even in the presence of this branch.
+      addMethodAmount(receiptGrossTotals, row.metodo_pago, ticket.amount);
       collected = round(collected + ticket.amount);
       addEra(receiptEra, resolveEconomicPeriodKind(null, sessionOf(row)), ticket.amount);
       paymentCount += 1;
@@ -458,7 +472,14 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
         collected: round(collected - refunded),
         collectedGross: collected,
         refunded,
+        // NET, unchanged -- the exact object every existing consumer
+        // (cashCountService, closeoutReconciliation) already reads.
         byMethod: Object.freeze({ ...receiptTotals }),
+        // REFUND V1 SLICE C -- additive. Per method: byMethod ===
+        // byMethodGross - byMethodRefunds, always (proven in
+        // economicSnapshot.refundReporting.test.js).
+        byMethodGross: Object.freeze({ ...receiptGrossTotals }),
+        byMethodRefunds: Object.freeze({ ...receiptRefundTotals }),
       }),
       counts: Object.freeze({
         obligations: obligations.length,

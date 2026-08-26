@@ -304,6 +304,19 @@ function createCloseoutReconciliation({
       status: session.status,
 
       // SCOPE 1 — "Este servicio".
+      //
+      // REFUND V1 SLICE C — `refunded` used to silently mix scopes: `collected`
+      // is (and always was) RECEIPT-scoped (payment/refund events whose own
+      // instant falls in this window), but `refunded` was OBLIGATION-scoped
+      // (refunds against orders BORN in this window, regardless of when the
+      // refund itself happened). That made a cross-day refund invisible here:
+      // today's collected correctly drops, but today's refunded stayed 0
+      // because the SALE it reverses was born on a different day -- an
+      // unexplained-drop bug the Slice A/B contract audit named and deferred
+      // to this slice. `refunded` now matches `collected`'s own scope, so
+      // `collected === collectedGross - refunded` holds inside this view.
+      // The OBLIGATION-scoped figure this field used to silently BE is kept,
+      // under its own explicit name, never dropped.
       service: Object.freeze({
         scope: "service",
         serviceSessionId: String(session.id),
@@ -312,12 +325,21 @@ function createCloseoutReconciliation({
         collected: serviceView.receipts.collected,
         unpaid: serviceView.obligation.unpaid,
         voided: serviceView.obligation.voided,
-        refunded: serviceView.obligation.refunded,
+        // RECEIPT-scoped: refund events recorded in THIS window. Same scope
+        // as `collected` above -- explains why collected moved.
+        refunded: serviceView.receipts.refunded,
+        // OBLIGATION-scoped: how much of what was SOLD in this window has
+        // since been refunded, whenever that refund happened. Never mixed
+        // with the receipt-scoped figure above again.
+        obligationRefunded: serviceView.obligation.refunded,
         byMethod: serviceView.receipts.byMethod,
+        byMethodGross: serviceView.receipts.byMethodGross,
+        byMethodRefunds: serviceView.receipts.byMethodRefunds,
         window: serviceView.window,
       }),
 
-      // SCOPE 2 — "Día operativo".
+      // SCOPE 2 — "Día operativo". Same receipt-vs-obligation refund split as
+      // SCOPE 1 above, same reason.
       reconciliation: Object.freeze({
         scope: "business_day",
         window: Object.freeze({ from: win.from, to: win.to, timezone: win.timezone, preset: win.preset }),
@@ -327,8 +349,11 @@ function createCloseoutReconciliation({
         collected: dayView.receipts.collected,
         unpaid: dayView.obligation.unpaid,
         voided: dayView.obligation.voided,
-        refunded: dayView.obligation.refunded,
+        refunded: dayView.receipts.refunded,
+        obligationRefunded: dayView.obligation.refunded,
         byMethod: dayView.receipts.byMethod,
+        byMethodGross: dayView.receipts.byMethodGross,
+        byMethodRefunds: dayView.receipts.byMethodRefunds,
         cashReceipts,
         // How many Operational Services this window really spanned — the
         // number that explains why day cash can exceed service cash.
