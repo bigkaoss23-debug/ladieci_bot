@@ -160,10 +160,15 @@ function projectSessionAccount(session, { lines = [], transactions = [], orders 
       kitchenNote: order.nota_cucina,
     })),
     lines,
+    // REFUND V1 SLICE B0 — reversesTransactionId was already fetched by mesaDao.js
+    // (payment_transactions.reverses_transaction_id) but dropped here, leaving the
+    // frontend with no way to link a refund row back to the original payment it
+    // reverses. Purely additive: every other field is unchanged.
     payments: transactions.map((tx) => ({
       id: tx.id, kind: tx.kind, mode: tx.mode, amount: Number(tx.amount),
       method: tx.payment_method, coversSettled: tx.covers_settled,
       actor: tx.by_actor, createdAt: tx.created_at,
+      reversesTransactionId: tx.reverses_transaction_id || null,
     })),
   };
 }

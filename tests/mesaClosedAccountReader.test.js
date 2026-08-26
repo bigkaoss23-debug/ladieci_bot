@@ -144,6 +144,37 @@ test('the full payment history survives, in order, with its real methods', async
   assert.equal(account.payments.reduce((s, p) => s + p.amount, 0), 128.5);
 });
 
+// REFUND V1 SLICE B0 — the CLOSED-session reader (service.sessionAccount ->
+// buildClosedAccount -> projectSessionAccount) must preserve
+// reversesTransactionId exactly like the open floor does (proven in
+// mesaService.test.js). A closed table is explicitly first-class for Refund
+// V1 (26/26 money-bearing tables are closed today), so this is the primary
+// surface a refund's linkage must survive on.
+test('a closed account preserves reversesTransactionId on a refund row, linking it to its exact original', async () => {
+  const rowsWithRefund = {
+    ...MESA_4_ROWS,
+    transactions: [
+      ...MESA_4_ROWS.transactions,
+      { id: 'tx-refund-1', table_session_id: SESSION_ID, kind: 'refund', mode: 'refund', amount: 10,
+        payment_method: 'tarjeta', covers_settled: 0, by_actor: 'owner',
+        created_at: '2026-08-20T19:40:00Z', reverses_transaction_id: 'tx1' },
+    ],
+  };
+  const service = createMesaService({ dao: readOnlyDao({ listSessionAccountRows: async () => rowsWithRefund }) });
+  const { status, account } = await service.sessionAccount({ context: ctx(), tableSessionId: SESSION_ID });
+
+  const refundRow = account.payments.find((p) => p.id === 'tx-refund-1');
+  assert.equal(refundRow.reversesTransactionId, 'tx1');
+  const originalRow = account.payments.find((p) => p.id === 'tx1');
+  assert.equal(originalRow.reversesTransactionId, null);
+  // every original payment row (unaffected by the refund fixture) still has null
+  for (const id of ['tx2', 'tx3', 'tx4', 'tx5']) {
+    assert.equal(account.payments.find((p) => p.id === id).reversesTransactionId, null);
+  }
+  // the table stays CLOSED -- reading a refund's linkage never reopens anything
+  assert.equal(status, 'closed');
+});
+
 test('per-method receipts match the certified split', async () => {
   const service = createMesaService({ dao: readOnlyDao() });
   const { account } = await service.sessionAccount({ context: ctx(), tableSessionId: SESSION_ID });

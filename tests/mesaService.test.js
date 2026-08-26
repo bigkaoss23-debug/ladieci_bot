@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createMesaService, MesaServiceError, buildFloor } = require('../src/tables/mesaService');
+const { createMesaService, MesaServiceError, buildFloor, projectSessionAccount } = require('../src/tables/mesaService');
 
 const ctx = (overrides = {}) => ({
   actor: 'operator_primary', role: 'operator', workspaceId: 'ws-1',
@@ -651,4 +651,86 @@ test('refund propagates the RPC error code untouched (e.g. exceeds refundable re
     }),
     (error) => error.code === 'MESA_REFUND_EXCEEDS_REMAINING'
   );
+});
+
+// ═══ REFUND V1 SLICE B0 — reader prerequisite: reversesTransactionId ═══
+// account.payments must expose the exact transaction/refund linkage a refund
+// UI needs to compute refundable-remaining per original transaction, never
+// from a session/table aggregate. mesaDao.js already fetches
+// payment_transactions.reverses_transaction_id from Supabase for both the
+// open-floor and closed-session readers; projectSessionAccount is the ONE
+// shared projection both call, so proving it here proves both.
+
+test('projectSessionAccount: an original payment has reversesTransactionId null', () => {
+  const session = { id: 's1', covers_total: 2 };
+  const account = projectSessionAccount(session, {
+    lines: [],
+    orders: [],
+    transactions: [
+      { id: 'pt-original', kind: 'payment', mode: 'full', amount: 30, payment_method: 'tarjeta',
+        covers_settled: 2, by_actor: 'owner', created_at: '2026-08-22T20:14:00Z' },
+    ],
+  });
+  assert.equal(account.payments.length, 1);
+  assert.equal(account.payments[0].reversesTransactionId, null);
+});
+
+test('projectSessionAccount: a refund transaction carries the EXACT id of the original it reverses', () => {
+  const session = { id: 's1', covers_total: 2 };
+  const account = projectSessionAccount(session, {
+    lines: [],
+    orders: [],
+    transactions: [
+      { id: 'pt-original', kind: 'payment', mode: 'full', amount: 30, payment_method: 'tarjeta',
+        covers_settled: 2, by_actor: 'owner', created_at: '2026-08-22T20:14:00Z' },
+      { id: 'pt-refund-1', kind: 'refund', mode: 'refund', amount: 10, payment_method: 'tarjeta',
+        covers_settled: 0, by_actor: 'owner', created_at: '2026-08-22T20:47:00Z',
+        reverses_transaction_id: 'pt-original' },
+    ],
+  });
+  const refundRow = account.payments.find((p) => p.id === 'pt-refund-1');
+  assert.equal(refundRow.reversesTransactionId, 'pt-original');
+  const originalRow = account.payments.find((p) => p.id === 'pt-original');
+  assert.equal(originalRow.reversesTransactionId, null);
+});
+
+test('projectSessionAccount: reversesTransactionId is additive -- every other payment projection field is unchanged', () => {
+  const session = { id: 's1', covers_total: 1 };
+  const account = projectSessionAccount(session, {
+    lines: [], orders: [],
+    transactions: [
+      { id: 'pt-1', kind: 'payment', mode: 'custom_amount', amount: 12, payment_method: 'efectivo',
+        covers_settled: 1, by_actor: 'operator_primary', created_at: '2026-08-22T10:00:00Z' },
+    ],
+  });
+  assert.deepEqual(Object.keys(account.payments[0]).sort(), [
+    'actor', 'amount', 'coversSettled', 'createdAt', 'id', 'kind', 'method', 'mode', 'reversesTransactionId',
+  ].sort());
+  assert.equal(account.payments[0].id, 'pt-1');
+  assert.equal(account.payments[0].kind, 'payment');
+  assert.equal(account.payments[0].mode, 'custom_amount');
+  assert.equal(account.payments[0].amount, 12);
+  assert.equal(account.payments[0].method, 'efectivo');
+  assert.equal(account.payments[0].coversSettled, 1);
+  assert.equal(account.payments[0].actor, 'operator_primary');
+  assert.equal(account.payments[0].createdAt, '2026-08-22T10:00:00Z');
+});
+
+test('the OPEN-floor reader (buildFloor) preserves reversesTransactionId through the shared projection', () => {
+  const rows = {
+    tables: [{ id: 't1', table_number: 1, display_name: 'Mesa 1', capacity: 4, position_x: 0, position_y: 0, shape: 'round', active: true }],
+    sessions: [{ id: 's1', table_id: 't1', service_session_id: 'service', status: 'open', covers_total: 1, opened_at: 'now' }],
+    orders: [{ id: 'o1', table_session_id: 's1', table_command_number: 1, estado: 'EN_COCINA', totale: 30, items: [] }],
+    lines: [{ id: 'l1', table_session_id: 's1', order_id: 'o1', source_line_id: 'g1', source_line_index: 1, unit_index: 1, description: 'Pizza', product_snapshot: {}, net_amount: 30 }],
+    transactions: [
+      { id: 'pt-original', table_session_id: 's1', kind: 'payment', mode: 'full', amount: 30, payment_method: 'tarjeta', covers_settled: 1, by_actor: 'owner', created_at: 'now' },
+      { id: 'pt-refund-1', table_session_id: 's1', kind: 'refund', mode: 'refund', amount: 10, payment_method: 'tarjeta', covers_settled: 0, by_actor: 'owner', created_at: 'later', reverses_transaction_id: 'pt-original' },
+    ],
+    allocations: [{ payment_transaction_id: 'pt-original', table_order_line_id: 'l1', amount: 30 }],
+  };
+  const table = buildFloor(rows)[0];
+  const refundRow = table.session.payments.find((p) => p.id === 'pt-refund-1');
+  assert.equal(refundRow.reversesTransactionId, 'pt-original');
+  const originalRow = table.session.payments.find((p) => p.id === 'pt-original');
+  assert.equal(originalRow.reversesTransactionId, null);
 });
