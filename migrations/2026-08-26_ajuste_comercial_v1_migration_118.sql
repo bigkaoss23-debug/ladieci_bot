@@ -892,8 +892,9 @@ $fn$;
 CREATE OR REPLACE FUNCTION public.mesa_post_payment_v1(
   p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid,
   p_payment_method text, p_mode text, p_client_request_id text, p_request_hash text,
-  p_amount numeric, p_covers_settled integer, p_line_ids uuid[], p_meta jsonb,
-  p_confirm_duplicate boolean
+  p_amount numeric DEFAULT NULL, p_covers_settled integer DEFAULT NULL,
+  p_line_ids uuid[] DEFAULT NULL, p_meta jsonb DEFAULT '{}'::jsonb,
+  p_confirm_duplicate boolean DEFAULT false
 ) RETURNS jsonb
 LANGUAGE plpgsql
 VOLATILE
@@ -1259,7 +1260,7 @@ $fn$;
 --     CHIUSO_FORZATO literals are preserved verbatim -- only the economic filter moved.  -- language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this slice deliberately keeps OUT of every economic filter, named here as evidence, not new vocabulary
 -- ══════════════════════════════════════════════════════════════════════════
 CREATE OR REPLACE FUNCTION public.mesa_close_session_v1(
-  p_workspace_id uuid, p_by_actor text, p_table_session_id uuid, p_force boolean
+  p_workspace_id uuid, p_by_actor text, p_table_session_id uuid, p_force boolean DEFAULT false
 ) RETURNS jsonb
 LANGUAGE plpgsql
 VOLATILE
