@@ -1397,17 +1397,29 @@ $fn$;
 -- 12. PRIVILEGES -- fail closed. Same posture as mesa_post_payment_v1 /
 --     mesa_post_refund_v1: nothing for PUBLIC, EXECUTE for service_role only. anon and
 --     authenticated must never reach a financial writer directly.
+--
+--     REVOKE ... FROM PUBLIC alone is NOT enough on this project: pg_default_acl shows
+--     role postgres/supabase_admin grants EXECUTE on every NEW function in public to
+--     anon/authenticated/service_role directly (Supabase's standard default ACL) -- a
+--     grant to PUBLIC is a separate thing from a grant directly to those two roles, and
+--     revoking PUBLIC's grant does not touch it. Verified live (rollback-forced) before
+--     this fix: has_function_privilege('anon', ..., 'EXECUTE') was TRUE on a freshly
+--     created function immediately after "REVOKE ALL ... FROM PUBLIC". Each REVOKE below
+--     now names anon and authenticated explicitly, matching mesa_post_payment_v1's and
+--     mesa_post_refund_v1's REPLACE targets, which never needed this fix because
+--     CREATE OR REPLACE preserves a function's existing grants -- it does not re-apply
+--     the default ACL. Only a fresh CREATE (all four functions here) is exposed.
 -- ══════════════════════════════════════════════════════════════════════════
-REVOKE ALL ON FUNCTION public.order_canonical_obligation_v1(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.order_canonical_obligation_v1(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.order_canonical_obligation_v1(uuid) TO service_role;
 
-REVOKE ALL ON FUNCTION public.order_obligation_apply_adjustment_v1(uuid,numeric,text,text,text,text,text,text,numeric) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.order_obligation_apply_adjustment_v1(uuid,numeric,text,text,text,text,text,text,numeric) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.order_obligation_apply_adjustment_v1(uuid,numeric,text,text,text,text,text,text,numeric) TO service_role;
 
-REVOKE ALL ON FUNCTION public.mesa_post_commercial_adjustment_v1(uuid,text,text,uuid,uuid,numeric,text,text,text,numeric,jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.mesa_post_commercial_adjustment_v1(uuid,text,text,uuid,uuid,numeric,text,text,text,numeric,jsonb) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.mesa_post_commercial_adjustment_v1(uuid,text,text,uuid,uuid,numeric,text,text,text,numeric,jsonb) TO service_role;
 
-REVOKE ALL ON FUNCTION public.order_cancel_v1(text,text,text,text,text,text,jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.order_cancel_v1(text,text,text,text,text,text,jsonb) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.order_cancel_v1(text,text,text,text,text,text,jsonb) TO service_role;
 
 -- ══════════════════════════════════════════════════════════════════════════
@@ -1438,7 +1450,7 @@ BEGIN
   -- ── THE INVARIANT THIS WHOLE DESIGN RESTS ON: create_rev_chk is untouched. ──
   SELECT pg_get_constraintdef(oid) INTO v_def FROM pg_constraint
    WHERE conrelid='public.order_obligations'::regclass AND conname='order_obligations_create_rev_chk';
-  IF v_def IS DISTINCT FROM 'CHECK ((((source = ''order_create_v1''::text) = (revision = 1))))' THEN
+  IF v_def IS DISTINCT FROM 'CHECK (((source = ''order_create_v1''::text) = (revision = 1)))' THEN
     RAISE EXCEPTION 'AJUSTE_118 post-condition failed: create_rev_chk was modified (now: %)', COALESCE(v_def,'<null>');
   END IF;
 
@@ -1513,11 +1525,18 @@ BEGIN
     THEN RAISE EXCEPTION 'AJUSTE_118 post-condition failed: % writes money or order state', v_lit; END IF;
   END LOOP;
 
-  -- ── cancellation NEVER fabricates a refund, for any tender. ──
+  -- ── cancellation NEVER fabricates a refund, for any tender. A refund IS a
+  --    payment_transactions row (kind='refund') reversing a prior one via
+  --    reverses_transaction_id -- absence of both INSERT targets and that column is
+  --    the real guarantee. A blunt substring match on the quoted word 'refund' was
+  --    dropped: order_cancel_v1's netCollected query legitimately READS
+  --    type IN ('payment','payment_imported','refund') to net out any refund already
+  --    on the ledger (the N-6 pattern order_refund/order_void/_ledger_write_payment
+  --    all use) -- that is filtering existing evidence, not creating a refund row. ──
   SELECT prosrc INTO v_src FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.proname='order_cancel_v1';
   IF v_src ~ 'INSERT INTO public\.payment_transactions' OR v_src ~ 'INSERT INTO public\.payment_allocations'
-     OR v_src ~ '''refund''' OR v_src ~ 'reverses_transaction_id'
+     OR v_src ~ 'reverses_transaction_id'
   THEN RAISE EXCEPTION 'AJUSTE_118 post-condition failed: order_cancel_v1 can create a refund'; END IF;
   -- ...and it never chooses an amount: there is no new-gross parameter at all.
   IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
