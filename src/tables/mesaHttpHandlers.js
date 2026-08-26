@@ -24,11 +24,25 @@ function safeError(error) {
     'MESA_TABLE_HAS_RESERVATIONS',
     'MESA_COVERS_NOT_SET','MESA_COVERS_IMMUTABLE','MESA_TABLE_HAS_ORDERS',
     'MESA_TABLE_NOT_SETTLED','MESA_TABLE_HAS_ACTIVE_ORDERS',
+    // REFUND V1 SLICE A — state/idempotency conflicts from mesa_post_refund_v1.
+    'MESA_REFUND_TRANSACTION_MISMATCH','MESA_REFUND_NOT_REFUNDABLE',
+    'MESA_REFUND_EXCEEDS_REMAINING','MESA_REFUND_ALREADY_FULL',
+    'MESA_REFUND_IDEMPOTENCY_CONFLICT',
   ]);
-  const denied = new Set(['MESA_PAYMENT_FORBIDDEN','MESA_OPEN_FORBIDDEN','MESA_LAYOUT_FORBIDDEN','MESA_RESERVATION_FORBIDDEN','MESA_CLOSE_FORBIDDEN']);
-  const missing = new Set(['MESA_SESSION_NOT_FOUND','MESA_TABLE_NOT_FOUND','MESA_WORKSPACE_NOT_FOUND','MESA_COMMAND_NOT_FOUND','MESA_RESERVATION_NOT_FOUND']);
+  const denied = new Set([
+    'MESA_PAYMENT_FORBIDDEN','MESA_OPEN_FORBIDDEN','MESA_LAYOUT_FORBIDDEN','MESA_RESERVATION_FORBIDDEN','MESA_CLOSE_FORBIDDEN',
+    'MESA_REFUND_FORBIDDEN',
+  ]);
+  const missing = new Set([
+    'MESA_SESSION_NOT_FOUND','MESA_TABLE_NOT_FOUND','MESA_WORKSPACE_NOT_FOUND','MESA_COMMAND_NOT_FOUND','MESA_RESERVATION_NOT_FOUND',
+    'MESA_TRANSACTION_NOT_FOUND',
+  ]);
+  // REFUND V1 SLICE A — MESA_REFUND_ALLOCATION_MISMATCH is an invariant breach
+  // (§L.3), never a client mistake: 500, fail closed, no SQL detail forwarded.
+  const internal = new Set(['MESA_REFUND_ALLOCATION_MISMATCH']);
   return {
-    status: conflict.has(code) ? 409 : denied.has(code) ? 403 : missing.has(code) ? 404 : code === 'MESA_INTERNAL_ERROR' ? 500 : 400,
+    status: conflict.has(code) ? 409 : denied.has(code) ? 403 : missing.has(code) ? 404
+      : internal.has(code) ? 500 : code === 'MESA_INTERNAL_ERROR' ? 500 : 400,
     code,
   };
 }
@@ -157,6 +171,16 @@ function createMesaHandlers({ service = createMesaService(), logger = console } 
       // `=== true` before it ever reaches the DAO.
       confirmDuplicate: req.body?.confirmDuplicate,
     })),
+    // REFUND V1 SLICE A -- originalTransactionId is a payment_transactions.id, same
+    // UUID shape as every other path/body id this router already validates.
+    refund: run('refund', (req) => service.refund({
+      context: req.mesaContext,
+      tableSessionId: requireId(req.params.sessionId),
+      originalTransactionId: requireId(req.body?.originalTransactionId),
+      amount: req.body?.amount,
+      reason: req.body?.reason,
+      clientRequestId: requestId(req.body),
+    })),
     saveTable: run('save_table', (req) => service.saveTable({
       context: req.mesaContext,
       table: {
@@ -228,12 +252,14 @@ function registerMesaRoutes(router, deps = {}) {
   router.post('/sessions/:sessionId/covers', auth, handlers.setCovers);
   router.post('/sessions/:sessionId/commands/:orderId/served', auth, handlers.markServed);
   router.post('/sessions/:sessionId/payments', auth, handlers.pay);
+  // REFUND V1 SLICE A
+  router.post('/sessions/:sessionId/refunds', auth, handlers.refund);
   router.post('/tables/:tableId/reservations', auth, handlers.createReservation);
   router.put('/reservations/:reservationId', auth, handlers.updateReservation);
   router.post('/reservations/:reservationId/status', auth, handlers.setReservationStatus);
   router.post('/reservations/:reservationId/open', auth, handlers.openReservation);
-  // 13 + ACC-01's two read-only GETs
-  return Object.freeze({ routes: 15 });
+  // 13 + ACC-01's two read-only GETs + REFUND V1's one refunds POST
+  return Object.freeze({ routes: 16 });
 }
 
 module.exports = {

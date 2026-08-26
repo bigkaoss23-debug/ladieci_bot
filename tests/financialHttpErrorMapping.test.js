@@ -40,6 +40,9 @@ const EXPECT = {
   // N-6 — refund/void/import refuse an order whose financial ownership cannot be proven.
   // 409 like its sibling state conflicts: nothing about the request is malformed.
   ORDER_WITHOUT_SERVICE_SESSION: 409,
+  // REFUND V1 SLICE A — legacy order_refund refuses a transaction-backed order;
+  // use mesa_post_refund_v1 instead. A state conflict, not a bad request.
+  AUTH_REFUND_TRANSACTION_BACKED: 409,
 };
 
 // completeness: every recognized domain code is explicitly mapped

@@ -119,6 +119,20 @@ const okResult = (over = {}) => Object.assign({
       .map((x) => x.replace(/RAISE EXCEPTION '|'/g, ''))
       .forEach((x) => fromSql.add(x));
   }
+  // REFUND V1 SLICE A -- that migration also defines mesa_post_refund_v1 in the
+  // SAME file, whose MESA_REFUND_* markers belong to mesaHttpHandlers' vocabulary,
+  // not financialDao's. Scanning the whole file would wrongly demand every one of
+  // those in RECOGNIZED_DOMAIN_CODES too, so only order_refund's own redefined
+  // body (the one financialDao actually calls) is harvested here.
+  {
+    const txt = fs.readFileSync(path.join(__dirname, '..', 'migrations/2026-08-26_refund_v1_slice_a_mesa_post_refund.sql'), 'utf8');
+    const start = txt.indexOf('CREATE OR REPLACE FUNCTION public.order_refund(');
+    const end = txt.indexOf('$function$;', start);
+    const orderRefundBody = start >= 0 && end >= 0 ? txt.slice(start, end) : '';
+    (orderRefundBody.match(/RAISE EXCEPTION '([A-Z_]+)'/g) || [])
+      .map((x) => x.replace(/RAISE EXCEPTION '|'/g, ''))
+      .forEach((x) => fromSql.add(x));
+  }
   // Migration-scaffolding raises (predecessor guards / post-conditions) cannot be
   // harvested by that regex: they are prose messages like 'N-6 refused: ...', which the
   // bare-marker pattern deliberately does not match.

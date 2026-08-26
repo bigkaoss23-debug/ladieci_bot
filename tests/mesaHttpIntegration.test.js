@@ -30,6 +30,8 @@ test('enabled integration mounts exactly thirteen static routes', () => {
     setCovers: async () => ({ ok: true }),
     markServed: async () => ({ ok: true }),
     pay: async () => ({ ok: true }),
+    // REFUND V1 SLICE A
+    refund: async () => ({ ok: true }),
     releaseEmptyTable: async () => ({ ok: true }),
     closeTable: async () => ({ ok: true }),
     saveReservation: async () => ({ ok: true }),
@@ -42,6 +44,7 @@ test('enabled integration mounts exactly thirteen static routes', () => {
     verifyToken: () => ({ sub: 'operator_primary', role: 'operator', sv: 1, sid: 'sid' }),
     getActor: async () => ({ actor: 'operator_primary', role: 'operator', active: true, session_version: 1, workspace_id: 'ws' }),
   });
-  // 13 + ACC-01's two read-only GETs (recent-closed list, session account)
-  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 15 });
+  // 13 + ACC-01's two read-only GETs (recent-closed list, session account) +
+  // REFUND V1 SLICE A's one refunds POST
+  assert.deepEqual(result, { enabled: true, prefix: PREFIX, routes: 16 });
 });

@@ -52,6 +52,11 @@ const STATUS_BY_CODE = Object.freeze({
   // request: the caller sent nothing wrong, the order is simply not in a state where
   // money can be attributed.
   ORDER_WITHOUT_SERVICE_SESSION: 409,
+  // REFUND V1 SLICE A — order carries transaction-backed evidence; use
+  // mesa_post_refund_v1 instead of the legacy order_refund path. A state
+  // conflict, not a bad request: the caller sent a valid order id, it is simply
+  // settled through a Mesa payment transaction now.
+  AUTH_REFUND_TRANSACTION_BACKED: 409,
   // ── 500 ─────────────────────────────────────────────────────────────────────
   [INTERNAL_ERROR_CODE]: 500,       // FINANCIAL_INTERNAL_ERROR
 });

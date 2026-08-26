@@ -24,6 +24,9 @@ class MesaServiceError extends Error {
 const FLOOR_ROLES = new Set(['admin','operator','owner','cashier','waiter','legacy_operator','shift_manager']);
 const OPEN_ROLES = new Set(['admin','operator','owner','cashier','waiter','legacy_operator']);
 const PAYMENT_ROLES = new Set(['admin','operator','owner','cashier','legacy_operator']);
+// REFUND V1 SLICE A — narrower than PAYMENT_ROLES on purpose: the role that takes
+// money should not be the one that can silently return it (contract §10/§I.5).
+const REFUND_ROLES = new Set(['admin','owner']);
 const LAYOUT_ROLES = new Set(['admin','owner']);
 const RESERVATION_ROLES = new Set(['admin','operator','owner','cashier','waiter','shift_manager','legacy_operator']);
 const CANCELLED = new Set(['ANULADO','CANCELADO','CANCELLED','CHIUSO_FORZATO']);
@@ -521,6 +524,32 @@ function createMesaService({
         // confirmDuplicate is still the same logical payment intent). Strict
         // `=== true`: no truthy-string/number coercion enables the override.
         confirmDuplicate: confirmDuplicate === true,
+      });
+    },
+
+    // REFUND V1 SLICE A — returns money against ONE identified original
+    // payment_transactions row; never changes the sale (order_obligations is
+    // untouched). Method is forced from the original transaction inside the RPC —
+    // there is deliberately no paymentMethod parameter here. amount:null means
+    // "the full currently-refundable remainder".
+    async refund({ context, tableSessionId, originalTransactionId, amount, reason, clientRequestId } = {}) {
+      const ctx = requireContext(context, REFUND_ROLES);
+      if (typeof ctx.sid !== 'string' || !ctx.sid) throw new MesaServiceError('MESA_RELOGIN_REQUIRED', 401);
+      const bySidHash = hashSid(ctx.sid);
+      if (typeof bySidHash !== 'string' || !/^[0-9a-f]{64}$/.test(bySidHash)) {
+        throw new MesaServiceError('MESA_RELOGIN_REQUIRED', 401);
+      }
+      const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
+      if (!trimmedReason) throw new MesaServiceError('MESA_REFUND_REASON_REQUIRED', 400);
+      const semantic = {
+        tableSessionId, originalTransactionId,
+        amount: amount == null ? null : Number(amount),
+        reason: trimmedReason,
+      };
+      return dao.postRefund({
+        workspaceId: ctx.workspaceId, byActor: ctx.actor, bySidHash,
+        ...semantic, clientRequestId, requestHash: canonicalHash(semantic),
+        meta: { source: 'mesa_dashboard' },
       });
     },
 

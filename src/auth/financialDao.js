@@ -29,7 +29,12 @@ const RECOGNIZED_DOMAIN_CODES = Object.freeze([
   'AUTH_IP_HASH_TOO_LONG', 'AUTH_LEGACY_IMPORT_REQUIRED', 'AUTH_META_INVALID',
   'AUTH_META_SENSITIVE_KEY', 'AUTH_META_TOO_LARGE', 'AUTH_METHOD_INVALID',
   'AUTH_NOT_LEGACY_PAID', 'AUTH_NO_PAYMENT_BASIS', 'AUTH_ORDER_NOT_FOUND',
-  'AUTH_REASON_BLANK', 'AUTH_REFUND_BASIS_INTEGRITY', 'AUTH_SESSION_STALE',
+  'AUTH_REASON_BLANK', 'AUTH_REFUND_BASIS_INTEGRITY',
+  // REFUND V1 SLICE A — legacy order_refund refuses an order that carries
+  // transaction-backed evidence (payment_transaction_id IS NOT NULL); the caller
+  // must use mesa_post_refund_v1 instead. See migrations/2026-08-26_refund_v1_
+  // slice_a_mesa_post_refund.sql.
+  'AUTH_REFUND_TRANSACTION_BACKED', 'AUTH_SESSION_STALE',
   'AUTH_VOID_REPLAY_INTEGRITY', 'AUTH_VOID_STATE_FORBIDDEN',
   // N-6 — refund/void/import now refuse an order whose financial ownership cannot be
   // proven (no service session). Without this entry the refusal would collapse into the

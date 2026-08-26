@@ -223,6 +223,22 @@ const postPayment = (args) => rpc('mesa_post_payment_v1', {
   p_confirm_duplicate: args.confirmDuplicate === true,
 });
 
+// REFUND V1 SLICE A — canonical, transaction-centric reversal. Method is NEVER
+// caller-supplied (forced from the original transaction inside the RPC); amount
+// NULL means "full refundable remainder"; reason is mandatory.
+const postRefund = (args) => rpc('mesa_post_refund_v1', {
+  p_workspace_id: args.workspaceId,
+  p_by_actor: args.byActor,
+  p_by_sid_hash: args.bySidHash,
+  p_table_session_id: args.tableSessionId,
+  p_original_transaction_id: args.originalTransactionId,
+  p_amount: args.amount ?? null,
+  p_reason: args.reason,
+  p_client_request_id: args.clientRequestId,
+  p_request_hash: args.requestHash,
+  p_meta: args.meta || {},
+});
+
 const saveReservation = (args) => rpc('mesa_save_reservation_v1', {
   p_workspace_id: args.workspaceId,
   p_by_actor: args.byActor,
@@ -284,6 +300,7 @@ module.exports = {
   setCovers,
   saveTable,
   postPayment,
+  postRefund,
   saveReservation,
   setReservationStatus,
   openReservation,

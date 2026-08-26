@@ -553,3 +553,102 @@ test('closeTable propagates the RPC error code untouched (e.g. genuine pending k
     (error) => error.code === 'MESA_TABLE_HAS_ACTIVE_ORDERS'
   );
 });
+
+// ═══ REFUND V1 SLICE A ═══
+
+test('refund hashes trusted session id and a canonical semantic request, method never supplied by the caller', async () => {
+  let args;
+  const service = createMesaService({
+    dao: { postRefund: async (value) => { args = value; return { ok: true }; } },
+    hashSid: () => 'a'.repeat(64),
+  });
+  await service.refund({
+    context: ctx({ role: 'admin' }), tableSessionId: 's1', originalTransactionId: 'pt-1',
+    amount: 10, reason: 'Error de importe', clientRequestId: 'refund-0001',
+  });
+  assert.equal(args.bySidHash, 'a'.repeat(64));
+  assert.match(args.requestHash, /^[0-9a-f]{64}$/);
+  assert.equal(args.tableSessionId, 's1');
+  assert.equal(args.originalTransactionId, 'pt-1');
+  assert.equal(args.amount, 10);
+  assert.equal(args.reason, 'Error de importe');
+  assert.deepEqual(args.meta, { source: 'mesa_dashboard' });
+  assert.equal('paymentMethod' in args, false);
+});
+
+test('refund with no amount forwards null (full refundable remainder), not zero/undefined', async () => {
+  let args;
+  const service = createMesaService({
+    dao: { postRefund: async (value) => { args = value; return { ok: true }; } },
+  });
+  await service.refund({
+    context: ctx({ role: 'owner' }), tableSessionId: 's1', originalTransactionId: 'pt-1',
+    reason: 'Cobro duplicado', clientRequestId: 'refund-0002',
+  });
+  assert.equal(args.amount, null);
+});
+
+test('REFUND_ROLES is strictly narrower than PAYMENT_ROLES: a cashier can pay but cannot refund', async () => {
+  const service = createMesaService({ dao: { postRefund: async () => ({ ok: true }) } });
+  await assert.rejects(
+    service.refund({
+      context: ctx({ actor: 'cashier-1', role: 'cashier' }), tableSessionId: 's1',
+      originalTransactionId: 'pt-1', reason: 'Error de cobro', clientRequestId: 'refund-0003',
+    }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_FORBIDDEN'
+  );
+});
+
+test('operator and waiter cannot refund either -- only admin/owner', async () => {
+  const service = createMesaService({ dao: { postRefund: async () => ({ ok: true }) } });
+  for (const role of ['operator', 'waiter', 'legacy_operator']) {
+    await assert.rejects(
+      service.refund({
+        context: ctx({ actor: `${role}-1`, role }), tableSessionId: 's1',
+        originalTransactionId: 'pt-1', reason: 'Mesa equivocada', clientRequestId: `refund-${role}`,
+      }),
+      (error) => error instanceof MesaServiceError && error.code === 'MESA_FORBIDDEN'
+    );
+  }
+});
+
+test('refund rejects a blank/missing reason before ever touching the DAO', async () => {
+  const calls = [];
+  const service = createMesaService({
+    dao: { postRefund: async (value) => { calls.push(value); return { ok: true }; } },
+  });
+  for (const reason of [undefined, null, '', '   ']) {
+    await assert.rejects(
+      service.refund({
+        context: ctx({ role: 'admin' }), tableSessionId: 's1', originalTransactionId: 'pt-1',
+        reason, clientRequestId: 'refund-blank',
+      }),
+      (error) => error instanceof MesaServiceError && error.code === 'MESA_REFUND_REASON_REQUIRED' && error.status === 400
+    );
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('refund without a trusted sid on the context is refused before touching the DAO', async () => {
+  const service = createMesaService({ dao: { postRefund: async () => ({ ok: true }) } });
+  await assert.rejects(
+    service.refund({
+      context: ctx({ role: 'admin', sid: undefined }), tableSessionId: 's1',
+      originalTransactionId: 'pt-1', reason: 'Otro', clientRequestId: 'refund-0004',
+    }),
+    (error) => error instanceof MesaServiceError && error.code === 'MESA_RELOGIN_REQUIRED' && error.status === 401
+  );
+});
+
+test('refund propagates the RPC error code untouched (e.g. exceeds refundable remainder)', async () => {
+  const service = createMesaService({
+    dao: { postRefund: async () => { const e = new Error('MESA_REFUND_EXCEEDS_REMAINING'); e.code = 'MESA_REFUND_EXCEEDS_REMAINING'; throw e; } },
+  });
+  await assert.rejects(
+    service.refund({
+      context: ctx({ role: 'admin' }), tableSessionId: 's1', originalTransactionId: 'pt-1',
+      amount: 999, reason: 'Error de importe', clientRequestId: 'refund-0005',
+    }),
+    (error) => error.code === 'MESA_REFUND_EXCEEDS_REMAINING'
+  );
+});

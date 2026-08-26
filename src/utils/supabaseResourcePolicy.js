@@ -341,6 +341,8 @@ const REGISTRY = Object.freeze([
   entry('rpc/mesa_close_session_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/mesaDao.js'),
   entry('rpc/mesa_save_table_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/mesaDao.js'),
   entry('rpc/mesa_post_payment_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'tables/mesaDao.js'),
+  // REFUND V1 SLICE A — canonical transaction-centric Mesa refund writer.
+  entry('rpc/mesa_post_refund_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'tables/mesaDao.js'),
   entry('rpc/mesa_save_reservation_v1', KIND.RPC, ['POST'], SENSITIVITY.PII, 'tables/mesaDao.js'),
   entry('rpc/mesa_set_reservation_status_v1', KIND.RPC, ['POST'], SENSITIVITY.PII, 'tables/mesaDao.js'),
   entry('rpc/mesa_open_reservation_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/mesaDao.js'),
