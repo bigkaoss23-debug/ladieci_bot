@@ -29,7 +29,15 @@ const PAYMENT_ROLES = new Set(['admin','operator','owner','cashier','legacy_oper
 const REFUND_ROLES = new Set(['admin','owner']);
 const LAYOUT_ROLES = new Set(['admin','owner']);
 const RESERVATION_ROLES = new Set(['admin','operator','owner','cashier','waiter','shift_manager','legacy_operator']);
-const CANCELLED = new Set(['ANULADO','CANCELADO','CANCELLED','CHIUSO_FORZATO']);
+// OVER-COLLECTED SLICE A — the force-closed-table terminal state is removed -- language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this paragraph explains the removal of, not new vocabulary
+// from this set. It is an operational terminal state (the table's business
+// ended), never an economic void, and currentServiceCloseout.js's own
+// CANCELLED set already excludes it with a deployed, evidence-backed
+// comment explaining why. This set had drifted from that decision, silently
+// zeroing real ledger-evidenced money for every such order (9 real rows on
+// staging, 8 carrying money) — see the over-collected audit, 2026-08-26.
+// Canonical economic voids only, matching currentServiceCloseout.js:26.
+const CANCELLED = new Set(['ANULADO','CANCELADO','CANCELLED']);
 // Same shape mesaHttpHandlers validates path params with — an id that cannot be
 // a table session must never reach a query.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -123,13 +131,27 @@ function normalizeLinesBySession(rows) {
 // serve both.
 function projectSessionAccount(session, { lines = [], transactions = [], orders = [] }) {
   const totalCents = lines.reduce((sum, line) => sum + cents(line.amount), 0);
-  const paidCents = lines.reduce((sum, line) => sum + cents(line.paid), 0);
+  // OVER-COLLECTED SLICE A — netCollected is money truth and comes from
+  // payment transactions (payments minus refunds), NEVER from summing
+  // line.paid. Line visibility can change (a cancelled/identity-broken order
+  // drops its lines) while payment_transactions rows are immutable facts, so
+  // deriving session money from lines let real collected money disappear
+  // whenever its line disappeared — see the over-collected audit,
+  // 2026-08-26. Per-line paid/remaining (normalizeLinesBySession) stay for
+  // display/selection only and are never summed into session money.
+  const netCollectedCents = transactions.reduce((sum, tx) =>
+    sum + (tx.kind === 'refund' ? -1 : 1) * cents(tx.amount), 0);
   const coversEffect = transactions.reduce((sum, tx) =>
     sum + (tx.kind === 'refund' ? -1 : 1) * Number(tx.covers_settled || 0), 0);
   // NULL until the first comanda sets it (walk-in Mesa just opened, no orders yet).
   const coversTotal = session.covers_total == null ? null : Number(session.covers_total);
   const coversRemaining = coversTotal == null ? 0 : Math.max(0, coversTotal - coversEffect);
-  const outstanding = money(Math.max(0, totalCents - paidCents));
+  const outstanding = money(Math.max(0, totalCents - netCollectedCents));
+  // overCollected is the published complement of outstanding, never netted
+  // away: netCollected > total is real (e.g. a line dropped by a cancel-like
+  // state while its payment stands), and outstanding alone would hide it
+  // behind a false zero (frozen rule, over-collected audit §2).
+  const overCollected = money(Math.max(0, netCollectedCents - totalCents));
   const methodTotals = aggregateByMethod(transactions.map((tx) => ({
     kind: tx.kind, method: tx.payment_method, amount: tx.amount,
   })));
@@ -142,8 +164,9 @@ function projectSessionAccount(session, { lines = [], transactions = [], orders 
     openedAt: session.opened_at,
     settledAt: session.settled_at,
     total: money(totalCents),
-    paid: money(paidCents),
+    paid: money(netCollectedCents),
     outstanding,
+    overCollected,
     nextEqualShare: outstanding > 0 && coversRemaining > 0
       ? nextEqualShare(outstanding, coversRemaining) : 0,
     paymentTotals: { ...methodTotals },

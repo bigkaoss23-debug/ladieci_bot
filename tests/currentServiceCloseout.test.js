@@ -183,17 +183,28 @@ test("P0-C — force-closed-table order with zero payment reads real unpaid expo
   assert.equal(out.tickets[0].cancelled,false);
 });
 
-test("P0-D — a genuinely CANCELADO order keeps today's void semantics unchanged",async()=>{
+// OVER-COLLECTED SLICE A — a genuinely CANCELADO order still VOIDS the
+// obligation (gross/unpaid stay 0, paymentState stays "cancelled"), but its
+// real payment evidence is a fact that already happened and must no longer
+// be erased: collected/paymentTotals now report the true 100.00 collected,
+// and the surplus is published as overCollected rather than hidden behind a
+// false zero (frozen invariant #1, "payment facts are never erased by order
+// state" — over-collected audit, 2026-08-26). Pre-Slice-A this test asserted
+// collected=0/paymentTotals.efectivo=0, which was exactly the bug: cash
+// really received on a since-cancelled order vanished from every reader.
+test("P0-D — a genuinely CANCELADO order voids the obligation but its real payment stays visible as overCollected",async()=>{
   const s=session();
   const orders=[{id:"o-d",service_session_id:s.id,totale:100,estado:"CANCELADO"}];
   const events=[{order_id:"o-d",service_session_id:s.id,type:"payment",amount:100,payment_method:"efectivo"}];
   const out=await createCurrentServiceCloseout({select:async(t)=>t==="ordenes"?orders:events,sessionLifecycle:identity({ok:true,code:"OK",session:s})})();
   assert.equal(out.totals.gross,0);
-  assert.equal(out.totals.collected,0);
+  assert.equal(out.totals.collected,100);
   assert.equal(out.totals.unpaid,0);
-  assert.equal(out.paymentTotals.efectivo,0);
+  assert.equal(out.totals.overCollected,100);
+  assert.equal(out.paymentTotals.efectivo,100);
   assert.equal(out.tickets[0].paymentState,"cancelled");
   assert.equal(out.tickets[0].cancelled,true);
+  assert.equal(out.tickets[0].overCollectedAmount,100);
   assert.equal(out.counts.cancelled,1);
 });
 

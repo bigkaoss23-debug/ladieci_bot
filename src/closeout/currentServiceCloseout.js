@@ -114,20 +114,32 @@ function safeTicket(order, events, session, obligation = null) {
   const hasLedgerEvidence = events.length > 0;
   const legacyPaid = !hasLedgerEvidence && (order.cobrado === true || order.ya_pagado === true);
   const grossCollected = round(paidAmount || (legacyPaid ? amount : 0));
-  // A refund hands money back, so it must LEAVE the collected total — in the live
-  // closeout and in the archived summary alike, which now share this function.
-  const collectedAmount = voided ? 0 : Math.min(amount, Math.max(0, round(grossCollected - refundedAmount)));
-  const unpaidAmount = voided ? 0 : Math.max(0, round(amount - collectedAmount));
+  // OVER-COLLECTED SLICE A — netCollected is an append-only fact of money
+  // that really moved (payments minus refunds) and is NEVER erased by order
+  // state. A cancellation zeroes what is OWED (currentObligation below),
+  // never what was COLLECTED — "Payment facts are never erased by order
+  // state" (over-collected audit, frozen invariant #1). The old
+  // `voided ? 0 : Math.min(amount, …)` clamp both capped an over-collection
+  // at the obligation (discarding the complement) AND, for a void, deleted
+  // real ledger-evidenced money outright.
+  const netCollected = round(grossCollected - refundedAmount);
+  const currentObligation = voided ? 0 : amount;
+  const collectedAmount = netCollected;
+  const unpaidAmount = Math.max(0, round(currentObligation - netCollected));
+  // The published complement of unpaidAmount, from the SAME unclamped
+  // difference — never both zero by construction of a clamp (frozen §2).
+  const overCollectedAmount = Math.max(0, round(netCollected - currentObligation));
   const methods = new Set(payments.map((event) => paymentBucket(event.payment_method)));
   const method = methods.size > 1 ? "mixto" : (payments.at(-1)?.payment_method || order.metodo_pago || "");
   const methodTotals = emptyPaymentTotals();
-  if (!voided) {
-    if (payments.length > 0) {
-      for (const event of payments) addMethodAmount(methodTotals, event.payment_method, eventAmount(event));
-      for (const event of refunds) addMethodAmount(methodTotals, event.payment_method, -eventAmount(event));
-    } else if (legacyPaid) {
-      addMethodAmount(methodTotals, order.metodo_pago, amount);
-    }
+  // Unconditional — a void must not erase methodTotals either (mirrors
+  // netCollected above; this is what fed the audit's "cash reads as an
+  // unexplained SURPLUS" warning when it stayed gated on `!voided`).
+  if (payments.length > 0) {
+    for (const event of payments) addMethodAmount(methodTotals, event.payment_method, eventAmount(event));
+    for (const event of refunds) addMethodAmount(methodTotals, event.payment_method, -eventAmount(event));
+  } else if (legacyPaid) {
+    addMethodAmount(methodTotals, order.metodo_pago, amount);
   }
 
   const paymentState = voided ? "cancelled"
@@ -143,15 +155,15 @@ function safeTicket(order, events, session, obligation = null) {
   // (see receiptKindOf) — never merged into a guessed bucket.
   // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, used here as object keys, not new vocabulary
   const receiptTotalsByKind = { PRANZO: 0, SERA: 0, unknown: 0 };
-  if (!voided) {
-    for (const event of payments) {
-      const bucket = receiptKindOf(event) || "unknown";
-      receiptTotalsByKind[bucket] = round(receiptTotalsByKind[bucket] + eventAmount(event));
-    }
-    for (const event of refunds) {
-      const bucket = receiptKindOf(event) || "unknown";
-      receiptTotalsByKind[bucket] = round(receiptTotalsByKind[bucket] - eventAmount(event));
-    }
+  // Unconditional for the same reason methodTotals is: receipt facts survive
+  // a void.
+  for (const event of payments) {
+    const bucket = receiptKindOf(event) || "unknown";
+    receiptTotalsByKind[bucket] = round(receiptTotalsByKind[bucket] + eventAmount(event));
+  }
+  for (const event of refunds) {
+    const bucket = receiptKindOf(event) || "unknown";
+    receiptTotalsByKind[bucket] = round(receiptTotalsByKind[bucket] - eventAmount(event));
   }
 
   return Object.freeze({
@@ -168,6 +180,7 @@ function safeTicket(order, events, session, obligation = null) {
     paymentState,
     collectedAmount,
     unpaidAmount,
+    overCollectedAmount,
     refundedAmount,
     paymentTotals: methodTotals,
     cancelled: voided,
@@ -198,9 +211,13 @@ function aggregate(session, orders, events, obligations) {
     const id = String(order.orden_id || order.id || "");
     return safeTicket(order, byOrder.get(id) || [], session, obligationByOrder.get(id) || null);
   });
+  // OVER-COLLECTED SLICE A — unconditional (was `if (ticket.cancelled)
+  // continue`). A cancelled/voided ticket's real payment/refund money is a
+  // fact that already happened and must reach the service-level totals too,
+  // exactly like collectedAmount above (ticket.paymentTotals itself is now
+  // never zeroed by voided — see safeTicket).
   const paymentTotals = emptyPaymentTotals();
   for (const ticket of tickets) {
-    if (ticket.cancelled) continue;
     for (const key of Object.keys(paymentTotals)) {
       paymentTotals[key] = round(paymentTotals[key] + (ticket.paymentTotals[key] || 0));
     }
@@ -209,13 +226,18 @@ function aggregate(session, orders, events, obligations) {
   const collectedTotal = round(tickets.reduce((s, t) => s + t.collectedAmount, 0));
   const refundedTotal = round(tickets.reduce((s, t) => s + t.refundedAmount, 0));
   const unpaidTotal = round(tickets.reduce((s, t) => s + t.unpaidAmount, 0));
+  // Published complement of unpaidTotal, summed from each ticket's own
+  // already-unclamped overCollectedAmount — same scope (this service's own
+  // tickets), never netted against a different scope (over-collected audit §7).
+  const overCollectedTotal = round(tickets.reduce((s, t) => s + t.overCollectedAmount, 0));
 
   // S-E — economic breakdown: an Operational Service now legitimately spans
   // both windows, so obligations (sales, gross) and receipts (net payments)
   // are split independently by their own era-aware kind, per Phase 2/3/6 of
   // the S-E brief. Cancelled tickets are excluded from obligations (mirrors
-  // grossTotal above); receipts already exclude them at the source
-  // (safeTicket zeroes receiptTotalsByKind for voided tickets).
+  // grossTotal above); receipts are NOT excluded (OVER-COLLECTED SLICE A —
+  // safeTicket no longer zeroes receiptTotalsByKind for a voided ticket, so
+  // real collected money on a cancelled order still lands in its own era).
   const economicBreakdown = {
     obligations: { PRANZO: 0, SERA: 0, unknown: 0 }, // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, used here as object keys, not new vocabulary
     receipts: { PRANZO: 0, SERA: 0, unknown: 0 },
@@ -255,7 +277,13 @@ function aggregate(session, orders, events, obligations) {
     closedAt: session?.closed_at || null,
     status,
     tickets,
-    totals: { gross: grossTotal, collected: collectedTotal, refunded: refundedTotal, unpaid: unpaidTotal, difference: round(grossTotal - collectedTotal) },
+    totals: {
+      gross: grossTotal, collected: collectedTotal, refunded: refundedTotal, unpaid: unpaidTotal,
+      // OVER-COLLECTED SLICE A — published alongside unpaid, always, so
+      // neither side can be inferred-away as a hidden zero (frozen §2).
+      overCollected: overCollectedTotal,
+      difference: round(grossTotal - collectedTotal),
+    },
     paymentTotals,
     economicBreakdown,
     counts: {

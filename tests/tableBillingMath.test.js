@@ -40,7 +40,24 @@ test('early product payer updates both remaining bill and next Roman share', () 
 test('multiple partial payments and a refund are accumulated in cents', () => {
   assert.deepEqual(
     computeOutstanding({ total: 50, payments: [10, 12.35, 7.65], refunds: [5] }),
-    { total: 50, paid: 30, refunded: 5, collected: 25, outstanding: 25 }
+    { total: 50, paid: 30, refunded: 5, collected: 25, outstanding: 25, overCollected: 0 }
+  );
+});
+
+// OVER-COLLECTED SLICE A — both sides of the equation are published together
+// from the SAME raw difference; a caller must never see one clamp away and
+// have to infer the other.
+test('collected above total publishes overCollected, never a fake zero outstanding hiding it', () => {
+  assert.deepEqual(
+    computeOutstanding({ total: 20, payments: [30] }),
+    { total: 20, paid: 30, refunded: 0, collected: 30, outstanding: 0, overCollected: 10 }
+  );
+});
+
+test('collected below total publishes outstanding with overCollected at zero', () => {
+  assert.deepEqual(
+    computeOutstanding({ total: 30, payments: [20] }),
+    { total: 30, paid: 20, refunded: 0, collected: 20, outstanding: 10, overCollected: 0 }
   );
 });
 

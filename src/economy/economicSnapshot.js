@@ -319,6 +319,15 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
     const unpaid = round(obligations.reduce((s, t) => s + t.unpaidAmount, 0));
     const voided = round(obligations.filter((t) => t.cancelled).reduce((s, t) => s + t.amount, 0));
     const obligationRefunded = round(obligations.reduce((s, t) => s + t.refundedAmount, 0));
+    // OVER-COLLECTED SLICE A — summed from each order's own already-unclamped
+    // overCollectedAmount (safeTicket), same scope as `unpaid` immediately
+    // above (this window's own obligations). Never derived by diffing
+    // receipts.collected against obligation.gross: those are two
+    // deliberately different populations (born-in-window vs received-in-
+    // window — see windowCrossing below and this module's own header), and
+    // netting them would manufacture a false figure out of a scope mismatch
+    // (over-collected audit §7, "do not net exposures across different scopes").
+    const overCollected = round(obligations.reduce((s, t) => s + (t.overCollectedAmount || 0), 0));
 
     // ── 5. RECEIPT SIDE — events in window, by their own instant ────────────
     const receiptTotals = emptyPaymentTotals();
@@ -343,19 +352,25 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
       const isPayment = PAYMENT_TYPES.has(type);
       const isRefund = type === "refund";
       if (!isPayment && !isRefund) continue;
-      // Mirrors safeTicket: a voided ticket contributes no receipts at all.
+      // OVER-COLLECTED SLICE A — a voided/cancelled order's receipts are NO
+      // LONGER excluded from totals. This used to mirror safeTicket's old
+      // `voided ? 0` clamp and, for the same reason, deleted real
+      // ledger-evidenced money from methodTotals/byMethod/era whenever an
+      // order's estado became a cancel-like state (frozen invariant #1,
+      // "payment facts are never erased by order state" — over-collected
+      // audit, 2026-08-26). `cancelled` is kept as `excludedAsVoid` below
+      // purely as drill-down provenance (was this receipt's order in a
+      // cancel-like state), never again as an inclusion gate.
       const cancelled = !!order && (CANCELLED.has(String(order.estado || order.state || "").toUpperCase()));
       const amount = eventAmount(event);
       const signed = isRefund ? -amount : amount;
-      if (!cancelled) {
-        addMethodAmount(receiptTotals, event.payment_method, signed);
-        if (isPayment) { addMethodAmount(receiptGrossTotals, event.payment_method, amount); collected = round(collected + amount); }
-        if (isRefund) { addMethodAmount(receiptRefundTotals, event.payment_method, amount); refunded = round(refunded + amount); }
-        const eraSession = (!event.event_service_session_id
-          || String(event.event_service_session_id) === String(order?.service_session_id || ""))
-          ? sessionOf(order) : sessions.get(String(event.event_service_session_id)) || null;
-        addEra(receiptEra, resolveEconomicPeriodKind(event.event_economic_period_kind, eraSession), signed);
-      }
+      addMethodAmount(receiptTotals, event.payment_method, signed);
+      if (isPayment) { addMethodAmount(receiptGrossTotals, event.payment_method, amount); collected = round(collected + amount); }
+      if (isRefund) { addMethodAmount(receiptRefundTotals, event.payment_method, amount); refunded = round(refunded + amount); }
+      const eraSession = (!event.event_service_session_id
+        || String(event.event_service_session_id) === String(order?.service_session_id || ""))
+        ? sessionOf(order) : sessions.get(String(event.event_service_session_id)) || null;
+      addEra(receiptEra, resolveEconomicPeriodKind(event.event_economic_period_kind, eraSession), signed);
       if (isPayment) paymentCount += 1;
       if (isRefund) refundCount += 1;
       receipts.push(Object.freeze({
@@ -368,6 +383,7 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
         method: paymentBucket(event.payment_method),
         rawMethod: event.payment_method || null,
         receiptAt: event.created_at || null,
+        // Provenance only — no longer an exclusion flag. See the comment above.
         excludedAsVoid: cancelled,
         serviceSessionId: event.service_session_id ? String(event.service_session_id) : null,
         obligationAt: order?.created_at || null,
@@ -480,6 +496,19 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
         // economicSnapshot.refundReporting.test.js).
         byMethodGross: Object.freeze({ ...receiptGrossTotals }),
         byMethodRefunds: Object.freeze({ ...receiptRefundTotals }),
+      }),
+      // OVER-COLLECTED SLICE A -- the dedicated reconciliation concept.
+      // overCollected is NOT a receipt, NOT a refund, NOT an obligation and
+      // NOT a payment method: it is the relationship netCollected minus
+      // currentObligation, so it gets its own section rather than being
+      // folded into obligation (it is not owed) or receipts (it is not a
+      // receipt). unresolvedOverCollected equals overCollected at this
+      // slice: there is no commercial-adjustment/resolution primitive yet
+      // (that is Slice B) so nothing can be marked resolved.
+      balance: Object.freeze({
+        unpaid,
+        overCollected,
+        unresolvedOverCollected: overCollected,
       }),
       counts: Object.freeze({
         obligations: obligations.length,

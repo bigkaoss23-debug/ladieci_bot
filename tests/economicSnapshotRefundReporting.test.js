@@ -114,7 +114,15 @@ const event = (overrides) => Object.freeze({
     assert.strictEqual(view.obligation.gross, 0);
   });
 
-  await atest("a voided/cancelled order contributes to neither byMethodGross nor byMethodRefunds", async () => {
+  // OVER-COLLECTED SLICE A — a voided/cancelled order's real payment/refund
+  // money is no longer erased from receipts. Pre-Slice-A this asserted BOTH
+  // buckets stayed all-zero, which was exactly the defect the over-collected
+  // audit (2026-08-26) named: "a voided ticket contributes no receipts at
+  // all", so a cancelled order's real cash silently vanished from
+  // methodTotals/byMethod/era. Money facts are never erased by order state
+  // (frozen invariant #1); here the payment and its own full refund still
+  // net to 0 in byMethod, but gross/refunds are no longer hidden.
+  await atest("a voided/cancelled order's real payment/refund still contributes to gross/refunds (money is never erased by order state)", async () => {
     const snapshot = harness({
       ordenes: [order({ estado: "CANCELADO" })],
       events: [
@@ -123,8 +131,22 @@ const event = (overrides) => Object.freeze({
       ],
     });
     const view = await snapshot({ preset: "personalizado", from: WIN_FROM, to: WIN_TO });
-    assert.deepStrictEqual(view.receipts.byMethodGross, { efectivo: 0, tarjeta: 0, bizum: 0, other: 0 });
-    assert.deepStrictEqual(view.receipts.byMethodRefunds, { efectivo: 0, tarjeta: 0, bizum: 0, other: 0 });
+    assert.deepStrictEqual(view.receipts.byMethodGross, { efectivo: 40, tarjeta: 0, bizum: 0, other: 0 });
+    assert.deepStrictEqual(view.receipts.byMethodRefunds, { efectivo: 40, tarjeta: 0, bizum: 0, other: 0 });
+    assert.deepStrictEqual(view.receipts.byMethod, { efectivo: 0, tarjeta: 0, bizum: 0, other: 0 });
+  });
+
+  await atest("a voided/cancelled order with unrefunded real payment shows up as overCollected, not erased", async () => {
+    const snapshot = harness({
+      ordenes: [order({ estado: "CANCELADO", totale: 75 })],
+      events: [event({ id: "e1", type: "payment", amount: 75, payment_method: "efectivo" })],
+    });
+    const view = await snapshot({ preset: "personalizado", from: WIN_FROM, to: WIN_TO });
+    assert.strictEqual(view.receipts.byMethod.efectivo, 75, "the real cash is visible, not zeroed by the void");
+    assert.strictEqual(view.obligation.gross, 0, "a cancelled order contributes 0 to gross obligation");
+    assert.strictEqual(view.balance.overCollected, 75);
+    assert.strictEqual(view.balance.unresolvedOverCollected, 75);
+    assert.strictEqual(view.balance.unpaid, 0);
   });
 
   await atest("this module remains read-only: createMemorySelect exposes no write method for it to reach", async () => {

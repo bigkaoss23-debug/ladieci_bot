@@ -63,6 +63,11 @@ function computeOutstanding({ total, payments = [], refunds = [] } = {}) {
     refunded: fromCents(refundedCents),
     collected: fromCents(collectedCents),
     outstanding: fromCents(Math.max(0, totalCents - collectedCents)),
+    // OVER-COLLECTED SLICE A — the published complement of outstanding, from
+    // the SAME raw difference before either side is clamped away. A caller
+    // that only reads `outstanding` must never be able to observe
+    // collected > total as a false zero (over-collected audit §7/frozen §2).
+    overCollected: fromCents(Math.max(0, collectedCents - totalCents)),
   });
 }
 
