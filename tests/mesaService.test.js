@@ -522,7 +522,12 @@ test('closing a table forwards the session id through to the DAO, force defaulte
     dao: { closeSession: async (value) => { args = value; return { ok: true, status: 'closed', forced: false }; } },
   });
   const result = await service.closeTable({ context: ctx(), tableSessionId: 's1' });
-  assert.deepEqual(args, { workspaceId: 'ws-1', byActor: 'operator_primary', tableSessionId: 's1', force: false });
+  // OVER-COLLECTED ACKNOWLEDGEMENT (ledger 119) — confirmOverCollected is forwarded
+  // alongside force, defaulting false, on every close.
+  assert.deepEqual(args, {
+    workspaceId: 'ws-1', byActor: 'operator_primary', tableSessionId: 's1',
+    force: false, confirmOverCollected: false,
+  });
   assert.equal(result.status, 'closed');
 });
 
@@ -533,6 +538,22 @@ test('closeTable only forwards force=true when explicitly requested', async () =
   });
   await service.closeTable({ context: ctx(), tableSessionId: 's1', force: true });
   assert.equal(args.force, true);
+  assert.equal(args.confirmOverCollected, false, 'force does not imply over-collected acknowledgement');
+});
+
+test('closeTable only forwards confirmOverCollected=true when explicitly requested (never inferred from a retry)', async () => {
+  let args;
+  const service = createMesaService({
+    dao: { closeSession: async (value) => { args = value; return { ok: true }; } },
+  });
+  await service.closeTable({ context: ctx(), tableSessionId: 's1', confirmOverCollected: true });
+  assert.equal(args.confirmOverCollected, true);
+  assert.equal(args.force, false, 'over-collected acknowledgement does not imply force');
+  // truthy-but-not-true never counts
+  await service.closeTable({ context: ctx(), tableSessionId: 's1', confirmOverCollected: 'yes' });
+  assert.equal(args.confirmOverCollected, false);
+  await service.closeTable({ context: ctx(), tableSessionId: 's1', confirmOverCollected: 1 });
+  assert.equal(args.confirmOverCollected, false);
 });
 
 test('a waiter can close a table they have been serving', async () => {

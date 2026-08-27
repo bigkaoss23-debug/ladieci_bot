@@ -29,6 +29,10 @@ function safeError(error) {
     'MESA_TABLE_HAS_RESERVATIONS',
     'MESA_COVERS_NOT_SET','MESA_COVERS_IMMUTABLE','MESA_TABLE_HAS_ORDERS',
     'MESA_TABLE_NOT_SETTLED','MESA_TABLE_HAS_ACTIVE_ORDERS',
+    // OVER-COLLECTED ACKNOWLEDGEMENT (ledger 119) — the table collected more than it
+    // owes and the operator has not acknowledged it yet. A retry WITH
+    // confirmOverCollected:true is the resolution, so this is a 409 state conflict.
+    'MESA_CLOSE_OVER_COLLECTED',
     // REFUND V1 SLICE A — state/idempotency conflicts from mesa_post_refund_v1.
     'MESA_REFUND_TRANSACTION_MISMATCH','MESA_REFUND_NOT_REFUNDABLE',
     'MESA_REFUND_EXCEEDS_REMAINING','MESA_REFUND_ALREADY_FULL',
@@ -49,12 +53,23 @@ function safeError(error) {
   ]);
   // REFUND V1 SLICE A — MESA_REFUND_ALLOCATION_MISMATCH is an invariant breach
   // (§L.3), never a client mistake: 500, fail closed, no SQL detail forwarded.
-  const internal = new Set(['MESA_REFUND_ALLOCATION_MISMATCH']);
-  return {
+  // OVER-COLLECTED ACKNOWLEDGEMENT — MESA_CLOSE_INCIDENT_PERSISTENCE_FAILED means the
+  // financial incident could not be recorded, so the close was rolled back: fail closed.
+  const internal = new Set(['MESA_REFUND_ALLOCATION_MISMATCH', 'MESA_CLOSE_INCIDENT_PERSISTENCE_FAILED']);
+  const result = {
     status: conflict.has(code) ? 409 : denied.has(code) ? 403 : missing.has(code) ? 404
       : internal.has(code) ? 500 : code === 'MESA_INTERNAL_ERROR' ? 500 : 400,
     code,
   };
+  // OVER-COLLECTED ACKNOWLEDGEMENT (ledger 119) — forward ONLY the numeric exposure the
+  // RPC put in its DETAIL ('overCollected=<n>'), strictly parsed. Never the raw string,
+  // never any other error's detail: this is the one safe structured field the operator
+  // UI needs to say "hay X € cobrados de más" before offering "cerrar igualmente".
+  if (code === 'MESA_CLOSE_OVER_COLLECTED' && typeof error?.pgDetail === 'string') {
+    const m = error.pgDetail.match(/^overCollected=([0-9]+(?:\.[0-9]+)?)$/);
+    if (m) result.overCollected = Number(m[1]);
+  }
+  return result;
 }
 
 function createMesaAuthMiddleware({ verifyToken = jwt.verifyToken, getActor = getAuthoritativeActor } = {}) {
@@ -92,7 +107,10 @@ function createMesaHandlers({ service = createMesaService(), logger = console } 
     } catch (error) {
       const mapped = safeError(error);
       try { logger.warn({ component: 'mesa', operation, outcome: 'error', code: mapped.code }); } catch (_) {}
-      return res.status(mapped.status).json({ ok: false, code: mapped.code });
+      const payload = { ok: false, code: mapped.code };
+      // OVER-COLLECTED ACKNOWLEDGEMENT — the single whitelisted structured field (see safeError).
+      if (typeof mapped.overCollected === 'number') payload.overCollected = mapped.overCollected;
+      return res.status(mapped.status).json(payload);
     }
   };
   const validId = (value) => typeof value === 'string' && UUID.test(value);
@@ -160,6 +178,9 @@ function createMesaHandlers({ service = createMesaService(), logger = console } 
       context: req.mesaContext,
       tableSessionId: requireId(req.params.sessionId),
       force: req.body?.force === true,
+      // OVER-COLLECTED ACKNOWLEDGEMENT (ledger 119) — one explicit boolean. Passed raw;
+      // mesaService.closeTable narrows it to `=== true` before it reaches the DAO.
+      confirmOverCollected: req.body?.confirmOverCollected,
     })),
     markServed: run('mark_served', (req) => service.markServed({
       context: req.mesaContext,

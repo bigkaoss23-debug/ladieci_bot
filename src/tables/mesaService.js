@@ -130,6 +130,54 @@ function normalizeLinesBySession(rows) {
   return linesBySession;
 }
 
+// AJUSTE COMERCIAL V1 reader gap — the canonical per-order obligation shape the
+// frontend needs to render and submit a MANUAL commercial adjustment. Pure: given one
+// `ordenes` row and its `order_obligations` revisions (asc by revision), it derives the
+// same numbers the DB's own reader would.
+//
+//   * has revisions  -> originalObligation = revision-1 gross, currentObligation = the
+//     latest revision's gross, obligationRevision = that latest revision number.
+//   * no revisions yet (lazy bootstrap not triggered) -> both obligations fall back to
+//     the SAME legacy basis order_canonical_obligation_v1 uses: ordenes.totale, zeroed
+//     for a genuinely cancelled order. obligationRevision = 0.
+//   * no order_uid at all (Class B) -> fail closed: adjustable = false, and the RPC/HTTP
+//     layers reject a null orderUid independently.
+//
+// `commercialAdjustment` is currentObligation - originalObligation (<= 0 for a
+// reduction). `adjustable` is a read-only hint, derived from order-level facts only
+// (never session status: mesa_post_commercial_adjustment_v1, like Refund V1, accepts a
+// closed table session and never reopens it — close and adjustment stay decoupled).
+function projectOrderFinancial(order, revisions) {
+  const orderUid = order.order_uid || null;
+  const legacyBasisCents = CANCELLED.has(String(order.estado || '').toUpperCase())
+    ? 0 : cents(order.totale);
+  const sorted = [...(revisions || [])].sort((a, b) => Number(a.revision) - Number(b.revision));
+
+  let originalCents = legacyBasisCents;
+  let currentCents = legacyBasisCents;
+  let obligationRevision = 0;
+  if (sorted.length > 0) {
+    const baseline = sorted.find((r) => Number(r.revision) === 1) || sorted[0];
+    const latest = sorted[sorted.length - 1];
+    originalCents = cents(baseline.gross_amount);
+    currentCents = cents(latest.gross_amount);
+    obligationRevision = Number(latest.revision) || 0;
+  }
+
+  const adjustable = orderUid != null
+    && !CANCELLED.has(String(order.estado || '').toUpperCase())
+    && currentCents > 0;
+
+  return {
+    orderUid,
+    originalObligation: money(originalCents),
+    currentObligation: money(currentCents),
+    commercialAdjustment: money(currentCents - originalCents),
+    obligationRevision,
+    adjustable,
+  };
+}
+
 // ACC-01 — THE ONE ACCOUNT PROJECTION. Everything economic about a single table
 // session lives here: total, paid, outstanding, covers, per-method receipts,
 // comandas, lines and the payment history.
@@ -140,7 +188,16 @@ function normalizeLinesBySession(rows) {
 // could disagree with it. This function is pure and reads no status: it does
 // not care whether the session is open or closed, which is precisely why it can
 // serve both.
-function projectSessionAccount(session, { lines = [], transactions = [], orders = [] }) {
+function projectSessionAccount(session, { lines = [], transactions = [], orders = [], obligations = [] }) {
+  // AJUSTE COMERCIAL V1 — group obligation revisions by the PERMANENT order_uid. Safe to
+  // hand the whole set in: order_uid is globally unique, so a revision for another
+  // session's order simply matches no command here.
+  const revisionsByUid = new Map();
+  for (const revision of obligations || []) {
+    const key = String(revision.order_uid);
+    if (!revisionsByUid.has(key)) revisionsByUid.set(key, []);
+    revisionsByUid.get(key).push(revision);
+  }
   const totalCents = lines.reduce((sum, line) => sum + cents(line.amount), 0);
   // OVER-COLLECTED SLICE A — netCollected is money truth and comes from
   // payment transactions (payments minus refunds), NEVER from summing
@@ -183,6 +240,9 @@ function projectSessionAccount(session, { lines = [], transactions = [], orders 
     paymentTotals: { ...methodTotals },
     commands: orders.map((order) => ({
       id: order.id,
+      // AJUSTE COMERCIAL V1 — the PERMANENT identity, mirrored inside `financial` so that
+      // sub-object is a complete adjustment target on its own. Never the recycled `id`.
+      orderUid: order.order_uid || null,
       commandNumber: order.table_command_number,
       serviceOrderNumber: order.service_order_number,
       state: order.estado,
@@ -192,6 +252,8 @@ function projectSessionAccount(session, { lines = [], transactions = [], orders 
       note: order.nota,
       // language-guard: allow-legacy nota_cucina is the existing ordenes column name, projected verbatim as buildFloor already did, not new vocabulary
       kitchenNote: order.nota_cucina,
+      // AJUSTE COMERCIAL V1 reader gap — additive canonical obligation shape.
+      financial: projectOrderFinancial(order, revisionsByUid.get(String(order.order_uid)) || []),
     })),
     lines,
     // REFUND V1 SLICE B0 — reversesTransactionId was already fetched by mesaDao.js
@@ -267,6 +329,9 @@ function buildFloor(rows) {
         lines: linesBySession.get(key) || [],
         transactions: txBySession.get(key) || [],
         orders: ordersBySession.get(key) || [],
+        // AJUSTE COMERCIAL V1 — every revision; projectSessionAccount buckets by the
+        // globally-unique order_uid, so passing the whole set per table is safe.
+        obligations: rows.obligations || [],
       }),
     };
   });
@@ -305,6 +370,7 @@ function buildClosedAccount(session, rows, table) {
       lines: linesBySession.get(key) || [],
       transactions,
       orders,
+      obligations: rows.obligations || [],
     }),
   };
 }
@@ -514,10 +580,20 @@ function createMesaService({
     // force is accepted end-to-end (RPC-level support is real and audited)
     // but no frontend UI calls it with force=true yet -- see mesaService.js
     // deploy-order note and the P0-B.1 migration's own header comment.
-    async closeTable({ context, tableSessionId, force } = {}) {
+    //
+    // OVER-COLLECTED ACKNOWLEDGEMENT (ledger 119) — confirmOverCollected is the
+    // operator's explicit decision to close a table that collected MORE than it owes.
+    // Strict `=== true`: a retry, a truthy string or a missing field never counts as
+    // acknowledgement. Acknowledging over-collection does NOT relax the unpaid-balance
+    // block, and the RPC records the exposure as an OVER_COLLECTED_AT_CLOSE incident
+    // atomically with the close. Closing over-collection is still the SAME close
+    // authority (OPEN_ROLES) — it is NOT the admin-only manual Ajuste Comercial power.
+    async closeTable({ context, tableSessionId, force, confirmOverCollected } = {}) {
       const ctx = requireContext(context, OPEN_ROLES);
       return dao.closeSession({
-        workspaceId: ctx.workspaceId, byActor: ctx.actor, tableSessionId, force: force === true,
+        workspaceId: ctx.workspaceId, byActor: ctx.actor, tableSessionId,
+        force: force === true,
+        confirmOverCollected: confirmOverCollected === true,
       });
     },
 

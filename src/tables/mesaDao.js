@@ -22,6 +22,11 @@ async function rpc(name, body) {
       ? response.body.message.trim() : '';
     const error = new AuthDaoError(rawCode || 'MESA_DATA_WRITE_FAILED', 'Mesa RPC failed');
     error.status = response.status;
+    // PostgREST forwards a RAISE EXCEPTION's DETAIL verbatim in `details`. The HTTP layer
+    // never surfaces it raw (it would leak SQL); a single, explicitly whitelisted numeric
+    // field is parsed from it for MESA_CLOSE_OVER_COLLECTED — see mesaHttpHandlers.safeError.
+    error.pgDetail = response.body && typeof response.body.details === 'string'
+      ? response.body.details : null;
     throw error;
   }
   return response.body;
@@ -48,11 +53,14 @@ async function listFloorRows(workspaceId, { includeInactive = false } = {}) {
   ]);
   const sessionIds = sessions.map((row) => row.id);
   const sessionFilter = idsFilter(sessionIds);
-  if (!sessionFilter) return { tables, sessions, reservations, orders: [], lines: [], transactions: [], allocations: [] };
+  if (!sessionFilter) return { tables, sessions, reservations, orders: [], lines: [], transactions: [], allocations: [], obligations: [] };
 
   const [orders, lines, transactions] = await Promise.all([
     select('ordenes',
-      `select=id,table_session_id,table_command_number,table_number_snapshot,table_name_snapshot,`
+      // AJUSTE COMERCIAL V1 reader gap — order_uid is the PERMANENT economic identity
+      // the frontend needs to target a manual commercial adjustment (the recycled
+      // display id is never economic identity). Additive: every other column is as before.
+      `select=id,order_uid,table_session_id,table_command_number,table_number_snapshot,table_name_snapshot,`
       + `service_session_id,service_order_number,estado,items,nota,nota_cucina,hora,totale,ts`
       + `&table_session_id=${sessionFilter}&order=ts.asc`),
     select('table_order_lines',
@@ -71,7 +79,26 @@ async function listFloorRows(workspaceId, { includeInactive = false } = {}) {
       `select=id,payment_transaction_id,table_order_line_id,order_id,amount,created_at`
       + `&payment_transaction_id=${txFilter}&order=created_at.asc`)
     : [];
-  return { tables, sessions, reservations, orders, lines, transactions, allocations };
+  // AJUSTE COMERCIAL V1 reader gap — canonical per-order obligation revisions, keyed on
+  // the PERMANENT order_uid (never the recycled display id). READ ONLY: this select never
+  // materialises a row. projectSessionAccount derives originalObligation / currentObligation
+  // / commercialAdjustment from these; when an order has no revision row yet it falls back
+  // to the SAME legacy basis order_canonical_obligation_v1 uses (ordenes.totale).
+  const obligations = await listObligationsForOrders(orders);
+  return { tables, sessions, reservations, orders, lines, transactions, allocations, obligations };
+}
+
+// AJUSTE COMERCIAL V1 reader gap — shared by the open-floor reader and the closed-account
+// reader so the canonical per-order obligation projection cannot drift between them. Scoped
+// by order_uid IN (...) (globally unique), never by the recycled #NNN and never by
+// service_session_id (which would pull in other tables' orders). Class B orders (order_uid
+// NULL) simply contribute nothing here and are reported non-adjustable downstream.
+async function listObligationsForOrders(orders) {
+  const uidFilter = idsFilter((orders || []).map((row) => row.order_uid));
+  if (!uidFilter) return [];
+  return select('order_obligations',
+    `select=order_uid,order_id,revision,gross_amount,source,cause,created_at`
+    + `&order_uid=${uidFilter}&order=order_uid.asc,revision.asc`);
 }
 
 async function getSession(workspaceId, sessionId) {
@@ -94,7 +121,9 @@ async function listSessionAccountRows(tableSessionId) {
   const scope = `table_session_id=eq.${encodeURIComponent(tableSessionId)}`;
   const [orders, lines, transactions] = await Promise.all([
     select('ordenes',
-      `select=id,table_session_id,table_command_number,table_number_snapshot,table_name_snapshot,`
+      // AJUSTE COMERCIAL V1 reader gap — order_uid selected here exactly as listFloorRows
+      // now does, so the closed-account reader carries the same permanent identity.
+      `select=id,order_uid,table_session_id,table_command_number,table_number_snapshot,table_name_snapshot,`
       // language-guard: allow-legacy nota_cucina is the existing ordenes column name, selected verbatim exactly as listFloorRows already does, not new vocabulary
       + `service_session_id,service_order_number,estado,items,nota,nota_cucina,hora,totale,ts`
       + `&${scope}&order=ts.asc`),
@@ -113,7 +142,8 @@ async function listSessionAccountRows(tableSessionId) {
       `select=id,payment_transaction_id,table_order_line_id,order_id,amount,created_at`
       + `&payment_transaction_id=${txFilter}&order=created_at.asc`)
     : [];
-  return { orders, lines, transactions, allocations };
+  const obligations = await listObligationsForOrders(orders);
+  return { orders, lines, transactions, allocations, obligations };
 }
 
 // ACC-01 — the most recently closed table sessions, newest first. Bounded by
@@ -170,11 +200,20 @@ const releaseEmptySession = (args) => rpc('mesa_release_empty_session_v1', {
 // Distinct from releaseEmptySession above (which stays scoped to the
 // never-ordered, covers_total IS NULL case). p_force only ever affects
 // kitchen/order completeness, never the financial-settlement precondition.
+//
+// OVER-COLLECTED ACKNOWLEDGEMENT (ledger 119) — p_confirm_over_collected is the
+// operator's explicit, per-request decision to close a table that has collected MORE
+// than it owes. Default false: an over-collected table then fails with
+// MESA_CLOSE_OVER_COLLECTED instead of closing silently. It is NEVER inferred from a
+// retry, and it does NOT bypass the unpaid-balance block (which still wins). On an
+// acknowledged close the RPC records an OVER_COLLECTED_AT_CLOSE financial incident in
+// the SAME transaction — no payment, refund or adjustment is fabricated.
 const closeSession = (args) => rpc('mesa_close_session_v1', {
   p_workspace_id: args.workspaceId,
   p_by_actor: args.byActor,
   p_table_session_id: args.tableSessionId,
   p_force: args.force === true,
+  p_confirm_over_collected: args.confirmOverCollected === true,
 });
 
 // SLICE 4C.2C — trusted-system counterpart for performIncidentSafeRollover.
