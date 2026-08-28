@@ -2,10 +2,16 @@
 // ===============================================================
 // economyHttpHandlers.js — I-1 the /api/economy/v1 surface.
 //
-// Three routes. Two of them are GETs that read; the third writes exactly one
-// append-only row. There is no route here that can close, open or otherwise
-// disturb an Operational Service, and there is no RPC call anywhere in this
-// module.
+// Four routes. Three of them are GETs that read; the fourth writes exactly
+// one append-only row. There is no route here that can close, open or
+// otherwise disturb an Operational Service, and there is no RPC call
+// anywhere in this module.
+//
+// PENDENCIAS ECONÓMICAS SLICE 1 — `pendencies` is the fourth GET, added
+// alongside the other three without touching their behavior. It reuses this
+// SAME auth boundary (READ_ROLES) rather than wiring the still-unwired V3-A
+// capabilityRegistry, per the architecture audit's §19/§H: "prefer the
+// existing Economía/financial read authorization boundary" for this slice.
 //
 // AUTH mirrors the Mesa router (createMesaAuthMiddleware): a verified JWT plus
 // a fresh read of the authoritative actor row, so a revoked or role-changed
@@ -19,6 +25,7 @@ const { createEconomicSnapshot } = require('./economicSnapshot');
 const { createCashCountService, CashCountError } = require('./cashCountService');
 const { createCloseoutReconciliation, ReconciliationError } = require('./closeoutReconciliation');
 const { EconomicWindowError } = require('./economicWindow');
+const { createPendingExposures, PendingExposuresError } = require('./pendingExposures');
 
 // ROLE GATE. Both sets are exactly mesaService.js's PAYMENT_ROLES — the set
 // this repo already treats as "trusted with money". Reusing it deliberately:
@@ -33,7 +40,7 @@ const COUNT_ROLES = new Set(['admin', 'operator', 'owner', 'cashier', 'legacy_op
 
 function safeError(error) {
   if (error instanceof CashCountError || error instanceof EconomicWindowError
-      || error instanceof ReconciliationError) {
+      || error instanceof ReconciliationError || error instanceof PendingExposuresError) {
     return { status: error.status || 400, code: error.code };
   }
   const code = typeof error?.code === 'string' && /^(ECONOMY|RECONCILIATION)_[A-Z0-9_]+$/.test(error.code)
@@ -81,6 +88,7 @@ function createEconomyHandlers({
   snapshot = createEconomicSnapshot(),
   cashCounts = createCashCountService(),
   reconciliation = createCloseoutReconciliation(),
+  pendencies = createPendingExposures(),
   logger = console,
 } = {}) {
   const run = (operation, fn) => async (req, res) => {
@@ -104,8 +112,23 @@ function createEconomyHandlers({
     serviceSessionId: req.query?.serviceSessionId,
   });
 
+  // PENDENCIAS ECONÓMICAS SLICE 1 — deliberately the smallest filter set
+  // (§20 of the architecture audit): a direction, an optional [from, to) on
+  // the target's own original date, and one free-text search box. No
+  // service/method/status filter — none of those are useful on a screen
+  // whose whole point is exposures that outlived the normal operational UI.
+  const pendencyParams = (req) => ({
+    direction: req.query?.direction,
+    from: req.query?.from,
+    to: req.query?.to,
+    q: req.query?.q,
+  });
+
   return Object.freeze({
     snapshot: run('snapshot', (req) => snapshot(windowParams(req))),
+    // PENDENCIAS ECONÓMICAS SLICE 1 — read-only, zero writes. See
+    // pendingExposures.js for the full contract.
+    pendencies: run('pendencies', (req) => pendencies(pendencyParams(req))),
     // J-1 — the Finalizar preflight. READ-ONLY: it returns the two scopes
     // (this service, and its Business Day) side by side plus whichever cash
     // count is legitimately comparable, and writes nothing. Persisting the
@@ -143,10 +166,13 @@ function registerEconomyRoutes(router, deps = {}) {
   router.get('/reconciliation', auth, canRead, handlers.reconciliation);
   router.get('/cash-counts', auth, canRead, handlers.listCashCounts);
   router.post('/cash-counts', auth, canCount, handlers.createCashCount);
+  // PENDENCIAS ECONÓMICAS SLICE 1 — same READ_ROLES gate as /snapshot; this
+  // slice's reader is read-only, so it needs no write-capable role at all.
+  router.get('/pendencies', auth, canRead, handlers.pendencies);
   // There is no PUT, PATCH or DELETE on this router, and there must never be:
   // a recorded count is history. A mistaken count is corrected by recording a
   // new one, which is why the table refuses UPDATE and DELETE outright.
-  return Object.freeze({ routes: 4 });
+  return Object.freeze({ routes: 5 });
 }
 
 module.exports = {

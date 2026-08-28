@@ -31,7 +31,9 @@ const CASH = "src/economy/cashCountService.js";
 const HTTP = "src/economy/economyHttpHandlers.js";
 const INTEGRATION = "src/economy/economyHttpIntegration.js";
 const RECONCILIATION = "src/economy/closeoutReconciliation.js";
-const ALL = [SNAPSHOT, WINDOW, CASH, HTTP, INTEGRATION, RECONCILIATION];
+// PENDENCIAS ECONÓMICAS SLICE 1 — same isolation invariants apply to the new reader.
+const PENDENCIES = "src/economy/pendingExposures.js";
+const ALL = [SNAPSHOT, WINDOW, CASH, HTTP, INTEGRATION, RECONCILIATION, PENDENCIES];
 
 // Every mutating helper the Supabase util exposes, plus the RPC door.
 const WRITE_HELPERS = ["sbInsert", "sbUpsert", "sbUpdate", "sbDelete", "sbRpc"];
@@ -43,6 +45,17 @@ test("SNAPSHOT_DB_WRITES = 0 — the reader names no write helper at all", () =>
       `${SNAPSHOT} must not reference ${helper} — a snapshot reads and nothing else`);
   }
   // It may import exactly one thing from the supabase util, and that is the reader.
+  const imports = source.match(/require\(["']\.\.\/utils\/supabase["']\)[\s\S]{0,80}/g) || [];
+  assert.strictEqual(imports.length, 1, "one supabase import");
+  assert.ok(/\{\s*sbSelect\s*\}/.test(source), "and it destructures sbSelect only");
+});
+
+test("PENDENCIAS SLICE 1 — the pending-exposures reader names no write helper at all", () => {
+  const source = code(PENDENCIES);
+  for (const helper of WRITE_HELPERS) {
+    assert.ok(!source.includes(helper),
+      `${PENDENCIES} must not reference ${helper} — Pendencias reads and nothing else`);
+  }
   const imports = source.match(/require\(["']\.\.\/utils\/supabase["']\)[\s\S]{0,80}/g) || [];
   assert.strictEqual(imports.length, 1, "one supabase import");
   assert.ok(/\{\s*sbSelect\s*\}/.test(source), "and it destructures sbSelect only");
@@ -101,13 +114,14 @@ test("the economy router exposes no mutating verb beyond the one append", () => 
   assert.strictEqual(posts.length, 1, "exactly one POST: recording a count");
   assert.ok(source.includes("router.post('/cash-counts'"), "and it is the cash count");
   const gets = source.match(/router\.get\(/g) || [];
-  assert.strictEqual(gets.length, 3, "three GETs: the snapshot, the reconciliation preflight and the count history");
+  // PENDENCIAS ECONÓMICAS SLICE 1 adds a fourth GET (`/pendencies`), read-only.
+  assert.strictEqual(gets.length, 4, "four GETs: the snapshot, the reconciliation preflight, the count history and pendencies");
 });
 
 test("every economy route is authenticated and role-gated", () => {
   const source = code(HTTP);
   const routes = [...source.matchAll(/router\.(get|post)\((.+?)\);/g)].map((m) => m[2]);
-  assert.strictEqual(routes.length, 4);
+  assert.strictEqual(routes.length, 5);
   for (const route of routes) {
     assert.ok(route.includes("auth"), `unauthenticated route: ${route}`);
     assert.ok(/canRead|canCount/.test(route), `ungated route: ${route}`);
@@ -188,6 +202,8 @@ test("every table the economy module touches is registered for the methods it ne
     ["cash_counts", "GET"], ["cash_counts", "POST"],
     ["service_closeout_reconciliations", "GET"],
     ["rpc/create_service_closeout_reconciliation_v1", "POST"],
+    // PENDENCIAS ECONÓMICAS SLICE 1 — the two additional tables the reader touches.
+    ["order_obligations", "GET"], ["table_sessions", "GET"],
   ];
   for (const [resource, method] of required) {
     const policy = getResourcePolicy(resource);
