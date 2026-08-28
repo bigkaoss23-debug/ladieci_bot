@@ -113,13 +113,18 @@ test("withinRange / matchesQuery — half-open range, case-insensitive substring
 // ═══════════════════════════════════════════════════════════════════════
 
 const SS1 = "ss-1";
+const WORKSPACE = "ws-authenticated"; // the workspace every request in this file is scoped to
+const OTHER_WORKSPACE = "ws-foreign"; // a DIFFERENT workspace, for the isolation tests only
 const sessions = [{ id: SS1, business_date: "2026-08-20", status: "closed" }];
 
 const tableSessions = [
-  { id: "ts-a", status: "closed" },
-  { id: "ts-b", status: "closed" },
-  { id: "ts-c", status: "closed" },
-  { id: "ts-f", status: "open" }, // F — still actively settling
+  { id: "ts-a", workspace_id: WORKSPACE, status: "closed" },
+  { id: "ts-b", workspace_id: WORKSPACE, status: "closed" },
+  { id: "ts-c", workspace_id: WORKSPACE, status: "closed" },
+  { id: "ts-f", workspace_id: WORKSPACE, status: "open" }, // F — still actively settling
+  // W — a Mesa order (below) points at THIS table session, which belongs to
+  // a DIFFERENT workspace. The reader must never read it.
+  { id: "ts-w", workspace_id: OTHER_WORKSPACE, status: "closed" },
 ];
 
 // One shared roster, one order per lettered scenario from the task brief
@@ -189,6 +194,20 @@ const orders = [
   { id: "#T-OBL", order_uid: "uid-obl", service_session_id: SS1, table_session_id: null,
     estado: "RETIRADO", totale: 40, ...PICKUP, nombre: "", tel: "",
     created_at: "2026-08-26T09:00:00Z" },
+  // W — WORKSPACE ISOLATION. This Mesa order's own table_session_id ("ts-w")
+  // belongs to a DIFFERENT workspace. A real unpaid balance exists, so
+  // without isolation this would leak into POR_COBRAR; with isolation the
+  // table_sessions lookup returns nothing for THIS workspace and it must
+  // fail closed into requiereRevision instead.
+  { id: "#T-W", order_uid: "uid-w", service_session_id: SS1, table_session_id: "ts-w",
+    estado: "RETIRADO", totale: 40, ...PICKUP,
+    nombre: "Mesa 99", tel: "MESA-000000TW", created_at: "2026-08-24T09:00:00Z" },
+  // OBL-W — WORKSPACE ISOLATION for order_obligations (see the fixture's own
+  // comment below). Legacy totale is 50; only the FOREIGN-workspace
+  // obligation row claims 20.
+  { id: "#T-OBL-W", order_uid: "uid-obl-w", service_session_id: SS1, table_session_id: null,
+    estado: "RETIRADO", totale: 50, ...PICKUP, nombre: "", tel: "",
+    created_at: "2026-08-24T10:00:00Z" },
   // Tie-break pair — identical originalDate, different orderUid, to prove
   // the sort is deterministic rather than accidental array order.
   { id: "#T-TIE-B", order_uid: "uid-tie-b", service_session_id: SS1, table_session_id: null,
@@ -207,12 +226,19 @@ const events = [
   { order_id: "#T-K2", service_session_id: SS1, type: "payment", amount: 10, payment_method: "tarjeta", created_at: "2026-08-25T09:35:00Z" },
   { order_id: "#T-N", service_session_id: SS1, type: "payment", amount: 10, payment_method: "bizum", created_at: "2026-08-26T08:10:00Z" },
   { order_id: "#T-OBL", service_session_id: SS1, type: "payment", amount: 20, payment_method: "efectivo", created_at: "2026-08-26T09:10:00Z" },
+  { order_id: "#T-OBL-W", service_session_id: SS1, type: "payment", amount: 20, payment_method: "efectivo", created_at: "2026-08-24T10:10:00Z" },
   // A wrong-amount incident for B, to prove the incident is never consulted.
 ];
 
 const obligations = [
-  { order_id: "#T-OBL", order_uid: "uid-obl", service_session_id: SS1, revision: 1, gross_amount: 40 },
-  { order_id: "#T-OBL", order_uid: "uid-obl", service_session_id: SS1, revision: 2, gross_amount: 25 },
+  { order_id: "#T-OBL", order_uid: "uid-obl", workspace_id: WORKSPACE, service_session_id: SS1, revision: 1, gross_amount: 40 },
+  { order_id: "#T-OBL", order_uid: "uid-obl", workspace_id: WORKSPACE, service_session_id: SS1, revision: 2, gross_amount: 25 },
+  // WORKSPACE ISOLATION — a foreign-workspace obligation for a DIFFERENT
+  // order. If this ever leaked in, currentObligation would drop from the
+  // legacy totale (50) to 20, netCollected would already equal it, and a
+  // real 30 EUR exposure would silently vanish rather than merely read
+  // wrong — the more dangerous failure mode, and the one this proves against.
+  { order_id: "#T-OBL-W", order_uid: "uid-obl-w", workspace_id: OTHER_WORKSPACE, service_session_id: SS1, revision: 1, gross_amount: 20 },
 ];
 
 // The legacy nightly archive table: no order_uid column at all, by schema.
@@ -235,12 +261,16 @@ const select = createMemorySelect(
   },
   { onCall: (c) => calls.push(c) },
 );
-const getPendingExposures = createPendingExposures({ select });
+const rawGetPendingExposures = createPendingExposures({ select });
+// Every call in this file is scoped to the SAME authenticated workspace,
+// exactly as the HTTP layer would supply it from the verified auth context —
+// never from caller-supplied params.
+const getPendingExposures = (params = {}) => rawGetPendingExposures({ workspaceId: WORKSPACE, now: NOW, ...params });
 
 let result; // populated once, reused by every read-only assertion below
 
 (async () => {
-  result = await getPendingExposures({ now: NOW });
+  result = await getPendingExposures();
   await atest("setup — the reader runs end to end against the full roster", async () => {
     assert.strictEqual(result.ok, true);
   });
@@ -409,6 +439,41 @@ let result; // populated once, reused by every read-only assertion below
     );
   });
 
+  // ── WORKSPACE ISOLATION ───────────────────────────────────────────────
+  await atest("W1 · a Mesa order whose table_session belongs to ANOTHER workspace never leaks in", async () => {
+    assert.strictEqual(byUid("uid-w"), undefined,
+      "must not appear in porCobrar/porDevolver even though a real 40 EUR balance exists");
+    const rev = result.requiereRevision.find((r) => r.orderDisplay === "#T-W");
+    assert.ok(rev, "the exposure must still surface — reviewably, not silently");
+    assert.strictEqual(rev.reasonCode, "MISSING_TABLE_SESSION");
+    assert.strictEqual(rev.amount, 40);
+  });
+
+  await atest("W2 · an order_obligations row from ANOTHER workspace is never read, even when it would hide real money", async () => {
+    const item = byUid("uid-obl-w");
+    assert.ok(item, "the real 30 EUR exposure must still be found");
+    assert.strictEqual(item.currentObligation, 50, "the legacy totale — the foreign-workspace revision (20) must be invisible");
+    assert.strictEqual(item.amount, 30, "50 - 20 collected; NOT 0, which is what a leak would have produced");
+  });
+
+  await atest("W3 · a request with no workspaceId is refused outright, exactly like cashCountService's own guard", async () => {
+    await assert.rejects(() => rawGetPendingExposures({ now: NOW }),
+      (e) => e instanceof PendingExposuresError && e.code === "ECONOMY_UNAUTHENTICATED" && e.status === 401);
+    await assert.rejects(() => rawGetPendingExposures({ workspaceId: "", now: NOW }),
+      (e) => e.code === "ECONOMY_UNAUTHENTICATED");
+    await assert.rejects(() => rawGetPendingExposures({ workspaceId: 42, now: NOW }),
+      (e) => e.code === "ECONOMY_UNAUTHENTICATED", "a non-string workspaceId must refuse, never coerce");
+  });
+
+  await atest("W4 · every table_sessions / order_obligations query this run made was scoped to the caller's own workspace", async () => {
+    const scopedCalls = calls.filter((c) => c.table === "table_sessions" || c.table === "order_obligations");
+    assert.ok(scopedCalls.length > 0, "sanity: these tables were queried at all");
+    for (const c of scopedCalls) {
+      assert.ok(c.query.includes(`workspace_id=eq.${WORKSPACE}`),
+        `${c.table} query must be workspace-scoped, got: ${c.query}`);
+    }
+  });
+
   // ── S — AUTH READ GATE (HTTP layer) ──────────────────────────────────
   await atest("S · /pendencies is registered behind the SAME read-role gate as /snapshot", async () => {
     const { registerEconomyRoutes, READ_ROLES } = require("../src/economy/economyHttpHandlers");
@@ -438,6 +503,29 @@ let result; // populated once, reused by every read-only assertion below
     const allowed = new Set(["ordenes", "storico", "order_financial_events", "order_obligations", "service_sessions", "table_sessions"]); // language-guard: allow-legacy storico is the real table name this allowlist checks against, not new vocabulary
     assert.ok(calls.length > 0, "sanity: the reader did call select");
     for (const c of calls) assert.ok(allowed.has(c.table), `unexpected table touched: ${c.table}`);
+  });
+
+  // ── PRE-DEPLOY REVIEW §2 — QUERY SHAPE, PINNED ────────────────────────
+  await atest("scale · a SINGLE call makes exactly ONE unbounded order_financial_events read (the orphan scan); the rest are id-scoped and index-supported", async () => {
+    // Isolated select/calls, so batching from the many getPendingExposures()
+    // invocations earlier in this file cannot inflate the count below.
+    const freshCalls = [];
+    const freshSelect = createMemorySelect(
+      { ordenes: orders, storico: legacyArchive, order_financial_events: [...events, orphanEvent], order_obligations: obligations, service_sessions: sessions, table_sessions: tableSessions }, // language-guard: allow-legacy storico is the real PostgREST table name this key must match verbatim, not new vocabulary
+      { onCall: (c) => freshCalls.push(c) },
+    );
+    await createPendingExposures({ select: freshSelect })({ workspaceId: WORKSPACE, now: NOW });
+    const eventCalls = freshCalls.filter((c) => c.table === "order_financial_events");
+    const unbounded = eventCalls.filter((c) => !c.query.includes("order_id=in."));
+    const bounded = eventCalls.filter((c) => c.query.includes("order_id=in."));
+    assert.strictEqual(unbounded.length, 1,
+      "exactly one order_financial_events read may be unfiltered by order_id — the orphan scan, and no other");
+    assert.ok(bounded.length > 0, "the primary population must be fetched id-scoped, using the live order_financial_events_order_created_idx");
+    // The orphan scan must not request a sort either — see its own header
+    // for why: no consumer of it needs chronological order, and requesting
+    // one would force Postgres to materialize and sort the whole table for
+    // no reason this reader can use.
+    assert.ok(!unbounded[0].query.includes("order="), "the orphan scan must not request a sort");
   });
 
   console.log(`pendingExposures: ${passed} passed`);

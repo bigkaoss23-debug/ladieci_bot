@@ -94,13 +94,18 @@ const events = [
   { order_id: "#379", service_session_id: "c9d5aaa7-d0d5-4740-a6ee-83a8ee57adda", type: "payment", amount: 25.00, payment_method: "efectivo", created_at: "2026-08-13T19:08:38.222938Z" },
 ];
 
+// The live singleton workspace (verified: `workspaces` holds exactly this
+// one row) — every real table_sessions/order_obligations row below carries
+// this exact workspace_id, read live alongside them.
+const WORKSPACE = "a8a1809a-9a1e-4dc3-b661-ed357e8f23dc";
+
 // order_obligations — verbatim. Only #999034 has canonical rows (three
 // commercial-adjustment revisions); #999001 and #379 predate them and fall
 // through to the legacy `totale`, exactly as safeTicket already handles.
 const obligations = [
-  { order_id: "#999034", order_uid: "68a3c44f-e677-4d0a-8d9b-e090dd89e4b2", service_session_id: "42af1de9-8981-4d01-b331-554566bec60a", revision: 1, gross_amount: 85 },
-  { order_id: "#999034", order_uid: "68a3c44f-e677-4d0a-8d9b-e090dd89e4b2", service_session_id: "42af1de9-8981-4d01-b331-554566bec60a", revision: 2, gross_amount: 70.00 },
-  { order_id: "#999034", order_uid: "68a3c44f-e677-4d0a-8d9b-e090dd89e4b2", service_session_id: "42af1de9-8981-4d01-b331-554566bec60a", revision: 3, gross_amount: 60.00 },
+  { order_id: "#999034", order_uid: "68a3c44f-e677-4d0a-8d9b-e090dd89e4b2", workspace_id: WORKSPACE, service_session_id: "42af1de9-8981-4d01-b331-554566bec60a", revision: 1, gross_amount: 85 },
+  { order_id: "#999034", order_uid: "68a3c44f-e677-4d0a-8d9b-e090dd89e4b2", workspace_id: WORKSPACE, service_session_id: "42af1de9-8981-4d01-b331-554566bec60a", revision: 2, gross_amount: 70.00 },
+  { order_id: "#999034", order_uid: "68a3c44f-e677-4d0a-8d9b-e090dd89e4b2", workspace_id: WORKSPACE, service_session_id: "42af1de9-8981-4d01-b331-554566bec60a", revision: 3, gross_amount: 60.00 },
 ];
 
 const serviceSessions = [
@@ -110,9 +115,9 @@ const serviceSessions = [
 ];
 
 const tableSessions = [
-  { id: "98794c63-ad71-4c60-af76-f5277890ddcb", status: "closed" },
-  { id: "63655206-41fa-40a4-8e79-11bba8fb5a4f", status: "closed" },
-  { id: "b4fe37af-2da8-4b0c-8d79-ac3e2b92da8c", status: "closed" },
+  { id: "98794c63-ad71-4c60-af76-f5277890ddcb", workspace_id: WORKSPACE, status: "closed" },
+  { id: "63655206-41fa-40a4-8e79-11bba8fb5a4f", workspace_id: WORKSPACE, status: "closed" },
+  { id: "b4fe37af-2da8-4b0c-8d79-ac3e2b92da8c", workspace_id: WORKSPACE, status: "closed" },
 ];
 
 const select = createMemorySelect({
@@ -125,7 +130,7 @@ const select = createMemorySelect({
 const getPendingExposures = createPendingExposures({ select });
 
 (async () => {
-  const result = await getPendingExposures({ now: NOW });
+  const result = await getPendingExposures({ workspaceId: WORKSPACE, now: NOW });
   const byUid = (uid) => [...result.porCobrar, ...result.porDevolver].find((i) => i.orderUid === uid);
 
   await atest("#999034 — the audit's own UAT specimen: POR_DEVOLVER 10.00, exactly the OVER_COLLECTED_AT_CLOSE incident amount", async () => {

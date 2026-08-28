@@ -43,6 +43,25 @@
 // cannot be safely identified (Class B). Keeping them in separate arrays
 // makes it structurally impossible for a caller to accidentally treat an
 // unreliable record as a normal one.
+//
+// ─── WORKSPACE ISOLATION ────────────────────────────────────────────────────
+// `workspaceId` is REQUIRED and comes ONLY from the caller's verified auth
+// context — never from a query parameter — matching cashCountService.js's
+// own convention exactly (same failure code and status on a missing one:
+// ECONOMY_UNAUTHENTICATED/401). Two DIFFERENT isolation mechanisms are in
+// play, because two different things are true of this schema (verified live,
+// not assumed):
+//   `table_sessions` and `order_obligations` DO carry a workspace_id column
+//     — scoped explicitly below, by `workspace_id=eq.<id>`, mirroring the
+//     SAME filter mesaDao.js already applies to table_sessions reads.
+//   `ordenes`, the legacy archive table and `order_financial_events` carry
+//     NO workspace_id column AT ALL — there is nothing to filter by. Isolation for these is
+//     a DB-WIDE invariant instead: `workspaces` holds exactly one row, and
+//     `mesa_singleton_workspace_v1` RAISEs MESA_WORKSPACE_AMBIGUOUS the
+//     instant a second one would exist. Every sibling economy reader
+//     (economicSnapshot.js, closeoutReconciliation.js,
+//     economiaLedgerAggregate.js) already relies on this exact same
+//     boundary for these same tables — it is not a gap introduced here.
 // ===============================================================
 
 const { sbSelect } = require("../utils/supabase");
@@ -256,40 +275,85 @@ async function selectLegacyArchive(select) {
   return Array.isArray(rows) ? rows : [];
 }
 
-// UNFILTERED on purpose. An `order_id IN (...)` filter (economicSnapshot.js's
-// own approach, correct for ITS bounded time window) can only ever surface an
-// orphan event that happens to share a display number with a CURRENTLY
-// existing order — a recycled-id collision. A truly vanished order_id (no
-// current row anywhere, under ANY session) would never be fetched at all and
-// its money would silently vanish from Pendientes too, which is exactly the
-// failure this whole feature exists to prevent (§3 below). At Slice-1 scale
-// (69 live rows) reading the whole ledger once is both simpler and strictly
-// more correct than batching by a candidate id list; a materially larger
-// ledger is the same future pagination concern already noted on selectOrders.
-async function selectAllEvents(select) {
-  const rows = await select("order_financial_events", "order=created_at.asc&limit=20000");
-  return Array.isArray(rows) ? rows : [];
-}
-
-async function selectObligationsForIds(select, ids) {
+// PRE-DEPLOY REVIEW §2 — SCALE. This is the index-supported, bounded path,
+// used for every order/archive-row this reader already knows about (which is
+// every order EXCEPT a true orphan — see selectAllEventsForOrphanScan below).
+// `order_financial_events_order_created_idx (order_id, created_at)` — a real,
+// already-live index, verified against the schema, no migration needed —
+// supports this `order_id IN (...)` filter directly, the SAME shape
+// economicSnapshot.js's own selectEventsForOrders already uses for its
+// bounded time window. This covers 100% of porCobrar/porDevolver and the
+// legacy-archive requiereRevision path: both only ever need events for an
+// order_id they already hold (from `ordenes` or the archive table).
+async function selectEventsForIds(select, ids) {
   if (!ids.length) return [];
   const out = [];
   for (const batch of chunk(ids, ID_BATCH)) {
     const rows = await select(
-      "order_obligations",
-      `order_id=in.(${batch.map((id) => enc(String(id))).join(",")})&order=revision.asc`,
+      "order_financial_events",
+      `order_id=in.(${batch.map((id) => enc(String(id))).join(",")})&order=created_at.asc`,
     );
     if (Array.isArray(rows)) out.push(...rows);
   }
   return out;
 }
 
-async function selectByIds(select, table, column, ids) {
+// PRE-DEPLOY REVIEW §2 — the ONE remaining unbounded read, and it is
+// unavoidable at Slice 1 without a migration. Orphan detection (§3 below)
+// asks "does any event's (order_id, service_session_id) match NO order
+// anywhere" — a genuine anti-join. No index on this schema can turn that into
+// a bounded lookup: an `order_id IN (...)` filter (used everywhere else in
+// this file) is definitionally the wrong shape here, since it can only ever
+// surface an orphan that happens to share a display number with a CURRENTLY
+// known order (a recycled-id collision) — a truly vanished order_id would
+// never be fetched at all, silently defeating the one guarantee this path
+// exists for. The real fix is a server-side anti-join (a small RPC), which
+// is a schema addition and therefore explicitly out of scope this slice —
+// reported, not implemented (see this slice's pre-deploy report §D).
+//
+// What CAN be done without a migration, and is done here: no `ORDER BY` is
+// requested. Orphan grouping (below) computes its own per-group max()
+// regardless of input order, so the one cost this call can shed without an
+// index is the sort itself — Postgres can stream the table rather than
+// materialize and sort all of it. Still O(n) in ledger size; see the report
+// for the growth ceiling this remains safe under.
+async function selectAllEventsForOrphanScan(select) {
+  const rows = await select("order_financial_events", "limit=20000");
+  return Array.isArray(rows) ? rows : [];
+}
+
+// WORKSPACE ISOLATION — `order_obligations` carries `workspace_id` (verified
+// against the live schema), the SAME column mesaDao.js already filters
+// `table_sessions`/`restaurant_tables`/`table_reservations` reads by. Scoping
+// here matches that established convention rather than leaning solely on the
+// DB-wide singleton invariant (see selectByIds below).
+async function selectObligationsForIds(select, ids, workspaceId) {
+  if (!ids.length) return [];
+  const out = [];
+  for (const batch of chunk(ids, ID_BATCH)) {
+    const rows = await select(
+      "order_obligations",
+      `order_id=in.(${batch.map((id) => enc(String(id))).join(",")})&workspace_id=eq.${enc(workspaceId)}&order=revision.asc`,
+    );
+    if (Array.isArray(rows)) out.push(...rows);
+  }
+  return out;
+}
+
+// WORKSPACE ISOLATION — `workspace_id` is applied whenever the target table
+// actually carries the column (`table_sessions` does; `service_sessions`
+// does not — see the reader's own workspace note below), mirroring
+// mesaDao.js's own `workspace_id=eq.<id>` filters on the same tables. A
+// foreign-workspace row is excluded from the map entirely, so a Mesa order
+// whose table_sessions row belongs to another workspace fails closed into
+// MISSING_TABLE_SESSION rather than reading that other workspace's status.
+async function selectByIds(select, table, column, ids, { workspaceId = null } = {}) {
   const clean = [...new Set(ids.filter(Boolean).map(String))];
   if (!clean.length) return new Map();
   const map = new Map();
+  const scope = workspaceId ? `&workspace_id=eq.${enc(workspaceId)}` : "";
   for (const batch of chunk(clean, ID_BATCH)) {
-    const rows = await select(table, `${column}=in.(${batch.map(enc).join(",")})`);
+    const rows = await select(table, `${column}=in.(${batch.map(enc).join(",")})${scope}`);
     for (const row of Array.isArray(rows) ? rows : []) map.set(String(row[column]), row);
   }
   return map;
@@ -339,7 +403,14 @@ function matchesQuery(item, q) {
 }
 
 function createPendingExposures({ select = sbSelect } = {}) {
-  return async function getPendingExposures({ direction, from, to, q, now = new Date() } = {}) {
+  return async function getPendingExposures({ workspaceId, direction, from, to, q, now = new Date() } = {}) {
+    // WORKSPACE ISOLATION — fail closed with the SAME code+status
+    // cashCountService.js's own `requireContext` already uses for exactly
+    // this condition: an absent/malformed workspaceId means the caller was
+    // never properly authenticated, not merely that a filter is missing.
+    if (typeof workspaceId !== "string" || !workspaceId) {
+      throw new PendingExposuresError("ECONOMY_UNAUTHENTICATED", 401);
+    }
     if (direction && direction !== "POR_COBRAR" && direction !== "POR_DEVOLVER") {
       throw new PendingExposuresError("ECONOMY_PENDENCIES_DIRECTION_INVALID");
     }
@@ -360,14 +431,37 @@ function createPendingExposures({ select = sbSelect } = {}) {
     //    separately, below, straight into requiereRevision. ─────────────
     const orders = await selectOrders(select);
     const orderIds = [...new Set(orders.map((o) => String(o.id)).filter(Boolean))];
-    const events = await selectAllEvents(select);
-    const obligationRows = await selectObligationsForIds(select, orderIds);
+    // Fetched here, ahead of the events read, so its ids can join the SAME
+    // bounded, index-supported event fetch below (§2 of the pre-deploy
+    // review) — one query serves both the actionable population and the
+    // legacy-archive requiereRevision path, neither of which ever needs an
+    // event for an order_id it does not already hold.
+    const archiveRows = await selectLegacyArchive(select);
+    const archiveIds = archiveRows.map((r) => String(r.orden_id)).filter(Boolean);
+    const knownIds = [...new Set([...orderIds, ...archiveIds])];
+    const events = await selectEventsForIds(select, knownIds);
+    // WORKSPACE ISOLATION — scoped; see selectObligationsForIds above.
+    const obligationRows = await selectObligationsForIds(select, orderIds, workspaceId);
     const obligationByOrder = latestObligationsByOrder(obligationRows);
 
+    // WORKSPACE NOTE — `service_sessions` carries no workspace_id column at
+    // all (verified against the live schema), the SAME as `ordenes`, the
+    // legacy archive table and `order_financial_events` selected above and
+    // below. None of them can be filtered by workspace because the column does not
+    // exist; isolation for these four tables is instead a DB-wide invariant
+    // (`workspaces` holds exactly one row; `mesa_singleton_workspace_v1`
+    // hard-fails, RAISE MESA_WORKSPACE_AMBIGUOUS, the instant a second
+    // workspace would exist) — the SAME boundary every sibling economy
+    // reader (economicSnapshot.js, closeoutReconciliation.js,
+    // economiaLedgerAggregate.js) already relies on, not a gap unique to
+    // this file. `table_sessions` and `order_obligations`, which DO carry
+    // the column, are scoped explicitly below rather than leaning on that
+    // invariant alone.
     const serviceSessionIds = orders.map((o) => o.service_session_id).filter(Boolean);
     const sessionsById = await selectByIds(select, "service_sessions", "id", serviceSessionIds);
     const tableSessionIds = orders.map((o) => o.table_session_id).filter(Boolean);
-    const tableSessionsById = await selectByIds(select, "table_sessions", "id", tableSessionIds);
+    // WORKSPACE ISOLATION — scoped; see selectByIds above.
+    const tableSessionsById = await selectByIds(select, "table_sessions", "id", tableSessionIds, { workspaceId });
 
     const porCobrar = [];
     const porDevolver = [];
@@ -435,7 +529,6 @@ function createPendingExposures({ select = sbSelect } = {}) {
     }
 
     // ── 2. LEGACY ARCHIVE, no stable identity by construction ───────────
-    const archiveRows = await selectLegacyArchive(select);
     if (archiveRows.length) {
       for (const row of archiveRows) {
         const matched = matchedEventsFor({ id: row.orden_id, service_session_id: row.service_session_id }, events);
@@ -462,12 +555,18 @@ function createPendingExposures({ select = sbSelect } = {}) {
     // already claimed its own events. Verified against live staging: exactly
     // one such row exists (#999004 / session d20ee320, 5.00 EUR — a
     // previously-documented N-6 foreign-session artifact), never assumed.
+    //
+    // This is the ONE call in this reader that still reads the whole ledger
+    // (see selectAllEventsForOrphanScan's own header for why that remains
+    // unavoidable without a migration) — used HERE ONLY, never for the
+    // bounded primary population above.
+    const orphanScanEvents = await selectAllEventsForOrphanScan(select);
     const knownKeys = new Set([
       ...orders.map((o) => `${String(o.id)}::${String(o.service_session_id || "")}`),
       ...archiveRows.map((r) => `${String(r.orden_id)}::${String(r.service_session_id || "")}`),
     ]);
     const orphanGroups = new Map();
-    for (const event of events) {
+    for (const event of orphanScanEvents) {
       const key = `${String(event.order_id ?? event.orden_id ?? "")}::${String(event.service_session_id || "")}`;
       if (knownKeys.has(key)) continue;
       if (!orphanGroups.has(key)) orphanGroups.set(key, { orderId: event.order_id, events: [] });

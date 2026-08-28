@@ -118,6 +118,10 @@ function createEconomyHandlers({
   // service/method/status filter — none of those are useful on a screen
   // whose whole point is exposures that outlived the normal operational UI.
   const pendencyParams = (req) => ({
+    // WORKSPACE ISOLATION — from the verified auth context ONLY, never the
+    // query string (a caller cannot ask to read another workspace by
+    // supplying its id — this field does not accept one).
+    workspaceId: req.economyContext?.workspaceId,
     direction: req.query?.direction,
     from: req.query?.from,
     to: req.query?.to,
