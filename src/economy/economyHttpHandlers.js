@@ -112,11 +112,13 @@ function createEconomyHandlers({
     serviceSessionId: req.query?.serviceSessionId,
   });
 
-  // PENDENCIAS ECONÓMICAS SLICE 1 — deliberately the smallest filter set
-  // (§20 of the architecture audit): a direction, an optional [from, to) on
-  // the target's own original date, and one free-text search box. No
-  // service/method/status filter — none of those are useful on a screen
-  // whose whole point is exposures that outlived the normal operational UI.
+  // PENDENCIAS ECONÓMICAS — the filter set: a direction, one free-text search
+  // box, and a CANONICAL SCOPE. Scope is either the pre-existing raw [from, to)
+  // on the target's original date (bare request → GLOBAL / Todos), or a
+  // `preset` (hoy | ayer | servicio | personalizado) resolved server-side
+  // through the SAME economicWindow authority /snapshot uses. `serviceSessionId`
+  // is meaningful only with preset=servicio; `businessDate` mirrors /snapshot's
+  // optional override. Still no service/method/status filter beyond that.
   const pendencyParams = (req) => ({
     // WORKSPACE ISOLATION — from the verified auth context ONLY, never the
     // query string (a caller cannot ask to read another workspace by
@@ -126,6 +128,9 @@ function createEconomyHandlers({
     from: req.query?.from,
     to: req.query?.to,
     q: req.query?.q,
+    preset: req.query?.preset,
+    serviceSessionId: req.query?.serviceSessionId,
+    businessDate: req.query?.businessDate,
   });
 
   return Object.freeze({
@@ -142,6 +147,13 @@ function createEconomyHandlers({
     })),
     listCashCounts: run('cash_counts_list', (req) => cashCounts.list({
       context: req.economyContext,
+      // CANONICAL SCOPE — same shape /pendencies and /snapshot accept. A bare
+      // request (no preset) keeps the pre-existing raw counted_at [from, to)
+      // behaviour; a preset routes through economicWindow, and servicio scopes
+      // by the count's own persisted service_session_id (never a time overlap).
+      preset: req.query?.preset,
+      serviceSessionId: req.query?.serviceSessionId,
+      businessDate: req.query?.businessDate,
       from: req.query?.from,
       to: req.query?.to,
       limit: req.query?.limit,

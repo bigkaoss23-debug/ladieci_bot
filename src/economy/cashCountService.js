@@ -28,7 +28,12 @@
 
 const { sbSelect, sbInsert } = require("../utils/supabase");
 const { createEconomicSnapshot } = require("./economicSnapshot");
-const { PRESET } = require("./economicWindow");
+const { PRESET, resolveEconomicWindow, windowForServiceSession } = require("./economicWindow");
+// CANONICAL CURRENT SERVICE — the lifecycle-pointer authority, the SAME
+// resolver the operational board reads use. Consulted READ-ONLY, for
+// PROVENANCE only: it never gates, delays or fails a count (a count has never
+// required an open service, and this must not change that — see `create`).
+const { getCurrentOperationalSession } = require("../serviceSessions/currentOperationalSession");
 
 class CashCountError extends Error {
   constructor(code, status = 400) {
@@ -111,10 +116,78 @@ function projectCount(row) {
   });
 }
 
+// The presets the HISTORY reader (list) answers. Same four as /pendencies.
+// `mediodia` / `noche` are not offered here for the same reason.
+const CASH_COUNT_LIST_PRESETS = Object.freeze(new Set([
+  PRESET.HOY, PRESET.AYER, PRESET.SERVICIO, PRESET.PERSONALIZADO,
+]));
+
+// CANONICAL SCOPE for the history reader — mirrors
+// pendingExposures.resolvePendencyScope exactly:
+//   'global'  — no preset. Raw counted_at [from, to), byte-for-byte as before.
+//   'window'  — hoy | ayer | personalizado, resolved through economicWindow,
+//               then the SAME counted_at [from, to). Answers "which counts
+//               happened during this period?", which for a cash count — a
+//               physical event at an instant — is a legitimate question.
+//   'service' — servicio + serviceSessionId. EXACT identity:
+//               cash_counts.service_session_id = serviceSessionId. Never a
+//               timestamp overlap, so a legacy NULL-attribution row is
+//               correctly NOT a match (§12) rather than being fabricated in.
+async function resolveCashCountListScope({ select, preset, serviceSessionId, businessDate, from, to, now }) {
+  const key = preset == null || preset === "" ? null : String(preset).trim().toLowerCase();
+
+  if (key === null) {
+    if (serviceSessionId) throw new CashCountError("ECONOMY_CASH_COUNT_SCOPE_INVALID");
+    return {
+      kind: "global", from: from || null, to: to || null,
+      scopeEcho: null,
+      windowEcho: (from || to)
+        ? Object.freeze({ from: from || null, to: to || null, bounds: "[from,to)" })
+        : null,
+    };
+  }
+
+  if (!CASH_COUNT_LIST_PRESETS.has(key)) {
+    throw new CashCountError("ECONOMY_CASH_COUNT_SCOPE_INVALID");
+  }
+
+  if (key === PRESET.SERVICIO) {
+    if (!serviceSessionId || typeof serviceSessionId !== "string") {
+      throw new CashCountError("ECONOMY_CASH_COUNT_SERVICE_SESSION_REQUIRED");
+    }
+    const rows = await select("service_sessions", `id=eq.${encodeURIComponent(serviceSessionId)}&limit=1`);
+    const session = Array.isArray(rows) ? rows[0] : null;
+    if (!session) throw new CashCountError("ECONOMY_CASH_COUNT_SERVICE_NOT_FOUND", 404);
+    let win = null;
+    try { win = windowForServiceSession(session, { asOf: now }); } catch (_) { win = null; }
+    return {
+      kind: "service", serviceSessionId,
+      scopeEcho: Object.freeze({ preset: key, serviceSessionId, businessDate: session.business_date || null }),
+      windowEcho: win
+        ? Object.freeze({ from: win.from, to: win.to, timezone: win.timezone, businessDate: win.businessDate, bounds: win.bounds })
+        : null,
+    };
+  }
+
+  if (serviceSessionId) throw new CashCountError("ECONOMY_CASH_COUNT_SCOPE_INVALID");
+  // economicWindow owns every calendar decision, and throws EconomicWindowError
+  // (already mapped by economyHttpHandlers.safeError) on a bad/absent range.
+  const win = resolveEconomicWindow({ preset: key, from, to, businessDate, now });
+  return {
+    kind: "window", from: win.from, to: win.to,
+    scopeEcho: Object.freeze({ preset: key, businessDate: win.businessDate || null }),
+    windowEcho: Object.freeze({
+      from: win.from, to: win.to, timezone: win.timezone, businessDate: win.businessDate || null, bounds: win.bounds,
+    }),
+  };
+}
+
 function createCashCountService({
   select = sbSelect,
   insert = sbInsert,
   snapshot = createEconomicSnapshot(),
+  // Injectable for tests. The real resolver is the lifecycle-pointer authority.
+  getCurrentService = getCurrentOperationalSession,
 } = {}) {
   // Reads the window's economy, then writes ONE row. The snapshot call is the
   // same read-only reader the Snapshot surface uses — the number an operator
@@ -141,6 +214,36 @@ function createCashCountService({
     const recordedCents = toCents(view.receipts.byMethod.efectivo);
     const varianceCents = countedCents - recordedCents;
 
+    // ── CANONICAL SERVICE ATTRIBUTION (provenance only) ────────────────────
+    // Precedence, deliberately NOT trusting the client to name the service:
+    //   1. a servicio-scoped snapshot window already names its own session
+    //      (the snapshot reader validated that id — 404 if it does not exist);
+    //   2. for a "count now" (preset hoy — the operational Contar Caja), the
+    //      BACKEND resolves the canonical current Operational Service itself,
+    //      through the lifecycle-pointer authority. A body-supplied
+    //      serviceSessionId is IGNORED here (§10: the frontend does not get to
+    //      decide the authoritative service identity);
+    //   3. every other preset (ayer / personalizado / …) → NULL. There is no
+    //      such thing as physically counting a past day's drawer "in" a
+    //      service.
+    // If nothing yields a session (nothing open, or the pointer is
+    // unresolvable), the count still records with service_session_id NULL: a
+    // cash count has never required an open service and this must not change
+    // that (§11/§19). The resolve is READ-ONLY and its failure is swallowed —
+    // it can never fail, delay or alter the count. `window_*` and the recorded
+    // figure are UNTOUCHED by any of this, so closeoutReconciliation's
+    // exact-window matching sees exactly what it saw before (§14).
+    let attributedServiceSessionId = view.window.serviceSessionId
+      ? String(view.window.serviceSessionId)
+      : null;
+    if (!attributedServiceSessionId
+        && String(preset || "").trim().toLowerCase() === PRESET.HOY) {
+      try {
+        const current = await getCurrentService();
+        if (current && current.id) attributedServiceSessionId = String(current.id);
+      } catch (_) { /* lifecycle-independent: never block a count on this */ }
+    }
+
     // Idempotency: the same clientRequestId must return the SAME count, never
     // a second one. Checked before insert for a clean answer, and backed by a
     // unique index so a genuine race still cannot create two rows.
@@ -162,9 +265,11 @@ function createCashCountService({
       window_to: view.window.to,
       window_timezone: view.window.timezone,
       window_preset: view.window.preset,
-      // Optional provenance. Recorded when the operator was looking at one
-      // service, absent otherwise — and load-bearing for nothing either way.
-      service_session_id: view.window.serviceSessionId || (serviceSessionId ? String(serviceSessionId) : null),
+      // Canonical service provenance — see the attribution block above. NOT a
+      // foreign key, NOT a lifecycle coupling: the migration keeps this column
+      // nullable and FK-free on purpose, and the count stays true and readable
+      // even if this service is later archived.
+      service_session_id: attributedServiceSessionId,
       snapshot_context: {
         generatedAt: view.window.generatedAt,
         asOf: view.window.asOf,
@@ -200,17 +305,35 @@ function createCashCountService({
 
   // Newest first. History is read-only by construction — there is no update
   // and no delete anywhere in this service, and the database refuses both.
-  async function list({ context, from, to, limit = 20 } = {}) {
+  //
+  // CANONICAL SCOPE — a bare call (no preset) is byte-for-byte the old
+  // behaviour: raw counted_at [from, to). A `preset` routes through
+  // economicWindow (hoy | ayer | personalizado → "which counts happened in
+  // this period?") or, for `servicio`, filters on the count's own persisted
+  // service_session_id — an exact identity match, never a timestamp overlap.
+  async function list({ context, preset, serviceSessionId, businessDate, from, to, limit = 20, now = new Date() } = {}) {
     requireContext(context);
     const size = Math.min(Math.max(Number.parseInt(limit, 10) || 20, 1), 100);
+
+    const scope = await resolveCashCountListScope({
+      select, preset, serviceSessionId, businessDate, from, to, now,
+    });
+
     const filters = [];
-    if (from) filters.push(`counted_at=gte.${encodeURIComponent(new Date(from).toISOString())}`);
-    if (to) filters.push(`counted_at=lt.${encodeURIComponent(new Date(to).toISOString())}`);
+    if (scope.kind === "service") {
+      filters.push(`service_session_id=eq.${encodeURIComponent(scope.serviceSessionId)}`);
+    } else {
+      if (scope.from) filters.push(`counted_at=gte.${encodeURIComponent(new Date(scope.from).toISOString())}`);
+      if (scope.to) filters.push(`counted_at=lt.${encodeURIComponent(new Date(scope.to).toISOString())}`);
+    }
     filters.push("order=counted_at.desc");
     filters.push(`limit=${size}`);
     const rows = await select("cash_counts", filters.join("&"));
     return Object.freeze({
       ok: true,
+      // The canonical scope the server applied. null for a bare request.
+      scope: scope.scopeEcho,
+      window: scope.windowEcho,
       counts: Object.freeze((Array.isArray(rows) ? rows : []).map(projectCount)),
     });
   }
@@ -218,4 +341,7 @@ function createCashCountService({
   return Object.freeze({ create, list });
 }
 
-module.exports = { createCashCountService, CashCountError, toCents, toEuros };
+module.exports = {
+  createCashCountService, CashCountError, toCents, toEuros,
+  CASH_COUNT_LIST_PRESETS, resolveCashCountListScope,
+};

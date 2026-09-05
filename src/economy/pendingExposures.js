@@ -68,9 +68,29 @@ const { sbSelect } = require("../utils/supabase");
 const {
   safeTicket, round, CANCELLED, latestObligationsByOrder,
 } = require("../closeout/currentServiceCloseout");
+// CANONICAL SCOPE — the SAME window authority economicSnapshot.js uses. This
+// module does NOT compute a Madrid 04:00 boundary, a 17:30 split, a DST offset
+// or any business-date arithmetic of its own: `preset` in, resolved
+// `[from, to)` out, exactly like every other economy reader. `servicio` scope
+// is by canonical identity (order.service_session_id), never an approximate
+// timestamp range — the window it resolves is echo-only there.
+// EconomicWindowError is NOT imported: when resolveEconomicWindow throws it,
+// the error propagates verbatim and economyHttpHandlers.safeError already maps
+// it (it checks `instanceof EconomicWindowError` there), so re-wrapping it here
+// would only blur the code it carries.
+const {
+  resolveEconomicWindow, windowForServiceSession, PRESET,
+} = require("./economicWindow");
 
 const enc = encodeURIComponent;
 const ID_BATCH = 80;
+
+// The only presets this reader answers. `mediodia` / `noche` are deliberately
+// NOT offered here (they are arbitrary clock windows, not a question a
+// Pendencias screen asks) even though economicWindow itself supports them.
+const PENDENCY_PRESETS = Object.freeze(new Set([
+  PRESET.HOY, PRESET.AYER, PRESET.SERVICIO, PRESET.PERSONALIZADO,
+]));
 
 function chunk(list, size) {
   const out = [];
@@ -233,6 +253,11 @@ function buildPendingItem({ order, ticket, channel, sessionRow }) {
     netCollected: ticket.collectedAmount,
     originalDate: order.created_at || null,
     originalBusinessDate: sessionRow ? sessionRow.business_date || null : null,
+    // Canonical service identity of the ORDER (N-6 basis), for the 'servicio'
+    // scope filter. Operational metadata, never a customer identity and never
+    // rendered as one — the same status buildDisplay's tableName/commandNumber
+    // already have.
+    serviceSessionId: order.service_session_id ? String(order.service_session_id) : null,
     lastMovementAt: ticket.lastMovementAt,
     ageDays: ticket.ageDays,
     channel,
@@ -251,6 +276,11 @@ function buildRevisionItem({ reasonCode, amount = null, direction = null, order 
     direction,
     orderDisplay: order && order.id != null ? String(order.id) : null, // metadata only
     originalDate: order && order.created_at ? order.created_at : null,
+    // Present for archive-row / missing-identity revisions that still carry a
+    // real service_session_id; null for a true orphan (no order at all), which
+    // therefore never matches a 'servicio' scope — correct, an orphan cannot be
+    // attributed to a specific service.
+    serviceSessionId: order && order.service_session_id ? String(order.service_session_id) : null,
     channel: order ? channelOf(order) : null,
     note,
   });
@@ -402,8 +432,96 @@ function matchesQuery(item, q) {
   return haystack.some((v) => v.includes(needle));
 }
 
+// ─── CANONICAL SCOPE RESOLUTION ────────────────────────────────────────────
+// Turns the request's scope params into ONE membership predicate over the
+// pending items, plus the resolved window to echo back. Three kinds:
+//
+//   'global'  — no preset. The pre-existing behaviour, byte-for-byte: the
+//               raw `from`/`to` (if any) filter `item.originalDate`
+//               (= order.created_at), half-open. This is what a bare
+//               GET /pendencies keeps doing, and what the bottom-nav badge
+//               reads.
+//   'window'  — preset hoy | ayer | personalizado. The window is resolved by
+//               economicWindow (04:00 Madrid rollover, DST-correct) and the
+//               SAME `item.originalDate ∈ [from, to)` filter is applied to it.
+//   'service' — preset servicio + serviceSessionId. Membership is canonical
+//               identity: item.serviceSessionId === serviceSessionId. NOT a
+//               timestamp overlap. The session's own interval is resolved only
+//               to echo it back to the caller.
+//
+// `serviceSessionId` is meaningful ONLY with preset 'servicio'. Supplied with
+// any other preset it is a contradictory request and is refused (§17) rather
+// than silently ignored.
+async function resolvePendencyScope({ select, preset, serviceSessionId, businessDate, from, to, now }) {
+  const key = preset == null || preset === "" ? null : String(preset).trim().toLowerCase();
+
+  if (key === null) {
+    if (serviceSessionId) {
+      throw new PendingExposuresError("ECONOMY_PENDENCIES_SCOPE_INVALID");
+    }
+    return Object.freeze({
+      kind: "global",
+      matchItem: (item) => withinRange(item.originalDate, from, to),
+      scopeEcho: null,
+      windowEcho: (from || to)
+        ? Object.freeze({ from: from || null, to: to || null, bounds: "[from,to)" })
+        : null,
+    });
+  }
+
+  if (!PENDENCY_PRESETS.has(key)) {
+    throw new PendingExposuresError("ECONOMY_PENDENCIES_SCOPE_INVALID");
+  }
+
+  if (key === PRESET.SERVICIO) {
+    if (!serviceSessionId || typeof serviceSessionId !== "string") {
+      throw new PendingExposuresError("ECONOMY_PENDENCIES_SERVICE_SESSION_REQUIRED");
+    }
+    const rows = await select("service_sessions", `id=eq.${enc(serviceSessionId)}&limit=1`);
+    const session = Array.isArray(rows) ? rows[0] : null;
+    if (!session) {
+      throw new PendingExposuresError("ECONOMY_PENDENCIES_SERVICE_NOT_FOUND", 404);
+    }
+    // Echo only. Membership below is by identity, never by this interval.
+    let win = null;
+    try { win = windowForServiceSession(session, { asOf: now }); } catch (_) { win = null; }
+    return Object.freeze({
+      kind: "service",
+      serviceSessionId,
+      matchItem: (item) => String(item.serviceSessionId || "") === serviceSessionId,
+      scopeEcho: Object.freeze({ preset: key, serviceSessionId, businessDate: session.business_date || null }),
+      windowEcho: win
+        ? Object.freeze({ from: win.from, to: win.to, timezone: win.timezone, businessDate: win.businessDate, bounds: win.bounds })
+        : null,
+    });
+  }
+
+  if (serviceSessionId) {
+    throw new PendingExposuresError("ECONOMY_PENDENCIES_SCOPE_INVALID");
+  }
+  if (key === PRESET.PERSONALIZADO && (!from || !to)) {
+    throw new PendingExposuresError("ECONOMY_PENDENCIES_RANGE_INVALID");
+  }
+  // economicWindow owns every calendar decision here. It throws
+  // EconomicWindowError on a bad range; that class is already mapped by
+  // economyHttpHandlers.safeError, so it is allowed to propagate.
+  const win = resolveEconomicWindow({ preset: key, from, to, businessDate, now });
+  return Object.freeze({
+    kind: "window",
+    matchItem: (item) => withinRange(item.originalDate, win.from, win.to),
+    scopeEcho: Object.freeze({ preset: key, businessDate: win.businessDate || null }),
+    windowEcho: Object.freeze({
+      from: win.from, to: win.to, timezone: win.timezone, businessDate: win.businessDate || null, bounds: win.bounds,
+    }),
+  });
+}
+
 function createPendingExposures({ select = sbSelect } = {}) {
-  return async function getPendingExposures({ workspaceId, direction, from, to, q, now = new Date() } = {}) {
+  return async function getPendingExposures({
+    workspaceId, direction, from, to, q,
+    preset, serviceSessionId, businessDate,
+    now = new Date(),
+  } = {}) {
     // WORKSPACE ISOLATION — fail closed with the SAME code+status
     // cashCountService.js's own `requireContext` already uses for exactly
     // this condition: an absent/malformed workspaceId means the caller was
@@ -424,6 +542,14 @@ function createPendingExposures({ select = sbSelect } = {}) {
       throw new PendingExposuresError("ECONOMY_PENDENCIES_RANGE_NOT_ORDERED");
     }
     const nowDate = now instanceof Date ? now : new Date(now);
+
+    // CANONICAL SCOPE — resolved once, through economicWindow. 'global' (no
+    // preset) keeps the pre-existing raw from/to behaviour byte-for-byte; a
+    // preset routes the window through the SAME resolver every other economy
+    // reader uses, and 'servicio' scopes by canonical order identity.
+    const scope = await resolvePendencyScope({
+      select, preset, serviceSessionId, businessDate, from, to, now: nowDate,
+    });
 
     // ── 1. THE ACTIONABLE POPULATION: ordenes only. The legacy archive table has NO // language-guard: allow-legacy storico is the archive table this sentence describes without naming, not new vocabulary
     //    order_uid column at all (verified against the live schema) and so
@@ -590,11 +716,15 @@ function createPendingExposures({ select = sbSelect } = {}) {
     }
 
     // ── 4. FILTERS (server-side, minimal — §20) ─────────────────────────
-    const byRange = (item) => withinRange(item.originalDate, from, to);
+    // Scope membership comes from the resolver: 'global'/'window' compare
+    // item.originalDate against a half-open [from,to); 'service' compares the
+    // canonical order identity. This file computes no window of its own. `q`
+    // free-text and `direction` are unchanged and orthogonal.
+    const byScope = scope.matchItem;
     const byQuery = (item) => matchesQuery(item, q);
-    let cobrarOut = porCobrar.filter(byRange).filter(byQuery);
-    let devolverOut = porDevolver.filter(byRange).filter(byQuery);
-    let revisionOut = requiereRevision.filter(byRange).filter(byQuery);
+    let cobrarOut = porCobrar.filter(byScope).filter(byQuery);
+    let devolverOut = porDevolver.filter(byScope).filter(byQuery);
+    let revisionOut = requiereRevision.filter(byScope).filter(byQuery);
     if (direction === "POR_COBRAR") devolverOut = [];
     if (direction === "POR_DEVOLVER") cobrarOut = [];
 
@@ -612,9 +742,22 @@ function createPendingExposures({ select = sbSelect } = {}) {
     devolverOut = devolverOut.slice().sort(byOldestFirst);
     revisionOut = revisionOut.slice().sort(byOldestFirst);
 
+    // Presentation-only sums, from the SAME canonical item population that was
+    // just filtered and sorted — never a second query, never a re-derivation,
+    // never an amount altered. requiereRevision is deliberately NOT summed
+    // into any total: it is not an actionable balance.
+    const sumAmount = (items) =>
+      round(items.reduce((acc, it) => acc + (Number(it && it.amount) || 0), 0));
+
     return Object.freeze({
       ok: true,
       generatedAt: nowDate.toISOString(),
+      // The canonical scope the server actually applied. null for a bare
+      // request (GLOBAL / Todos) — the shape the Economía bottom-nav badge
+      // reads. Scoped requests echo it so a consumer can render "viewing a
+      // filtered subset" without re-deriving what the server did.
+      scope: scope.scopeEcho,
+      window: scope.windowEcho,
       porCobrar: Object.freeze(cobrarOut),
       porDevolver: Object.freeze(devolverOut),
       requiereRevision: Object.freeze(revisionOut),
@@ -622,6 +765,16 @@ function createPendingExposures({ select = sbSelect } = {}) {
         porCobrar: cobrarOut.length,
         porDevolver: devolverOut.length,
         requiereRevision: revisionOut.length,
+      }),
+      // CANONICAL MONETARY TOTALS. By construction:
+      //   totals.porCobrar   === Σ porCobrar[].amount   (to the cent)
+      //   totals.porDevolver === Σ porDevolver[].amount (to the cent)
+      // This is the ONE source General.PENDIENTE(scope) consumes; the KPI and
+      // the detail list it opens cannot disagree, because they are the same
+      // number over the same scope from the same reader.
+      totals: Object.freeze({
+        porCobrar: sumAmount(cobrarOut),
+        porDevolver: sumAmount(devolverOut),
       }),
     });
   };
@@ -634,4 +787,5 @@ module.exports = {
   // Exported for direct unit testing — pure, no I/O.
   NON_MESA_TERMINAL_STATES, isCancelLike, channelOf, isOperationallyOver,
   normalizeCustomer, buildDisplay, allowedActionsFor, matchesQuery, withinRange,
+  PENDENCY_PRESETS, resolvePendencyScope,
 };
