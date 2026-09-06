@@ -15,6 +15,7 @@ const { createStaleServiceRecovery, RECOVERY_CODE } = require("../src/serviceSes
 
 const TODAY = "2026-09-06";
 const OLD = "2026-08-25";
+const FUTURE = "2026-09-07";
 
 // ── collaborator fakes ─────────────────────────────────────────────────────
 function fakes(overrides = {}) {
@@ -92,6 +93,42 @@ test("open service on the current Business Day -> NO_STALE_SERVICE (never touche
   assert.equal(r.stale, false);
   assert.equal(r.serviceSessionId, "svc-today");
   assert.equal(calls.close.length, 0);
+});
+
+// ── REVIEW FIX — FUTURE-dated open service -> fail closed, never a "previous" ─
+test("FUTURE-dated open service -> ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH, fail closed, no scan, no close", async () => {
+  const { recovery, calls } = fakes({
+    session: { id: "svc-future", status: "open", business_date: FUTURE },
+    canonicalBusinessDate: TODAY,
+  });
+  const r = await recovery.recoverStaleService({ actor: "system" });
+  assert.equal(r.ok, false, "fail closed — not a definitive proceed");
+  assert.equal(r.stale, false, "a future service is NOT stale / NOT a previous service");
+  assert.equal(r.code, RECOVERY_CODE.ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH);
+  assert.notEqual(r.code, RECOVERY_CODE.PREVIOUS_SERVICE_PENDING);
+  assert.equal(r.serviceSessionId, "svc-future");
+  assert.equal(r.serviceBusinessDate, FUTURE);
+  assert.equal(r.currentBusinessDate, TODAY);
+  assert.equal(calls.scan.length, 0, "no pre-close scan — there is nothing to recover");
+  assert.equal(calls.close.length, 0, "a future-dated service is NEVER auto-finalized");
+});
+
+// ── §17 FUTURE-DATED SYNTHETIC FIXTURE (deterministic) ─────────────────────
+test("§17 future-dated fixture: canonical BD 2026-09-06, service business_date 2026-09-07 -> fail closed, no order/table may inherit it", async () => {
+  const { recovery, calls } = fakes({
+    session: { id: "5e5777c5-future-fixture", status: "open", business_date: "2026-09-07" },
+    canonicalBusinessDate: "2026-09-06",
+    // even a CLEAN economy must not open a recovery path for a future service
+    scanBlocking: { orders: 0, tables: 0 },
+    recon: { ok: true, service: { unpaid: 0, overCollected: 0 } },
+  });
+  const r = await recovery.recoverStaleService({ actor: "system" });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, RECOVERY_CODE.ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH);
+  assert.equal(r.stale, false);
+  assert.equal(r.recovered, undefined, "not recovered — no close path exists");
+  assert.equal(calls.close.length, 0);
+  assert.equal(calls.scan.length, 0);
 });
 
 // ── 1. CLEAN STALE -> AUTO-FINALIZE via V3 authority, exactly once ─────────

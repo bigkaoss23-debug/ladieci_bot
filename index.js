@@ -684,12 +684,37 @@ app.post("/api", async (req, res) => {
         try {
           recovery = await recoverStaleService({ actor: actorId, source: "stale_service_auto_recovery" });
         } catch (e) {
-          // A recovery read failure must never turn the silent path into a
-          // 5xx. Leave `ensured` as-is; the SQL fail-closed intake guard
-          // (migration 120) remains the backstop against misfiled work.
-          console.warn("[ensureCurrentServiceSession] stale-service recovery unavailable (non-fatal):", (e && e.message) || e);
+          // REVIEW FIX — a recovery THROW is not "non-fatal". If we cannot
+          // prove the pointed service is valid for the canonical Business
+          // Day, we must NOT continue with REUSED. Classify it as an
+          // unresolved lifecycle and fall into the fail-closed branch below.
+          console.warn("[ensureCurrentServiceSession] stale-service recovery threw — failing closed:", (e && e.message) || e);
+          recovery = { ok: false, code: "LIFECYCLE_UNRESOLVED", detail: String((e && e.message) || e) };
         }
-        if (recovery && recovery.stale) {
+
+        // REVIEW FIX — FAIL CLOSED. recovery.ok === true is set ONLY for the
+        // three definitive answers (NO_STALE_SERVICE / PREVIOUS_SERVICE_PENDING
+        // / AUTO_RECOVERY_PERFORMED). Anything else — LIFECYCLE_UNRESOLVED,
+        // CANONICAL_BUSINESS_DATE_UNAVAILABLE, ACTIVE_SERVICE_BUSINESS_DAY_
+        // MISMATCH (future-dated service), MULTIPLE_ACTIVE_SERVICE_SESSIONS,
+        // SERVICE_SESSION_STATE_CORRUPT, or a null result — means the current
+        // pointer could not be validated. Do NOT hand back REUSED; do NOT let
+        // operational work proceed. Return the TRUTHFUL code (never coerced to
+        // PREVIOUS_SERVICE_PENDING) at the same 200/success:false shape this
+        // handler already uses for ensure_service_session's own integrity
+        // codes; the frontend classifier maps any unrecognized code to a
+        // blocking exception panel, which is exactly the fail-closed surface.
+        if (!recovery || recovery.ok !== true) {
+          return res.status(200).json({
+            success: false,
+            code: (recovery && recovery.code) || "LIFECYCLE_UNRESOLVED",
+            detail: (recovery && recovery.detail) || null,
+            serviceBusinessDate: (recovery && recovery.serviceBusinessDate) || null,
+            currentBusinessDate: (recovery && recovery.currentBusinessDate) || null,
+          });
+        }
+
+        if (recovery.stale === true) {
           if (recovery.recovered) {
             // AUTO_RECOVERY_PERFORMED — the stale service is finalized. Re-run
             // the silent resolver so the response reflects the NEW lifecycle
@@ -725,6 +750,9 @@ app.post("/api", async (req, res) => {
             });
           }
         }
+        // recovery.ok === true && recovery.stale !== true  → NO_STALE_SERVICE:
+        // the pointed service is valid for the canonical Business Day. Continue
+        // with the existing REUSED behaviour unchanged.
       }
 
       // A non-success here is almost never a crash: "we are in the 17:30-18:00

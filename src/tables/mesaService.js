@@ -425,14 +425,33 @@ function createMesaService({
     let recovery = null;
     try {
       recovery = await staleRecovery({ actor, source: 'stale_service_auto_recovery' });
-    } catch (_) {
-      // A recovery read failure must not become a seating attempt against a
-      // possibly-stale service. Fall through to currentCloseout below; if the
-      // pointed service is stale the seat will still be refused by the checks
-      // there once migration 120's SQL guard is in play on the resolver path.
-      recovery = null;
+    } catch (e) {
+      // REVIEW FIX — a recovery THROW must not fall through to a seating
+      // attempt. currentCloseout() below reads through
+      // get_current_service_closeout_session, which migration 120 does NOT
+      // touch, so it would still hand back a stale/corrupt pointer and the
+      // seat would proceed. Classify as unresolved and fail closed just
+      // below.
+      // eslint-disable-next-line no-console
+      console.warn('[mesaService] stale-service recovery threw — failing closed:', (e && e.message) || e);
+      recovery = { ok: false, code: 'LIFECYCLE_UNRESOLVED' };
     }
-    if (recovery && recovery.stale && !recovery.recovered) {
+
+    // REVIEW FIX — FAIL CLOSED. recovery.ok === true is set ONLY for the
+    // three definitive answers. Anything else (LIFECYCLE_UNRESOLVED,
+    // CANONICAL_BUSINESS_DATE_UNAVAILABLE, ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH
+    // for a future-dated service, MULTIPLE_ACTIVE_SERVICE_SESSIONS,
+    // SERVICE_SESSION_STATE_CORRUPT, or null) means the current pointer could
+    // not be validated for the canonical Business Day — do NOT seat. Same
+    // meaning to the waiter as "there is no current service to seat against":
+    // MESA_SERVICE_NOT_OPEN (existing dictionary entry, no frontend change).
+    if (!recovery || recovery.ok !== true) {
+      const err = new MesaServiceError('MESA_SERVICE_NOT_OPEN', 409);
+      err.lifecycleCode = (recovery && recovery.code) || 'LIFECYCLE_UNRESOLVED';
+      throw err;
+    }
+
+    if (recovery.stale && !recovery.recovered) {
       const err = new MesaServiceError('MESA_PREVIOUS_SERVICE_PENDING', 409);
       err.previousService = {
         staleServiceSessionId: recovery.staleServiceSessionId,
@@ -442,6 +461,8 @@ function createMesaService({
       };
       throw err;
     }
+    // recovery.ok === true and (NO_STALE_SERVICE or AUTO_RECOVERY_PERFORMED):
+    // the pointer is valid (or was just made valid). Proceed to seat.
 
     const identity = await lifecycle.currentCloseout();
     let serviceSessionId = (identity && identity.ok && identity.session && identity.session.status === 'open')

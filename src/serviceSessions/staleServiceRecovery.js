@@ -31,6 +31,22 @@
 //                               blocker facts. The operator resolves it and
 //                               uses the EXISTING manual Finalizar flow.
 //
+// ─── FAIL-CLOSED OUTCOMES (ok:false — the caller must NOT continue) ───────
+//   LIFECYCLE_UNRESOLVED / <the corrupt pointer's own code, e.g.
+//   MULTIPLE_ACTIVE_SERVICE_SESSIONS / SERVICE_SESSION_STATE_CORRUPT> —
+//                               the lifecycle pointer could not be read or is
+//                               corrupt. Not this module's job to reconcile.
+//   CANONICAL_BUSINESS_DATE_UNAVAILABLE — the canonical Business Day could
+//                               not be resolved, so staleness cannot be
+//                               judged at all.
+//   ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH — the open service's business_date
+//                               is AHEAD of the canonical Business Day (a
+//                               future-dated service: corruption / clock
+//                               skew). This is NOT a "previous" service and
+//                               has NO recovery path — never auto-closed,
+//                               never reclassified. Same canonical code
+//                               open_operational_service_v1 uses.
+//
 // ─── WHAT IT NEVER DOES ───────────────────────────────────────────────────
 // No fake payment/refund, no obligation rewrite, no automatic order
 // cancellation, no netting unpaid against overCollected, no fabricated cash
@@ -44,8 +60,10 @@
 // The canonical Business Day comes from get_order_intake_context_v1()
 // (04:00 Madrid rollover, STABLE, side-effect-free) via
 // orderIntakePolicy.fetchOrderIntakeContext — NEVER a JS Date computation.
-// "stale" is exactly: session.business_date < canonicalBusinessDate. The
-// same rule migration 120 applies in SQL, so the two halves agree.
+// "stale" is exactly: session.business_date < canonicalBusinessDate;
+// session.business_date > canonicalBusinessDate is the future-dated anomaly
+// above. The same three-way rule migration 120 applies in SQL, so the two
+// halves agree.
 // ===============================================================
 
 const { lifecycle } = require("./serviceSessionLifecycle");
@@ -62,6 +80,12 @@ const RECOVERY_CODE = Object.freeze({
   // Fail-closed outcomes — recovery cannot proceed and must not guess.
   LIFECYCLE_UNRESOLVED: "LIFECYCLE_UNRESOLVED",
   CANONICAL_BUSINESS_DATE_UNAVAILABLE: "CANONICAL_BUSINESS_DATE_UNAVAILABLE",
+  // REVIEW FIX — a FUTURE-dated open service (business_date AHEAD of the
+  // canonical Business Day) is a lifecycle anomaly, never a "previous"
+  // service. Fail closed with the SAME canonical code open_operational_
+  // service_v1 already returns for an active service under a non-canonical
+  // business day. No auto-close, no reclassification.
+  ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH: "ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH",
 });
 
 // A stale service is auto-finalizable only when EVERY canonical fact says
@@ -149,7 +173,24 @@ function createStaleServiceRecovery({
     }
 
     const sessionBusinessDate = typeof session.business_date === "string" ? session.business_date.slice(0, 10) : null;
-    // 'YYYY-MM-DD' strings compare lexicographically exactly as dates.
+
+    // REVIEW FIX — FUTURE-dated open service: the pointed service belongs to a
+    // Business Day that has not started yet. That is corruption / clock skew,
+    // not a "previous" service, and there is no recovery path for it — this
+    // module must never auto-close or reclassify it. Fail closed with the
+    // canonical mismatch code. ('YYYY-MM-DD' strings compare lexicographically
+    // exactly as dates.)
+    if (!!sessionBusinessDate && sessionBusinessDate > currentBusinessDate) {
+      return {
+        ok: false,
+        stale: false,
+        code: RECOVERY_CODE.ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH,
+        serviceSessionId: session.id,
+        serviceBusinessDate: sessionBusinessDate,
+        currentBusinessDate,
+      };
+    }
+
     const stale = !!sessionBusinessDate && sessionBusinessDate < currentBusinessDate;
     if (!stale) {
       return {

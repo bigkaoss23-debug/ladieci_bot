@@ -36,10 +36,18 @@ const ctx = (overrides = {}) => ({
   sessionVersion: 1, sid: 'high-entropy-session-id', ...overrides,
 });
 
+// STALE SERVICE PROTECTION V1 (+ REVIEW FIX) — seatWithStaleServiceRecovery now
+// consults staleRecovery FIRST and fails closed on any non-definitive verdict.
+// The pre-existing "happy path" cases below assert seating behaviour, not
+// recovery, so they inject the benign verdict (the current pointer is valid).
+// The dedicated fail-closed / stale / auto-recovery cases inject their own.
+const NO_STALE = async () => ({ ok: true, stale: false, code: 'NO_STALE_SERVICE' });
+
 // ── CASE A — current-day walk-in: nothing changes ─────────────────────────
 test('CASE A: a current-day walk-in seats directly, with zero resolver call', async () => {
   const calls = { seats: [], resolutions: [] };
   const service = createMesaService({
+    staleRecovery: NO_STALE,
     dao: { openSession: async (args) => { calls.seats.push(args); return { ok: true, sessionId: 's1' }; } },
     lifecycle: {
       currentCloseout: async () => ({ ok: true, session: { id: SUCCESSOR_ID, status: 'open' } }),
@@ -58,6 +66,7 @@ test('CASE A: a current-day walk-in seats directly, with zero resolver call', as
 test('CASE A2: a current-day reservation seats directly, with zero resolver call', async () => {
   const calls = { seats: [] };
   const service = createMesaService({
+    staleRecovery: NO_STALE,
     dao: { openReservation: async (args) => { calls.seats.push(args); return { ok: true, sessionId: 's2' }; } },
     lifecycle: {
       currentCloseout: async () => ({ ok: true, session: { id: SUCCESSOR_ID, status: 'open' } }),
@@ -93,9 +102,10 @@ const NO_OPEN_SERVICE_READS = {
     { ok: false, code: 'SERVICE_SESSION_STATE_CORRUPT' },
 };
 
-function resumeService({ seatKey = 'openSession', resolved } = {}) {
+function resumeService({ seatKey = 'openSession', resolved, staleRecovery = NO_STALE } = {}) {
   const calls = { seats: [], resolutions: [] };
   const service = createMesaService({
+    staleRecovery,
     dao: {
       [seatKey]: async (args) => { calls.seats.push(args); return { ok: true, sessionId: 'ts-resumed' }; },
     },
@@ -161,10 +171,92 @@ test('G-1: an honest resolver refusal is surfaced, never overridden — no servi
   }
 });
 
+// ── REVIEW FIX — the seating path FAILS CLOSED on any unresolved recovery ──
+// staleRecovery is the FIRST thing seatWithStaleServiceRecovery consults. If
+// it cannot prove the current pointer is valid for the canonical Business Day
+// (a throw, or any ok:false verdict — LIFECYCLE_UNRESOLVED, CANONICAL_BUSINESS_
+// DATE_UNAVAILABLE, ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH for a future-dated
+// service, MULTIPLE_ACTIVE_SERVICE_SESSIONS, SERVICE_SESSION_STATE_CORRUPT),
+// the seat is refused — never falls through to currentCloseout()/seat().
+function seatWith(staleRecovery) {
+  const calls = { seats: [], reads: 0, resolutions: 0 };
+  const service = createMesaService({
+    staleRecovery,
+    dao: { openSession: async (args) => { calls.seats.push(args); return { ok: true, sessionId: 'ts-1' }; } },
+    lifecycle: {
+      currentCloseout: async () => { calls.reads += 1; return { ok: true, session: { id: SUCCESSOR_ID, status: 'open' } }; },
+      resolveOperationalContext: async () => { calls.resolutions += 1; return { ok: true, periodId: SUCCESSOR_ID }; },
+    },
+  });
+  return { service, calls };
+}
+
+const UNRESOLVED_RECOVERY_VERDICTS = [
+  ['a recovery throw', () => { throw new Error('recovery boom'); }, 'LIFECYCLE_UNRESOLVED'],
+  ['LIFECYCLE_UNRESOLVED', async () => ({ ok: false, stale: false, code: 'LIFECYCLE_UNRESOLVED' }), 'LIFECYCLE_UNRESOLVED'],
+  ['CANONICAL_BUSINESS_DATE_UNAVAILABLE', async () => ({ ok: false, stale: false, code: 'CANONICAL_BUSINESS_DATE_UNAVAILABLE' }), 'CANONICAL_BUSINESS_DATE_UNAVAILABLE'],
+  ['MULTIPLE_ACTIVE_SERVICE_SESSIONS', async () => ({ ok: false, stale: false, code: 'MULTIPLE_ACTIVE_SERVICE_SESSIONS' }), 'MULTIPLE_ACTIVE_SERVICE_SESSIONS'],
+  ['SERVICE_SESSION_STATE_CORRUPT', async () => ({ ok: false, stale: false, code: 'SERVICE_SESSION_STATE_CORRUPT' }), 'SERVICE_SESSION_STATE_CORRUPT'],
+  ['ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH (future-dated service)', async () => ({
+    ok: false, stale: false, code: 'ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH',
+    serviceSessionId: 'svc-future', serviceBusinessDate: '2026-09-07', currentBusinessDate: '2026-09-06',
+  }), 'ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH'],
+];
+
+for (const [label, verdict, expectedLifecycleCode] of UNRESOLVED_RECOVERY_VERDICTS) {
+  test(`REVIEW FIX: ${label} -> MESA_SERVICE_NOT_OPEN (409), zero seat attempts, never reaches currentCloseout`, async () => {
+    const { service, calls } = seatWith(verdict);
+    await assert.rejects(
+      () => service.open({ context: ctx(), tableId: 'table-1' }),
+      (error) => error instanceof MesaServiceError
+        && error.code === 'MESA_SERVICE_NOT_OPEN' && error.status === 409
+        && error.lifecycleCode === expectedLifecycleCode,
+      label,
+    );
+    assert.equal(calls.seats.length, 0, 'zero seat attempts against an unproven service');
+    assert.equal(calls.reads, 0, 'the seat helper never even reads currentCloseout after a fail-closed verdict');
+  });
+}
+
+test('REVIEW FIX: PREVIOUS_SERVICE_PENDING (a past service) -> MESA_PREVIOUS_SERVICE_PENDING (409) with previousService, still zero seats', async () => {
+  const { service, calls } = seatWith(async () => ({
+    ok: true, stale: true, recovered: false, code: 'PREVIOUS_SERVICE_PENDING',
+    staleServiceSessionId: 'svc-old', staleBusinessDate: '2026-08-25', currentBusinessDate: '2026-09-06',
+    blockers: { orders: 2, tables: 0, unpaid: 32, overCollected: 10, reconciliationError: null },
+  }));
+  await assert.rejects(
+    () => service.open({ context: ctx(), tableId: 'table-1' }),
+    (error) => error instanceof MesaServiceError
+      && error.code === 'MESA_PREVIOUS_SERVICE_PENDING' && error.status === 409
+      && error.previousService && error.previousService.staleServiceSessionId === 'svc-old'
+      && error.previousService.blockers.orders === 2,
+  );
+  assert.equal(calls.seats.length, 0);
+});
+
+test('REVIEW FIX: NO_STALE_SERVICE -> the seat proceeds normally (the pointer is valid)', async () => {
+  const { service, calls } = seatWith(async () => ({ ok: true, stale: false, code: 'NO_STALE_SERVICE' }));
+  const r = await service.open({ context: ctx(), tableId: 'table-1' });
+  assert.equal(r.sessionId, 'ts-1');
+  assert.equal(calls.seats.length, 1);
+  assert.equal(calls.seats[0].serviceSessionId, SUCCESSOR_ID);
+});
+
+test('REVIEW FIX: AUTO_RECOVERY_PERFORMED -> the seat proceeds normally (the stale service was finalized)', async () => {
+  const { service, calls } = seatWith(async () => ({
+    ok: true, stale: true, recovered: true, code: 'AUTO_RECOVERY_PERFORMED',
+    recoveredServiceSessionId: 'svc-old', staleBusinessDate: '2026-08-25', currentBusinessDate: '2026-09-06',
+  }));
+  const r = await service.open({ context: ctx(), tableId: 'table-1' });
+  assert.equal(r.sessionId, 'ts-1');
+  assert.equal(calls.seats.length, 1);
+});
+
 // ── CASE F — Business Day 1:N is preserved ────────────────────────────────
 test('CASE F: a second service on the SAME Business Day is a plain seat, resolver never called', async () => {
   const calls = { seats: [] };
   const service = createMesaService({
+    staleRecovery: NO_STALE,
     dao: { openSession: async (args) => { calls.seats.push(args); return { ok: true, sessionId: 's-second' }; } },
     lifecycle: {
       currentCloseout: async () => ({ ok: true, session: { id: 'second-service-same-day', status: 'open' } }),

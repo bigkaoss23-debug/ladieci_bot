@@ -37,18 +37,37 @@ require.cache[supaPath].exports = Object.assign({}, realSupa, {
 });
 
 const SESSION_ID = "00000000-0000-4000-8000-0000000000c1";
+// STALE SERVICE PROTECTION V1 — index.js now runs recoverStaleService on every
+// REUSED. The current session's business_date and the canonical Business Day
+// (stubbed below) are the SAME date, so that check resolves to NO_STALE_SERVICE
+// and the handler continues on the ordinary success path. The stale / future /
+// fail-closed branches are covered in tests/staleServiceRecovery.test.js.
+const TODAY_BD = "2026-08-08";
 const lifecyclePath = require.resolve("../src/serviceSessions/serviceSessionLifecycle");
 const realLifecycle = require(lifecyclePath);
 require.cache[lifecyclePath].exports = Object.assign({}, realLifecycle, {
   lifecycle: Object.assign({}, realLifecycle.lifecycle, {
-    // No business_date/service_kind -> classifySessionForRollover returns
-    // INTEGRITY_ERROR -> isRolloverDue() false -> ensureCurrentServiceSession
-    // takes the simple "REUSED, no rollover" success path, exactly like
-    // getOrdenesArchivadosSesionHttpIntegration.test.js's stub does.
+    // No service_kind -> classifySessionForRollover returns INTEGRITY_ERROR ->
+    // isRolloverDue() false -> ensureCurrentServiceSession takes the simple
+    // "REUSED, no rollover" success path. business_date present and equal to
+    // the canonical Business Day => the new stale-service check is a no-op.
     currentCloseout: async () => ({
       ok: true,
-      session: { id: SESSION_ID, status: "open", opened_at: "2026-08-08T09:00:00Z" },
+      session: { id: SESSION_ID, status: "open", business_date: TODAY_BD, opened_at: "2026-08-08T09:00:00Z" },
     }),
+  }),
+});
+
+// recoverStaleService reads the canonical Business Day through
+// orderIntakePolicy.fetchOrderIntakeContext (wraps the
+// get_order_intake_context_v1 RPC). No DB here, so stub it to the same date as
+// the current session: staleness = false, no recovery, no close.
+const orderIntakePolicyPath = require.resolve("../src/serviceSessions/orderIntakePolicy");
+const realOrderIntakePolicy = require(orderIntakePolicyPath);
+require.cache[orderIntakePolicyPath].exports = Object.assign({}, realOrderIntakePolicy, {
+  // recoverStaleService reads ONLY businessDate off this context.
+  fetchOrderIntakeContext: async () => ({
+    businessDate: TODAY_BD, canCreateNewOrder: true, hasValidCurrentService: true,
   }),
 });
 

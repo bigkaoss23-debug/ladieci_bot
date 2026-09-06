@@ -16,11 +16,31 @@
 -- already does) IS the grace boundary:
 --   service.business_date  = currentBusinessDate  -> may be current/resumable
 --                                                    by the normal lifecycle
---   service.business_date  < currentBusinessDate  -> STALE. Must NOT be
+--   service.business_date  < currentBusinessDate  -> STALE (a PREVIOUS
+--                                                    service). Must NOT be
 --                                                    handed back as normal
 --                                                    intake context, and no
 --                                                    new work may attach to
---                                                    it.
+--                                                    it. Code
+--                                                    PREVIOUS_SERVICE_PENDING
+--                                                    -> the JS recovery layer.
+--   service.business_date  > currentBusinessDate  -> FUTURE-dated open
+--                                                    service (REVIEW FIX): a
+--                                                    lifecycle/business-date
+--                                                    anomaly, NOT a "previous"
+--                                                    service, no recovery
+--                                                    path. Fail closed with
+--                                                    the canonical code
+--                                                    ACTIVE_SERVICE_BUSINESS_
+--                                                    DAY_MISMATCH (the same
+--                                                    code open_operational_
+--                                                    service_v1 already
+--                                                    returns for an active
+--                                                    service under a
+--                                                    non-canonical business
+--                                                    day). Never RESOLVED,
+--                                                    never REUSED, never
+--                                                    auto-closed.
 -- The existing 04:00 rollover already gives overnight continuity: a service
 -- opened 23:00 keeps business_date = yesterday, and so does
 -- currentBusinessDate until 04:00 the next day — they stay equal, continuity
@@ -42,14 +62,20 @@
 --   * resolve_order_intake_context_v1 — the operational_service_v1
 --     short-circuit now returns {ok:false, code:'PREVIOUS_SERVICE_PENDING',
 --     staleServiceSessionId, staleBusinessDate, currentBusinessDate} when
---     v_period.business_date < v_business_date, INSTEAD of RESOLVED. The
---     service_session_assign_order() trigger raises that code, so a new order
---     cannot enter a stale service — fail closed, every channel.
+--     v_period.business_date < v_business_date, and {ok:false,
+--     code:'ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH', ...} when
+--     v_period.business_date > v_business_date (REVIEW FIX), INSTEAD of
+--     RESOLVED. The service_session_assign_order() trigger raises whichever
+--     code applies, so a new order cannot enter a past OR a future service —
+--     fail closed, every channel. Only business_date = v_business_date reaches
+--     RESOLVED.
 --   * ensure_service_session — the current_session_id IS NOT NULL branch now
---     runs the SAME stale check (via get_order_intake_context_v1, exactly the
---     authority the existing F-11 guard uses two branches down) BEFORE it can
---     short-circuit into REUSED. F-11 was structurally unreachable for a
---     still-open stale service; it no longer is.
+--     runs the SAME three-way check (via get_order_intake_context_v1, exactly
+--     the authority the existing F-11 guard uses two branches down) BEFORE it
+--     can short-circuit into REUSED: past -> PREVIOUS_SERVICE_PENDING, future
+--     -> ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH, same-day -> REUSED. F-11 was
+--     structurally unreachable for a still-open stale service; it no longer
+--     is.
 --   * get_order_intake_context_v1 — hasValidCurrentService is scoped back to
 --     business_date = v_business_date (the pre-O-3 shape for this read fact
 --     only), so orderIntakePolicy.js's advisory preflight agrees with the
@@ -185,6 +211,21 @@ BEGIN
         'code', 'PREVIOUS_SERVICE_PENDING',
         'staleServiceSessionId', v_period.id,
         'staleBusinessDate', v_period.business_date,
+        'currentBusinessDate', v_business_date,
+        'serviceKind', v_service_kind
+      );
+    ELSIF v_period.business_date > v_business_date THEN
+      -- REVIEW FIX — a FUTURE-dated open service is a lifecycle/business-date
+      -- anomaly, never a "previous" service and never ordinary continuity.
+      -- Fail closed with the canonical code the opener primitive already uses
+      -- for "an active service under a business day other than canonical"
+      -- (open_operational_service_v1, ledger 93/96). No recovery path: the JS
+      -- layer must not auto-close or reclassify a future-dated service.
+      RETURN jsonb_build_object(
+        'ok', false,
+        'code', 'ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH',
+        'serviceSessionId', v_period.id,
+        'serviceBusinessDate', v_period.business_date,
         'currentBusinessDate', v_business_date,
         'serviceKind', v_service_kind
       );
@@ -329,14 +370,25 @@ BEGIN
       NULLIF(public.get_order_intake_context_v1() ->> 'businessDate', '')::date;
     IF v_session.business_date IS NOT NULL
        AND v_canonical_business_date IS NOT NULL
-       AND v_session.business_date < v_canonical_business_date
     THEN
-      RETURN jsonb_build_object('ok', false, 'code', 'PREVIOUS_SERVICE_PENDING',
-        'staleServiceSessionId', v_session.id,
-        'staleBusinessDate', v_session.business_date,
-        'currentBusinessDate', v_canonical_business_date,
-        'staleBusinessDay', true,
-        'session', to_jsonb(v_session));
+      IF v_session.business_date < v_canonical_business_date THEN
+        RETURN jsonb_build_object('ok', false, 'code', 'PREVIOUS_SERVICE_PENDING',
+          'staleServiceSessionId', v_session.id,
+          'staleBusinessDate', v_session.business_date,
+          'currentBusinessDate', v_canonical_business_date,
+          'staleBusinessDay', true,
+          'session', to_jsonb(v_session));
+      ELSIF v_session.business_date > v_canonical_business_date THEN
+        -- REVIEW FIX — a FUTURE-dated current pointer is a lifecycle anomaly,
+        -- never a "previous" service and never REUSED. Same canonical code as
+        -- resolve_order_intake_context_v1's ELSIF above and as
+        -- open_operational_service_v1's own defensive branch. Reads only.
+        RETURN jsonb_build_object('ok', false, 'code', 'ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH',
+          'serviceSessionId', v_session.id,
+          'serviceBusinessDate', v_session.business_date,
+          'currentBusinessDate', v_canonical_business_date,
+          'session', to_jsonb(v_session));
+      END IF;
     END IF;
 
     RETURN jsonb_build_object('ok', true, 'code', 'REUSED', 'created', false, 'session', to_jsonb(v_session));
@@ -456,14 +508,22 @@ BEGIN
 
   IF v_resolve NOT LIKE '%v_period.business_date < v_business_date%'
      OR v_resolve NOT LIKE '%''code'', ''PREVIOUS_SERVICE_PENDING''%' THEN
-    RAISE EXCEPTION 'M120 post-condition failed: resolve_order_intake_context_v1 missing the stale short-circuit';
+    RAISE EXCEPTION 'M120 post-condition failed: resolve_order_intake_context_v1 missing the past-Business-Day short-circuit';
+  END IF;
+  IF v_resolve NOT LIKE '%v_period.business_date > v_business_date%'
+     OR v_resolve NOT LIKE '%''code'', ''ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH''%' THEN
+    RAISE EXCEPTION 'M120 post-condition failed: resolve_order_intake_context_v1 missing the FUTURE-Business-Day fail-closed branch';
   END IF;
   IF v_resolve NOT LIKE '%''advanced'', false%' OR v_resolve NOT LIKE '%''advanced'', true%' THEN
     RAISE EXCEPTION 'M120 post-condition failed: resolve_order_intake_context_v1 lost a RESOLVED path';
   END IF;
   IF v_ensure NOT LIKE '%v_session.business_date < v_canonical_business_date%'
      OR v_ensure NOT LIKE '%''code'', ''PREVIOUS_SERVICE_PENDING''%' THEN
-    RAISE EXCEPTION 'M120 post-condition failed: ensure_service_session missing the stale check';
+    RAISE EXCEPTION 'M120 post-condition failed: ensure_service_session missing the past-Business-Day check';
+  END IF;
+  IF v_ensure NOT LIKE '%v_session.business_date > v_canonical_business_date%'
+     OR v_ensure NOT LIKE '%''code'', ''ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH''%' THEN
+    RAISE EXCEPTION 'M120 post-condition failed: ensure_service_session missing the FUTURE-Business-Day fail-closed branch';
   END IF;
   IF v_ensure NOT LIKE '%''code'', ''REUSED'', ''created'', false%' THEN
     RAISE EXCEPTION 'M120 post-condition failed: ensure_service_session lost the REUSED path';

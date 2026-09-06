@@ -9,6 +9,14 @@ const ctx = (overrides = {}) => ({
   sessionVersion: 1, sid: 'high-entropy-session-id', ...overrides,
 });
 
+// STALE SERVICE PROTECTION V1 (+ REVIEW FIX) — seatWithStaleServiceRecovery
+// consults staleRecovery first and fails closed on any non-definitive verdict.
+// The seating tests below assert derivation behaviour, not recovery, so they
+// inject the benign "the current pointer is valid" verdict. Recovery itself is
+// covered by tests/staleServiceRecovery.test.js and
+// tests/mesaFirstSeatingStaleServiceGuard.test.js.
+const NO_STALE = async () => ({ ok: true, stale: false, code: 'NO_STALE_SERVICE' });
+
 test('floor exposes exact partial balance, mixed methods and remaining covers', () => {
   const rows = {
     tables: [{ id: 't1', table_number: 1, display_name: 'Mesa 1', capacity: 4, position_x: 15, position_y: 18, shape: 'round', active: true }],
@@ -105,6 +113,7 @@ test('a fully paid account disappears from the floor and the table is free', () 
 test('open derives the current service session server-side and never sends covers', async () => {
   let args;
   const service = createMesaService({
+    staleRecovery: NO_STALE,
     dao: { openSession: async (value) => { args = value; return { ok: true }; } },
     lifecycle: { currentCloseout: async () => ({ ok: true, session: { id: 'service-1', status: 'open' } }) },
   });
@@ -431,6 +440,7 @@ test('waiter can cancel a reservation', async () => {
 test('opening a reservation derives the service and forwards its version atomically', async () => {
   let args;
   const service = createMesaService({
+    staleRecovery: NO_STALE,
     dao: { openReservation: async (value) => { args = value; return { ok: true, sessionId: 's2' }; } },
     lifecycle: { currentCloseout: async () => ({ ok: true, session: { id: 'service-2', status: 'open' } }) },
   });
@@ -447,6 +457,7 @@ test('opening a reservation derives the service and forwards its version atomica
 test('a reordered item after settlement opens a brand-new account id', async () => {
   let sequence = 0;
   const service = createMesaService({
+    staleRecovery: NO_STALE,
     dao: { openSession: async () => ({ ok: true, sessionId: `new-session-${++sequence}` }) },
     lifecycle: { currentCloseout: async () => ({ ok: true, session: { id: 'service-1', status: 'open' } }) },
   });

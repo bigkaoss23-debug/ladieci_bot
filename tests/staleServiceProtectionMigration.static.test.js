@@ -70,20 +70,37 @@ function fnBody(src, name) {
   assert("3b: ensure_ body extracted", !!en);
   assert("3c: get_ body extracted", !!gv);
 
-  assert("4a: resolve_ — the operational_service_v1 short-circuit gains a stale branch",
+  assert("4a: resolve_ — the operational_service_v1 short-circuit gains a PAST (stale) branch",
     /IF v_period\.business_date < v_business_date THEN/.test(rv));
-  assert("4b: resolve_ — stale branch returns ok:false + PREVIOUS_SERVICE_PENDING + the three diagnostic keys",
+  assert("4b: resolve_ — PAST branch returns ok:false + PREVIOUS_SERVICE_PENDING + the three diagnostic keys",
     /'ok', false,\s*'code', 'PREVIOUS_SERVICE_PENDING',\s*'staleServiceSessionId', v_period\.id,\s*'staleBusinessDate', v_period\.business_date,\s*'currentBusinessDate', v_business_date/.test(rv.replace(/\s+/g, " ")));
+  // REVIEW FIX — the THREE-way classification: past / future / same-day.
+  assert("4b2: resolve_ — FUTURE branch exists (business_date > v_business_date) and fails closed",
+    /ELSIF v_period\.business_date > v_business_date THEN/.test(rv));
+  assert("4b3: resolve_ — FUTURE branch returns ok:false + the canonical ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH code (never PREVIOUS_SERVICE_PENDING)",
+    /'ok', false,\s*'code', 'ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH'/.test(rv.replace(/\s+/g, " ")) &&
+    rv.indexOf("ELSIF v_period.business_date > v_business_date") < rv.indexOf("ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH") &&
+    rv.indexOf("ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH") < rv.indexOf("'code', 'RESOLVED'"));
+  assert("4b4: resolve_ — only business_date = v_business_date reaches RESOLVED (both diff branches return before it)",
+    rv.indexOf("IF v_period.business_date < v_business_date") < rv.indexOf("'code', 'RESOLVED'") &&
+    rv.indexOf("ELSIF v_period.business_date > v_business_date") < rv.indexOf("'code', 'RESOLVED'"));
   assert("4c: resolve_ — the same-day RESOLVED short-circuit is still reachable (advanced:false path)",
     /'code', 'RESOLVED'[\s\S]*?'advanced', false/.test(rv));
   assert("4d: resolve_ — the lazy-open RESOLVED path is still reachable (advanced:true)",
     /'code', 'RESOLVED'[\s\S]*?'advanced', true/.test(rv));
   assert("4e: resolve_ — NO FORGOTTEN_CLOSE_REQUIRED resurrected (O-4 stays)", !/FORGOTTEN_CLOSE_REQUIRED/.test(rv));
 
-  assert("5a: ensure_ — stale check runs in the current_session_id IS NOT NULL branch, BEFORE the REUSED return",
+  assert("5a: ensure_ — PAST-BD check runs in the current_session_id IS NOT NULL branch, BEFORE the REUSED return",
     /v_session\.business_date < v_canonical_business_date/.test(en) &&
     en.indexOf("'code', 'PREVIOUS_SERVICE_PENDING'") < en.indexOf("'code', 'REUSED', 'created', false"));
-  assert("5b: ensure_ — stale check reuses get_order_intake_context_v1 as the Business Day authority (no JS/clock date here)",
+  // REVIEW FIX — ensure_ classifies three ways too.
+  assert("5a2: ensure_ — FUTURE-BD branch exists (business_date > v_canonical_business_date) and fails closed BEFORE REUSED",
+    /ELSIF v_session\.business_date > v_canonical_business_date THEN/.test(en) &&
+    /'code', 'ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH'/.test(en) &&
+    en.indexOf("ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH") < en.indexOf("'code', 'REUSED', 'created', false"));
+  assert("5a3: ensure_ — the FUTURE code is the canonical one, NOT coerced to PREVIOUS_SERVICE_PENDING",
+    /'code', 'ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH',\s*'serviceSessionId', v_session\.id/.test(en.replace(/\s+/g, " ")));
+  assert("5b: ensure_ — the checks reuse get_order_intake_context_v1 as the Business Day authority (no JS/clock date here)",
     /v_canonical_business_date :=\s*NULLIF\(public\.get_order_intake_context_v1\(\) ->> 'businessDate', ''\)::date/.test(en));
   assert("5c: ensure_ — REUSED is still returned for a same-day service",
     /'code', 'REUSED', 'created', false, 'session', to_jsonb\(v_session\)/.test(en));
@@ -121,8 +138,13 @@ function fnBody(src, name) {
   assert("8b: rollback removes the stale short-circuit — restored function BODIES carry no PREVIOUS_SERVICE_PENDING",
     !/PREVIOUS_SERVICE_PENDING/.test(fnBody(rbk, "resolve_order_intake_context_v1") || "") &&
     !/PREVIOUS_SERVICE_PENDING/.test(fnBody(rbk, "ensure_service_session") || ""));
-  assert("8b2: rollback's resolve_ body has no stale business_date branch",
-    !/v_period\.business_date < v_business_date/.test(fnBody(rbk, "resolve_order_intake_context_v1") || ""));
+  assert("8b2: rollback's resolve_ body has no PAST or FUTURE business_date branch (both M120 additions removed)",
+    !/v_period\.business_date < v_business_date/.test(fnBody(rbk, "resolve_order_intake_context_v1") || "") &&
+    !/v_period\.business_date > v_business_date/.test(fnBody(rbk, "resolve_order_intake_context_v1") || ""));
+  assert("8b3: rollback restored bodies carry no ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH (the REVIEW-FIX future branch is gone too)",
+    !/ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH/.test(fnBody(rbk, "resolve_order_intake_context_v1") || "") &&
+    !/ACTIVE_SERVICE_BUSINESS_DAY_MISMATCH/.test(fnBody(rbk, "ensure_service_session") || "") &&
+    !/v_session\.business_date > v_canonical_business_date/.test(fnBody(rbk, "ensure_service_session") || ""));
   assert("8c: rollback's get_ drops the business_date scope again (restores post-O-3 shape)",
     !/AND business_date = v_business_date/.test(fnBody(rbk, "get_order_intake_context_v1") || ""));
   assert("8d: rollback guard refuses when the M120 shape is absent",
