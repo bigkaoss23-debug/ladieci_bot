@@ -58,12 +58,30 @@ const TOTAL_KEYS = Object.freeze(['gross', 'collected', 'refunded', 'unpaid']);
 // closeout view and Economía can never drift on what the snapshot "means".
 function snapshotToEconomicShape(row) {
   if (!row || typeof row !== 'object') return null;
-  const gross = centsToEur(row.gross_sales_cents);
   const collected = centsToEur(row.paid_amount_cents);
+  // FINALIZAR V3 CANONICAL CLOSEOUT V1 — a canonical closeout (migration 121+)
+  // carries the CURRENT obligation at close explicitly. That is the headline
+  // "Total" the operator signed off on (Finalizar's own preflight already
+  // showed it), and it is what a recomputed obligation-aware aggregate
+  // converges to — so the two stop diverging by construction. A pre-121 row
+  // has current_obligation_cents == null: the headline stays the ORIGINAL
+  // gross, byte-identical to this reader's prior behaviour, and the existing
+  // divergence / currentReconciled mechanism keeps describing any drift. The
+  // pairing CHECK in migration 121 guarantees over_collected_cents is non-null
+  // iff current_obligation_cents is, so `isCanonical` is one unambiguous test,
+  // never a guess from a zero amount or a date.
+  const originalGross = centsToEur(row.gross_sales_cents);
+  const isCanonical = row.current_obligation_cents != null;
+  const gross = isCanonical ? centsToEur(row.current_obligation_cents) : originalGross;
   return Object.freeze({
     closeoutId: row.id || null,
     closedAt: row.closed_at || null,
     closeSource: row.close_source || null,
+    // 'canonical_obligation_v1' — gross below is the current obligation at
+    // close and overCollected is a real figure; 'legacy_gross_v0' — gross is
+    // the original order gross and overCollected is null (unknowable for a row
+    // written before the canonical-closeout contract).
+    closeoutContract: isCanonical ? 'canonical_obligation_v1' : 'legacy_gross_v0',
     totals: Object.freeze({
       gross,
       collected,
@@ -72,6 +90,13 @@ function snapshotToEconomicShape(row) {
       // Cancelled/voided value is carried by the snapshot and has no live equivalent
       // in `totals` — surfaced so a report can state it.
       voided: centsToEur(row.total_void_cents),
+      // FINALIZAR V3 CANONICAL CLOSEOUT V1 — additive. The ORIGINAL order gross,
+      // always, so a report can show it alongside the current obligation.
+      // Equal to `gross` for a legacy row.
+      originalGross,
+      // Real aggregate over-collection for a canonical row; null when the row
+      // predates the contract and never recorded it (never a fabricated 0).
+      overCollected: isCanonical ? centsToEur(row.over_collected_cents) : null,
       difference: round(gross - collected),
     }),
     paymentTotals: Object.freeze({

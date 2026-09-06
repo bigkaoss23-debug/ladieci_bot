@@ -278,6 +278,15 @@ async function computeSummary(ordiniDaArch, oggi, diaSemana, source, sessionOpen
   // quanto è stato realmente incassato, quindi
   // pendiente = cassa_totale - (efectivo + tarjeta + bizum + non_specificato).
   // Nessuna colonna nuova, e il numero archiviato ora è uguale al live per costruzione.
+  //
+  // FINALIZAR V3 CANONICAL CLOSEOUT V1 — DEFERRED_LATENT_PATTERN. This is a
+  // 3-argument aggregateCloseout() call (no order_obligations), but it reads
+  // ONLY ledger.paymentTotals.* — receipt-side totals from
+  // order_financial_events, which do not depend on the obligation argument. It
+  // never touches ledger.totals.gross / .unpaid / .overCollected, so it is
+  // provably unaffected by the LEGACY_GROSS_CLOSEOUT_WRITER root cause and is
+  // intentionally NOT migrated in that slice. See the anti-regression guard in
+  // tests/finalizarV3AggregateObligationCallSites.static.test.js.
   const ledger = aggregateCloseout({ id: null, status: "closing" }, ordiniDaArch, financialEvents || []);
   summary.cassa_efectivo        = ledger.paymentTotals.efectivo;
   summary.cassa_tarjeta         = ledger.paymentTotals.tarjeta;

@@ -82,6 +82,14 @@ function safeTicket(order, events, session, obligation = null) {
       ? obligation.gross_amount
       : (order.totale ?? order.total ?? 0)
   );
+  // FINALIZAR V3 CANONICAL CLOSEOUT V1 — the order's own RAW gross, before any
+  // commercial adjustment: always the legacy ordenes.totale column, never the
+  // obligation. `amount` above is the CURRENT obligation (canonical row) or
+  // the same legacy value (pre-N-2 order); `originalAmount` is the frozen
+  // historical meaning of service_closeouts.gross_sales_cents, so a caller can
+  // persist ORIGINAL GROSS and CURRENT OBLIGATION as two distinct facts from
+  // one derivation.
+  const originalAmount = round(order.totale ?? order.total ?? 0);
   const refunds = events.filter((event) => eventType(event) === "refund");
   const payments = events.filter((event) => ["payment", "payment_imported"].includes(eventType(event)));
   const voided = events.some((event) => eventType(event) === "void") || CANCELLED.has(state.toUpperCase());
@@ -176,6 +184,10 @@ function safeTicket(order, events, session, obligation = null) {
     time: order.hora || "",
     state,
     amount,
+    // FINALIZAR V3 CANONICAL CLOSEOUT V1 — raw ordenes.totale, obligation-
+    // independent. Equal to `amount` for a pre-N-2 order or when no commercial
+    // adjustment has been applied.
+    originalAmount,
     paymentMethod: method || null,
     paymentState,
     collectedAmount,
@@ -223,6 +235,14 @@ function aggregate(session, orders, events, obligations) {
     }
   }
   const grossTotal = round(tickets.filter((t) => !t.cancelled).reduce((s, t) => s + t.amount, 0));
+  // FINALIZAR V3 CANONICAL CLOSEOUT V1 — the ORIGINAL service gross (Sigma raw
+  // ordenes.totale over non-cancelled tickets), same scope as grossTotal.
+  // grossTotal above is now the CURRENT obligation whenever canonical
+  // order_obligations rows were passed; originalGrossTotal is the frozen
+  // historical figure service_closeouts.gross_sales_cents must keep. With no
+  // obligations passed the two are identical, so every existing caller is
+  // byte-unchanged.
+  const originalGrossTotal = round(tickets.filter((t) => !t.cancelled).reduce((s, t) => s + t.originalAmount, 0));
   const collectedTotal = round(tickets.reduce((s, t) => s + t.collectedAmount, 0));
   const refundedTotal = round(tickets.reduce((s, t) => s + t.refundedAmount, 0));
   const unpaidTotal = round(tickets.reduce((s, t) => s + t.unpaidAmount, 0));
@@ -282,6 +302,10 @@ function aggregate(session, orders, events, obligations) {
       // OVER-COLLECTED SLICE A — published alongside unpaid, always, so
       // neither side can be inferred-away as a hidden zero (frozen §2).
       overCollected: overCollectedTotal,
+      // FINALIZAR V3 CANONICAL CLOSEOUT V1 — additive: the original service
+      // gross, so the V3 close writer persists gross_sales_cents (original)
+      // and current_obligation_cents (= gross above) as two distinct facts.
+      originalGross: originalGrossTotal,
       difference: round(grossTotal - collectedTotal),
     },
     paymentTotals,
@@ -322,6 +346,13 @@ function withOfficialSnapshot(base, snapshot) {
     ...base,
     financialSource: "official_closeout",
     closeoutId: snap.closeoutId,
+    // FINALIZAR V3 CANONICAL CLOSEOUT V1 — which persisted contract wrote this
+    // row: 'canonical_obligation_v1' (headline totals.gross is the current
+    // obligation at close, totals.overCollected is real) or 'legacy_gross_v0'
+    // (pre-migration-121 row: totals.gross stays the original gross, exactly
+    // as before; totals.overCollected is null). Derived in ONE place —
+    // snapshotToEconomicShape — never here.
+    closeoutContract: snap.closeoutContract,
     totals: { ...snap.totals },
     paymentTotals: { ...snap.paymentTotals },
     counts: {

@@ -54,6 +54,12 @@ function createServiceCloseoutCreation({ rpc = sbRpc } = {}) {
       deliveryPendingCount = 0,
       incidentCount = 0,
       criticalIncidentCount = 0,
+      // FINALIZAR V3 CANONICAL CLOSEOUT V1 — the canonical-obligation facts.
+      // Default null so a caller that omits them writes a legacy row (both
+      // columns null, per the DB pairing CHECK); the obligation-aware V3
+      // engine always passes both, non-null.
+      currentObligationCents = null,
+      overCollectedCents = null,
     }) {
       const res = normalize(await rpc("create_service_closeout", {
         p_service_session_id: serviceSessionId,
@@ -79,6 +85,8 @@ function createServiceCloseoutCreation({ rpc = sbRpc } = {}) {
         p_delivery_pending_count: deliveryPendingCount,
         p_incident_count: incidentCount,
         p_critical_incident_count: criticalIncidentCount,
+        p_current_obligation_cents: currentObligationCents,
+        p_over_collected_cents: overCollectedCents,
       }));
       if (res.ok !== true) {
         return { success: false, created: false, code: res.code || "SERVICE_CLOSEOUT_CREATE_FAILED", closeout: null };

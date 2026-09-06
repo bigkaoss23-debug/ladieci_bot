@@ -78,6 +78,10 @@ function fakeEnv({
     if (table === 'ordenes') return allOrders.filter((o) => String(o.service_session_id) === String(scopedId));
     if (table === 'table_sessions') return tableSessions.filter((t) => String(t.service_session_id) === String(scopedId));
     if (table === 'order_financial_events') return financialEvents.filter((e) => String(e.service_session_id) === String(scopedId));
+    // FINALIZAR V3 CANONICAL CLOSEOUT V1 — the engine's Phase B now also reads
+    // order_obligations. This harness sets up no canonical-obligation rows, so
+    // [] keeps every assertion on legacy ordenes.totale-based numbers valid.
+    if (table === 'order_obligations') return [];
     throw new Error('unexpected table ' + table);
   };
 

@@ -316,17 +316,25 @@ function createServiceLifecycleEngine({
     // evidence BEFORE any mutation. The snapshot is recovery/audit evidence;
     // Phase C reconciles from these SAME canonical rows directly, never from
     // the frozen payload (the snapshot is not the reconciliation source).
-    let orders, tableSessions, financialEvents;
+    let orders, tableSessions, financialEvents, orderObligations;
     try {
-      [orders, tableSessions, financialEvents] = await Promise.all([
+      [orders, tableSessions, financialEvents, orderObligations] = await Promise.all([
         select("ordenes", sessionFilter),
         select("table_sessions", sessionFilter),
         select("order_financial_events", sessionFilter),
+        // FINALIZAR V3 CANONICAL CLOSEOUT V1 — the canonical order_obligations
+        // for this service, scoped and ordered exactly as the two already-
+        // correct readers do (currentServiceCloseout.getCurrentServiceCloseout,
+        // economiaLedgerAggregate.aggregateOneSession): service-scoped,
+        // revision.asc so latestObligationsByOrder picks the top revision.
+        // Without this the aggregate() call below fell back to ordenes.totale
+        // (root cause LEGACY_GROSS_CLOSEOUT_WRITER).
+        select("order_obligations", `${sessionFilter}&order=revision.asc`),
       ]);
     } catch (e) {
       return { success: false, code: "V3_CLOSE_LIVE_STATE_READ_FAILED", closeoutCorrelationId, detail: String((e && e.message) || e) };
     }
-    if (!Array.isArray(orders) || !Array.isArray(tableSessions) || !Array.isArray(financialEvents)) {
+    if (!Array.isArray(orders) || !Array.isArray(tableSessions) || !Array.isArray(financialEvents) || !Array.isArray(orderObligations)) {
       return { success: false, code: "V3_CLOSE_LIVE_STATE_SHAPE_INVALID", closeoutCorrelationId };
     }
     // No order-count ownership check here (removed, SLICE 3.2.1): by this
@@ -340,7 +348,14 @@ function createServiceLifecycleEngine({
       closeoutCorrelationId,
       capturedBy: actor,
       source,
-      payload: { session, orders, tableSessions, financialEvents },
+      // FINALIZAR V3 CANONICAL CLOSEOUT V1 — orderObligations added additively
+      // to the immutable evidence payload so the close artifact alone can
+      // reconstruct the current obligation at close (and hence unpaid /
+      // over-collected), without a later temporal JOIN against the live
+      // append-only order_obligations table. schema_version stays 1: the
+      // snapshot RPC treats the payload as opaque jsonb (only jsonb_typeof =
+      // 'object' is checked) and no reader parses its keys.
+      payload: { session, orders, tableSessions, financialEvents, orderObligations },
     });
     if (!captureResult.success) {
       return { success: false, code: captureResult.code || "V3_CLOSE_SNAPSHOT_FAILED", closeoutCorrelationId };
@@ -352,14 +367,34 @@ function createServiceLifecycleEngine({
     // table_sessions' historical origin service — so a table that survived a
     // service boundary contributes its NEW orders to the session actually
     // being closed here, not to whatever session it opened under.
-    const closeout = aggregateCloseout(session, orders, financialEvents);
+    // FINALIZAR V3 CANONICAL CLOSEOUT V1 — the 4th argument. With
+    // orderObligations passed, safeTicket derives every ticket's amount /
+    // unpaid / overCollected from the canonical latest obligation revision
+    // instead of the legacy ordenes.totale fallback. safeTicket's formulas
+    // are unchanged; only the input it receives is now canonical — the exact
+    // same call shape currentServiceCloseout and economiaLedgerAggregate
+    // already use.
+    const closeout = aggregateCloseout(session, orders, financialEvents, orderObligations);
 
     const nonTerminalCount = orders.filter(
       (o) => !TERMINAL_ORDER_STATES.has(String((o && o.estado) || "").toUpperCase())
     ).length;
+    // Canonical: Sigma max(0, currentObligation - netCollected) per ticket.
     const unpaidExposureCents = toCents(closeout.totals.unpaid);
+    // FINALIZAR V3 CANONICAL CLOSEOUT V1 — the current canonical obligation at
+    // close (Sigma latest obligation revision, non-cancelled). This is the
+    // number Finalizar's preflight showed the operator as "Total".
+    const currentObligationCents = toCents(closeout.totals.gross);
+    // Canonical: Sigma max(0, netCollected - currentObligation) per ticket.
+    // NEVER netted against unpaid (frozen over-collected invariant).
+    const overCollectedCents = toCents(closeout.totals.overCollected);
 
-    const grossSalesCents = toCents(closeout.totals.gross);
+    // gross_sales_cents keeps its frozen historical meaning — ORIGINAL ORDER
+    // GROSS — so it is sourced from totals.originalGross (Sigma raw
+    // ordenes.totale, non-cancelled), NOT totals.gross (which is now the
+    // current obligation). net_sales_cents below therefore stays byte-
+    // identical to its pre-canonical value.
+    const grossSalesCents = toCents(closeout.totals.originalGross);
     const refundedCents = toCents(closeout.totals.refunded);
     const cashAmountCents = toCents(closeout.paymentTotals.efectivo);
     const cardAmountCents = toCents(closeout.paymentTotals.tarjeta);
@@ -376,9 +411,16 @@ function createServiceLifecycleEngine({
     if (Math.abs(paidAmountCents - collectedCentsFromLedger) > 1) {
       return { success: false, code: "V3_CLOSE_RECONCILIATION_MISMATCH", closeoutCorrelationId };
     }
+    // FINALIZAR V3 CANONICAL CLOSEOUT V1 — total_void_cents keeps its frozen
+    // meaning: the ORIGINAL gross of cancelled orders. Sourced from
+    // t.originalAmount (raw ordenes.totale) so it is byte-identical to its
+    // pre-canonical value; t.amount for a cancelled ticket is now the
+    // obligation-aware figure and is deliberately not used here.
     const voidCents = toCents(
-      closeout.tickets.filter((t) => t.cancelled).reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+      closeout.tickets.filter((t) => t.cancelled).reduce((sum, t) => sum + (Number(t.originalAmount) || 0), 0)
     );
+    // Unchanged legacy/historical field: grossSalesCents is still ORIGINAL
+    // gross, so this value does not move.
     const netSalesCents = Math.max(0, grossSalesCents - refundedCents);
     const occupiedTablesAtClose = tableSessions.filter((t) => t.status === "open").length;
 
@@ -524,6 +566,11 @@ function createServiceLifecycleEngine({
       deliveryPendingCount: classification.deliveryPendingCount,
       incidentCount,
       criticalIncidentCount,
+      // FINALIZAR V3 CANONICAL CLOSEOUT V1 — the obligation-aware engine
+      // always persists both, non-null (DB pairing CHECK). gross_sales_cents
+      // above stays ORIGINAL gross; these two are the canonical facts.
+      currentObligationCents,
+      overCollectedCents,
     });
     if (!createResult.success) {
       return { success: false, code: createResult.code || "V3_CLOSE_CLOSEOUT_PERSIST_FAILED", closeoutCorrelationId };

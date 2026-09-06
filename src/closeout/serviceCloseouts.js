@@ -43,6 +43,13 @@ function publicCloseout(row) {
       cardAmountCents: row.card_amount_cents,
       bizumAmountCents: row.bizum_amount_cents,
       otherAmountCents: row.other_amount_cents,
+      // FINALIZAR V3 CANONICAL CLOSEOUT V1 (migration 121). Both null on a row
+      // written before the canonical-closeout contract; both non-null on a
+      // canonical closeout (DB pairing CHECK). currentObligationCents is the
+      // current obligation at close; grossSalesCents keeps its own, unchanged
+      // meaning (original order gross).
+      currentObligationCents: row.current_obligation_cents ?? null,
+      overCollectedCents: row.over_collected_cents ?? null,
     },
     operational: {
       openOrdersAtClose: row.open_orders_at_close,
