@@ -63,9 +63,14 @@ const LEGACY_SUMMARY_REL = "src/utils/serv" + "izio.js";
 
 // (a) file is allowlisted as not-yet-canonical, with a stated reason.
 // (b) call is the harmless empty NO_SERVICE_SESSION path.
+//
+// economicBoundaryEngine.js WAS here (the intraday-roll writer, the second
+// confirmed LEGACY_GROSS_CLOSEOUT_WRITER instance). It was canonicalized in
+// the fast-follow — it now reads order_obligations in Phase B and passes the
+// 4th argument — so it is deliberately NOT allowlisted any more and this test
+// now REQUIRES its canonical call (see the explicit check below).
 const CALL_ALLOWLIST = new Map([
   [LEGACY_SUMMARY_REL, "DEFERRED_LATENT_PATTERN — reads ONLY ledger.paymentTotals.* (receipt-side, obligation-independent); never ledger.totals.gross/.unpaid/.overCollected. Provably unaffected by the root cause. Not migrated in this slice (audit §28)."],
-  ["src/serviceSessions/economicBoundaryEngine.js", "DEFERRED — the INTRADAY economic-boundary roll engine (roll_service_session_economic_v1), a SEPARATE writer from Finalizar V3. It persists totals.gross/.unpaid from a 3-arg aggregate, so it is a genuine second instance of the same class — flagged for a fast-follow, explicitly OUT OF SCOPE for FINALIZAR V3 CANONICAL CLOSEOUT V1 (which is scoped to serviceLifecycleEngine.js only)."],
   ["src/closeout/currentServiceCloseout.js", "the empty NO_SERVICE_SESSION path — aggregate(null, [], []) with no orders derives nothing economic; the real reader call two lines up passes 4 args."],
 ]);
 
@@ -99,15 +104,19 @@ for (const f of files) {
 
 console.log("\n== every economic aggregate()/safeTicket() call passes the obligation input (or is explicitly deferred) ==");
 
-// The Finalizar V3 engine MUST be canonical.
-{
-  const eng = fs.readFileSync(path.join(SRC, "serviceSessions", "serviceLifecycleEngine.js"), "utf8");
-  assert("serviceLifecycleEngine.js Phase C calls aggregateCloseout with the 4th (obligations) argument",
+// Both service_closeouts writers MUST be canonical.
+for (const w of ["serviceLifecycleEngine.js", "economicBoundaryEngine.js"]) {
+  const eng = fs.readFileSync(path.join(SRC, "serviceSessions", w), "utf8");
+  assert(`${w} Phase C calls aggregateCloseout with the 4th (obligations) argument`,
     /aggregateCloseout\(session, orders, financialEvents, orderObligations\)/.test(eng));
-  assert("serviceLifecycleEngine.js Phase B reads order_obligations",
+  assert(`${w} Phase B reads order_obligations`,
     /select\("order_obligations",/.test(eng));
-  assert("serviceLifecycleEngine.js is NOT in the deferred allowlist",
-    !CALL_ALLOWLIST.has("src/serviceSessions/serviceLifecycleEngine.js"));
+  assert(`${w} passes currentObligationCents + overCollectedCents to closeoutCreation.create`,
+    /currentObligationCents,/.test(eng) && /overCollectedCents,/.test(eng));
+  assert(`${w} sources grossSalesCents from totals.originalGross (keeps ORIGINAL gross)`,
+    /grossSalesCents = toCents\(closeout\.totals\.originalGross\)/.test(eng));
+  assert(`${w} is NOT in the deferred allowlist`,
+    !CALL_ALLOWLIST.has(`src/serviceSessions/${w}`));
 }
 
 // Every non-canonical call site found must be allowlisted.
@@ -122,16 +131,21 @@ for (const [rel, reason] of CALL_ALLOWLIST) {
   assert(`allowlist entry still current: ${rel}`, hit, `no 3-arg call found — remove this stale allowlist entry. reason on file: ${reason.slice(0, 60)}...`);
 }
 
-// The two deferred files carry a visible DEFERRED marker so the next engineer
-// finds the rationale at the call site, not only here.
+// The one remaining deferred file carries a visible DEFERRED marker so the
+// next engineer finds the rationale at the call site, not only here.
 assert("the legacy archived-summary module carries a DEFERRED_LATENT_PATTERN marker at the call site",
   /DEFERRED_LATENT_PATTERN/.test(fs.readFileSync(path.join(ROOT, LEGACY_SUMMARY_REL), "utf8")));
 
+// economicBoundaryEngine.js was the second deferred writer — it is now
+// canonical and must NOT reappear as a 3-arg finding.
+assert("economicBoundaryEngine.js is no longer a 3-arg finding (fast-follow canonicalized it)",
+  !findings.some((x) => x.rel === "src/serviceSessions/economicBoundaryEngine.js"),
+  JSON.stringify(findings.filter((x) => x.rel === "src/serviceSessions/economicBoundaryEngine.js")));
+
 // Guard against a broken scan silently passing.
 assert("the scan walked a non-trivial number of files", files.length > 40, String(files.length));
-assert("the scan actually found the known deferred call sites (not a broken matcher)",
-  findings.some((x) => x.rel === LEGACY_SUMMARY_REL)
-  && findings.some((x) => x.rel === "src/serviceSessions/economicBoundaryEngine.js"));
+assert("the scan actually found the known deferred call site (not a broken matcher)",
+  findings.some((x) => x.rel === LEGACY_SUMMARY_REL));
 
 console.log("\n== the canonical readers stay canonical ==");
 {

@@ -144,17 +144,25 @@ function createEconomicBoundaryEngine({
 
     // Phase B — read canonical live state, capture immutable evidence BEFORE
     // any mutation (same discipline as serviceLifecycleEngine.js's own Phase B).
-    let orders, tableSessions, financialEvents;
+    let orders, tableSessions, financialEvents, orderObligations;
     try {
-      [orders, tableSessions, financialEvents] = await Promise.all([
+      [orders, tableSessions, financialEvents, orderObligations] = await Promise.all([
         select("ordenes", sessionFilter),
         select("table_sessions", sessionFilter),
         select("order_financial_events", sessionFilter),
+        // FINALIZAR V3 CANONICAL CLOSEOUT V1 (fast-follow) — the canonical
+        // order_obligations for this service, scoped and ordered exactly as
+        // serviceLifecycleEngine.js's Phase B, currentServiceCloseout and
+        // economiaLedgerAggregate all do (revision.asc so
+        // latestObligationsByOrder picks the top revision). Without this the
+        // aggregate() call below fell back to ordenes.totale — the same
+        // LEGACY_GROSS_CLOSEOUT_WRITER root cause the Finalizar V3 writer had.
+        select("order_obligations", `${sessionFilter}&order=revision.asc`),
       ]);
     } catch (e) {
       return { success: false, code: "ECONOMIC_BOUNDARY_LIVE_STATE_READ_FAILED", closeoutCorrelationId, detail: String((e && e.message) || e) };
     }
-    if (!Array.isArray(orders) || !Array.isArray(tableSessions) || !Array.isArray(financialEvents)) {
+    if (!Array.isArray(orders) || !Array.isArray(tableSessions) || !Array.isArray(financialEvents) || !Array.isArray(orderObligations)) {
       return { success: false, code: "ECONOMIC_BOUNDARY_LIVE_STATE_SHAPE_INVALID", closeoutCorrelationId };
     }
 
@@ -163,7 +171,13 @@ function createEconomicBoundaryEngine({
       closeoutCorrelationId,
       capturedBy: actor,
       source,
-      payload: { session, orders, tableSessions, financialEvents },
+      // FINALIZAR V3 CANONICAL CLOSEOUT V1 (fast-follow) — orderObligations
+      // added additively to the immutable evidence payload so the roll's close
+      // artifact alone reconstructs the current obligation (and hence unpaid /
+      // over-collected), same as serviceLifecycleEngine.js. schema_version
+      // stays 1: the snapshot RPC treats the payload as opaque jsonb and no
+      // reader parses its keys.
+      payload: { session, orders, tableSessions, financialEvents, orderObligations },
     });
     if (!captureResult.success) {
       return { success: false, code: captureResult.code || "ECONOMIC_BOUNDARY_SNAPSHOT_FAILED", closeoutCorrelationId };
@@ -172,13 +186,32 @@ function createEconomicBoundaryEngine({
     // Phase C — reconcile. Non-terminal orders/open tables/unpaid balances
     // are NOT hard blockers here (see header) — they simply carry forward,
     // recorded as facts on the closeout row, never as incidents.
-    const closeout = aggregateCloseout(session, orders, financialEvents);
+    //
+    // FINALIZAR V3 CANONICAL CLOSEOUT V1 (fast-follow) — the 4th argument.
+    // With orderObligations passed, safeTicket derives every ticket's
+    // amount / unpaid / overCollected from the canonical latest obligation
+    // revision instead of the legacy ordenes.totale fallback. safeTicket's
+    // formulas are unchanged; only the input is now canonical — the exact
+    // same call shape serviceLifecycleEngine, currentServiceCloseout and
+    // economiaLedgerAggregate all use.
+    const closeout = aggregateCloseout(session, orders, financialEvents, orderObligations);
     const nonTerminalCount = orders.filter(
       (o) => !TERMINAL_ORDER_STATES.has(String((o && o.estado) || "").toUpperCase())
     ).length;
     const occupiedTablesAtClose = tableSessions.filter((t) => t.status === "open").length;
 
-    const grossSalesCents = toCents(closeout.totals.gross);
+    // gross_sales_cents keeps its frozen historical meaning — ORIGINAL ORDER
+    // GROSS — so it is sourced from totals.originalGross (Sigma raw
+    // ordenes.totale, non-cancelled), NOT totals.gross (which is now the
+    // current obligation). net_sales_cents below therefore stays byte-
+    // identical to its pre-canonical value.
+    const grossSalesCents = toCents(closeout.totals.originalGross);
+    // FINALIZAR V3 CANONICAL CLOSEOUT V1 (fast-follow) — the current canonical
+    // obligation at roll time (Sigma latest obligation revision, non-cancelled).
+    const currentObligationCents = toCents(closeout.totals.gross);
+    // Canonical: Sigma max(0, netCollected - currentObligation) per ticket.
+    // NEVER netted against unpaid (frozen over-collected invariant).
+    const overCollectedCents = toCents(closeout.totals.overCollected);
     const refundedCents = toCents(closeout.totals.refunded);
     const cashAmountCents = toCents(closeout.paymentTotals.efectivo);
     const cardAmountCents = toCents(closeout.paymentTotals.tarjeta);
@@ -192,14 +225,23 @@ function createEconomicBoundaryEngine({
     if (Math.abs(paidAmountCents - collectedCentsFromLedger) > 1) {
       return { success: false, code: "ECONOMIC_BOUNDARY_RECONCILIATION_MISMATCH", closeoutCorrelationId };
     }
+    // Canonical: Sigma max(0, currentObligation - netCollected) per ticket.
     const unpaidExposureCents = toCents(closeout.totals.unpaid);
+    // Unchanged legacy/historical field: grossSalesCents is still ORIGINAL
+    // gross, so this value does not move.
     const netSalesCents = Math.max(0, grossSalesCents - refundedCents);
+    // FINALIZAR V3 CANONICAL CLOSEOUT V1 (fast-follow) — total_void_cents keeps
+    // its frozen meaning: the ORIGINAL gross of cancelled orders. Sourced from
+    // t.originalAmount (raw ordenes.totale) so it is byte-identical to its
+    // pre-canonical value; t.amount for a cancelled ticket is now obligation-
+    // aware and is deliberately not used here.
     const voidCents = toCents(
-      closeout.tickets.filter((t) => t.cancelled).reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+      closeout.tickets.filter((t) => t.cancelled).reduce((sum, t) => sum + (Number(t.originalAmount) || 0), 0)
     );
 
     // Phase D — persist the ONE authoritative service_closeouts row for A.
-    // Reuses create_service_closeout unmodified; zero incidents by design.
+    // Reuses create_service_closeout (25-parameter, migration 121); zero
+    // incidents by design.
     const createResult = await closeoutCreation.create({
       serviceSessionId: session.id,
       closeoutCorrelationId,
@@ -214,6 +256,11 @@ function createEconomicBoundaryEngine({
       openOrdersAtClose: nonTerminalCount, occupiedTablesAtClose,
       kitchenPendingCount: 0, listoCount: 0, deliveryPendingCount: 0,
       incidentCount: 0, criticalIncidentCount: 0,
+      // FINALIZAR V3 CANONICAL CLOSEOUT V1 (fast-follow) — the obligation-aware
+      // roll always persists both, non-null (DB pairing CHECK). gross_sales_cents
+      // above stays ORIGINAL gross; these two are the canonical facts.
+      currentObligationCents,
+      overCollectedCents,
     });
     if (!createResult.success) {
       return { success: false, code: createResult.code || "ECONOMIC_BOUNDARY_CLOSEOUT_PERSIST_FAILED", closeoutCorrelationId };

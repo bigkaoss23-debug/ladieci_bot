@@ -24,7 +24,7 @@ const order = (o = {}) => ({
   cobrado: false, ya_pagado: false, metodo_pago: "", ...o,
 });
 
-function fakeEnv({ sessionRow = session(), orders = [], tableSessions = [], financialEvents = [], rollBody } = {}) {
+function fakeEnv({ sessionRow = session(), orders = [], tableSessions = [], financialEvents = [], orderObligations = [], rollBody } = {}) {
   const env = {
     calls: { acquire: [], capture: [], create: [], rpc: [], complete: [] },
     rollBody: rollBody || null,
@@ -33,6 +33,11 @@ function fakeEnv({ sessionRow = session(), orders = [], tableSessions = [], fina
     if (table === "ordenes") return orders;
     if (table === "table_sessions") return tableSessions;
     if (table === "order_financial_events") return financialEvents;
+    // FINALIZAR V3 CANONICAL CLOSEOUT V1 (fast-follow) — Phase B now also reads
+    // order_obligations. Existing scenarios set up none, so [] keeps every
+    // assertion on legacy ordenes.totale-based numbers valid; a fixture can
+    // pass orderObligations to exercise the canonical path.
+    if (table === "order_obligations") return orderObligations;
     throw new Error("unexpected table " + table);
   };
   env.attempts = {
@@ -307,6 +312,101 @@ const make = (env, target = { serviceKind: "SERA", businessDate: "2026-08-10" })
     assert("both calls succeed", a.success === true && b.success === true);
     assert("both converge on the identical correlation id (the real active-uq contract)", a.closeoutCorrelationId === b.closeoutCorrelationId);
     assert("both report the SAME sessionB, never two different B's", a.sessionB.id === b.sessionB.id);
+  }
+
+  console.log("\n══ 12. FINALIZAR V3 CANONICAL CLOSEOUT V1 (fast-follow) — the roll persists canonical obligation truth ══");
+  // These fixtures exercise the REAL aggregate() (the whole point of the
+  // fix), so they build the engine WITHOUT the stub aggregateCloseout the
+  // other scenarios inject.
+  const makeReal = (env, target = { serviceKind: "SERA", businessDate: "2026-08-10" }) =>
+    createEconomicBoundaryEngine({
+      select: env.select, rpc: env.rpc, attempts: env.attempts, snapshots: env.snapshots,
+      closeoutCreation: env.closeoutCreation,
+      sessionLifecycle: env.sessionLifecycle, resolvePeriod: () => target,
+      reconcileResidue: env.reconcileResidue,
+    });
+  {
+    // FIXTURE — exact #999034 economics on the intraday-boundary writer.
+    // original gross 85, obligation revisions 85 -> 70 -> 60, 85 paid, 15 refunded.
+    const obl = (order_id, revision, gross_amount) => ({ order_id, service_session_id: SESSION_ID, revision, gross_amount });
+    const ev = (order_id, type, amount, payment_method = "efectivo") => ({ order_id, service_session_id: SESSION_ID, type, amount, payment_method, created_at: "2026-08-10T14:00:00Z" });
+
+    const env = fakeEnv({
+      orders: [order({ id: "#F", estado: "RETIRADO", totale: 85 })],
+      financialEvents: [ev("#F", "payment", 85), ev("#F", "refund", 15)],
+      orderObligations: [obl("#F", 1, 85), obl("#F", 2, 70), obl("#F", 3, 60)],
+    });
+    env.rollBody = rolledBody();
+    const r = await makeReal(env)({ actor: "owner" });
+    const c = env.calls.create[0];
+    assert("F0: roll succeeded", r.success === true && r.code === "ROLLED_OVER");
+    assert("F1: currentObligationCents = 6000 (the adjusted obligation, not the original 85)", c.currentObligationCents === 6000, String(c.currentObligationCents));
+    assert("F2: grossSalesCents = 8500 (ORIGINAL order gross — unchanged meaning)", c.grossSalesCents === 8500, String(c.grossSalesCents));
+    assert("F3: unpaidExposureCents = 0 (60 - 70, clamped — NOT the legacy 85 - 70 = 15)", c.unpaidExposureCents === 0, String(c.unpaidExposureCents));
+    assert("F4: overCollectedCents = 1000 (70 - 60, never netted against unpaid)", c.overCollectedCents === 1000, String(c.overCollectedCents));
+    assert("F5: paidAmountCents = 7000 (85 paid - 15 refunded, cash)", c.paidAmountCents === 7000, String(c.paidAmountCents));
+    assert("F6: totalRefundsCents = 1500", c.totalRefundsCents === 1500, String(c.totalRefundsCents));
+    assert("F7: netSalesCents stays legacy — max(0, 8500 - 1500) = 7000", c.netSalesCents === 7000, String(c.netSalesCents));
+
+    // The same fixture under the pre-fix 3-arg semantics: unpaid 15, overCollected 0.
+    const { aggregate } = require("../src/closeout/currentServiceCloseout");
+    const S = { id: SESSION_ID, status: "open" };
+    const legacy = aggregate(S, [order({ id: "#F", estado: "RETIRADO", totale: 85 })], [ev("#F", "payment", 85), ev("#F", "refund", 15)]);
+    assert("F8: pre-fix (3-arg) aggregate would have said unpaid 15 / overCollected 0 — the bug this removes",
+      Math.abs(legacy.totals.unpaid - 15) < 1e-9 && Math.abs(legacy.totals.overCollected) < 1e-9);
+  }
+  {
+    // §13 normal regressions, asserted on the persisted create() fields.
+    const obl = (order_id, revision, gross_amount) => ({ order_id, service_session_id: SESSION_ID, revision, gross_amount });
+    const ev = (order_id, type, amount) => ({ order_id, service_session_id: SESSION_ID, type, amount, payment_method: "efectivo", created_at: "2026-08-10T14:00:00Z" });
+    const cases = [
+      ["A fully paid   (obl 50, pay 50)",           50, [50],      [ev("#x", "payment", 50)],                        { obl: 5000, unpaid: 0,    over: 0 }],
+      ["B unpaid       (obl 20, pay 0)",            20, [20],      [],                                              { obl: 2000, unpaid: 2000, over: 0 }],
+      ["C adjustment   (orig 100 -> obl 70, pay 70)", 100, [100, 70], [ev("#x", "payment", 70)],                     { obl: 7000, unpaid: 0,    over: 0, gross: 10000 }],
+      ["D refund       (obl 40, pay 40, refund 10)", 40, [40],      [ev("#x", "payment", 40), ev("#x", "refund", 10)], { obl: 4000, unpaid: 1000, over: 0 }],
+      ["E over-collect (obl 30, pay 45)",           30, [30],      [ev("#x", "payment", 45)],                        { obl: 3000, unpaid: 0,    over: 1500 }],
+    ];
+    for (const [label, totale, revs, events, exp] of cases) {
+      const env = fakeEnv({
+        orders: [order({ id: "#x", estado: "RETIRADO", totale })],
+        financialEvents: events,
+        orderObligations: revs.map((g, i) => obl("#x", i + 1, g)),
+      });
+      env.rollBody = rolledBody();
+      await makeReal(env)({ actor: "owner" });
+      const c = env.calls.create[0];
+      assert(label, c.currentObligationCents === exp.obl && c.unpaidExposureCents === exp.unpaid
+        && c.overCollectedCents === exp.over && c.grossSalesCents === (exp.gross ?? totale * 100),
+        `obl ${c.currentObligationCents} unpaid ${c.unpaidExposureCents} over ${c.overCollectedCents} gross ${c.grossSalesCents}`);
+    }
+  }
+  {
+    // No obligation rows at all (a pre-N-2-only service): the writer still
+    // produces a CANONICAL row (both fields non-null, per the DB pairing
+    // CHECK) — a pre-N-2 order has a well-defined Sigma-totale obligation, so
+    // current_obligation_cents == gross_sales_cents and over_collected_cents
+    // is the real (totale-based) figure. NULL is reserved for rows written
+    // before this contract existed at all — that path is exercised at the RPC
+    // level (DEFAULT NULL) in finalizarV3CanonicalCloseoutMigration.static.
+    const env = fakeEnv({ orders: [order({ id: "#p", estado: "RETIRADO", totale: 12, ya_pagado: true })] });
+    env.rollBody = rolledBody();
+    await makeReal(env)({ actor: "owner" });
+    const c = env.calls.create[0];
+    assert("BC: no obligation rows -> canonical row, currentObligationCents == grossSalesCents (1200)",
+      c.currentObligationCents === 1200 && c.grossSalesCents === 1200,
+      `obl ${c.currentObligationCents} gross ${c.grossSalesCents}`);
+    assert("BC: overCollectedCents = 0 (fully paid, no over-collection)", c.overCollectedCents === 0, String(c.overCollectedCents));
+    assert("BC: neither canonical field is null — a deployed writer always fills them", c.currentObligationCents !== null && c.overCollectedCents !== null);
+  }
+  {
+    // §11 snapshot payload now carries orderObligations, additively.
+    const obl = (order_id, revision, gross_amount) => ({ order_id, service_session_id: SESSION_ID, revision, gross_amount });
+    const env = fakeEnv({ orders: [order({ id: "#s", estado: "RETIRADO", totale: 20, ya_pagado: true })], orderObligations: [obl("#s", 1, 20)] });
+    env.rollBody = rolledBody();
+    await makeReal(env)({ actor: "owner" });
+    const payload = env.calls.capture[0].payload;
+    assert("SNAP: roll snapshot payload carries orderObligations", Array.isArray(payload.orderObligations) && payload.orderObligations.length === 1);
+    assert("SNAP: and still carries the pre-existing keys", "session" in payload && "orders" in payload && "tableSessions" in payload && "financialEvents" in payload);
   }
 
   console.log("");
