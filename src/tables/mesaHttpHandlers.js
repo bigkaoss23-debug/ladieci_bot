@@ -10,7 +10,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 // mesa_*_v1 Postgres functions and the frontend's error dictionary -- see the
 // deploy-order note in mesaService.js.
 function safeError(error) {
-  if (error instanceof MesaServiceError) return { status: error.status, code: error.code };
+  if (error instanceof MesaServiceError) {
+    const out = { status: error.status, code: error.code };
+    // STALE SERVICE PROTECTION V1 — forward the previous-service facts the
+    // waiter surface needs to open the certified Finalizar preflight for the
+    // stale service. Structured field only; never a raw string.
+    if (error.code === 'MESA_PREVIOUS_SERVICE_PENDING' && error.previousService && typeof error.previousService === 'object') {
+      out.previousService = error.previousService;
+    }
+    return out;
+  }
   // AJUSTE COMERCIAL V1 — ORDER_* is admitted alongside MESA_*: the shared obligation
   // primitive is not Mesa-scoped (order_cancel_v1 serves non-table orders too) and its
   // fail-closed identity refusals are client-fixable 400s, not internal errors. Without

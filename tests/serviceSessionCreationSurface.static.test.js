@@ -123,11 +123,18 @@ assert("1a: at least 20 distinct functions tracked across migration history (gua
 //        alone. open_operational_service_v1/ensure_service_session remain
 //        untouched and stay pinned to G-1.
 const G1 = "2026-08-20_g1_autonomous_resume_operational_service.sql";
-const O4C = "2026-08-24_o4c_resolver_dead_control_flow_simplification.sql";
+// STALE SERVICE PROTECTION V1 (2026-09-06) — migration 120 redefines BOTH
+// ensure_service_session and resolve_order_intake_context_v1 to fail closed
+// (PREVIOUS_SERVICE_PENDING) when the open service belongs to a past Business
+// Day. It adds NO INSERT INTO service_sessions to either body (asserted at
+// 3a/3b below), so the frozen creation surface (section B: exactly ONE
+// creator, open_operational_service_v1) is unchanged — only the "which file
+// last redefined this" pin moves to M120.
+const M120 = "2026-09-06_stale_service_protection_v1_migration_120.sql";
 for (const [n, fn, expectedFile] of [["1b", "open_operational_service_v1", G1],
-                       ["1c", "ensure_service_session", G1],
-                       ["1d", "resolve_order_intake_context_v1", O4C]]) {
-  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O4C ? "O-4.2's" : "G-1's"} own migration file`,
+                       ["1c", "ensure_service_session", M120],
+                       ["1d", "resolve_order_intake_context_v1", M120]]) {
+  assert(`${n}: ${fn}'s latest definition is ${expectedFile === M120 ? "STALE SERVICE PROTECTION V1's (M120)" : "G-1's"} own migration file`,
     latest[fn] && latest[fn].file === expectedFile,
     latest[fn] && latest[fn].file);
 }

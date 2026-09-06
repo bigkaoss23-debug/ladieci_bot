@@ -84,6 +84,11 @@ const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/se
 // Transparent forwarder: identical arguments, identical result.
 const { closeServiceSessionV3 } = require("./src/serviceSessions/serviceCloseAuthority");
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
+// STALE SERVICE PROTECTION V1 — the remediation half. Migration 120 makes the
+// SQL resolvers fail closed on a stale open service; this runs the canonical
+// recovery (safe auto-finalize through the ONE V3 authority, or
+// PREVIOUS_SERVICE_PENDING) at the single silent lifecycle entry point.
+const { recoverStaleService } = require("./src/serviceSessions/staleServiceRecovery");
 const { rollEconomicPeriod } = require("./src/serviceSessions/economicBoundaryEngine");
 const { periodConsolidation } = require("./src/serviceSessions/periodConsolidation");
 const { getCurrentOperationalSession, serviceSessionQuery, getOperationalSessionIds, serviceSessionsQuery } = require("./src/serviceSessions/currentOperationalSession");
@@ -664,7 +669,64 @@ app.post("/api", async (req, res) => {
     if (action === "ensureCurrentServiceSession") {
       const actorId = req.authCtx?.actor;
       if (!actorId) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
-      const ensured = await ensureCurrentServiceSession({ actor: actorId, source: "auto_entry" });
+      let ensured = await ensureCurrentServiceSession({ actor: actorId, source: "auto_entry" });
+
+      // STALE SERVICE PROTECTION V1 — the ONE synchronous remediation point.
+      // ensureCurrentServiceSession returns REUSED for a still-open service
+      // regardless of its Business Day (it reads through
+      // get_current_service_closeout_session, which migration 120 does NOT
+      // touch). So, exactly here, classify that service and — if it belongs
+      // to a PAST Business Day — either safely auto-finalize it through the
+      // one V3 close authority or surface PREVIOUS_SERVICE_PENDING. The
+      // frontend never compares dates; it projects this canonical state.
+      if (ensured.success && ensured.code === "REUSED" && ensured.session && ensured.session.id) {
+        let recovery = null;
+        try {
+          recovery = await recoverStaleService({ actor: actorId, source: "stale_service_auto_recovery" });
+        } catch (e) {
+          // A recovery read failure must never turn the silent path into a
+          // 5xx. Leave `ensured` as-is; the SQL fail-closed intake guard
+          // (migration 120) remains the backstop against misfiled work.
+          console.warn("[ensureCurrentServiceSession] stale-service recovery unavailable (non-fatal):", (e && e.message) || e);
+        }
+        if (recovery && recovery.stale) {
+          if (recovery.recovered) {
+            // AUTO_RECOVERY_PERFORMED — the stale service is finalized. Re-run
+            // the silent resolver so the response reflects the NEW lifecycle
+            // state (typically NO_OPEN_SERVICE: the restaurant is idle until
+            // the next real order/seating opens the current-day service, via
+            // resolve_order_intake_context_v1 — G-1, unchanged).
+            ensured = await ensureCurrentServiceSession({ actor: actorId, source: "auto_entry" });
+            ensured.autoRecovery = {
+              performed: true,
+              code: "AUTO_RECOVERY_PERFORMED",
+              recoveredServiceSessionId: recovery.recoveredServiceSessionId,
+              staleBusinessDate: recovery.staleBusinessDate,
+              currentBusinessDate: recovery.currentBusinessDate,
+              idempotent: recovery.idempotent === true,
+            };
+            // fall through to the normal ensured.success / non-success handling
+          } else {
+            // PREVIOUS_SERVICE_PENDING — the stale service cannot be auto-
+            // finalized (operational blockers / unpaid / over-collected /
+            // un-buildable reconciliation). The operator must resolve it via
+            // the EXISTING manual Finalizar flow for THIS service.
+            return res.status(409).json({
+              success: false,
+              code: "PREVIOUS_SERVICE_PENDING",
+              staleServiceSessionId: recovery.staleServiceSessionId,
+              staleBusinessDate: recovery.staleBusinessDate,
+              currentBusinessDate: recovery.currentBusinessDate,
+              blockers: recovery.blockers,
+              // The stale service row itself, so the frontend can open the
+              // certified Finalizar preflight for exactly this id — never a
+              // client-chosen one.
+              session: ensured.session,
+            });
+          }
+        }
+      }
+
       // A non-success here is almost never a crash: "we are in the 17:30-18:00
       // buffer" and "lunch is still open" are legitimate answers the UI renders
       // differently. 200 carries them; only a genuine failure is a 5xx.

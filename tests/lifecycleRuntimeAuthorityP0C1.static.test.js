@@ -173,8 +173,17 @@ const readStripped = (rel) => stripComments(read(rel));
   // F-10 added, is deleted: O-3 (ledger 107) made an open
   // operational_service_v1 unconditional continuity regardless of Business
   // Day, so the recovery it existed to perform can no longer be triggered.
-  // index.js (operator Finalizar) is once again the ONLY certified caller.
-  const AUTHORIZED_AUTHORITY_CALLERS = ["index.js"];
+  //
+  // STALE SERVICE PROTECTION V1 (2026-09-06, migration 120) — a second
+  // certified caller returns, EXACTLY the "future second caller" the
+  // serviceCloseAuthority.js facade header explicitly reserved itself for:
+  // src/serviceSessions/staleServiceRecovery.js. It runs the canonical
+  // AUTO_CLOSE_SAFE predicate over existing facts and, only when safe,
+  // finalizes a stale (past-Business-Day) service through this SAME facade —
+  // never a second close implementation, and it holds no lifecycle policy
+  // that would belong in the facade (2h below still asserts the facade is
+  // transport-only).
+  const AUTHORIZED_AUTHORITY_CALLERS = ["index.js", "src/serviceSessions/staleServiceRecovery.js"];
   assert(
     "O-4: src/serviceSessions/forgottenCloseRecovery.js file no longer exists",
     !fs.existsSync(path.join(ROOT, "src/serviceSessions/forgottenCloseRecovery.js")),

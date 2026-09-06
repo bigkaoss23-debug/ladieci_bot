@@ -6,6 +6,10 @@ const { lifecycle: defaultLifecycle } = require('../serviceSessions/serviceSessi
 const { creaOrdine: defaultCreateOrder, cambiaStato: defaultChangeOrderState } = require('../agents/agentOrdini');
 const { nextEqualShare, aggregateByMethod } = require('./billingMath');
 const { sidHash: defaultSidHash } = require('../auth/sidHash');
+// STALE SERVICE PROTECTION V1 — the mesa seating RPCs do not guard an
+// operational_service_v1 by Business Day (O-3), so the first-seating helper
+// runs the canonical stale-service recovery itself before it seats.
+const { recoverStaleService: defaultStaleRecovery } = require('../serviceSessions/staleServiceRecovery');
 
 // Error `.code` values use the MESA_ prefix, matching the mesa_*_v1 Postgres
 // functions and mesaHttpHandlers/mesaApi's exact-string classification. This
@@ -381,6 +385,7 @@ function createMesaService({
   createOrder = defaultCreateOrder,
   changeOrderState = defaultChangeOrderState,
   hashSid = defaultSidHash,
+  staleRecovery = defaultStaleRecovery,
 } = {}) {
   // ═══ G-1 — SEATING IS LEGITIMATE FIRST ACTIVITY ═══
   //
@@ -402,20 +407,42 @@ function createMesaService({
   // outside the intake window it answers ORDER_INTAKE_CLOSED, and that stays
   // MESA_SERVICE_NOT_OPEN to the waiter. A service is never forced open.
   //
-  // O-4 — REMOVED, not merely dormant: the stale-service recovery path this
-  // helper used to run (seat -> DB raises FORGOTTEN_CLOSE_REQUIRED -> one
-  // recovery -> one pinned retry) can no longer fire. O-3 (ledger 107) made
-  // an open operational_service_v1 unconditional continuity regardless of
-  // Business Day, which already stopped mesa_open_session_v1 /
-  // mesa_open_reservation_v1 from ever seeing a stale service through this
-  // path; O-4 (ledger 108) then deleted the FORGOTTEN_CLOSE_REQUIRED raise
-  // itself from resolve_order_intake_context_v1, and this helper's dead
-  // catch/recover/retry with it, along with the forgottenCloseRecovery.js
-  // module both call sites shared with agentOrdini.js's creaOrdine (deleted -- language-guard: allow-legacy agentOrdini.js/creaOrdine are the existing module filename and function name being cross-referenced, not new vocabulary
-  // outright — its only callers were this one and creaOrdine's own retry
-  // loop, also removed). What remains is a plain seat against whatever
-  // service the resolver names.
+  // O-4 removed the old "seat -> DB raises FORGOTTEN_CLOSE_REQUIRED -> one
+  // recovery -> one pinned retry" loop this helper's name refers to, because
+  // O-3 made an open operational_service_v1 unconditional continuity
+  // regardless of Business Day — which is exactly the hazard the 2026-09-06
+  // stale-service audit then found live. STALE SERVICE PROTECTION V1 restores
+  // the recovery, now built on the ONE V3 close authority instead of the
+  // deleted F-10 raise: before seating against whatever the pointer names,
+  // run staleServiceRecovery. If the current service belongs to a PAST
+  // Business Day it is either safely auto-finalized (then resolveOperational
+  // Context below advances the day and names the fresh service) or reported
+  // as PREVIOUS_SERVICE_PENDING (a typed 409 the waiter surface renders).
+  // mesa_open_session_v1 / mesa_open_reservation_v1 still do NOT guard an
+  // operational_service_v1 by Business Day, so this JS gate is load-bearing
+  // for the seating path.
   async function seatWithStaleServiceRecovery({ actor, source, seat }) {
+    let recovery = null;
+    try {
+      recovery = await staleRecovery({ actor, source: 'stale_service_auto_recovery' });
+    } catch (_) {
+      // A recovery read failure must not become a seating attempt against a
+      // possibly-stale service. Fall through to currentCloseout below; if the
+      // pointed service is stale the seat will still be refused by the checks
+      // there once migration 120's SQL guard is in play on the resolver path.
+      recovery = null;
+    }
+    if (recovery && recovery.stale && !recovery.recovered) {
+      const err = new MesaServiceError('MESA_PREVIOUS_SERVICE_PENDING', 409);
+      err.previousService = {
+        staleServiceSessionId: recovery.staleServiceSessionId,
+        staleBusinessDate: recovery.staleBusinessDate,
+        currentBusinessDate: recovery.currentBusinessDate,
+        blockers: recovery.blockers,
+      };
+      throw err;
+    }
+
     const identity = await lifecycle.currentCloseout();
     let serviceSessionId = (identity && identity.ok && identity.session && identity.session.status === 'open')
       ? identity.session.id
@@ -424,9 +451,20 @@ function createMesaService({
     if (!serviceSessionId) {
       const resolved = await lifecycle.resolveOperationalContext({ actor, source });
       if (!resolved || resolved.ok !== true || typeof resolved.periodId !== 'string') {
-        // Includes ORDER_INTAKE_CLOSED and every other typed resolver
-        // refusal. Same meaning to a waiter as before: there is no current
-        // service to seat against. Zero seat attempts, zero mutation.
+        // Includes ORDER_INTAKE_CLOSED, PREVIOUS_SERVICE_PENDING (migration
+        // 120), and every other typed resolver refusal. Same meaning to a
+        // waiter as before: there is no current service to seat against.
+        // Zero seat attempts, zero mutation.
+        if (resolved && resolved.code === 'PREVIOUS_SERVICE_PENDING') {
+          const err = new MesaServiceError('MESA_PREVIOUS_SERVICE_PENDING', 409);
+          err.previousService = {
+            staleServiceSessionId: resolved.staleServiceSessionId || null,
+            staleBusinessDate: resolved.staleBusinessDate || null,
+            currentBusinessDate: resolved.currentBusinessDate || null,
+            blockers: null,
+          };
+          throw err;
+        }
         throw new MesaServiceError('MESA_SERVICE_NOT_OPEN', 409);
       }
       serviceSessionId = resolved.periodId;
