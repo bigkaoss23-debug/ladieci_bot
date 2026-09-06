@@ -284,6 +284,44 @@ function createCloseoutReconciliation({
 
     const cashReceipts = dayView.receipts.byMethod.efectivo;
 
+    // ─── SCOPE RELATIONSHIP (K2/K3 — Finalizar closeout hardening) ──────────
+    // Both windows are already resolved here, so the RELATIONSHIP between them
+    // is computed ONCE, on the backend, and the frontend never compares
+    // timestamps. A service's own interval is normally INSIDE its Business Day
+    // window; it is NOT when the service outlives the day it opened on (a
+    // staging fixture left open for days, or a genuine cross-day service). When
+    // it is not:
+    //   • "Hoy se cobraron X en efectivo. De este servicio: Y." is a FALSE
+    //     subset claim — the day's cash and the service's cash are then
+    //     disjoint populations, not a whole/part pair;
+    //   • a cash count taken over the Business Day window does NOT certify this
+    //     service's drawer, so "Diferencia 0,00 €" must not read as "this
+    //     service reconciles".
+    // This is interval containment, not a new economic formula: no money is
+    // touched, economicSnapshot is unchanged.
+    const svcFrom = new Date(serviceView.window.from).getTime();
+    const svcTo = new Date(serviceView.window.to).getTime();
+    const dayFrom = new Date(win.from).getTime();
+    const dayTo = new Date(win.to).getTime();
+    const serviceWithinDay = Number.isFinite(svcFrom) && Number.isFinite(svcTo)
+      && Number.isFinite(dayFrom) && Number.isFinite(dayTo)
+      && svcFrom >= dayFrom && svcTo <= dayTo;
+    const scopeRelation = Object.freeze({
+      // "nested"   — the service interval is fully inside its Business Day
+      //              window; day-scoped figures are a meaningful superset and
+      //              cross-scope comparative copy is safe.
+      // "crossing" — the service interval extends outside that window; day and
+      //              service figures are different populations, not a
+      //              whole/part pair, and no comparative sentence is truthful.
+      kind: serviceWithinDay ? "nested" : "crossing",
+      serviceWithinDay,
+      // Does a cash count over the Business Day window meaningfully describe
+      // THIS service's cash? Only when the service sits inside that window.
+      cashCountComparable: serviceWithinDay,
+      serviceWindow: Object.freeze({ from: serviceView.window.from, to: serviceView.window.to }),
+      dayWindow: Object.freeze({ from: win.from, to: win.to }),
+    });
+
     // Window-compatible counts, newest first. The newest is the ONLY candidate
     // for "current": every older one was taken before it, so any movement that
     // staled the newest staled them too. If the newest is not current, none is.
@@ -332,6 +370,19 @@ function createCloseoutReconciliation({
         // since been refunded, whenever that refund happened. Never mixed
         // with the receipt-scoped figure above again.
         obligationRefunded: serviceView.obligation.refunded,
+        // K1 (Finalizar closeout hardening) — the canonical over-collected
+        // figure for THIS service, taken VERBATIM from economicSnapshot.balance
+        // (which sums each order's own unclamped safeTicket
+        // netCollected - currentObligation). It is NOT recomputed here and is
+        // NEVER netted against `unpaid`: they are independent exposures (frozen
+        // over-collected invariant). Without this field the Finalizar card
+        // cannot explain its own arithmetic — `gross - collected` differs from
+        // `unpaid` by exactly this amount whenever one order was over-paid
+        // (e.g. #999034: obligation 60, net collected 70 -> unpaid 0,
+        // overCollected 10, while other orders leave 32 unpaid: the card shows
+        // 161 / 139 / 32 and the missing 10 is this).
+        overCollected: serviceView.balance.overCollected,
+        unresolvedOverCollected: serviceView.balance.unresolvedOverCollected,
         byMethod: serviceView.receipts.byMethod,
         byMethodGross: serviceView.receipts.byMethodGross,
         byMethodRefunds: serviceView.receipts.byMethodRefunds,
@@ -351,6 +402,10 @@ function createCloseoutReconciliation({
         voided: dayView.obligation.voided,
         refunded: dayView.receipts.refunded,
         obligationRefunded: dayView.obligation.refunded,
+        // K1 — same canonical over-collected fact, for the Business Day scope.
+        // Independent of `unpaid`, never netted.
+        overCollected: dayView.balance.overCollected,
+        unresolvedOverCollected: dayView.balance.unresolvedOverCollected,
         byMethod: dayView.receipts.byMethod,
         byMethodGross: dayView.receipts.byMethodGross,
         byMethodRefunds: dayView.receipts.byMethodRefunds,
@@ -394,6 +449,14 @@ function createCloseoutReconciliation({
       // consumer has to infer it.
       varianceSemantics: "counted_minus_recorded_receipts",
       drawerMovementsModeled: false,
+
+      // K2/K3 — how the SERVICE window relates to the BUSINESS-DAY /
+      // cash-count window. "nested" ⇒ day figures are a superset of this
+      // service's and comparative copy is safe; "crossing" ⇒ the two are
+      // different populations and no "de este servicio" sentence, and no
+      // "Diferencia 0 ⇒ this service reconciles" reading, is truthful. The
+      // frontend renders from this fact and never compares dates itself.
+      scopeRelation,
     });
   }
 

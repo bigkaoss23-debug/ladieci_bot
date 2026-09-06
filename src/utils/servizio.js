@@ -34,6 +34,11 @@ const { calcolaTotaleOrdine, deliveryFeeFor, isBevanda, isDesert } = require("./
 const { getCurrentOperationalSession, serviceSessionQuery } = require("../serviceSessions/currentOperationalSession");
 const { aggregate: aggregateCloseout } = require("../closeout/currentServiceCloseout");
 
+// The pre-close scan reads through this indirection so a test can hand it an
+// in-memory `select`; with no injected dependency it IS `sbSelect`, and every
+// other function and code path in this file is unchanged.
+const _defaultScanSelect = sbSelect;
+
 // ─── Date helpers ────────────────────────────────────────────────
 function madridDateStr(d = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
@@ -54,9 +59,30 @@ function fasciaOraDa(hora) {
 
 
 // ─── Scan: cosa c'è prima di chiudere (read-only) ────────────────
-async function scanServizio() {
+//
+// K4 (Finalizar closeout hardening, 2026-09-06) — the pre-close list `attivi`
+// is keyed by CATEGORY-NAMESPACED identity, NEVER by customer identity. One
+// customer can hold several unresolved orders at once (two DOMICILIO orders on
+// one `wa_id`, a Mesa comanda plus a phone order …); each is its own blocker
+// and must stay its own row. Keying orders by `wa_id`/`tel` collapsed
+// same-customer orders into a single entry — the list then silently dropped a
+// real economic exposure while `blocking.orders` still counted it, so summary
+// and detail disagreed. Orders are now keyed by their OWN canonical identity
+// (`order_uid`, or the text id for a legacy row without one); conversations
+// stay per-customer (a chat thread IS per customer); the three namespaces
+// cannot collide, so every distinct blocker in `blocking` maps to exactly one
+// row in `attivi`.
+//
+// `select` / `resolveCurrentService` are test seams only. With no argument the
+// behaviour is byte-identical to before: `sbSelect` and the lifecycle pointer
+// `getCurrentOperationalSession()`.
+// language-guard: allow-legacy scanServizio is the existing export name; only its optional test-seam args are new, not new vocabulary
+async function scanServizio({ select, resolveCurrentService } = {}) {
   const oggi = madridDateStr();
-  const currentService = await getCurrentOperationalSession();
+  const sbSelect = typeof select === "function" ? select : _defaultScanSelect;
+  const currentService = resolveCurrentService
+    ? await resolveCurrentService()
+    : await getCurrentOperationalSession();
   if (!currentService) {
     return { ok: true, data: oggi, service_session_id: null, completati: { ordini: 0, conv: 0 }, attivi: [] };
   }
@@ -75,12 +101,15 @@ async function scanServizio() {
   (Array.isArray(convAttive)    ? convAttive    : []).forEach(c => { attiviMap[c.wa_id] = { wa_id: c.wa_id, nombre: c.nombre || c.wa_id, hora: c.hora || "", stato: c.stato_ordine || "" }; });
   (Array.isArray(waMsgsAttivi)  ? waMsgsAttivi  : []).forEach(m => { if (!attiviMap[m.wa_id]) attiviMap[m.wa_id] = { wa_id: m.wa_id, nombre: m.nombre || m.wa_id, hora: "", stato: m.stato || "" }; });
   (Array.isArray(ordiniInCorso) ? ordiniInCorso : []).forEach(o => {
-    const key = o.wa_id || o.tel || o.id;
-    if (!attiviMap[key]) attiviMap[key] = { wa_id: o.wa_id || o.tel || "", nombre: o.nombre || o.id || "", hora: o.hora || "", stato: o.estado || "" };
+    // The order's OWN identity — never the customer's. `order_uid` is the
+    // canonical N-2 key; a legacy row without one keeps its unique text id.
+    const key = `ord:${o.order_uid || o.id}`;
+    if (!attiviMap[key]) attiviMap[key] = { kind: "order", wa_id: o.wa_id || o.tel || "", nombre: o.nombre || o.id || "", hora: o.hora || "", stato: o.estado || "" };
   });
   (Array.isArray(contiMesaAperti) ? contiMesaAperti : []).forEach(session => {
     const key = `mesa:${session.table_id || session.id}`;
     attiviMap[key] = {
+      kind: "table",
       wa_id: "",
       nombre: session.table_ref || "Mesa",
       hora: "",
