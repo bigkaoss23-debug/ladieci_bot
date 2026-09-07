@@ -43,6 +43,7 @@ const { integrateLoginRoute } = require("./src/auth/loginHttpIntegration");
 const { integrateAccountRoutes } = require("./src/account/accountHttpIntegration");
 const { integrateAccessManagementRoutes } = require("./src/auth/accessManagementHttpIntegrationV3");
 const { integrateMesaRoutes } = require("./src/tables/mesaHttpIntegration");
+const { integrateCashRoutes } = require("./src/cash/cashHttpIntegration");
 const { integrateEconomyRoutes } = require("./src/economy/economyHttpIntegration");
 const authDao = require("./src/auth/dao");
 const adminAccessDao = require("./src/auth/adminAccessDao");
@@ -159,6 +160,18 @@ console.log(JSON.stringify({
   component: "mesa-v1",
   state: mesaIntegration.enabled ? "enabled" : "disabled",
   routeBase: mesaIntegration.prefix,
+  env: process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV || "unknown",
+}));
+
+// CHECK-CENTRIC UNIVERSAL CASH V1 — the check-centric cash boundary
+// (Servicio/Banco/Retiro), mounted the same way Mesa is: staging-only,
+// disabled by default, its own env flag. A parallel adapter against the SAME
+// canonical ledger Mesa already writes to -- not a second payment engine.
+const cashIntegration = integrateCashRoutes(app, { env: process.env, logger: console });
+console.log(JSON.stringify({
+  component: "cash-v1",
+  state: cashIntegration.enabled ? "enabled" : "disabled",
+  routeBase: cashIntegration.prefix,
   env: process.env.RAILWAY_ENVIRONMENT_NAME || process.env.NODE_ENV || "unknown",
 }));
 

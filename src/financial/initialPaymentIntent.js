@@ -1,6 +1,15 @@
 'use strict';
 // N-3 — the application half of canonical initial payment for Nuevo Pedido.
 //
+// CHECK-CENTRIC UNIVERSAL CASH V1 (migration 122) — the trigger this intent
+// feeds (order_initial_payment_v1) now calls the canonical order_post_
+// payment_v1 instead of the legacy order_mark_paid, so the intent must also
+// carry a sid_hash (the same sha256(sid) proof Mesa's payment/refund/
+// adjustment RPCs already require) alongside the pre-existing sv/ip_hash
+// fields. `authCtx.sid` is the SAME JWT field the legacy auth guard already
+// puts on every request context (src/auth/legacyAuthGuard.js) -- this module
+// just hashes it, via the SAME shared helper Mesa uses, never a new mechanism.
+//
 // WHAT THIS IS NOT. It is not a payment writer. It writes nothing, derives no amount and
 // records no money. The canonical writer is `public.order_mark_paid` -> `_ledger_write_payment`
 // -- the same authority the operator collection path reaches through registerOperatorPayment --
@@ -26,6 +35,8 @@
 // FAIL CLOSED. If the verified context is unavailable, this refuses the PAID creation rather
 // than silently creating an unpaid order or falling back to the legacy flag. Losing the money
 // record is the failure N-3 exists to prevent; a clear refusal the operator can retry is not.
+
+const { sidHash: defaultSidHash } = require('../auth/sidHash');
 
 // Canonical payment vocabulary. Same three the SQL layer accepts -- no aliases invented here.
 const PAYMENT_METHODS = Object.freeze(['efectivo', 'tarjeta', 'bizum']);
@@ -100,7 +111,7 @@ function requestsInitialPayment(body) {
 //   { ok: true, intent: null }        — nothing requested; ordinary unpaid creation
 //   { ok: true, intent: {...} }       — attach this to the order INSERT
 //   { ok: false, code, message }      — refuse the whole creation; nothing was written
-function buildInitialPaymentIntent({ body, authCtx, ipHash, trustedClientIp } = {}) {
+function buildInitialPaymentIntent({ body, authCtx, ipHash, trustedClientIp, computeSidHash = defaultSidHash } = {}) {
   if (!requestsInitialPayment(body)) return Object.freeze({ ok: true, intent: null });
 
   // Mesa comandas settle through the table's own payment hub. The modal already forces this,
@@ -121,9 +132,17 @@ function buildInitialPaymentIntent({ body, authCtx, ipHash, trustedClientIp } = 
   const hash = typeof ipHash === 'function' ? ipHash(trustedClientIp) : null;
   if (typeof hash !== 'string' || hash.trim().length === 0) return fail(CONTEXT_UNAVAILABLE);
 
+  // CHECK-CENTRIC UNIVERSAL CASH V1 — the canonical writer the trigger now calls
+  // (order_post_payment_v1) needs the SAME sid_hash proof Mesa's payment RPCs
+  // require. authCtx.sid is the identical JWT field the legacy auth guard
+  // already exposes; fail closed here (never at the trigger) if it is missing.
+  const sid = authCtx && typeof authCtx.sid === 'string' ? authCtx.sid : '';
+  const sidHashValue = sid ? computeSidHash(sid) : null;
+  if (typeof sidHashValue !== 'string' || !/^[0-9a-f]{64}$/.test(sidHashValue)) return fail(CONTEXT_UNAVAILABLE);
+
   return Object.freeze({
     ok: true,
-    intent: Object.freeze({ method, actor, sv, ip_hash: hash.trim() }),
+    intent: Object.freeze({ method, actor, sv, ip_hash: hash.trim(), sid_hash: sidHashValue }),
   });
 }
 

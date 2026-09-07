@@ -33,7 +33,10 @@ const rollbackSql = fs.readFileSync(ROLLBACK, "utf8");
 const writersSrc = fs.readFileSync(path.join(__dirname, "..", "src", "agents", "agentOrdini.js"), "utf8");
 const indexJs = fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8");
 
-const OK_CTX = { actor: "owner", sv: 15 };
+// CHECK-CENTRIC UNIVERSAL CASH V1 — sid is now required too (the canonical
+// writer the trigger calls needs the same sid_hash proof Mesa's payment RPCs
+// require); a real, non-empty string hashes cleanly via the default sidHash().
+const OK_CTX = { actor: "owner", sv: 15, sid: "high-entropy-session-id-abc123" };
 const ipHashOk = () => "a".repeat(32);
 const ipHashNull = () => null;
 
@@ -67,8 +70,10 @@ console.log("\n── the intent carries only verified, server-side values ─�
   check("sv comes from the verified context, never the body", r.intent.sv === 15);
   check("method is normalized to canonical vocabulary", r.intent.method === "efectivo");
   check("ip_hash is present", typeof r.intent.ip_hash === "string" && r.intent.ip_hash.length > 0);
+  check("sid_hash is present and shaped like a sha256 hex digest",
+    typeof r.intent.sid_hash === "string" && /^[0-9a-f]{64}$/.test(r.intent.sid_hash));
   check("the intent carries nothing else (no amount, no flags)",
-    Object.keys(r.intent).sort().join(",") === "actor,ip_hash,method,sv");
+    Object.keys(r.intent).sort().join(",") === "actor,ip_hash,method,sid_hash,sv");
   check("an amount is NEVER carried — SQL derives it from ordenes.totale",
     !("amount" in r.intent) && !("totale" in r.intent));
 }
@@ -100,6 +105,22 @@ console.log("\n── fail closed: never silently create an unpaid order ──"
   const noIp = buildInitialPaymentIntent({ body: { ya_pagado: true, metodo_pago: "efectivo" }, authCtx: OK_CTX, ipHash: ipHashNull });
   check("a null ip_hash (IP_SECRET unset) is refused here, not at the trigger",
     noIp.ok === false && noIp.code === CONTEXT_UNAVAILABLE);
+  // CHECK-CENTRIC UNIVERSAL CASH V1 — sid is the new required field.
+  const noSid = buildInitialPaymentIntent({
+    body: { ya_pagado: true, metodo_pago: "efectivo" }, authCtx: { actor: "owner", sv: 15 }, ipHash: ipHashOk,
+  });
+  check("a context without sid is refused, never silently downgraded to unpaid",
+    noSid.ok === false && noSid.code === CONTEXT_UNAVAILABLE);
+  const blankSid = buildInitialPaymentIntent({
+    body: { ya_pagado: true, metodo_pago: "efectivo" }, authCtx: { actor: "owner", sv: 15, sid: "" }, ipHash: ipHashOk,
+  });
+  check("an empty-string sid is refused", blankSid.ok === false && blankSid.code === CONTEXT_UNAVAILABLE);
+  const badHash = buildInitialPaymentIntent({
+    body: { ya_pagado: true, metodo_pago: "efectivo" }, authCtx: OK_CTX, ipHash: ipHashOk,
+    computeSidHash: () => "not-a-valid-hex-digest",
+  });
+  check("a computeSidHash that returns something non-hex64 is refused, never trusted as-is",
+    badHash.ok === false && badHash.code === CONTEXT_UNAVAILABLE);
   const mesa = buildInitialPaymentIntent({
     body: { ya_pagado: true, metodo_pago: "efectivo", table_session_id: "9f0d-…" },
     authCtx: OK_CTX, ipHash: ipHashOk,

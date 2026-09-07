@@ -346,6 +346,14 @@ const REGISTRY = Object.freeze([
   // AJUSTE COMERCIAL V1 (ledger 118) — moves what the customer OWES, never money.
   entry('rpc/mesa_post_commercial_adjustment_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
     'tables/mesaDao.js'),
+  // CHECK-CENTRIC UNIVERSAL CASH V1 (migration 122) — the check-centric analogues of the
+  // three Mesa financial RPCs immediately above, called from cash/cashDao.js instead of
+  // tables/mesaDao.js. Same ledger (payment_transactions/payment_allocations/
+  // order_financial_events), a different domain adapter -- not a second payment engine.
+  entry('rpc/order_post_payment_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'cash/cashDao.js'),
+  entry('rpc/order_post_refund_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'cash/cashDao.js'),
+  entry('rpc/order_apply_commercial_adjustment_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
+    'cash/cashDao.js'),
   // AJUSTE COMERCIAL V1 (ledger 118) — canonical atomic cancellation: operational state
   // AND the mandatory obligation revision to 0, in one transaction. Registered here or the
   // DAO call is rejected before it reaches Supabase, with NO transport log line at all.

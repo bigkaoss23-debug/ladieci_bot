@@ -810,4 +810,11 @@ module.exports = {
   // ACC-01 — exported so the closed-account projection can be proven to be the
   // SAME arithmetic the open floor uses, not a second implementation.
   buildClosedAccount, projectSessionAccount, normalizeLinesBySession,
+  // CHECK-CENTRIC UNIVERSAL CASH V1 — projectOrderFinancial reads only `order`
+  // (estado/totale/order_uid) and `revisions` (order_obligations rows), neither
+  // of which is Mesa-specific. Exported so the check-centric cash reader
+  // (src/cash/cashService.js) reuses the SAME obligation/adjustability
+  // arithmetic Mesa's own MesaCommercialAdjustments already renders, instead
+  // of a second implementation that could silently drift from it.
+  projectOrderFinancial,
 };
