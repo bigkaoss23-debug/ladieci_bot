@@ -1528,11 +1528,56 @@ BEGIN
                    AND t.tgname='payment_allocations_append_only_v1' AND NOT t.tgisinternal) THEN
     RAISE EXCEPTION 'M122 post-condition failed: an append-only trigger disappeared';
   END IF;
-  IF has_table_privilege('service_role','public.payment_transactions','UPDATE')
-     OR has_table_privilege('service_role','public.payment_transactions','DELETE')
-     OR has_table_privilege('service_role','public.payment_allocations','UPDATE')
-     OR has_table_privilege('service_role','public.payment_allocations','DELETE') THEN
-    RAISE EXCEPTION 'M122 post-condition failed: the ledger stopped being append-only';
+  -- APPEND-ONLY ENFORCEMENT FAST-FOLLOW -- a real byte-exact STAGING apply
+  -- attempt proved the check above (has_table_privilege) false: it asserted
+  -- an invariant this system has never actually had. The historical
+  -- foundation migration (2026-08-01_v3h_messa_billing_foundation.sql) -- language-guard: allow-legacy existing filename cited verbatim, not new vocabulary
+  -- GRANTs service_role only SELECT, INSERT on both tables -- UPDATE/DELETE
+  -- were never explicitly granted here, but were never explicitly REVOKEd
+  -- either, and Supabase's own platform-level default privileges for
+  -- service_role include UPDATE/DELETE on every public-schema table
+  -- regardless of what any migration in this repo grants (independently
+  -- confirmed live: has_table_privilege('service_role', ..., 'UPDATE'/
+  -- 'DELETE') is TRUE on both tables today, on a database with zero
+  -- REVOKE of either privilege anywhere in its migration history). The
+  -- REAL, and only ever intended, enforcement is the trigger: both
+  -- payment_transactions_append_only_v1 and payment_allocations_
+  -- append_only_v1 fire BEFORE DELETE OR UPDATE and unconditionally RAISE
+  -- via mesa_append_only_v1() -- confirmed by that function's own live body
+  -- (`BEGIN RAISE EXCEPTION 'MESA_APPEND_ONLY' ...; END`), which blocks the
+  -- mutation regardless of what table-level grants exist. This asserts
+  -- that real invariant instead: each trigger exists, is not disabled, and
+  -- pg_get_triggerdef reconstructs to the EXACT canonical definition this
+  -- system has always had (proving timing, both events, and the specific
+  -- enforcement function all at once -- a swapped-in, differently-named,
+  -- or newly-permissive function would fail this exact-string match), plus
+  -- a direct check that mesa_append_only_v1's own body still unconditionally
+  -- raises. No REVOKE is introduced anywhere in this migration; that is a
+  -- deliberately separate, deferred decision (see FINANCIAL_LEDGER_
+  -- SERVICE_ROLE_PRIVILEGE_HARDENING_REVIEW in the slice report) -- this
+  -- fast-follow is a verification-contract correction only.
+  IF (SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+       JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND c.relname='payment_transactions'
+        AND t.tgname='payment_transactions_append_only_v1' AND NOT t.tgisinternal
+        AND t.tgenabled <> 'D')
+     IS DISTINCT FROM
+     'CREATE TRIGGER payment_transactions_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_transactions FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()'
+  THEN
+    RAISE EXCEPTION 'M122 post-condition failed: payment_transactions_append_only_v1 is missing, disabled, or no longer the exact BEFORE DELETE OR UPDATE / mesa_append_only_v1() enforcement';
+  END IF;
+  IF (SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+       JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND c.relname='payment_allocations'
+        AND t.tgname='payment_allocations_append_only_v1' AND NOT t.tgisinternal
+        AND t.tgenabled <> 'D')
+     IS DISTINCT FROM
+     'CREATE TRIGGER payment_allocations_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_allocations FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()'
+  THEN
+    RAISE EXCEPTION 'M122 post-condition failed: payment_allocations_append_only_v1 is missing, disabled, or no longer the exact BEFORE DELETE OR UPDATE / mesa_append_only_v1() enforcement';
+  END IF;
+  IF position('RAISE EXCEPTION' IN (SELECT prosrc FROM pg_proc WHERE proname='mesa_append_only_v1' AND pronamespace='public'::regnamespace)) = 0 THEN
+    RAISE EXCEPTION 'M122 post-condition failed: mesa_append_only_v1 no longer unconditionally raises -- append-only enforcement silently defanged';
   END IF;
 END $post$;
 

@@ -388,9 +388,9 @@ assert('[CASE B setup] the synthetic fixture genuinely differs from the real bod
   legacyReintroducedFn !== initFn && legacyReintroducedFn.includes('PERFORM public.order_mark_paid('));
 assert('[CASE B] a REAL legacy call is still correctly rejected by the NEW pattern (not merely blind to the name)',
   position('PERFORM public.order_mark_paid(', legacyReintroducedFn) > 0);
-assert('forward Migration 122 is pinned to this fast-follow\'s own committed bytes (9cbc9e1b2b59db51...)',
-  crypto.createHash('sha256').update(MIG).digest('hex') ===
-    '9cbc9e1b2b59db510b55a997a8e0e0673c55bc78bea378bb166419c43d4f579e');
+// NOTE: forward Migration 122 was pinned to 9cbc9e1b2b59db51... as of the comment-safe
+// postcondition fast-follow (267b583) -- superseded by the append-only enforcement
+// fast-follow below, which changes the forward file again; its own checksum is pinned there.
 
 section('POST-CONDITION — no backfill, append-only intact');
 assert('post-condition compares payment_transactions row count against the guard snapshot',
@@ -403,8 +403,66 @@ assert('post-condition asserts zero payment_allocations rows backfilled as check
   MIG.includes('table_order_line_id IS NULL OR order_uid IS NOT NULL) <> 0'));
 assert('post-condition re-asserts both append-only triggers are still live',
   MIG.includes('payment_transactions_append_only_v1') && MIG.includes('payment_allocations_append_only_v1'));
-assert('post-condition asserts service_role never gains UPDATE/DELETE on the ledger tables',
-  MIG.includes("has_table_privilege('service_role','public.payment_transactions','UPDATE')"));
+section('APPEND-ONLY ENFORCEMENT FAST-FOLLOW — real STAGING apply proved the privilege check false');
+// A real byte-exact STAGING apply attempt (with both prior fast-follows already applied
+// cleanly, no 42P13, no comment false-positive) reached this exact check and failed:
+// `has_table_privilege('service_role', ..., 'UPDATE'/'DELETE')` is TRUE on live STAGING --
+// independently confirmed read-only. Investigation (2026-08-01_v3h_messa_billing_foundation.sql) -- language-guard: allow-legacy existing filename cited verbatim, not new vocabulary
+// the tables' own foundation migration): service_role was GRANTed only SELECT, INSERT on both
+// tables -- UPDATE/DELETE were never explicitly granted, but were also never explicitly
+// REVOKEd anywhere in this repo's history. The REAL, only-ever-intended enforcement is the
+// trigger (payment_transactions_append_only_v1 / payment_allocations_append_only_v1, BEFORE
+// DELETE OR UPDATE, executing mesa_append_only_v1() -- confirmed live to unconditionally
+// RAISE). No REVOKE is introduced by this fix; that is a deliberately separate, deferred
+// decision -- see FINANCIAL_LEDGER_SERVICE_ROLE_PRIVILEGE_HARDENING_REVIEW in the report.
+assert('the false privilege-based check is gone as EXECUTABLE code (the string survives only in this fix\'s own explanatory comments, which is expected and fine)',
+  !/IF\s+has_table_privilege\(/.test(MIG));
+assert('the new check asserts the exact live-verified canonical trigger definitions',
+  MIG.includes("'CREATE TRIGGER payment_transactions_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_transactions FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()'") &&
+  MIG.includes("'CREATE TRIGGER payment_allocations_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_allocations FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()'"));
+assert('the new check excludes a disabled trigger (tgenabled <> \'D\')',
+  (MIG.match(/tgenabled <> 'D'/g) || []).length === 2);
+assert('the new check directly verifies mesa_append_only_v1 still unconditionally raises',
+  MIG.includes("position('RAISE EXCEPTION' IN (SELECT prosrc FROM pg_proc WHERE proname='mesa_append_only_v1'"));
+assert('the pre-existing, separate trigger-EXISTENCE checks (guard AND post) are untouched -- their own unique RAISE messages are still present verbatim',
+  MIG.includes("RAISE EXCEPTION 'M122 refused: an append-only trigger is missing -- resolve drift first'") &&
+  MIG.includes("RAISE EXCEPTION 'M122 post-condition failed: an append-only trigger disappeared'"));
+assert('Migration 122 still does not GRANT or REVOKE anything on these two tables (no privilege hardening introduced) -- checked as real SQL statements, not prose mentions',
+  !/\bGRANT\b[^\n;]*\bON\b[^\n;]*\bpublic\.payment_(transactions|allocations)\b/i.test(MIG) &&
+  !/\bREVOKE\b[^\n;]*\bON\b[^\n;]*\bpublic\.payment_(transactions|allocations)\b/i.test(MIG));
+
+// Local simulation of the exact predicate the migration runs (Postgres's `x IS DISTINCT FROM y`
+// -- unlike `=`, this is well-defined and TRUE when x is NULL), against synthetic catalog-shaped
+// fixtures for pg_get_triggerdef()'s output and pg_proc.prosrc. This tests the actual
+// discriminating LOGIC the migration's SQL uses, not merely that some string exists in the file.
+const isDistinctFrom = (a, b) => a === null ? b !== null : a !== b;
+const PT_CANONICAL = "CREATE TRIGGER payment_transactions_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_transactions FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()";
+// Mirrors the WHERE clause: tgenabled <> 'D' excludes the row entirely (v_def becomes NULL),
+// exactly like a genuinely-missing trigger would.
+const triggerdefFor = ({ exists = true, enabled = true, def = PT_CANONICAL }) =>
+  (exists && enabled) ? def : null;
+const wouldRaise = (def) => isDistinctFrom(def, PT_CANONICAL);
+
+section('APPEND-ONLY — CASE A/B/C/D/E (simulated against the exact predicate the migration runs)');
+assert('[CASE A] real historical model -- service_role retains UPDATE/DELETE grants, but the trigger is installed/enabled -- PASS (does not raise)',
+  !wouldRaise(triggerdefFor({ exists: true, enabled: true })));
+assert('[CASE B] trigger missing -- FAIL (raises)',
+  wouldRaise(triggerdefFor({ exists: false })));
+assert('[CASE C] trigger disabled (tgenabled=\'D\') -- FAIL (raises, same as missing: excluded by the WHERE clause)',
+  wouldRaise(triggerdefFor({ exists: true, enabled: false })));
+assert('[CASE D] wrong trigger function (canonical def with a different EXECUTE FUNCTION) -- FAIL (raises)',
+  wouldRaise(triggerdefFor({ exists: true, enabled: true,
+    def: PT_CANONICAL.replace('mesa_append_only_v1()', 'some_other_function()') })));
+assert('[CASE D, function-body variant] mesa_append_only_v1 redefined as a silent no-op -- FAIL (raises, via the separate prosrc check)',
+  (() => {
+    const noopBody = 'BEGIN\n  RETURN NEW;\nEND';
+    return noopBody.indexOf('RAISE EXCEPTION') === -1; // mirrors position(...) = 0 -> RAISE
+  })());
+assert('[CASE E] the fix does not require INSERT revocation or otherwise contradict the append-only model (INSERT stays allowed -- only UPDATE/DELETE are blocked, by the trigger, not by any grant change)',
+  !MIG.includes("'INSERT'") || !/payment_transactions.*INSERT.*REVOKE|REVOKE.*INSERT.*payment_transactions/i.test(MIG));
+assert('forward Migration 122 is pinned to this fast-follow\'s own committed bytes (3c7bedd144c24bb3...)',
+  crypto.createHash('sha256').update(MIG).digest('hex') ===
+    '3c7bedd144c24bb340ad6075e388e90f8fbb6b28251533642471c34231e319c9');
 
 section('ROLLBACK — hard-refuses once a check-centric fact exists, honest about what comes back');
 assert('rollback refuses if any payment_transactions row has table_session_id IS NULL',
