@@ -889,7 +889,19 @@ GRANT EXECUTE ON FUNCTION public.order_apply_commercial_adjustment_v1(
 -- brief; owner-approved, not a Mesa business-semantic redesign). This is
 -- CREATE OR REPLACE, not DROP+CREATE: the signature is unchanged, so
 -- existing grants (service_role-only) carry over untouched.
-CREATE OR REPLACE FUNCTION public.mesa_post_refund_v1(p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid, p_original_transaction_id uuid, p_reason text, p_client_request_id text, p_request_hash text, p_amount numeric, p_meta jsonb)
+-- PARAMETER-DEFAULT FAST-FOLLOW -- a byte-exact apply attempt against live
+-- STAGING failed with PostgreSQL 42P13 ("cannot remove parameter defaults
+-- from existing function"): the live signature carries `p_amount numeric
+-- DEFAULT NULL::numeric, p_meta jsonb DEFAULT '{}'::jsonb`, and CREATE OR
+-- REPLACE refuses to silently drop existing defaults (unlike ordinary
+-- CREATE OR REPLACE body/logic changes, a default is part of what the
+-- command must reproduce verbatim to be accepted as a replace rather than
+-- a signature change). "The signature is unchanged" above refers to
+-- parameter identity (types/order/count) for pg_get_function_identity_
+-- arguments purposes, which is genuinely untouched and is why grants still
+-- carry over -- but the DEFAULT clauses are a separate PostgreSQL rule and
+-- must be reproduced exactly, which this declaration now does.
+CREATE OR REPLACE FUNCTION public.mesa_post_refund_v1(p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid, p_original_transaction_id uuid, p_reason text, p_client_request_id text, p_request_hash text, p_amount numeric DEFAULT NULL::numeric, p_meta jsonb DEFAULT '{}'::jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
  SET search_path TO 'public', 'extensions', 'pg_temp'

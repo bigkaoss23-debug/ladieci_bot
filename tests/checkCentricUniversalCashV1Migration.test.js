@@ -217,10 +217,40 @@ assert('the old NULL-unsafe comparison is gone', !mesaRefundFn.includes('v_origi
 assert('every other `<>` in the function is untouched (this is a one-line fix, not a rewrite)',
   (mesaRefundFn.match(/<>/g) || []).length >= 3); // request_hash<>, by_actor<>, kind<>
 assert('CREATE OR REPLACE (not DROP+CREATE) -- same signature, grants carry over automatically',
-  /CREATE OR REPLACE FUNCTION public\.mesa_post_refund_v1\(p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid, p_original_transaction_id uuid, p_reason text, p_client_request_id text, p_request_hash text, p_amount numeric, p_meta jsonb\)/.test(MIG));
+  /CREATE OR REPLACE FUNCTION public\.mesa_post_refund_v1\(p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid, p_original_transaction_id uuid, p_reason text, p_client_request_id text, p_request_hash text, p_amount numeric DEFAULT NULL::numeric, p_meta jsonb DEFAULT '\{\}'::jsonb\)/.test(MIG));
 assert('post-condition asserts the fix landed and the old comparison is gone',
   MIG.includes("position('v_original.table_session_id <> p_table_session_id' IN v_def) > 0") &&
   MIG.includes("position('v_original.table_session_id IS DISTINCT FROM p_table_session_id' IN v_def) = 0"));
+
+section('PARAMETER-DEFAULT FAST-FOLLOW — the exact 42P13 caught on a real byte-exact STAGING apply attempt');
+// A byte-exact apply of the pre-fast-follow file against live STAGING failed with PostgreSQL
+// 42P13 ("cannot remove parameter defaults from existing function"): CREATE OR REPLACE refuses
+// to silently drop a parameter's existing DEFAULT, and the live mesa_post_refund_v1 has always
+// carried DEFAULT NULL::numeric / DEFAULT '{}'::jsonb on its last two parameters (independently
+// confirmed live via pg_get_function_arguments before this fast-follow). The very test above
+// (pre-fast-follow) asserted the buggy declaration as if it were correct -- proof that a purely
+// static/textual review of a CREATE OR REPLACE cannot catch a missing-default defect; only a
+// real apply attempt (or an explicit live-signature diff) can.
+assert('declares the live p_amount default verbatim (DEFAULT NULL::numeric)',
+  MIG.includes('p_amount numeric DEFAULT NULL::numeric, p_meta jsonb'));
+assert('declares the live p_meta default verbatim (DEFAULT \'{}\'::jsonb)',
+  MIG.includes("p_meta jsonb DEFAULT '{}'::jsonb"));
+const mesaRefundDeclFixed =
+  "p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid, p_original_transaction_id uuid, p_reason text, p_client_request_id text, p_request_hash text, p_amount numeric DEFAULT NULL::numeric, p_meta jsonb DEFAULT '{}'::jsonb";
+const mesaRefundDeclOriginal =
+  "p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid, p_original_transaction_id uuid, p_reason text, p_client_request_id text, p_request_hash text, p_amount numeric, p_meta jsonb";
+assert('identity arguments (types, order, count) are byte-identical to the live pre-122 signature -- only the two DEFAULT clauses were added, nothing else',
+  MIG.includes(mesaRefundDeclFixed) &&
+  mesaRefundDeclFixed.replace(' DEFAULT NULL::numeric', '').replace(" DEFAULT '{}'::jsonb", '') === mesaRefundDeclOriginal);
+assert('still CREATE OR REPLACE, not DROP+CREATE -- no DROP FUNCTION for mesa_post_refund_v1 anywhere in the forward file (defaults preserved in-declaration instead)',
+  !/DROP\s+FUNCTION[^;]*mesa_post_refund_v1/i.test(MIG));
+assert('the fixed declaration appears exactly once (no duplicate CREATE for the same function)',
+  (MIG.match(/CREATE OR REPLACE FUNCTION public\.mesa_post_refund_v1\(/g) || []).length === 1);
+assert('the body-level assertions above (fixed comparison present, old one gone, other `<>` untouched) still hold on the SAME extracted body -- the default fix touched only the parameter list, never AS $function$',
+  mesaRefundFn.includes('v_original.table_session_id IS DISTINCT FROM p_table_session_id') &&
+  !mesaRefundFn.includes('v_original.table_session_id <> p_table_session_id'));
+assert('KNOWN DEFECT (pending owner decision -- MIGRATION_122_FAST_FOLLOW_ROLLBACK_DECISION_REQUIRED, not fixed in this fast-follow): the ROLLBACK\'s own CREATE OR REPLACE for mesa_post_refund_v1 still omits both defaults and would independently 42P13 if ever executed after this corrected forward file. This assertion documents the finding -- if the rollback is later fixed under separate authorization, THIS assertion must be updated (or it will start failing), not silently left green.',
+  /CREATE OR REPLACE FUNCTION public\.mesa_post_refund_v1\([^)]*p_amount numeric, p_meta jsonb\)/.test(RB));
 
 section('MESA UNTOUCHED — no redefinition of the writers this slice must not touch');
 assert('mesa_post_payment_v1 is not redefined in this migration file',
