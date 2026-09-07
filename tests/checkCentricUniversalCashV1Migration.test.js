@@ -417,13 +417,6 @@ section('APPEND-ONLY ENFORCEMENT FAST-FOLLOW — real STAGING apply proved the p
 // decision -- see FINANCIAL_LEDGER_SERVICE_ROLE_PRIVILEGE_HARDENING_REVIEW in the report.
 assert('the false privilege-based check is gone as EXECUTABLE code (the string survives only in this fix\'s own explanatory comments, which is expected and fine)',
   !/IF\s+has_table_privilege\(/.test(MIG));
-assert('the new check asserts the exact live-verified canonical trigger definitions',
-  MIG.includes("'CREATE TRIGGER payment_transactions_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_transactions FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()'") &&
-  MIG.includes("'CREATE TRIGGER payment_allocations_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_allocations FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()'"));
-assert('the new check excludes a disabled trigger (tgenabled <> \'D\')',
-  (MIG.match(/tgenabled <> 'D'/g) || []).length === 2);
-assert('the new check directly verifies mesa_append_only_v1 still unconditionally raises',
-  MIG.includes("position('RAISE EXCEPTION' IN (SELECT prosrc FROM pg_proc WHERE proname='mesa_append_only_v1'"));
 assert('the pre-existing, separate trigger-EXISTENCE checks (guard AND post) are untouched -- their own unique RAISE messages are still present verbatim',
   MIG.includes("RAISE EXCEPTION 'M122 refused: an append-only trigger is missing -- resolve drift first'") &&
   MIG.includes("RAISE EXCEPTION 'M122 post-condition failed: an append-only trigger disappeared'"));
@@ -431,38 +424,96 @@ assert('Migration 122 still does not GRANT or REVOKE anything on these two table
   !/\bGRANT\b[^\n;]*\bON\b[^\n;]*\bpublic\.payment_(transactions|allocations)\b/i.test(MIG) &&
   !/\bREVOKE\b[^\n;]*\bON\b[^\n;]*\bpublic\.payment_(transactions|allocations)\b/i.test(MIG));
 
-// Local simulation of the exact predicate the migration runs (Postgres's `x IS DISTINCT FROM y`
-// -- unlike `=`, this is well-defined and TRUE when x is NULL), against synthetic catalog-shaped
-// fixtures for pg_get_triggerdef()'s output and pg_proc.prosrc. This tests the actual
-// discriminating LOGIC the migration's SQL uses, not merely that some string exists in the file.
-const isDistinctFrom = (a, b) => a === null ? b !== null : a !== b;
-const PT_CANONICAL = "CREATE TRIGGER payment_transactions_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_transactions FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()";
-// Mirrors the WHERE clause: tgenabled <> 'D' excludes the row entirely (v_def becomes NULL),
-// exactly like a genuinely-missing trigger would.
-const triggerdefFor = ({ exists = true, enabled = true, def = PT_CANONICAL }) =>
-  (exists && enabled) ? def : null;
-const wouldRaise = (def) => isDistinctFrom(def, PT_CANONICAL);
-
-section('APPEND-ONLY — CASE A/B/C/D/E (simulated against the exact predicate the migration runs)');
-assert('[CASE A] real historical model -- service_role retains UPDATE/DELETE grants, but the trigger is installed/enabled -- PASS (does not raise)',
-  !wouldRaise(triggerdefFor({ exists: true, enabled: true })));
-assert('[CASE B] trigger missing -- FAIL (raises)',
-  wouldRaise(triggerdefFor({ exists: false })));
-assert('[CASE C] trigger disabled (tgenabled=\'D\') -- FAIL (raises, same as missing: excluded by the WHERE clause)',
-  wouldRaise(triggerdefFor({ exists: true, enabled: false })));
-assert('[CASE D] wrong trigger function (canonical def with a different EXECUTE FUNCTION) -- FAIL (raises)',
-  wouldRaise(triggerdefFor({ exists: true, enabled: true,
-    def: PT_CANONICAL.replace('mesa_append_only_v1()', 'some_other_function()') })));
-assert('[CASE D, function-body variant] mesa_append_only_v1 redefined as a silent no-op -- FAIL (raises, via the separate prosrc check)',
-  (() => {
-    const noopBody = 'BEGIN\n  RETURN NEW;\nEND';
-    return noopBody.indexOf('RAISE EXCEPTION') === -1; // mirrors position(...) = 0 -> RAISE
-  })());
-assert('[CASE E] the fix does not require INSERT revocation or otherwise contradict the append-only model (INSERT stays allowed -- only UPDATE/DELETE are blocked, by the trigger, not by any grant change)',
-  !MIG.includes("'INSERT'") || !/payment_transactions.*INSERT.*REVOKE|REVOKE.*INSERT.*payment_transactions/i.test(MIG));
-assert('forward Migration 122 is pinned to this fast-follow\'s own committed bytes (3c7bedd144c24bb3...)',
+section('ROBUST TRIGGER IDENTITY/ENABLEMENT FAST-FOLLOW — rendered-text comparison was itself search_path-dependent');
+// The append-only fast-follow's own check (immediately above) was proven environment-fragile
+// by the FINAL REVIEW before promotion, not by another live apply failure: it compared
+// pg_get_triggerdef()'s RENDERED text against a hard-coded canonical string. Independently
+// verified read-only, both ways in the SAME session: search_path including 'public' renders
+// "EXECUTE FUNCTION mesa_append_only_v1()"; `SET LOCAL search_path = pg_catalog` renders
+// "EXECUTE FUNCTION public.mesa_append_only_v1()" for the IDENTICAL trigger -- a byte-for-byte
+// different string that would have made the exact-match check spuriously refuse a correct
+// migration under nothing more than a different session environment. Replaced with catalog
+// IDENTITY: t.tgfoid = 'public.mesa_append_only_v1()'::regprocedure (OID equality via an
+// explicitly schema-qualified literal -- independently re-verified live under BOTH
+// search_path states: identical TRUE either way) and t.tgtype = 27, whose bit decomposition
+// (ROW=1, BEFORE=2, INSERT=4, DELETE=8, UPDATE=16) was derived from LIVE catalog evidence --
+// cross-referencing twelve real non-internal triggers' tgtype against their own
+// pg_get_triggerdef() text and solving the resulting linear system -- not recalled from
+// memory. t.tgenabled IN ('O','A') replaces the old `<> 'D'`, which wrongly accepted 'R'
+// (replica-only, inactive for ordinary application sessions).
+assert('the OLD rendered-text canonical-string comparison is gone -- no more pg_get_triggerdef() call in this specific check',
+  !/pg_get_triggerdef\(t\.oid\) FROM pg_trigger t JOIN pg_class c ON c\.oid=t\.tgrelid\s*\n\s*JOIN pg_namespace n ON n\.oid=c\.relnamespace\s*\n\s*WHERE n\.nspname='public' AND c\.relname='payment_(transactions|allocations)'\s*\n\s*AND t\.tgname='payment_(transactions|allocations)_append_only_v1'/.test(MIG));
+assert('the OLD `tgenabled <> \'D\'` predicate (which wrongly accepted \'R\') is gone',
+  !MIG.includes("tgenabled <> 'D'"));
+assert('the new check resolves function identity via tgfoid/regprocedure OID equality, not rendered name text -- appears exactly twice as EXECUTABLE code (once per table; a third mention in this fix\'s own explanatory comment is expected and fine)',
+  (MIG.match(/^\s*AND t\.tgfoid = 'public\.mesa_append_only_v1\(\)'::regprocedure/gm) || []).length === 2);
+assert('the new check asserts the exact live-derived tgtype bitmask (27 = ROW+BEFORE+DELETE+UPDATE) -- appears exactly twice as EXECUTABLE code',
+  (MIG.match(/^\s*AND t\.tgtype = 27/gm) || []).length === 2);
+assert('the new check requires ordinary-enabled OR always-enabled, explicitly rejecting replica-only -- appears exactly twice as EXECUTABLE code',
+  (MIG.match(/^\s*AND t\.tgenabled IN \('O','A'\)/gm) || []).length === 2);
+assert('both new checks are scoped to the correct relation AND correct trigger name (not name-only, not table-only)',
+  /c\.relname='payment_transactions'[\s\S]{0,80}t\.tgname='payment_transactions_append_only_v1'/.test(MIG) &&
+  /c\.relname='payment_allocations'[\s\S]{0,80}t\.tgname='payment_allocations_append_only_v1'/.test(MIG));
+assert('both new checks still exclude internal/system triggers',
+  (MIG.match(/AND NOT t\.tgisinternal\s*\n\s*AND t\.tgenabled IN \('O','A'\)/g) || []).length === 2);
+assert('the new check directly verifies mesa_append_only_v1 still unconditionally raises (function-body authority preserved, unchanged, sufficient -- not broadened)',
+  MIG.includes("position('RAISE EXCEPTION' IN (SELECT prosrc FROM pg_proc WHERE proname='mesa_append_only_v1'"));
+assert('forward Migration 122 is pinned to this fast-follow\'s own committed bytes (31ab8b8f5d2928cf...)',
   crypto.createHash('sha256').update(MIG).digest('hex') ===
-    '3c7bedd144c24bb340ad6075e388e90f8fbb6b28251533642471c34231e319c9');
+    '31ab8b8f5d2928cf56aa2ecf6cab3eee6de4a77f68ef025f5405d74f7e9a4fb6');
+
+// Local simulation of the ACTUAL structural predicate the migration now runs -- a
+// `NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ... WHERE <all AND-ed conditions>)`
+// -- mirrored field-by-field (relation, name, tgisinternal, tgenabled, tgfoid, tgtype) rather
+// than any rendered-text concept. `renderedUnderPgCatalogSp` is carried on every fixture but
+// is DELIBERATELY NEVER READ by the predicate below -- CASE F exploits exactly that to prove
+// identity no longer depends on it.
+const APPEND_ONLY_FN_OID = 'public.mesa_append_only_v1()'; // stands in for the live-verified regprocedure OID (20080)
+const REQUIRED_TGTYPE = 27; // ROW(1) + BEFORE(2) + DELETE(8) + UPDATE(16) -- see migration comment for the live derivation
+const isValidAppendOnlyTrigger = (row, expected) =>
+  row.exists !== false &&
+  row.isInternal !== true &&
+  row.relname === expected.relname &&
+  row.tgname === expected.tgname &&
+  ['O', 'A'].includes(row.tgenabled) &&
+  row.tgfoid === APPEND_ONLY_FN_OID &&
+  row.tgtype === REQUIRED_TGTYPE;
+const PT_EXPECTED = { relname: 'payment_transactions', tgname: 'payment_transactions_append_only_v1' };
+const VALID_PT_ROW = { exists: true, isInternal: false, relname: 'payment_transactions',
+  tgname: 'payment_transactions_append_only_v1', tgenabled: 'O', tgfoid: APPEND_ONLY_FN_OID,
+  tgtype: REQUIRED_TGTYPE, renderedUnderPublicSp: 'CREATE TRIGGER payment_transactions_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_transactions FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()',
+  renderedUnderPgCatalogSp: 'CREATE TRIGGER payment_transactions_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_transactions FOR EACH ROW EXECUTE FUNCTION public.mesa_append_only_v1()' };
+
+section('APPEND-ONLY — CASE A-K (simulated against the real structural predicate: relation/name/internal/tgenabled/tgfoid/tgtype)');
+assert('[CASE A] real historical model -- tgenabled=\'O\', correct tgfoid, BEFORE ROW DELETE-OR-UPDATE (tgtype=27) -- PASS',
+  isValidAppendOnlyTrigger(VALID_PT_ROW, PT_EXPECTED));
+assert('[CASE B] tgenabled=\'A\' (always-enabled) -- PASS, same as \'O\'',
+  isValidAppendOnlyTrigger({ ...VALID_PT_ROW, tgenabled: 'A' }, PT_EXPECTED));
+assert('[CASE C] tgenabled=\'R\' (replica-only) -- FAIL (this is the exact case the old `<> \'D\'` form wrongly accepted)',
+  !isValidAppendOnlyTrigger({ ...VALID_PT_ROW, tgenabled: 'R' }, PT_EXPECTED));
+assert('[CASE D] tgenabled=\'D\' (disabled) -- FAIL',
+  !isValidAppendOnlyTrigger({ ...VALID_PT_ROW, tgenabled: 'D' }, PT_EXPECTED));
+assert('[CASE E] wrong tgfoid (points at a different function, same rendered NAME text) -- FAIL',
+  !isValidAppendOnlyTrigger({ ...VALID_PT_ROW, tgfoid: 'public.some_other_function()' }, PT_EXPECTED));
+assert('[CASE F] identical trigger, but its RENDERED text differs by search_path (the exact scenario that broke the OLD check) -- STILL PASS, because tgfoid/tgtype/tgenabled never consult the rendered string at all',
+  VALID_PT_ROW.renderedUnderPublicSp !== VALID_PT_ROW.renderedUnderPgCatalogSp && // the two renderings really are different strings
+  isValidAppendOnlyTrigger(VALID_PT_ROW, PT_EXPECTED)); // yet the structural predicate does not care
+assert('[CASE G] AFTER instead of BEFORE (tgtype=25 = ROW+DELETE+UPDATE, no BEFORE bit) -- FAIL',
+  !isValidAppendOnlyTrigger({ ...VALID_PT_ROW, tgtype: 25 }, PT_EXPECTED));
+assert('[CASE H] UPDATE only, no DELETE (tgtype=19 = ROW+BEFORE+UPDATE) -- FAIL',
+  !isValidAppendOnlyTrigger({ ...VALID_PT_ROW, tgtype: 19 }, PT_EXPECTED));
+assert('[CASE I] DELETE only, no UPDATE (tgtype=11 = ROW+BEFORE+DELETE) -- FAIL',
+  !isValidAppendOnlyTrigger({ ...VALID_PT_ROW, tgtype: 11 }, PT_EXPECTED));
+assert('[CASE J] correct trigger name/shape but on the WRONG relation -- FAIL',
+  !isValidAppendOnlyTrigger({ ...VALID_PT_ROW, relname: 'some_other_table' }, PT_EXPECTED));
+assert('[CASE K] internal/system trigger (e.g. a FK constraint trigger) -- FAIL',
+  !isValidAppendOnlyTrigger({ ...VALID_PT_ROW, isInternal: true }, PT_EXPECTED));
+assert('[PROVEN_BY_PREDICATE] a STATEMENT-level trigger (tgtype=26, ROW bit absent) cannot pass -- not a separate required case, but the same exact-equality predicate rules it out',
+  !isValidAppendOnlyTrigger({ ...VALID_PT_ROW, tgtype: 26 }, PT_EXPECTED));
+assert('[wrong-function-body companion] mesa_append_only_v1 redefined as a silent no-op is still caught -- via the separate, unchanged, unbroadened prosrc check',
+  'BEGIN\n  RETURN NEW;\nEND'.indexOf('RAISE EXCEPTION') === -1); // mirrors position(...) = 0 -> RAISE
+assert('the fix does not require INSERT revocation or otherwise contradict the append-only model (INSERT stays allowed -- only UPDATE/DELETE are blocked, by the trigger, not by any grant change)',
+  !MIG.includes("'INSERT'") || !/payment_transactions.*INSERT.*REVOKE|REVOKE.*INSERT.*payment_transactions/i.test(MIG));
 
 section('ROLLBACK — hard-refuses once a check-centric fact exists, honest about what comes back');
 assert('rollback refuses if any payment_transactions row has table_session_id IS NULL',

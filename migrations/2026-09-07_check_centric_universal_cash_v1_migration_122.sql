@@ -1545,36 +1545,81 @@ BEGIN
   -- append_only_v1 fire BEFORE DELETE OR UPDATE and unconditionally RAISE
   -- via mesa_append_only_v1() -- confirmed by that function's own live body
   -- (`BEGIN RAISE EXCEPTION 'MESA_APPEND_ONLY' ...; END`), which blocks the
-  -- mutation regardless of what table-level grants exist. This asserts
-  -- that real invariant instead: each trigger exists, is not disabled, and
-  -- pg_get_triggerdef reconstructs to the EXACT canonical definition this
-  -- system has always had (proving timing, both events, and the specific
-  -- enforcement function all at once -- a swapped-in, differently-named,
-  -- or newly-permissive function would fail this exact-string match), plus
-  -- a direct check that mesa_append_only_v1's own body still unconditionally
-  -- raises. No REVOKE is introduced anywhere in this migration; that is a
-  -- deliberately separate, deferred decision (see FINANCIAL_LEDGER_
-  -- SERVICE_ROLE_PRIVILEGE_HARDENING_REVIEW in the slice report) -- this
-  -- fast-follow is a verification-contract correction only.
-  IF (SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
-       JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' AND c.relname='payment_transactions'
-        AND t.tgname='payment_transactions_append_only_v1' AND NOT t.tgisinternal
-        AND t.tgenabled <> 'D')
-     IS DISTINCT FROM
-     'CREATE TRIGGER payment_transactions_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_transactions FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()'
-  THEN
-    RAISE EXCEPTION 'M122 post-condition failed: payment_transactions_append_only_v1 is missing, disabled, or no longer the exact BEFORE DELETE OR UPDATE / mesa_append_only_v1() enforcement';
+  -- mutation regardless of what table-level grants exist. No REVOKE is
+  -- introduced anywhere in this migration; that is a deliberately separate,
+  -- deferred decision (see FINANCIAL_LEDGER_SERVICE_ROLE_PRIVILEGE_
+  -- HARDENING_REVIEW in the slice report) -- this fast-follow is a
+  -- verification-contract correction only.
+  --
+  -- ROBUSTNESS FAST-FOLLOW -- the FIRST version of this check (above
+  -- history) compared pg_get_triggerdef()'s RENDERED text against a
+  -- hard-coded string ending "...EXECUTE FUNCTION mesa_append_only_v1()".
+  -- That is search_path-dependent: Postgres only omits the schema
+  -- qualifier from the rendered EXECUTE FUNCTION clause when the function's
+  -- schema is resolvable via the CURRENT session's search_path at render
+  -- time. Verified live, read-only, both ways in the same session: with
+  -- search_path including 'public' (the ordinary case) it renders
+  -- "EXECUTE FUNCTION mesa_append_only_v1()"; with
+  -- `SET LOCAL search_path = pg_catalog` it renders "EXECUTE FUNCTION
+  -- public.mesa_append_only_v1()" -- a byte-for-byte different string for
+  -- the IDENTICAL trigger, which would have made this exact check spuriously
+  -- refuse a correct migration under nothing more than a different session
+  -- environment. Replaced with catalog IDENTITY instead of catalog TEXT:
+  --   - t.tgfoid = 'public.mesa_append_only_v1()'::regprocedure -- OID
+  --     equality, not name text. The comparison's OWN literal is explicitly
+  --     schema-qualified, so the cast resolves the SAME function regardless
+  --     of the executing session's search_path (independently re-verified
+  --     live under `SET LOCAL search_path = pg_catalog`: identical TRUE).
+  --   - t.tgtype -- Postgres does not expose named boolean accessors for
+  --     trigger timing/events, only this bitmask column, so the specific
+  --     bits were derived from LIVE catalog evidence (not memory) by cross-
+  --     referencing every non-internal public-schema trigger's tgtype
+  --     against its own pg_get_triggerdef() text and solving the resulting
+  --     system: AFTER INSERT ROW=5, BEFORE INSERT ROW=7 (so BEFORE=2),
+  --     BEFORE DELETE ROW=11, AFTER UPDATE ROW=17, BEFORE UPDATE ROW=19,
+  --     AFTER INSERT-OR-UPDATE ROW=21, BEFORE INSERT-OR-UPDATE ROW=23,
+  --     AFTER DELETE-OR-UPDATE ROW=25 -- twelve independent real examples,
+  --     every one consistent with exactly one solution: ROW=1, BEFORE=2,
+  --     INSERT=4, DELETE=8, UPDATE=16 (matching PostgreSQL's own documented
+  --     TRIGGER_TYPE_* bit layout, confirmed rather than assumed). The
+  --     historically-installed trigger's own tgtype is 27 = ROW+BEFORE+
+  --     DELETE+UPDATE (1+2+8+16) -- exactly "BEFORE DELETE OR UPDATE ...
+  --     FOR EACH ROW", verified against FIVE other real triggers in this
+  --     same database sharing that identical tgtype=27 (order_entities_
+  --     append_only_v1 among them, also on mesa_append_only_v1() itself).
+  --     Asserting the exact value therefore proves BEFORE (not AFTER),
+  --     both UPDATE and DELETE (not one alone), and ROW-level (not
+  --     STATEMENT) all at once, with no rendered-text/search_path exposure.
+  --   - t.tgenabled IN ('O','A') -- 'O' (origin/normal) is the frozen live
+  --     state; 'A' (always) is likewise active under every
+  --     session_replication_role and so equally protects ordinary writes.
+  --     'R' (replica-only) is deliberately REJECTED here even though it is
+  --     not literally "disabled": a replica-only trigger does not fire for
+  --     ordinary application sessions (session_replication_role='origin'),
+  --     so it would NOT protect the writes this invariant actually cares
+  --     about -- the prior `<> 'D'` form wrongly accepted it. 'D'
+  --     (disabled) is rejected as before.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+     JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='public' AND c.relname='payment_transactions'
+      AND t.tgname='payment_transactions_append_only_v1' AND NOT t.tgisinternal
+      AND t.tgenabled IN ('O','A')
+      AND t.tgfoid = 'public.mesa_append_only_v1()'::regprocedure
+      AND t.tgtype = 27  -- ROW(1) + BEFORE(2) + DELETE(8) + UPDATE(16), empirically derived above
+  ) THEN
+    RAISE EXCEPTION 'M122 post-condition failed: payment_transactions_append_only_v1 is missing, disabled/replica-only, targets the wrong function, or no longer covers BEFORE ROW DELETE-OR-UPDATE';
   END IF;
-  IF (SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
-       JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' AND c.relname='payment_allocations'
-        AND t.tgname='payment_allocations_append_only_v1' AND NOT t.tgisinternal
-        AND t.tgenabled <> 'D')
-     IS DISTINCT FROM
-     'CREATE TRIGGER payment_allocations_append_only_v1 BEFORE DELETE OR UPDATE ON public.payment_allocations FOR EACH ROW EXECUTE FUNCTION mesa_append_only_v1()'
-  THEN
-    RAISE EXCEPTION 'M122 post-condition failed: payment_allocations_append_only_v1 is missing, disabled, or no longer the exact BEFORE DELETE OR UPDATE / mesa_append_only_v1() enforcement';
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+     JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='public' AND c.relname='payment_allocations'
+      AND t.tgname='payment_allocations_append_only_v1' AND NOT t.tgisinternal
+      AND t.tgenabled IN ('O','A')
+      AND t.tgfoid = 'public.mesa_append_only_v1()'::regprocedure
+      AND t.tgtype = 27  -- ROW(1) + BEFORE(2) + DELETE(8) + UPDATE(16), empirically derived above
+  ) THEN
+    RAISE EXCEPTION 'M122 post-condition failed: payment_allocations_append_only_v1 is missing, disabled/replica-only, targets the wrong function, or no longer covers BEFORE ROW DELETE-OR-UPDATE';
   END IF;
   IF position('RAISE EXCEPTION' IN (SELECT prosrc FROM pg_proc WHERE proname='mesa_append_only_v1' AND pronamespace='public'::regnamespace)) = 0 THEN
     RAISE EXCEPTION 'M122 post-condition failed: mesa_append_only_v1 no longer unconditionally raises -- append-only enforcement silently defanged';
