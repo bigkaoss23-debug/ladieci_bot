@@ -17,6 +17,7 @@ process.env.SUPABASE_KEY = process.env.SUPABASE_KEY || 'stub-service-role-key';
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 let pass = 0, fail = 0;
 const assert = (n, c, d = '') => {
@@ -249,8 +250,54 @@ assert('the fixed declaration appears exactly once (no duplicate CREATE for the 
 assert('the body-level assertions above (fixed comparison present, old one gone, other `<>` untouched) still hold on the SAME extracted body -- the default fix touched only the parameter list, never AS $function$',
   mesaRefundFn.includes('v_original.table_session_id IS DISTINCT FROM p_table_session_id') &&
   !mesaRefundFn.includes('v_original.table_session_id <> p_table_session_id'));
-assert('KNOWN DEFECT (pending owner decision -- MIGRATION_122_FAST_FOLLOW_ROLLBACK_DECISION_REQUIRED, not fixed in this fast-follow): the ROLLBACK\'s own CREATE OR REPLACE for mesa_post_refund_v1 still omits both defaults and would independently 42P13 if ever executed after this corrected forward file. This assertion documents the finding -- if the rollback is later fixed under separate authorization, THIS assertion must be updated (or it will start failing), not silently left green.',
-  /CREATE OR REPLACE FUNCTION public\.mesa_post_refund_v1\([^)]*p_amount numeric, p_meta jsonb\)/.test(RB));
+// ROLLBACK PARAMETER-DEFAULT FAST-FOLLOW (owner-approved) -- the KNOWN DEFECT the previous
+// fast-follow deliberately flagged (rollback's CREATE OR REPLACE for mesa_post_refund_v1 omitted
+// the same two DEFAULTs the forward file's own item-7 fast-follow had to add) is now fixed in
+// the rollback too. §9 required assertions 1-9 below; items 10-12 (Migration 123 absent, no new
+// table, no backfill) are already proven, byte-unmoved by this rollback-only change, by the
+// "NO MIGRATION 123, NO NEW TABLE, LEDGER STAYS 121" and "POST-CONDITION" sections above -- not
+// duplicated here.
+const rbMesaRefundFn = fnBody(RB, 'mesa_post_refund_v1');
+assert('[§9.1] rollback declares the live p_amount default verbatim (DEFAULT NULL::numeric)',
+  RB.includes('p_amount numeric DEFAULT NULL::numeric, p_meta jsonb'));
+assert('[§9.2] rollback declares the live p_meta default verbatim (DEFAULT \'{}\'::jsonb)',
+  RB.includes("p_meta jsonb DEFAULT '{}'::jsonb"));
+assert('[§9.3/§9.4] identity arguments (types AND order) are byte-identical to the live pre-122 signature in the rollback too -- only the two DEFAULT clauses were added, nothing else',
+  RB.includes(mesaRefundDeclFixed) &&
+  mesaRefundDeclFixed.replace(' DEFAULT NULL::numeric', '').replace(" DEFAULT '{}'::jsonb", '') === mesaRefundDeclOriginal);
+assert('[§9.5] return contract unchanged -- rollback declaration is still followed by RETURNS jsonb',
+  RB.slice(RB.indexOf('CREATE OR REPLACE FUNCTION public.mesa_post_refund_v1('),
+           RB.indexOf('CREATE OR REPLACE FUNCTION public.mesa_post_refund_v1(') + 700)
+    .includes('RETURNS jsonb'));
+assert('[§9.6] rollback body otherwise unchanged -- still restores the pre-fix NULL-unsafe `<>`, never the IS DISTINCT FROM fix (the default fix touched only the parameter list, never AS $function$)',
+  rbMesaRefundFn.includes('v_original.table_session_id <> p_table_session_id') &&
+  !rbMesaRefundFn.includes('v_original.table_session_id IS DISTINCT FROM p_table_session_id'));
+assert('[§9.7] no DROP FUNCTION mesa_post_refund_v1 anywhere in the rollback (defaults preserved in-declaration, not via drop+recreate)',
+  !/DROP\s+FUNCTION[^;]*mesa_post_refund_v1/i.test(RB));
+assert('[§9.9] rollback hard-refuse guards preserved verbatim (both canonical-fact checks still present, unmoved by this parameter-only edit)',
+  RB.includes('M122 ROLLBACK refused') &&
+  RB.includes('a payment_transactions row with table_session_id IS NULL exists') &&
+  RB.includes('a payment_allocations row with table_order_line_id IS NULL or order_uid IS NOT NULL exists'));
+assert('[§4] forward Migration 122 remains byte-identical to commit 0dffc2c (ae15840600e14bd9...) -- this is a rollback-only fast-follow',
+  crypto.createHash('sha256').update(MIG).digest('hex') ===
+    'ae15840600e14bd96228d83f5ce1c2c5198086c1d54ec63d05e94e130e188648');
+
+section('§10 — forward/rollback compatibility: neither direction can hit 42P13 for mesa_post_refund_v1');
+// The exact live signature independently confirmed via pg_get_function_arguments during the
+// STAGING promotion attempt that surfaced this whole defect class (both fast-follows). Encoded
+// once here as the single source of truth this offline test checks the forward AND rollback
+// files against -- if either file's declaration ever stops containing this exact substring,
+// that direction's CREATE OR REPLACE would attempt to remove a live default and 42P13.
+const LIVE_MESA_REFUND_DEFAULTS = "p_amount numeric DEFAULT NULL::numeric, p_meta jsonb DEFAULT '{}'::jsonb";
+assert('forward Migration 122 preserves the live defaults (structurally cannot 42P13 on apply)',
+  MIG.includes(LIVE_MESA_REFUND_DEFAULTS));
+assert('rollback Migration 122 preserves the SAME live defaults (structurally cannot 42P13 if ever run after a successful forward apply)',
+  RB.includes(LIVE_MESA_REFUND_DEFAULTS));
+assert('both declarations are otherwise identical to each other in their parameter list (same fix, same file convention, applied symmetrically)',
+  MIG.slice(MIG.indexOf('FUNCTION public.mesa_post_refund_v1('), MIG.indexOf('\n RETURNS jsonb', MIG.indexOf('FUNCTION public.mesa_post_refund_v1(')))
+    ===
+  RB.slice(RB.indexOf('FUNCTION public.mesa_post_refund_v1('), RB.indexOf('\n RETURNS jsonb', RB.indexOf('FUNCTION public.mesa_post_refund_v1(')))
+);
 
 section('MESA UNTOUCHED — no redefinition of the writers this slice must not touch');
 assert('mesa_post_payment_v1 is not redefined in this migration file',

@@ -112,7 +112,18 @@ $function$;
 -- Restore mesa_post_refund_v1 to its pre-122 body (the NULL-unsafe `<>`).
 -- Safe only because the guard above proved table_session_id has never been
 -- NULL on any payment_transactions row.
-CREATE OR REPLACE FUNCTION public.mesa_post_refund_v1(p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid, p_original_transaction_id uuid, p_reason text, p_client_request_id text, p_request_hash text, p_amount numeric, p_meta jsonb)
+-- PARAMETER-DEFAULT FAST-FOLLOW -- the live function has always carried
+-- `p_amount numeric DEFAULT NULL::numeric, p_meta jsonb DEFAULT '{}'::jsonb`
+-- on its last two parameters (this migration's forward file never removes
+-- them -- see its own item-7 fast-follow comment). CREATE OR REPLACE
+-- refuses to silently drop an existing default, so a rollback declaration
+-- that omitted them would itself fail with the same PostgreSQL 42P13 this
+-- forward-migration fast-follow fixed, the moment it ran after a
+-- successful forward apply. Reproducing both DEFAULTs here is therefore
+-- required for THIS statement to succeed -- it changes nothing about what
+-- gets restored: the body below is untouched, and identity (types/order/
+-- count) is untouched, which is why grants still carry over either way.
+CREATE OR REPLACE FUNCTION public.mesa_post_refund_v1(p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid, p_original_transaction_id uuid, p_reason text, p_client_request_id text, p_request_hash text, p_amount numeric DEFAULT NULL::numeric, p_meta jsonb DEFAULT '{}'::jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
  SET search_path TO 'public', 'extensions', 'pg_temp'
