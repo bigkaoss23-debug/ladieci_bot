@@ -278,9 +278,10 @@ assert('[§9.9] rollback hard-refuse guards preserved verbatim (both canonical-f
   RB.includes('M122 ROLLBACK refused') &&
   RB.includes('a payment_transactions row with table_session_id IS NULL exists') &&
   RB.includes('a payment_allocations row with table_order_line_id IS NULL or order_uid IS NOT NULL exists'));
-assert('[§4] forward Migration 122 remains byte-identical to commit 0dffc2c (ae15840600e14bd9...) -- this is a rollback-only fast-follow',
-  crypto.createHash('sha256').update(MIG).digest('hex') ===
-    'ae15840600e14bd96228d83f5ce1c2c5198086c1d54ec63d05e94e130e188648');
+// NOTE: forward Migration 122 was byte-identical to commit 0dffc2c as of the rollback-only
+// fast-follow (8ec5e24) -- that checkpoint (ae15840600e14bd9...) is superseded by the
+// comment-safe postcondition fast-follow below, which DOES intentionally change the forward
+// file; its own current checksum is pinned in that section instead of re-asserted here.
 
 section('§10 — forward/rollback compatibility: neither direction can hit 42P13 for mesa_post_refund_v1');
 // The exact live signature independently confirmed via pg_get_function_arguments during the
@@ -336,8 +337,60 @@ assert('always pays mode=full (a creation-time "ya pagado" settles the FULL obli
 assert('resolves workspace via order_entities, never trusts a client-supplied workspace',
   initFn.includes('FROM public.order_entities oe WHERE oe.order_uid = NEW.order_uid'));
 assert('post-condition proves the repoint landed and the guards survived',
-  MIG.includes("position('order_post_payment_v1' IN v_def) = 0") &&
-  MIG.includes("position('order_mark_paid' IN v_def) > 0"));
+  MIG.includes("position('PERFORM public.order_post_payment_v1(' IN v_def) = 0") &&
+  MIG.includes("position('PERFORM public.order_mark_paid(' IN v_def) > 0"));
+
+section('COMMENT-SAFE POSTCONDITION FAST-FOLLOW — real STAGING apply proved the bare-substring check false-positives');
+// A byte-exact apply of the pre-fast-follow file against live STAGING reached this exact
+// post-condition and failed: `position('order_mark_paid' IN v_def) > 0` matched the PROSE
+// comment on the line right above the real call ("...exactly like _ledger_write_payment/
+// order_mark_paid did."), not an executable call -- pg_get_functiondef() returns prosrc
+// verbatim, comments included. The transaction rolled back cleanly (verified independently:
+// ledger tip 121, pre-122 columns still NOT NULL, none of the three new writers persisted).
+//
+// This section reproduces the OLD and NEW check logic OFFLINE against the real extracted
+// function body (proving the false positive existed and is now gone) and against a synthetic
+// fixture with a genuine reintroduced legacy call (proving a real regression is still caught).
+// Scoped to the DO $post$ block specifically -- the untouched DO $guard$ precondition
+// (lines ~195-207) legitimately keeps the same bare `position('order_mark_paid' IN v_def)`
+// form: it is not exposed to the false-positive today (the live pre-122 body's ONLY
+// real call at that point genuinely IS order_mark_paid, and order_post_payment_v1 cannot
+// yet be mentioned anywhere since it does not exist pre-migration) and this fast-follow's
+// scope is the failing post-condition, not a sweep of every occurrence in the file.
+const postBlock = MIG.slice(MIG.indexOf('DO $post$'), MIG.indexOf('END $post$;') + 'END $post$;'.length);
+assert('the OLD bare-substring pattern is gone from the $post$ block specifically (guard block is untouched by design, see comment)',
+  !postBlock.includes("position('order_post_payment_v1' IN v_def)") &&
+  !postBlock.includes("position('order_mark_paid' IN v_def)"));
+assert('the real function body DOES contain the bare token "order_mark_paid" (proves the false-positive scenario is real, not hypothetical -- it is the comment on the line above the call)',
+  initFn.includes('order_mark_paid') &&
+  !/PERFORM public\.order_mark_paid\(/.test(initFn));
+
+// Local reproduction of Postgres's position(needle IN haystack) semantics: 1-based index,
+// 0 when absent. Applied to the REAL extracted body (what pg_get_functiondef would return
+// for the body portion) to prove the exact before/after behavior without touching STAGING.
+const position = (needle, haystack) => haystack.indexOf(needle) + 1; // 0 if absent, matches SQL position()
+
+// CASE A -- comment-only mention (the real, current function body).
+assert('[CASE A / BEFORE FIX] the OLD pattern WOULD have false-positived on the real body (reproduces the exact live failure)',
+  position('order_mark_paid', initFn) > 0);
+assert('[CASE A / AFTER FIX] the NEW pattern does NOT false-positive on the real body (comment-only mention is correctly ignored)',
+  position('PERFORM public.order_mark_paid(', initFn) === 0);
+assert('[CASE A] the NEW pattern correctly finds the real canonical call in the real body',
+  position('PERFORM public.order_post_payment_v1(', initFn) > 0);
+
+// CASE B -- a genuine legacy call reintroduced (synthetic fixture: swap the one real PERFORM
+// line for the pre-122 legacy call shape, keep the explanatory comment as-is -- proving the
+// fix is not merely "never matches order_mark_paid at all", but actually discriminates).
+const legacyReintroducedFn = initFn.replace(
+  'PERFORM public.order_post_payment_v1(',
+  'PERFORM public.order_mark_paid(');
+assert('[CASE B setup] the synthetic fixture genuinely differs from the real body (sanity check on the fixture itself)',
+  legacyReintroducedFn !== initFn && legacyReintroducedFn.includes('PERFORM public.order_mark_paid('));
+assert('[CASE B] a REAL legacy call is still correctly rejected by the NEW pattern (not merely blind to the name)',
+  position('PERFORM public.order_mark_paid(', legacyReintroducedFn) > 0);
+assert('forward Migration 122 is pinned to this fast-follow\'s own committed bytes (9cbc9e1b2b59db51...)',
+  crypto.createHash('sha256').update(MIG).digest('hex') ===
+    '9cbc9e1b2b59db510b55a997a8e0e0673c55bc78bea378bb166419c43d4f579e');
 
 section('POST-CONDITION — no backfill, append-only intact');
 assert('post-condition compares payment_transactions row count against the guard snapshot',

@@ -1466,10 +1466,27 @@ BEGIN
   SELECT pg_get_functiondef(p.oid) INTO v_def FROM pg_proc p
    JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='public' AND p.proname='order_initial_payment_v1';
-  IF position('order_post_payment_v1' IN v_def) = 0 THEN
+  -- COMMENT-SAFE FAST-FOLLOW -- a real byte-exact STAGING apply attempt proved
+  -- this check false-positives: pg_get_functiondef() returns prosrc verbatim,
+  -- comments included (Postgres never strips them from the stored source), and
+  -- this very function's body explains itself with a comment naming BOTH
+  -- writers for historical context ("...exactly like _ledger_write_payment/
+  -- order_mark_paid did." -- see the item-6 comment above this trigger). A bare
+  -- substring search on either function name is therefore unsound in BOTH
+  -- directions: it can wrongly REJECT a correct migration (the bug this fixes,
+  -- caught live) or wrongly ACCEPT a broken one where the real call was
+  -- removed but a comment mentioning the name was left behind. The fix
+  -- asserts the actual PL/pgSQL CALL STATEMENT shape this codebase already
+  -- uses for this exact trigger -- schema-qualified, immediately followed by
+  -- an opening paren, matching both the legacy call this trigger used before
+  -- this migration (`PERFORM public.order_mark_paid(`, see
+  -- 2026-08-24_n3_canonical_initial_payment.sql) and the canonical call it
+  -- uses now (`PERFORM public.order_post_payment_v1(`, item 6 above) -- a
+  -- prose mention can never accidentally reproduce this exact shape.
+  IF position('PERFORM public.order_post_payment_v1(' IN v_def) = 0 THEN
     RAISE EXCEPTION 'M122 post-condition failed: order_initial_payment_v1 does not call order_post_payment_v1';
   END IF;
-  IF position('order_mark_paid' IN v_def) > 0 THEN
+  IF position('PERFORM public.order_mark_paid(' IN v_def) > 0 THEN
     RAISE EXCEPTION 'M122 post-condition failed: order_initial_payment_v1 still references order_mark_paid';
   END IF;
   IF position('pay-order-' IN v_def) = 0 THEN
