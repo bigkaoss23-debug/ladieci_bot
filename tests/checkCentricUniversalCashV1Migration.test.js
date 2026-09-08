@@ -45,9 +45,25 @@ function fnBody(src, name) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-section('NO MIGRATION 123, NO NEW TABLE, LEDGER STAYS 121');
-assert('no migration 123 file exists',
-  !fs.readdirSync(MIG_DIR).some((f) => /_migration_123\b/.test(f) || /^2026-09-\d\d_.*123/.test(f)));
+section('NO NEW TABLE, LEDGER STAYS 121 (as of M122\'s own authoring)');
+// SUPERSEDED 2026-09-08 -- the ORIGINAL assertion here was "no migration 123
+// file exists", written when M122 believed (see this file's own header,
+// "WHAT IS DELIBERATELY NOT DONE: * NO migration 123. Everything above ships
+// in this one file.") that it needed no follow-up. A live STAGING test the
+// next day proved that false: M122 left order_initial_payment_v1 calling an
+// unqualified digest() with a search_path lacking `extensions`, breaking
+// every creation-time "ya pagado" order (SQLSTATE 42883) -- see
+// FORENSIC_YA_PAGADO_CREATION_FAILURE_M122_2026-09-08.md and migration
+// 2026-09-08_order_initial_payment_digest_schema_fix_migration_123.sql. The
+// owner explicitly authorized that migration 123 as the sole correction
+// vehicle for exactly this one defect. Banning ANY migration-123 file
+// outright is therefore no longer the right invariant -- what still matters
+// is that no OTHER, unauthorized migration 123 sneaks in under that number.
+assert('if a migration-123 file exists, it is EXACTLY the owner-authorized digest-schema-fix (no unauthorized migration 123)',
+  fs.readdirSync(MIG_DIR)
+    .filter((f) => /_migration_123\b/.test(f) || /^2026-09-\d\d_.*123/.test(f))
+    .every((f) => f === '2026-09-08_order_initial_payment_digest_schema_fix_migration_123.sql' ||
+                   f === '2026-09-08_order_initial_payment_digest_schema_fix_migration_123.ROLLBACK.sql'));
 assert('this migration creates NO new table',
   !/CREATE\s+TABLE/i.test(MIG));
 assert('the file declares ledger stays 121 (not applied here)',
