@@ -43,6 +43,9 @@ const { integrateLoginRoute } = require("./src/auth/loginHttpIntegration");
 const { integrateAccountRoutes } = require("./src/account/accountHttpIntegration");
 const { integrateAccessManagementRoutes } = require("./src/auth/accessManagementHttpIntegrationV3");
 const { integrateMesaRoutes } = require("./src/tables/mesaHttpIntegration");
+// UNIFIED_CASH_UI_SURFACE_V1 — additive canonical-obligation projection for the
+// two operator order-list reads (getOrdenes / getOrdenesArchivadosSesion).
+const { attachOrderFinancial } = require("./src/tables/orderObligationProjection");
 const { integrateCashRoutes } = require("./src/cash/cashHttpIntegration");
 const { integrateEconomyRoutes } = require("./src/economy/economyHttpIntegration");
 const authDao = require("./src/auth/dao");
@@ -423,7 +426,7 @@ app.get("/api", async (req, res) => {
       // rollover_source_session_id is actually present on the current
       // session (the common case, no carryover pending, pays nothing extra).
       const sessionIds = await getOperationalSessionIds({ select: sbSelect });
-      result = sessionIds.length > 0
+      const ordenesRows = sessionIds.length > 0
         ? await sbSelect(
             "ordenes",
             serviceSessionsQuery(
@@ -432,6 +435,10 @@ app.get("/api", async (req, res) => {
             ),
           )
         : [];
+      // UNIFIED_CASH_UI_SURFACE_V1 — additive `financial` (canonical obligation)
+      // per order, ONE batched order_obligations read. Nothing else changes;
+      // ordenes.totale is never written. Empty list short-circuits inside.
+      result = await attachOrderFinancial(ordenesRows, { select: sbSelect });
     } else if (action === "getOrdenesArchivadosSesion") {
       // LISTOS_ARCHIVADOS_V1 — sibling of getOrdenes above: same session-scoping
       // (getOperationalSessionIds/serviceSessionsQuery, P0-C2), same "no open
@@ -441,7 +448,7 @@ app.get("/api", async (req, res) => {
       // second query it doesn't need — this one is fetched only while Listos
       // is open.
       const sessionIds = await getOperationalSessionIds({ select: sbSelect });
-      result = sessionIds.length > 0
+      const archivadosRows = sessionIds.length > 0
         ? await sbSelect(
             "ordenes",
             serviceSessionsQuery(
@@ -451,6 +458,10 @@ app.get("/api", async (req, res) => {
             ),
           )
         : [];
+      // UNIFIED_CASH_UI_SURFACE_V1 — same additive `financial` projection as
+      // getOrdenes above, so an archived card and "Abrir en caja" agree on the
+      // current obligation. ONE batched read; ordenes.totale untouched.
+      result = await attachOrderFinancial(archivadosRows, { select: sbSelect });
     } else if (action === "getWaMsgs") {
       result = await sbSelect("wa_msgs", "stato=not.eq.COMPLETATO&order=ts.desc&limit=100");
     } else if (action === "getConfig") {
