@@ -72,14 +72,27 @@ const sha256 = (s) => require('crypto').createHash('sha256').update(s, 'utf8').d
 const stripLineComments = (s) => s.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n');
 
 // ═══════════════════════════════════════════════════════════════════
-section('CASE L — MIGRATION ORDER: 123 present exactly once, 124 absent');
+section('CASE L — MIGRATION ORDER: 123 present exactly once, 124 is only the authorized constraint-gap fix, 125 still absent');
 const allFiles = fs.readdirSync(MIG_DIR);
 assert('exactly one forward migration-123 file exists',
   allFiles.filter((f) => /_migration_123\.sql$/.test(f)).length === 1);
 assert('exactly one migration-123 rollback file exists',
   allFiles.filter((f) => /_migration_123\.ROLLBACK\.sql$/.test(f)).length === 1);
-assert('no migration-124 file of any kind exists',
-  !allFiles.some((f) => /_migration_124\b/.test(f) || /^2026-\d\d-\d\d_.*124/.test(f)));
+// SUPERSEDED 2026-09-09 -- the original assertion here was "no migration-124
+// file of any kind exists", a sequence guard from when 123 was the tip. The
+// owner authorized 2026-09-09_refund_paid_state_constraint_gap_v1_migration_124
+// (REFUND_PAID_STATE_CONSTRAINT_GAP_V1) as the sole migration 124. Same change
+// this project made to checkCentricUniversalCashV1Migration.test.js when 123
+// landed over 122: the guard is not deleted, it is narrowed to "no OTHER,
+// unauthorized migration 124 sneaks in under that number", and no-skip /
+// uniqueness / ascending order stay covered by migrationManifestOrder.test.js.
+assert('if a migration-124 file exists, it is EXACTLY the owner-authorized refund-paid-state constraint gap fix (no unauthorized migration 124)',
+  allFiles
+    .filter((f) => /_migration_124\b/.test(f) || /^2026-\d\d-\d\d_.*124/.test(f))
+    .every((f) => f === '2026-09-09_refund_paid_state_constraint_gap_v1_migration_124.sql' ||
+                   f === '2026-09-09_refund_paid_state_constraint_gap_v1_migration_124.ROLLBACK.sql'));
+assert('no migration-125 file of any kind exists yet (the sequence guard moves forward by one)',
+  !allFiles.some((f) => /_migration_125\b/.test(f) || /^2026-\d\d-\d\d_.*125/.test(f)));
 
 // ═══════════════════════════════════════════════════════════════════
 section('CASE K — M122 IMMUTABILITY: forward and rollback bytes/checksums untouched');
