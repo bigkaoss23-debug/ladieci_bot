@@ -77,7 +77,15 @@ const ROW_2 = Object.freeze({ ...ROW_1, id: 'co-2', service_session_id: 's2', cl
   {
     const closeouts = createServiceCloseouts(fakeDb([ROW_1]));
     const r = await closeouts.getBySessionId({ serviceSessionId: 's1' });
-    assert('4a: financial group present with every documented field', ['grossSalesCents', 'netSalesCents', 'totalDiscountsCents', 'totalRefundsCents', 'totalVoidCents', 'paidAmountCents', 'unpaidExposureCents', 'orderCount', 'cashAmountCents', 'cardAmountCents', 'bizumAmountCents', 'otherAmountCents'].every((k) => k in r.financial));
+    assert('4a: financial group present with every canonical documented field', ['grossSalesCents', 'totalDiscountsCents', 'totalRefundsCents', 'totalVoidCents', 'paidAmountCents', 'unpaidExposureCents', 'orderCount', 'cashAmountCents', 'cardAmountCents', 'bizumAmountCents', 'otherAmountCents', 'currentObligationCents', 'overCollectedCents'].every((k) => k in r.financial));
+    // SERVICE_CLOSEOUT_NET_SALES_LEGACY_CONTRACT_HARDENING_V1 (2026-09-09) — the
+    // legacy net_sales_cents column is deliberately NOT projected onto the
+    // public closeout object anymore (it used to reach the client via the
+    // service-close HTTP response — index.js res.json). The DB column + formula
+    // + RPC writer are unchanged; only this wire projection drops it, so no HTTP
+    // consumer can bind to the ambiguous legacy value. See migration 125 / the
+    // net-sales legacy audit.
+    assert('4a-bis: netSalesCents is NOT exposed on the public closeout (wire exposure removed)', !('netSalesCents' in r.financial));
     assert('4b: operational group present with every documented field', ['openOrdersAtClose', 'occupiedTablesAtClose', 'kitchenPendingCount', 'listoCount', 'deliveryPendingCount', 'incidentCount', 'criticalIncidentCount'].every((k) => k in r.operational));
     assert('4c: no raw snake_case column leaks onto the public object', !('unpaid_exposure_cents' in r) && !('service_session_id' in r) && r.serviceSessionId === 's1');
   }

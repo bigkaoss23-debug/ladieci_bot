@@ -72,7 +72,7 @@ const sha256 = (s) => require('crypto').createHash('sha256').update(s, 'utf8').d
 const stripLineComments = (s) => s.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n');
 
 // ═══════════════════════════════════════════════════════════════════
-section('CASE L — MIGRATION ORDER: 123 present exactly once, 124 is only the authorized constraint-gap fix, 125 still absent');
+section('CASE L — MIGRATION ORDER: 123 present exactly once, 124 is only the authorized constraint-gap fix, 125 is only the authorized net-sales contract-hardening fix, 126 still absent');
 const allFiles = fs.readdirSync(MIG_DIR);
 assert('exactly one forward migration-123 file exists',
   allFiles.filter((f) => /_migration_123\.sql$/.test(f)).length === 1);
@@ -91,8 +91,21 @@ assert('if a migration-124 file exists, it is EXACTLY the owner-authorized refun
     .filter((f) => /_migration_124\b/.test(f) || /^2026-\d\d-\d\d_.*124/.test(f))
     .every((f) => f === '2026-09-09_refund_paid_state_constraint_gap_v1_migration_124.sql' ||
                    f === '2026-09-09_refund_paid_state_constraint_gap_v1_migration_124.ROLLBACK.sql'));
-assert('no migration-125 file of any kind exists yet (the sequence guard moves forward by one)',
-  !allFiles.some((f) => /_migration_125\b/.test(f) || /^2026-\d\d-\d\d_.*125/.test(f)));
+// SUPERSEDED 2026-09-09 (again) -- the assertion here was "no migration-125 file
+// of any kind exists yet", a sequence guard from when 124 was the tip. The owner
+// authorized 2026-09-09_service_closeout_net_sales_legacy_contract_hardening_v1_migration_125
+// (SERVICE_CLOSEOUT_NET_SALES_LEGACY_CONTRACT_HARDENING_V1) as the sole migration
+// 125. Same narrowing as 124-over-123 above: the guard is not deleted, it moves
+// forward by one -- "no OTHER, unauthorized migration 125 sneaks in under that
+// number", and 126 is now the forbidden-next. no-skip / uniqueness / ascending
+// order stay covered by migrationManifestOrder.test.js.
+assert('if a migration-125 file exists, it is EXACTLY the owner-authorized net-sales legacy contract hardening fix (no unauthorized migration 125)',
+  allFiles
+    .filter((f) => /_migration_125\b/.test(f) || /^2026-\d\d-\d\d_.*125/.test(f))
+    .every((f) => f === '2026-09-09_service_closeout_net_sales_legacy_contract_hardening_v1_migration_125.sql' ||
+                   f === '2026-09-09_service_closeout_net_sales_legacy_contract_hardening_v1_migration_125.ROLLBACK.sql'));
+assert('no migration-126 file of any kind exists yet (the sequence guard moves forward by one)',
+  !allFiles.some((f) => /_migration_126\b/.test(f) || /^2026-\d\d-\d\d_.*126/.test(f)));
 
 // ═══════════════════════════════════════════════════════════════════
 section('CASE K — M122 IMMUTABILITY: forward and rollback bytes/checksums untouched');

@@ -32,7 +32,16 @@ function publicCloseout(row) {
     closedBy: row.closed_by,
     financial: {
       grossSalesCents: row.gross_sales_cents,
-      netSalesCents: row.net_sales_cents,
+      // SERVICE_CLOSEOUT_NET_SALES_LEGACY_CONTRACT_HARDENING_V1 (2026-09-09) --
+      // net_sales_cents is a LEGACY/HISTORICAL column: max(0, gross_sales_cents -
+      // total_refunds_cents) off the ORIGINAL order gross, ignoring commercial
+      // adjustments. It is NOT the current obligation, NOT the net collected,
+      // NOT an accounting/taxable authority. It is deliberately NOT projected
+      // onto the public closeout object so no HTTP consumer can bind to it (it
+      // used to reach the client via the service-close response — index.js
+      // res.json). The DB column, its formula and the RPC writer are all
+      // unchanged -- see migration 125 and
+      // SERVICE_CLOSEOUT_NET_SALES_LEGACY_SEMANTICS_V1_AUDIT.md.
       totalDiscountsCents: row.total_discounts_cents,
       totalRefundsCents: row.total_refunds_cents,
       totalVoidCents: row.total_void_cents,
