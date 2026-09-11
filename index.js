@@ -1012,10 +1012,12 @@ app.post("/api", async (req, res) => {
       // ECONOMIC_WRITER_HARDENING_REVIEW_FAIL_FIX_REQUIRED (false-success UX) — this whole
       // dispatcher falls through to a single `res.json(result)` (below) with the implicit
       // 200 status Express gives every response it doesn't set explicitly, regardless of
+      // language-guard: allow-legacy modificaOrdine/creaOrdine are the existing dispatcher action names/handlers this comment describes, not new vocabulary
       // `result.success`. modificaOrdine can now refuse with success:false for a Mesa/
       // adjusted/cancelled economic edit (ORDER_ECONOMIC_BASIS_LOCKED), the pre-existing
       // N-5 paid-order refusal, or a terminal-state refusal — any caller that reads HTTP
       // status instead of the JSON body (the reported case: a modal showing "success" off
+      // language-guard: allow-legacy creaOrdine is the existing dispatcher action name referenced for its 409 convention, not new vocabulary
       // response.ok) would show success on a refused write. Same 409 convention creaOrdine
       // already uses above for a rejected intent (line ~998) — status only, body unchanged.
       if (result && result.success === false) return res.status(409).json(result);
@@ -1093,6 +1095,7 @@ app.post("/api", async (req, res) => {
       // Dashboard operatore: geo/durata ri-risolti server-side, hora preservata.
       result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });
       // ECONOMIC_WRITER_HARDENING_REVIEW_FAIL_FIX_REQUIRED (false-success UX) — see the
+      // language-guard: allow-legacy modificaOrdine is the existing dispatcher branch name this comment refers back to, not new vocabulary
       // identical guard on the "modificaOrdine" branch above for the full rationale.
       if (result && result.success === false) return res.status(409).json(result);
     } else if (action === "updateEstado") {

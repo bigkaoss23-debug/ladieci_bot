@@ -1,6 +1,7 @@
 // tests/economicWriterHardeningV1.test.js — ECONOMIC_WRITER_HARDENING_V1 (Slice 1: fence +
 // lock). Static assertions on migrations/2026-09-11_economic_writer_hardening_v1_migration_126
 // .sql (+ its ROLLBACK, + the manifest row), plus behavioral coverage of the three JS writers
+// language-guard: allow-legacy modificaOrdine/cambiaStato/aggiungiItems are the three existing exported writer function names this header describes, not new vocabulary
 // (modificaOrdine / cambiaStato / aggiungiItems) and the guard module they share.
 //
 // DB-side behaviour (E-1/E-2 fences, Patch B lock ordering, cancelled-payment defense,
@@ -479,6 +480,7 @@ async function testAdjustmentLookup() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
 // Behavioral: modificaOrdine / cambiaStato / aggiungiItems, real module code against a
 // stubbed Supabase transport (require.cache injection, same harness as
 // orderStateTransitions.test.js — no network, no DB).
@@ -528,10 +530,12 @@ async function testWriters() {
   require.cache[mgPath].exports.getManualGiros = async () => [];
   require.cache[mgPath].exports.autoDissolveIfBelowThreshold = async () => ({ ok: true });
 
+  // language-guard: allow-legacy modificaOrdine/agentOrdini are the existing exported writer function and module path this test requires directly, not new vocabulary
   const { modificaOrdine, cambiaStato, aggiungiItems } = require("../src/agents/agentOrdini");
 
   function seed(id, overrides) {
     STORE[id] = {
+      // language-guard: allow-legacy tipo_consegna/RITIRO are the existing ordenes column name and enum value used verbatim in this fixture, not new vocabulary
       id, estado: "EN_COCINA", tipo_consegna: "RITIRO", items: [{ n: "Pizza", q: 1, p: 10 }],
       totale: 10, delivery_fee: 0, descuento_tipo: null, descuento_valor: null, descuento_importe: null,
       table_session_id: null, order_uid: null,
@@ -539,10 +543,12 @@ async function testWriters() {
     };
   }
 
+  // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
   console.log("\n── modificaOrdine ──");
   {
     updateCalls.length = 0;
     seed("#T1", { table_session_id: "11111111-0000-0000-0000-000000000001" });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#T1", { descuento_tipo: "EURO", descuento_valor: 2 });
     check("Mesa order economic edit → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
     check("Mesa order economic edit → no sbUpdate attempted (rejected before the write)",
@@ -553,6 +559,7 @@ async function testWriters() {
     const uid = "22222222-0000-0000-0000-000000000002";
     OBLIGATIONS[uid] = true;
     seed("#T2", { order_uid: uid });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#T2", { descuento_tipo: "EURO", descuento_valor: 2 });
     check("Non-Mesa adjusted-order economic edit → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
     check("adjusted-order economic edit → no sbUpdate attempted",
@@ -561,6 +568,7 @@ async function testWriters() {
   {
     updateCalls.length = 0;
     seed("#T3", { estado: "CANCELADO" });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#T3", { descuento_tipo: "EURO", descuento_valor: 2 });
     check("Non-Mesa cancelled-order edit → rejected (via MODIFICA_TERMINAL_STATES)",
       r.success === false && r.error === "estado_terminal" && r.estado === "CANCELADO");
@@ -570,6 +578,7 @@ async function testWriters() {
   {
     updateCalls.length = 0;
     seed("#T4");
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#T4", { descuento_tipo: "EURO", descuento_valor: 2 });
     check("Non-Mesa unpaid non-adjusted edit → still allowed", r.success === true);
     check("normal edit → sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23T4")));
@@ -577,15 +586,19 @@ async function testWriters() {
   {
     updateCalls.length = 0;
     seed("#T5", { table_session_id: "11111111-0000-0000-0000-000000000005" });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#T5", { nota: "sin cebolla" });
     check("Mesa order NON-economic edit (nota only) → still allowed (E-1 pre-check is scoped to economic fields)",
       r.success === true);
   }
 
+  // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
   console.log("\n── modificaOrdine — R-1 fix: non-economic edits on Mesa/adjusted orders ──");
   // R-1 (ECONOMIC_WRITER_HARDENING_REVIEW_FAIL_FIX_REQUIRED): the JS pre-check used to
   // treat `hora` as an economic field, so an hora-only edit on a Mesa or adjusted order was
+  // language-guard: allow-legacy calcolaTotaleOrdine is the existing helper function name this comment cites; tipo_consegna (next line) is the existing ordenes column name, not new vocabulary
   // wrongly refused even though calcolaTotaleOrdine/deliveryFeeFor (src/utils/helpers.js)
+  // language-guard: allow-legacy tipo_consegna is the existing ordenes column name this comment cites, not new vocabulary
   // depend only on items and tipo_consegna -- an hora-only edit always recomputes totale/
   // delivery_fee to the SAME values already on the row, which the DB fence's own
   // IS DISTINCT FROM check would have let through anyway. These cases prove the fix; #T5
@@ -593,6 +606,7 @@ async function testWriters() {
   {
     updateCalls.length = 0;
     seed("#T6", { table_session_id: "11111111-0000-0000-0000-000000000006" });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#T6", { hora: "20:30" });
     check("Mesa order + hora only → allowed (R-1 fix)", r.success === true);
     check("Mesa order + hora only → sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23T6")));
@@ -602,6 +616,7 @@ async function testWriters() {
     const uid = "22222222-0000-0000-0000-000000000007";
     OBLIGATIONS[uid] = true;
     seed("#T7", { order_uid: uid });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#T7", { nota: "sin cebolla" });
     check("adjusted order + note only → allowed", r.success === true);
   }
@@ -610,6 +625,7 @@ async function testWriters() {
     const uid = "22222222-0000-0000-0000-000000000008";
     OBLIGATIONS[uid] = true;
     seed("#T8", { order_uid: uid });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#T8", { hora: "21:00" });
     check("adjusted order + time only → allowed (R-1 fix, the concrete defect the review found)", r.success === true);
     check("adjusted order + time only → sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23T8")));
@@ -619,6 +635,7 @@ async function testWriters() {
     const uid = "22222222-0000-0000-0000-000000000009";
     OBLIGATIONS[uid] = true;
     seed("#T9", { order_uid: uid });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#T9", { items: [{ n: "Pizza", q: 2, p: 10 }] });
     check("adjusted order + items changed → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
     check("adjusted order + items changed → no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
@@ -628,13 +645,17 @@ async function testWriters() {
     const uid = "22222222-0000-0000-0000-000000000010";
     OBLIGATIONS[uid] = true;
     seed("#T10", { order_uid: uid });
+    // language-guard: allow-legacy tipo_consegna is the existing ordenes column name used verbatim in this fixture, not new vocabulary
     // tipo_consegna is the one field genuinely driving delivery_fee/totale
     // (deliveryFeeFor depends only on it) -- the R-1 "total changed" case.
+    // language-guard: allow-legacy modificaOrdine is the existing writer function called here; tipo_consegna (this and next line) is the existing ordenes column name used in these fixtures, not new vocabulary
     const r = await modificaOrdine("#T10", { tipo_consegna: "DOMICILIO" });
+    // language-guard: allow-legacy tipo_consegna is the existing ordenes column name cited in this test description, not new vocabulary
     check("adjusted order + total-affecting change (tipo_consegna) → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
     check("adjusted order + total-affecting change → no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
   }
 
+  // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
   console.log("\n── modificaOrdine — R-1 round 2: the REAL modal payload (not a synthetic {hora}/{nota}) ──");
   // Round-2 review finding: the real "Modificar" modal (ServicioPage.jsx's modificaOrden,
   // ~line 863: `api.post({action:"updateOrden", id, items:o.items, nota:o.nota, hora:o.hora,
@@ -648,6 +669,7 @@ async function testWriters() {
     const o = { ...orden, ...changes };
     return {
       items: o.items, nota: o.nota, hora: o.hora,
+      // language-guard: allow-legacy tipo_consegna is the existing ordenes column name used verbatim in this fixture, not new vocabulary
       ...(o.tipo_consegna === "DOMICILIO" ? {
         direccion: o.direccion ?? null,
         zona: o.zona ?? null,
@@ -664,6 +686,7 @@ async function testWriters() {
     OBLIGATIONS[uid] = true;
     seed("#R2A", { order_uid: uid, hora: "20:00", nota: "original" });
     const payload = realModalPayload(STORE["#R2A"], { nota: "sin cebolla" });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#R2A", payload);
     check("A. adjusted + real modal payload + note only → allowed", r.success === true);
     check("A. sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23R2A")));
@@ -675,6 +698,7 @@ async function testWriters() {
     OBLIGATIONS[uid] = true;
     seed("#R2B", { order_uid: uid, hora: "20:00", nota: "original" });
     const payload = realModalPayload(STORE["#R2B"], { hora: "21:15" });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#R2B", payload);
     check("B. adjusted + real modal payload + time only → allowed (the concrete review defect)", r.success === true);
     check("B. sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23R2B")));
@@ -686,10 +710,12 @@ async function testWriters() {
     OBLIGATIONS[uid] = true;
     seed("#R2C", {
       order_uid: uid, hora: "20:00", nota: "original",
+      // language-guard: allow-legacy tipo_consegna is the existing ordenes column name used verbatim in this fixture, not new vocabulary
       tipo_consegna: "DOMICILIO", delivery_fee: 2.5, totale: 12.5,
       direccion: "Calle Vieja 1", zona: "Q1", zona_lat: 1, zona_lon: 1, zona_manuale: false,
     });
     const payload = realModalPayload(STORE["#R2C"], { direccion: "Calle Nueva 2" });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#R2C", payload);
     check("C. adjusted DOMICILIO + real modal payload + address only → allowed", r.success === true);
     check("C. sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23R2C")));
@@ -701,6 +727,7 @@ async function testWriters() {
     OBLIGATIONS[uid] = true;
     seed("#R2D", { order_uid: uid, hora: "20:00", nota: "original" });
     const payload = realModalPayload(STORE["#R2D"], { items: [{ n: "Pizza", q: 2, p: 10 }] });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#R2D", payload);
     check("D. adjusted + real modal payload + quantity changed → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
     check("D. no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
@@ -712,6 +739,7 @@ async function testWriters() {
     OBLIGATIONS[uid] = true;
     seed("#R2E", { order_uid: uid, hora: "20:00", nota: "original" });
     const payload = realModalPayload(STORE["#R2E"], { items: [{ n: "Diavola", q: 1, p: 10 }] });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#R2E", payload);
     check("E. adjusted + real modal payload + product changed → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
     check("E. no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
@@ -724,16 +752,18 @@ async function testWriters() {
     OBLIGATIONS[uid] = true;
     seed("#R2F", { order_uid: uid, hora: "20:00", nota: "original" });
     const payload = realModalPayload(STORE["#R2F"], { items: [{ n: "Pizza", q: 1, p: 15 }] });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#R2F", payload);
     check("F. adjusted + real modal payload + price/total changed → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
     check("F. no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
   }
   {
-    // G. ordine normale non pagato/non adjusted + vera modifica economica → comportamento
-    // preesistente ammesso (E-1 non si applica fuori da Mesa/adjusted/cancelled)
+    // G. normal non-paid/non-adjusted order + a genuine economic edit → pre-existing
+    // behavior still allowed (E-1 does not apply outside Mesa/adjusted/cancelled)
     updateCalls.length = 0;
     seed("#R2G", { hora: "20:00", nota: "original" });
     const payload = realModalPayload(STORE["#R2G"], { items: [{ n: "Pizza", q: 5, p: 10 }] });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#R2G", payload);
     check("G. normal non-Mesa/non-adjusted + real modal payload + genuine economic change → still allowed", r.success === true);
     check("G. sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23R2G")));
@@ -752,6 +782,7 @@ async function testWriters() {
       items: [], totale: 100, delivery_fee: 0, hora: "20:00", nota: "original",
     });
     const payload = realModalPayload(STORE["#R2NB3"], { hora: "21:00" });
+    // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
     const r = await modificaOrdine("#R2NB3", payload);
     check("NB-3. Mesa row with stale non-zero totale + empty items + hora-only edit → rejected (totale would move 100→0)",
       r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
@@ -830,6 +861,7 @@ async function testWriters() {
 // ═══════════════════════════════════════════════════════════════════════════
 console.log("\n── MODIFICA_TERMINAL_STATES ──");
 {
+  // language-guard: allow-legacy agentOrdini is the existing module path this test requires, not new vocabulary
   const agentSrc = fs.readFileSync(path.join(__dirname, "..", "src", "agents", "agentOrdini.js"), "utf8");
   check("CANCELADO/CANCELLED/ANULADO added to MODIFICA_TERMINAL_STATES",
     /MODIFICA_TERMINAL_STATES = new Set\(\[[\s\S]{0,200}"CANCELADO", "CANCELLED", "ANULADO",?[\s\S]{0,20}\]\)/.test(agentSrc));
@@ -852,6 +884,7 @@ console.log("\n── index.js — legacy operator-collection branches retired �
 
 console.log("\n── index.js — false-success UX fix (backend reject ≠ success) ──");
 {
+  // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
   // The review's finding: this dispatcher's "modificaOrdine"/"updateOrden" branches fall
   // through to a single shared `res.json(result)` at the end of the big action switch,
   // which Express sends with an implicit 200 regardless of `result.success`. A caller that
@@ -865,17 +898,22 @@ console.log("\n── index.js — false-success UX fix (backend reject ≠ succ
   const indexJs = fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8");
   const GUARD_RE = /if \(result && result\.success === false\) return res\.status\(409\)\.json\(result\);/g;
   const guardCount = (indexJs.match(GUARD_RE) || []).length;
+  // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
   check("both modificaOrdine and updateOrden branches carry the false-success guard (2 occurrences)",
     guardCount === 2);
 
+  // language-guard: allow-legacy modificaOrdine is the existing exported writer function called on this and the next line, not new vocabulary
   const modBranchStart = indexJs.indexOf('action === "modificaOrdine"');
+  // language-guard: allow-legacy modificaOrdine is the existing exported writer function this string literal searches index.js's own source for, not new vocabulary
   const modCallIdx = indexJs.indexOf("result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });", modBranchStart);
   const modGuardIdx = indexJs.indexOf("if (result && result.success === false) return res.status(409).json(result);", modCallIdx);
   const nextBranchIdx = indexJs.indexOf('} else if (action === "aggiornaRispostaBot")', modCallIdx);
+  // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
   check("modificaOrdine branch: the guard runs immediately after the writer call, inside the SAME branch",
     modCallIdx !== -1 && modGuardIdx !== -1 && modGuardIdx > modCallIdx && modGuardIdx < nextBranchIdx);
 
   const updBranchStart = indexJs.indexOf('action === "updateOrden"');
+  // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
   const updCallIdx = indexJs.indexOf("result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });", updBranchStart);
   const updGuardIdx = indexJs.indexOf("if (result && result.success === false) return res.status(409).json(result);", updCallIdx);
   const updNextBranchIdx = indexJs.indexOf('} else if (action === "updateEstado")', updCallIdx);
@@ -886,10 +924,12 @@ console.log("\n── index.js — false-success UX fix (backend reject ≠ succ
   check("both guards run BEFORE the shared fallthrough res.json(result) (so a refusal never reaches the bare-200 path)",
     modGuardIdx < finalResJsonIdx && updGuardIdx < finalResJsonIdx);
 
+  // language-guard: allow-legacy creaOrdine is the existing exported writer function name, not new vocabulary
   check("the status code (409) matches this file's own existing convention for a rejected write (creaOrdine's intentA.ok check)",
     /if \(!intentA\.ok\) \{\s*\n\s*return res\.status\(409\)\.json/.test(indexJs));
 
   // Direct execution of the extracted guard, against the three concrete refusal shapes
+  // language-guard: allow-legacy modificaOrdine is the existing exported writer function this test calls directly, not new vocabulary
   // modificaOrdine can actually return, plus the success case -- not just a text match.
   function simulateDispatch(result) {
     const calls = [];

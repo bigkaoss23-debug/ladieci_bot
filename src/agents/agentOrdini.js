@@ -751,6 +751,7 @@ async function modificaOrdine(ordenId, updates) {
 
       // R-1 fix, round 2 (ECONOMIC_WRITER_HARDENING_REVIEW_FAIL_FIX_REQUIRED) — refuse a
       // Mesa/adjusted order ONLY when this write would actually MOVE the economic basis,
+      // language-guard: allow-legacy tipo_consegna is the existing ordenes column name referenced here, not new vocabulary
       // not merely because items/tipo_consegna/descuento_* were present in the request.
       // `itemsChanged` only compares when `upd.items` was actually set by the caller: the
       // FALLBACK branch above (`itemsFinali = ... (ord.items||[]).filter(...)`) just
@@ -765,6 +766,7 @@ async function modificaOrdine(ordenId, updates) {
         } catch (e) {
           // Cannot prove nothing moved — fail closed (treated as an economic change); the
           // DB fence is the real, fail-closed authority regardless of what this decides.
+          // language-guard: allow-legacy modificaOrdine is this function's own existing name, matching the identical [modificaOrdine ...] log-prefix convention already used above (lines 680/811/838), not new vocabulary
           console.warn(`[modificaOrdine ${ordenId}] item comparison failed, treating as changed:`, e?.message || e);
           return true;
         }
@@ -1147,6 +1149,7 @@ async function aggiungiItems(ordenId, newItems) {
   // Mesa/adjusted/cancelled orders. `rows[0]` is already the full row (no `select=`
   // narrowing above), so table_session_id/estado/order_uid cost nothing extra to read.
   // aggiungiItems always rewrites items/delivery_fee/totale below, so unlike
+  // language-guard: allow-legacy modificaOrdine is the existing writer function name this comment discusses, not new vocabulary
   // modificaOrdine there is no "does this edit even touch economic fields" branch.
   if (rows[0].table_session_id) return economicBasisLockRefusal(ordenId);
   if (["CANCELADO", "CANCELLED", "ANULADO"].includes(String(rows[0].estado || "").toUpperCase())) {

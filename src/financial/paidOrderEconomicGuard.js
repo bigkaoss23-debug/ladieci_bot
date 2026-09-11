@@ -100,6 +100,7 @@ function collectionWouldMutateEconomicBasis(extras) {
 // when the order is Mesa-owned, already carries a commercial-adjustment/cancellation
 // revision, or is already CANCELADO/CANCELLED/ANULADO. `isEconomicBasisLockRefusal` /
 // `economicBasisLockRefusal` give the three writers that already check
+// language-guard: allow-legacy modificaOrdine/cambiaStato/aggiungiItems are the three existing exported writer function names this guard module documents, not new vocabulary
 // `isEconomicMutationRefusal` (modificaOrdine, cambiaStato, aggiungiItems) the same
 // recognition for THIS DB refusal, so it is reported instead of silently mishandled.
 //
@@ -107,6 +108,7 @@ function collectionWouldMutateEconomicBasis(extras) {
 // those same three writers can refuse BEFORE even attempting the write, avoiding a
 // round-trip guaranteed to fail. It is fail-OPEN on a lookup failure (returns false) --
 // the DB trigger remains the real, fail-closed authority regardless of what this helper
+// language-guard: allow-legacy modificaOrdine is the existing writer function name whose estado guard this sentence compares against, not new vocabulary
 // returns, exactly like the top-of-function estado guard in modificaOrdine it sits beside.
 const ORDER_ECONOMIC_BASIS_LOCKED = 'ORDER_ECONOMIC_BASIS_LOCKED';
 

@@ -60,6 +60,15 @@ const ALLOWLIST_PATTERNS = [
   // and to stay symmetric with every other forward+ROLLBACK pair above.
   /^migrations\/2026-08-22_l1_legacy_public_data_lockdown\.sql$/,
   /^migrations\/2026-08-22_l1_legacy_public_data_lockdown\.ROLLBACK\.sql$/,
+  // Economic Writer Hardening V1 (migration 126) forward file references the
+  // existing `modificaOrdine` writer by name in a comment (line 23). Its
+  // sha256 is already registered as ladieci_schema_migrations apply_order=126
+  // on staging (tdikhfeinufaahagmpjz) -- any edit, including an inline
+  // suppression marker, would change the file's bytes and break that
+  // checksum. Exactly the H-1/L-1 situation above: file-level exemption is
+  // the only correct resolution. Its ROLLBACK carries no blocked term and
+  // needs no exemption.
+  /^migrations\/2026-09-11_economic_writer_hardening_v1_migration_126\.sql$/,
   // The guard's own source and its unit tests: they must hold the
   // blocked-term list, allowlist patterns and fixture strings as literal
   // data — that is not domain contamination.
