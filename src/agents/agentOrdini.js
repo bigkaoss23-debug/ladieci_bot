@@ -80,6 +80,11 @@ const { isEconomicCancellation, cancelOrderCanonical } = require("../financial/c
 const {
   isEconomicMutationRefusal,
   economicMutationRefusal,
+  // Economic Writer Hardening V1 (E-1, migration 126) — the sibling guard for
+  // Mesa/adjusted/cancelled orders (N-5's own guard above covers paid orders).
+  isEconomicBasisLockRefusal,
+  economicBasisLockRefusal,
+  orderHasCommercialAdjustmentRevision,
 } = require("../financial/paidOrderEconomicGuard");
 // N-3 — recognising a refused canonical initial payment in the INSERT's error body. The order
 // never existed when this fires, so it is a creation failure, never a partial success.
@@ -643,7 +648,13 @@ async function creaOrdine(params) {
 // Stati post-cucina / terminali: il pedido è già consegnato/chiuso e nessuna
 // modifica server-side deve poter mutarlo. Chiude MOD-4 (M-06 EN_ENTREGA,
 // M-07 RETIRADO/COMPLETADO). Vedi LaDieciBotV2_TEST_MATRIX.md.
-const MODIFICA_TERMINAL_STATES = new Set(["EN_ENTREGA", "RETIRADO", "COMPLETADO", "COMPLETATO"]);
+// Economic Writer Hardening V1 (E-1, migration 126) — CANCELADO/CANCELLED/ANULADO added:
+// a cancelled/annulled order has nothing left to edit, economic or otherwise (mirrors the
+// DB fence's predicate (c) exactly, applied here to every field, not only economic ones).
+const MODIFICA_TERMINAL_STATES = new Set([
+  "EN_ENTREGA", "RETIRADO", "COMPLETADO", "COMPLETATO",
+  "CANCELADO", "CANCELLED", "ANULADO",
+]);
 
 async function modificaOrdine(ordenId, updates) {
   if (updates.hora !== undefined && horaToMinStrict(updates.hora) == null) {
@@ -655,7 +666,7 @@ async function modificaOrdine(ordenId, updates) {
   // sul fetch: se sbSelect fallisce/non torna estado, cade nel path legacy
   // (non aumentiamo la superficie d'errore di flussi legittimi).
   try {
-    const cur = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=estado`);
+    const cur = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=estado,table_session_id,order_uid`);
     const estadoActual = cur?.[0]?.estado;
     if (estadoActual && MODIFICA_TERMINAL_STATES.has(estadoActual)) {
       return {
@@ -664,6 +675,28 @@ async function modificaOrdine(ordenId, updates) {
         estado: estadoActual,
         message: "No se puede modificar un pedido en estado terminal.",
       };
+    }
+    // Economic Writer Hardening V1 (E-1, migration 126) — anticipated rejection, BEFORE
+    // constructing `upd`, for Mesa orders and orders that already carry a commercial
+    // adjustment. Cancelled orders are already caught above. Scoped to edits that would
+    // actually reach the economic recompute block below (same fields it tests): an
+    // hora-only or nota-only edit on a Mesa order is not this guard's business, and the
+    // DB fence remains the fail-closed authority regardless of what this best-effort
+    // pre-check decides.
+    const touchesEconomicFields = updates.items !== undefined
+      || updates.tipo_consegna !== undefined
+      || updates.hora !== undefined
+      || updates.direccion !== undefined
+      || updates.durata_andata_min !== undefined
+      || updates.descuento_tipo !== undefined
+      || updates.descuento_valor !== undefined;
+    if (touchesEconomicFields) {
+      const tableSessionId = cur?.[0]?.table_session_id || null;
+      if (tableSessionId) return economicBasisLockRefusal(ordenId);
+      const orderUid = cur?.[0]?.order_uid || null;
+      if (orderUid && await orderHasCommercialAdjustmentRevision(orderUid)) {
+        return economicBasisLockRefusal(ordenId);
+      }
     }
   } catch (e) {
     console.warn(`[modificaOrdine ${ordenId}] guardia estado fallita:`, e?.message || e);
@@ -802,6 +835,9 @@ async function modificaOrdine(ordenId, updates) {
   // patch that was never applied would push the schedule off a phantom edit.
   const modRes = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
   if (isEconomicMutationRefusal(modRes)) return economicMutationRefusal(ordenId);
+  // E-1 backstop — the anticipated pre-check above is best-effort; this recognises the
+  // DB's own refusal if that pre-check missed it (lookup failure, race, etc.).
+  if (isEconomicBasisLockRefusal(modRes)) return economicBasisLockRefusal(ordenId);
   if (upd.forno_out !== undefined) {
     const zonaSync = upd.zona !== undefined ? upd.zona : undefined;
     const horaSync = upd.hora !== undefined ? upd.hora : undefined;
@@ -841,6 +877,17 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
     const ord = rows?.[0];
     if (ord) {
+      // Economic Writer Hardening V1 (E-1, migration 126) — anticipated rejection.
+      // `ord` is already the full row, so this costs no extra query. Mesa orders, orders
+      // that already carry a commercial adjustment, and already-cancelled/annulled orders
+      // must never have their descuento-driven totale rewritten here.
+      if (ord.table_session_id) return economicBasisLockRefusal(ordenId);
+      if (["CANCELADO", "CANCELLED", "ANULADO"].includes(String(ord.estado || "").toUpperCase())) {
+        return economicBasisLockRefusal(ordenId);
+      }
+      if (ord.order_uid && await orderHasCommercialAdjustmentRevision(ord.order_uid)) {
+        return economicBasisLockRefusal(ordenId);
+      }
       const itemsFinali = (ord.items || []).filter(i => i.n !== "Entrega a domicilio");
       const tipoConsegna = ord.tipo_consegna || "RITIRO";
       const totaleBase = calcolaTotaleOrdine(itemsFinali, tipoConsegna);
@@ -963,6 +1010,9 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     // transition that the DB rejected would be inventing history.
     const stateRes = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
     if (isEconomicMutationRefusal(stateRes)) return economicMutationRefusal(ordenId);
+    // E-1 backstop — recognises the DB's own refusal if the anticipated pre-check above
+    // (inside the descPassed branch) missed it.
+    if (isEconomicBasisLockRefusal(stateRes)) return economicBasisLockRefusal(ordenId);
   }
 
   // No-op (self-loop): nessun log di transizione — non c'è transizione. Evita
@@ -1072,6 +1122,18 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
 async function aggiungiItems(ordenId, newItems) {
   const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
   if (!rows || rows.length === 0) return { error: "not found" };
+  // Economic Writer Hardening V1 (E-1, migration 126) — anticipated rejection for
+  // Mesa/adjusted/cancelled orders. `rows[0]` is already the full row (no `select=`
+  // narrowing above), so table_session_id/estado/order_uid cost nothing extra to read.
+  // aggiungiItems always rewrites items/delivery_fee/totale below, so unlike
+  // modificaOrdine there is no "does this edit even touch economic fields" branch.
+  if (rows[0].table_session_id) return economicBasisLockRefusal(ordenId);
+  if (["CANCELADO", "CANCELLED", "ANULADO"].includes(String(rows[0].estado || "").toUpperCase())) {
+    return economicBasisLockRefusal(ordenId);
+  }
+  if (rows[0].order_uid && await orderHasCommercialAdjustmentRevision(rows[0].order_uid)) {
+    return economicBasisLockRefusal(ordenId);
+  }
   // Filtriamo via il fake item anche dagli newItems per sicurezza
   // Phase A: normalize only the NEW items. Already-persisted items keep their original
   // accepted snapshot and are never re-priced.
@@ -1086,6 +1148,7 @@ async function aggiungiItems(ordenId, newItems) {
     totale:       calcolaTotaleOrdine(merged, tipoConsegna)
   });
   if (isEconomicMutationRefusal(addRes)) return economicMutationRefusal(ordenId);
+  if (isEconomicBasisLockRefusal(addRes)) return economicBasisLockRefusal(ordenId);
   return { success: true, items: merged };
 }
 

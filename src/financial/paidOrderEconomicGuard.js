@@ -92,10 +92,74 @@ function collectionWouldMutateEconomicBasis(extras) {
   return Number.isFinite(valor) && valor > 0;
 }
 
+// ── Economic Writer Hardening V1 (E-1, migration 126) — the sibling guard. ────────────
+//
+// The DB IS THE AUTHORITY here too. migrations/2026-09-11_economic_writer_hardening_v1_
+// migration_126.sql installs order_economic_basis_lock_v1, a BEFORE UPDATE trigger on
+// `ordenes` that refuses a genuine value change to totale/items/delivery_fee/descuento_*
+// when the order is Mesa-owned, already carries a commercial-adjustment/cancellation
+// revision, or is already CANCELADO/CANCELLED/ANULADO. `isEconomicBasisLockRefusal` /
+// `economicBasisLockRefusal` give the three writers that already check
+// `isEconomicMutationRefusal` (modificaOrdine, cambiaStato, aggiungiItems) the same
+// recognition for THIS DB refusal, so it is reported instead of silently mishandled.
+//
+// `orderHasCommercialAdjustmentRevision` is the ANTICIPATED half: a best-effort read so
+// those same three writers can refuse BEFORE even attempting the write, avoiding a
+// round-trip guaranteed to fail. It is fail-OPEN on a lookup failure (returns false) --
+// the DB trigger remains the real, fail-closed authority regardless of what this helper
+// returns, exactly like the top-of-function estado guard in modificaOrdine it sits beside.
+const ORDER_ECONOMIC_BASIS_LOCKED = 'ORDER_ECONOMIC_BASIS_LOCKED';
+
+const BASIS_LOCKED_MESSAGE =
+  'No se puede modificar el importe de un pedido de Mesa, ya ajustado, o cancelado/anulado.';
+
+function isEconomicBasisLockRefusal(sbResult) {
+  if (!sbResult || typeof sbResult !== 'object' || Array.isArray(sbResult)) return false;
+  for (const key of ['message', 'details', 'detail', 'hint']) {
+    const v = sbResult[key];
+    if (typeof v === 'string' && v.includes(ORDER_ECONOMIC_BASIS_LOCKED)) return true;
+  }
+  return false;
+}
+
+function economicBasisLockRefusal(orderId) {
+  return {
+    success: false,
+    error: ORDER_ECONOMIC_BASIS_LOCKED,
+    code: ORDER_ECONOMIC_BASIS_LOCKED,
+    id: typeof orderId === 'string' ? orderId : undefined,
+    message: BASIS_LOCKED_MESSAGE,
+  };
+}
+
+// Best-effort: does this order_uid already carry a commercial-adjustment or cancellation
+// revision (order_obligations.source = 'order_commercial_adjustment_v1')? Mirrors E-1's own
+// predicate (b) exactly. Returns false (never throws) on a missing uid or a lookup failure
+// -- the DB trigger is the fail-closed authority, this is only the early-exit optimisation.
+async function orderHasCommercialAdjustmentRevision(orderUid, deps = {}) {
+  if (!orderUid || typeof orderUid !== 'string') return false;
+  const sbSelect = deps.sbSelect || require('../utils/supabase').sbSelect;
+  try {
+    const rows = await sbSelect(
+      'order_obligations',
+      `order_uid=eq.${encodeURIComponent(orderUid)}&source=eq.order_commercial_adjustment_v1&select=id&limit=1`
+    );
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (e) {
+    console.warn('[orderEconomicBasisLock] adjustment-evidence lookup failed:', e?.message || e);
+    return false;
+  }
+}
+
 module.exports = {
   PAID_ORDER_ECONOMIC_MUTATION_FORBIDDEN,
   OPERATOR_MESSAGE,
   isEconomicMutationRefusal,
   economicMutationRefusal,
   collectionWouldMutateEconomicBasis,
+  ORDER_ECONOMIC_BASIS_LOCKED,
+  BASIS_LOCKED_MESSAGE,
+  isEconomicBasisLockRefusal,
+  economicBasisLockRefusal,
+  orderHasCommercialAdjustmentRevision,
 };

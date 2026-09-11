@@ -47,6 +47,15 @@ const ORDER_INVALID = 'PAYMENT_ORDER_INVALID';
 // pre-ledger representation. Re-recording it would double-count. The order may proceed.
 const LEGACY_ALREADY_PAID = 'AUTH_LEGACY_IMPORT_REQUIRED';
 
+// Economic Writer Hardening V1 (migration 126) — order_mark_paid (this module's SQL
+// target, via financialService.markPaid) is now a retirement stub that raises exactly
+// this code on every call, unconditionally. index.js's two legacy-collection call sites
+// (updateEstado RETIRADO+metodo, marcarEntregado) no longer call registerPayment at all --
+// they answer this same code directly, without the round-trip. Exported here, alongside
+// LEGACY_ALREADY_PAID, so both call sites and any test importing this module share one
+// name for it instead of a re-typed string literal.
+const LEGACY_OPERATOR_COLLECTION_RETIRED = 'LEGACY_OPERATOR_COLLECTION_RETIRED';
+
 const fail = (code) => Object.freeze({ ok: false, code });
 
 // `ordenes.id` values look like `#723`; the SQL CHECK on idem_scope_key is
@@ -143,4 +152,5 @@ module.exports = {
   METHOD_INVALID,
   ORDER_INVALID,
   LEGACY_ALREADY_PAID,
+  LEGACY_OPERATOR_COLLECTION_RETIRED,
 };

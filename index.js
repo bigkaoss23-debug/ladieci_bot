@@ -60,7 +60,7 @@ const { createPinStepUpVerifier } = require("./src/auth/pinStepUp");
 // the operator flow; payment becomes an event, never a boolean side-effect of RETIRADO).
 const { createFinancialDao } = require("./src/auth/financialDao");
 const { createFinancialService } = require("./src/auth/financialService");
-const { createOperatorPaymentRegistrar, PAYMENT_METHODS, buildIdemScopeKey } = require("./src/financial/registerOperatorPayment");
+const { createOperatorPaymentRegistrar, PAYMENT_METHODS, buildIdemScopeKey, LEGACY_OPERATOR_COLLECTION_RETIRED } = require("./src/financial/registerOperatorPayment");
 // N-5 — a request may not collect money and then move the economic basis of the order it
 // just collected on. See the two call sites below and src/financial/paidOrderEconomicGuard.js.
 const {
@@ -1129,23 +1129,16 @@ app.post("/api", async (req, res) => {
         });
       }
       if (collecting) {
-        const pay = await operatorPayments.registerPayment({
-          orderId: req.body.id,
-          paymentMethod: extras.metodo_pago,
-          authCtx: req.authCtx,
-          trustedClientIp: trustedClientIp(req),
-          origin: extras.origin,
+        // Economic Writer Hardening V1 (migration 126) — order_mark_paid (this branch's
+        // only SQL target, via registerOperatorPayment/financialService.markPaid) is now a
+        // retirement stub: it creates no money under any input. This dormant-but-reachable
+        // legacy operator-collection branch (0 live FE callers per the audit) no longer
+        // calls it at all — answering the SAME typed code directly, consistent with the
+        // SQL retirement, without the round-trip.
+        return res.status(409).json({
+          success: false, error: LEGACY_OPERATOR_COLLECTION_RETIRED, code: LEGACY_OPERATOR_COLLECTION_RETIRED,
+          message: "No se pudo registrar el cobro. Usa el panel de caja (Cash V1) para cobrar este pedido.",
         });
-        if (!pay.ok) {
-          return res.status(409).json({ success: false, error: pay.code, code: pay.code,
-            message: "No se pudo registrar el cobro. El pedido no ha cambiado de estado." });
-        }
-        // order_mark_paid already set ya_pagado/cobrado/metodo_pago under lock. Re-writing
-        // them here would be a redundant second authority over the same accounting fact.
-        // (cobrado/ya_pagado non entrano piu in `extras`: li scrive solo il ledger.)
-        if (!pay.alreadyPaidLegacy) {
-          delete extras.metodo_pago;
-        }
       }
       result = await cambiaStato(req.body.id, req.body.estado, extras);
     } else if (action === "marcarEnEntrega") {
@@ -1185,21 +1178,14 @@ app.post("/api", async (req, res) => {
         });
       }
       if (isCollectionMethod(extras.metodo_pago)) {
-        const pay = await operatorPayments.registerPayment({
-          orderId: req.body.id,
-          paymentMethod: extras.metodo_pago,
-          authCtx: req.authCtx,
-          trustedClientIp: trustedClientIp(req),
-          origin: "entregas",
+        // Economic Writer Hardening V1 (migration 126) — same retirement as updateEstado
+        // above: order_mark_paid creates no money under any input, and this dormant-but-
+        // reachable legacy rider/operator collection branch (0 live FE callers) no longer
+        // calls registerOperatorPayment at all.
+        return res.status(409).json({
+          success: false, error: LEGACY_OPERATOR_COLLECTION_RETIRED, code: LEGACY_OPERATOR_COLLECTION_RETIRED,
+          message: "No se pudo registrar el cobro. Usa el panel de caja (Cash V1) para cobrar este pedido.",
         });
-        if (!pay.ok) {
-          return res.status(409).json({ success: false, error: pay.code, code: pay.code,
-            message: "No se pudo registrar el cobro. El pedido no ha cambiado de estado." });
-        }
-        // (cobrado/ya_pagado non entrano piu in `extras`: li scrive solo il ledger.)
-        if (!pay.alreadyPaidLegacy) {
-          delete extras.metodo_pago;
-        }
       }
       result = await cambiaStato(req.body.id, "RETIRADO", extras);
     } else if (action === "asignarRepartidor") {

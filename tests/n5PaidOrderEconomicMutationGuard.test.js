@@ -218,15 +218,15 @@ console.log("\n── index.js: refuse the collect+discount combination before m
   check("index.js imports the pre-check", /collectionWouldMutateEconomicBasis,/.test(indexJs));
   const guards = (indexJs.match(/collectionWouldMutateEconomicBasis\(extras\)/g) || []).length;
   check("both collecting call sites are guarded (updateEstado + marcarEntregado)", guards === 2);
-  // Ordering is the whole point: the refusal must precede registerPayment.
-  const firstGuard = indexJs.indexOf("collectionWouldMutateEconomicBasis(extras)");
-  const firstPay = indexJs.indexOf("operatorPayments.registerPayment(");
-  check("the first pre-check precedes the first registerPayment call", firstGuard < firstPay);
-  const lastGuard = indexJs.lastIndexOf("collectionWouldMutateEconomicBasis(extras)");
-  const lastPay = indexJs.lastIndexOf("operatorPayments.registerPayment(");
-  check("the second pre-check precedes the second registerPayment call", lastGuard < lastPay);
   check("it answers 409 with the typed code, like the other collection refusals",
     /status\(409\)[\s\S]{0,200}PAID_ORDER_ECONOMIC_MUTATION_FORBIDDEN/.test(indexJs));
+  // Economic Writer Hardening V1 (migration 126) supersedes the ordering check that used
+  // to live here: order_mark_paid (registerOperatorPayment's only SQL target) is now a
+  // retirement stub that creates no money under any input, so both `collecting` branches
+  // no longer call `operatorPayments.registerPayment` at all -- they answer the retirement
+  // code directly. See economicWriterHardeningV1.test.js for the coverage this replaces.
+  check("neither legacy-collection branch calls registerPayment any more (retired)",
+    !indexJs.includes("operatorPayments.registerPayment("));
 }
 
 console.log("");

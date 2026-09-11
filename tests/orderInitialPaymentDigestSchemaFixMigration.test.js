@@ -72,7 +72,7 @@ const sha256 = (s) => require('crypto').createHash('sha256').update(s, 'utf8').d
 const stripLineComments = (s) => s.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n');
 
 // ═══════════════════════════════════════════════════════════════════
-section('CASE L — MIGRATION ORDER: 123 present exactly once, 124 is only the authorized constraint-gap fix, 125 is only the authorized net-sales contract-hardening fix, 126 still absent');
+section('CASE L — MIGRATION ORDER: 123 present exactly once, 124 is only the authorized constraint-gap fix, 125 is only the authorized net-sales contract-hardening fix, 126 is only the authorized economic writer hardening fix, 127 still absent');
 const allFiles = fs.readdirSync(MIG_DIR);
 assert('exactly one forward migration-123 file exists',
   allFiles.filter((f) => /_migration_123\.sql$/.test(f)).length === 1);
@@ -104,8 +104,21 @@ assert('if a migration-125 file exists, it is EXACTLY the owner-authorized net-s
     .filter((f) => /_migration_125\b/.test(f) || /^2026-\d\d-\d\d_.*125/.test(f))
     .every((f) => f === '2026-09-09_service_closeout_net_sales_legacy_contract_hardening_v1_migration_125.sql' ||
                    f === '2026-09-09_service_closeout_net_sales_legacy_contract_hardening_v1_migration_125.ROLLBACK.sql'));
-assert('no migration-126 file of any kind exists yet (the sequence guard moves forward by one)',
-  !allFiles.some((f) => /_migration_126\b/.test(f) || /^2026-\d\d-\d\d_.*126/.test(f)));
+// SUPERSEDED 2026-09-11 -- the assertion here was "no migration-126 file of any
+// kind exists yet", a sequence guard from when 125 was the tip. The owner
+// authorized 2026-09-11_economic_writer_hardening_v1_migration_126
+// (ECONOMIC_WRITER_HARDENING_V1, Slice 1) as the sole migration 126. Same
+// narrowing as 125-over-124 above: the guard is not deleted, it moves forward
+// by one -- "no OTHER, unauthorized migration 126 sneaks in under that
+// number", and 127 is now the forbidden-next. no-skip / uniqueness / ascending
+// order stay covered by migrationManifestOrder.test.js.
+assert('if a migration-126 file exists, it is EXACTLY the owner-authorized economic writer hardening fix (no unauthorized migration 126)',
+  allFiles
+    .filter((f) => /_migration_126\b/.test(f) || /^2026-\d\d-\d\d_.*126/.test(f))
+    .every((f) => f === '2026-09-11_economic_writer_hardening_v1_migration_126.sql' ||
+                   f === '2026-09-11_economic_writer_hardening_v1_migration_126.ROLLBACK.sql'));
+assert('no migration-127 file of any kind exists yet (the sequence guard moves forward by one)',
+  !allFiles.some((f) => /_migration_127\b/.test(f) || /^2026-\d\d-\d\d_.*127/.test(f)));
 
 // ═══════════════════════════════════════════════════════════════════
 section('CASE K — M122 IMMUTABILITY: forward and rollback bytes/checksums untouched');
