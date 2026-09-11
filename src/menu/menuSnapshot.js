@@ -325,4 +325,173 @@ function normalizeOrderItem(item, opts = {}) {
   return deepFreeze(snap);
 }
 
-module.exports = { buildOrderItemSnapshot, normalizeOrderItem, OrderItemValidationError, SNAPSHOT_VERSION };
+// ===============================================================
+// NF-1 / NF-2 — EDIT BOUNDARY (Modificar pedido save, WhatsApp addition merge).
+//
+// An edited line can come back carrying TWO representations: the working mirrors an
+// editor changes (`q`, `p`, `sub`) and the canonical snapshot saved earlier
+// (`quantity`, `baseUnitPrice`, `extras[]`, `extrasUnitTotal`, `finalUnitPrice`,
+// `lineTotal`). normalizeOrderItem reads the canonical fields first, so a stale
+// canonical copy silently won over the edit: a quantity change was dropped, and an
+// extra was saved as `sub` text without being charged.
+//
+// reconcileEditedOrderItem resolves the two BY VALUE before normalizing:
+//   - quantity: when `q` and `quantity` disagree, the one that still reproduces the
+//     line's own saved `lineTotal` at its `finalUnitPrice` is the untouched snapshot,
+//     so the other one is the edit. Neither or both reproducing it -> refused.
+//   - price: a structured line (baseUnitPrice + extras[]) is priced from that
+//     structure. Every price mirror present (`p`, `finalUnitPrice`,
+//     `extrasUnitTotal`) must agree with it, and the "+Name" tags in `sub` must list
+//     exactly the structured extras (Custom lines excepted: their `sub` is generated
+//     description text). A disagreement is refused, never guessed.
+//   - lineTotal is derived; it may only disagree when it was the quantity evidence.
+// Creation keeps calling normalizeOrderItem unchanged; only the edit writers call
+// normalizeEditedOrderItem / mergeOrderLines.
+// ===============================================================
+
+const ORDER_ITEM_PAYLOAD_INCONSISTENT = "ORDER_ITEM_PAYLOAD_INCONSISTENT";
+
+class OrderItemPayloadInconsistentError extends Error {
+  constructor(field, detail) {
+    super(`${field}: ${detail}`);
+    this.name = "OrderItemPayloadInconsistentError";
+    this.code = ORDER_ITEM_PAYLOAD_INCONSISTENT;
+    this.field = field;
+  }
+}
+
+const cents = (n) => Math.round((Number(n) + Number.EPSILON) * 100);
+const isPresent = (v) => v !== undefined && v !== null && v !== "";
+
+function extrasCountByName(list) {
+  const counts = new Map();
+  for (const e of list) {
+    const name = String(e.name || "").trim();
+    if (name) counts.set(name, (counts.get(name) || 0) + (e.quantity > 0 ? e.quantity : 1));
+  }
+  return counts;
+}
+
+function sameCounts(a, b) {
+  if (a.size !== b.size) return false;
+  for (const [name, qty] of a) if (b.get(name) !== qty) return false;
+  return true;
+}
+
+function reconcileEditedOrderItem(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return item; // normalizeOrderItem rejects it
+  const out = { ...item };
+
+  // ── quantity: canonical `quantity` vs working mirror `q` ──
+  let lineTotalWasEvidence = false;
+  const canonQty = toNum(item.quantity);
+  const workQty = toNum(item.q);
+  if (canonQty != null && workQty != null && Math.trunc(canonQty) !== Math.trunc(workQty)) {
+    const unit = toNum(item.finalUnitPrice);
+    const line = toNum(item.lineTotal);
+    const canonIsSnapshot = unit != null && line != null && cents(unit * Math.trunc(canonQty)) === cents(line);
+    const workIsSnapshot = unit != null && line != null && cents(unit * Math.trunc(workQty)) === cents(line);
+    if (canonIsSnapshot === workIsSnapshot) {
+      throw new OrderItemPayloadInconsistentError("quantity",
+        `q=${item.q} quantity=${item.quantity} lineTotal=${item.lineTotal}: cannot tell which one was edited`);
+    }
+    out.quantity = canonIsSnapshot ? workQty : canonQty;
+    lineTotalWasEvidence = true;
+  }
+  const qn = toNum(out.quantity ?? out.q);
+  const quantity = qn && qn > 0 ? Math.trunc(qn) : 1;
+
+  // ── price: a structured line is priced from its structure ──
+  let unit = toNum(firstDefined(item.finalUnitPrice, item.p));
+  const base = toNum(item.baseUnitPrice);
+  if (base != null && Array.isArray(item.extras)) {
+    const extras = normalizeExtras(item, null);
+    const extrasUnitTotal = round2(extras.reduce((s, e) => s + (Number(e.price) || 0) * (e.quantity || 1), 0));
+    const finalUnitPrice = round2(base + extrasUnitTotal);
+    for (const [field, expected] of [["p", finalUnitPrice], ["finalUnitPrice", finalUnitPrice], ["extrasUnitTotal", extrasUnitTotal]]) {
+      if (isPresent(item[field]) && cents(item[field]) !== cents(expected)) {
+        throw new OrderItemPayloadInconsistentError(field,
+          `${item[field]} != ${expected} (baseUnitPrice ${base} + extras ${extrasUnitTotal})`);
+      }
+    }
+    if (!isCustomItem(item) && typeof item.sub === "string"
+      && !sameCounts(extrasCountByName(parseLegacySub(item.sub).extras), extrasCountByName(extras))) {
+      throw new OrderItemPayloadInconsistentError("sub", `"+" tags in "${item.sub}" do not match extras[]`);
+    }
+    out.extrasUnitTotal = extrasUnitTotal;
+    out.finalUnitPrice = finalUnitPrice;
+    out.p = finalUnitPrice;
+    unit = finalUnitPrice;
+  } else if (isPresent(item.p) && isPresent(item.finalUnitPrice) && cents(item.p) !== cents(item.finalUnitPrice)) {
+    throw new OrderItemPayloadInconsistentError("p", `${item.p} != finalUnitPrice ${item.finalUnitPrice}`);
+  }
+
+  // ── lineTotal: derived ──
+  if (!lineTotalWasEvidence && isPresent(item.lineTotal) && unit != null
+    && cents(item.lineTotal) !== cents(round2(unit * quantity))) {
+    throw new OrderItemPayloadInconsistentError("lineTotal", `${item.lineTotal} != ${round2(unit * quantity)}`);
+  }
+
+  out.quantity = quantity;
+  out.q = quantity;
+  return out;
+}
+
+function normalizeEditedOrderItem(item, opts = {}) {
+  return normalizeOrderItem(reconcileEditedOrderItem(item), opts);
+}
+
+// Same product in the same complete configuration -> one line with the summed
+// quantity; anything else (different extras, removals, note, accepted price, or a
+// Custom pizza) stays its own line. Mirrors the frontend's menu/itemSignature.js rule,
+// so an addition is never folded into a line it would charge or prepare differently.
+const lowerTrim = (v) => String(v == null ? "" : v).trim().toLowerCase();
+
+function lineProductKey(snap) {
+  const key = firstDefined(snap.productId, snap.legacyKey, snap.legacyId);
+  return key == null ? null : lowerTrim(key);
+}
+
+function extrasSignature(extras) {
+  return (extras || [])
+    .map((e) => `${lowerTrim(e.key)}|${lowerTrim(e.name)}|${cents(e.price)}:${e.quantity || 1}`)
+    .sort()
+    .join(",");
+}
+
+function sameOrderLineConfiguration(a, b) {
+  if (isCustomItem(a) || isCustomItem(b)) return false;
+  const keyA = lineProductKey(a);
+  const keyB = lineProductKey(b);
+  const sameProduct = keyA != null && keyB != null ? keyA === keyB : lowerTrim(a.n) === lowerTrim(b.n);
+  if (!sameProduct) return false;
+  return cents(a.baseUnitPrice) === cents(b.baseUnitPrice)
+    && cents(a.finalUnitPrice) === cents(b.finalUnitPrice)
+    && extrasSignature(a.extras) === extrasSignature(b.extras)
+    && lowerTrim(a.notes) === lowerTrim(b.notes)
+    && (a.removedIngredients || []).map(lowerTrim).sort().join("|")
+      === (b.removedIngredients || []).map(lowerTrim).sort().join("|");
+}
+
+// Saved lines are reconciled like any other edit; incoming lines are normalized; an
+// identical configuration sums its canonical quantity (lineTotal recomputed).
+function mergeOrderLines(existingItems, incomingItems) {
+  const lines = (existingItems || []).map((it) => normalizeEditedOrderItem(it));
+  for (const it of incomingItems || []) {
+    const add = normalizeOrderItem(it);
+    const at = lines.findIndex((line) => sameOrderLineConfiguration(line, add));
+    if (at < 0) {
+      lines.push(add);
+      continue;
+    }
+    const quantity = lines[at].quantity + add.quantity;
+    lines[at] = normalizeOrderItem({ ...lines[at], quantity, q: quantity });
+  }
+  return lines;
+}
+
+module.exports = {
+  buildOrderItemSnapshot, normalizeOrderItem, OrderItemValidationError, SNAPSHOT_VERSION,
+  reconcileEditedOrderItem, normalizeEditedOrderItem, sameOrderLineConfiguration, mergeOrderLines,
+  OrderItemPayloadInconsistentError, ORDER_ITEM_PAYLOAD_INCONSISTENT,
+};

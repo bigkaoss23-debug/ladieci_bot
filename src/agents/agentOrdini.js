@@ -4,7 +4,10 @@
 
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
-const { normalizeOrderItem, OrderItemValidationError } = require("../menu/menuSnapshot");
+const {
+  normalizeOrderItem, OrderItemValidationError,
+  normalizeEditedOrderItem, mergeOrderLines, ORDER_ITEM_PAYLOAD_INCONSISTENT,
+} = require("../menu/menuSnapshot");
 const { getOperationalSessionIds, serviceSessionsQuery } = require("../serviceSessions/currentOperationalSession");
 
 // P0-C3 — shared helper for the two driver-schedule-simulation call sites
@@ -45,6 +48,44 @@ function normalizeItemsForPersist(rawItems) {
       throw new OrderItemValidationError(`item #${idx + 1}${it && it.n ? " ('" + it.n + "')" : ""}: ${e.message}`);
     }
   });
+}
+
+// NF-1 / NF-2 — the EDIT-boundary counterpart of normalizeItemsForPersist, for lines a
+// person has already edited (the Modificar pedido save). A line whose working mirrors
+// (q/p/sub) disagree with its saved canonical fields is reconciled by value or refused
+// with a typed error, before anything is written; see reconcileEditedOrderItem in
+// src/menu/menuSnapshot.js.
+function normalizeItemsForEdit(rawItems) {
+  const arr = Array.isArray(rawItems) ? rawItems : [];
+  const real = arr.filter(i => i && i.n !== "Entrega a domicilio");
+  return real.map((it, idx) => {
+    const where = `item #${idx + 1}${it && it.n ? " ('" + it.n + "')" : ""}`;
+    try {
+      return normalizeEditedOrderItem(it);
+    } catch (e) {
+      if (e && e.code === ORDER_ITEM_PAYLOAD_INCONSISTENT) {
+        e.message = `${where}: ${e.message}`;
+        throw e;
+      }
+      throw new OrderItemValidationError(`${where}: ${e.message}`);
+    }
+  });
+}
+
+const ORDER_ITEM_PAYLOAD_INCONSISTENT_MESSAGE =
+  "No se ha podido actualizar el pedido. Revisa los productos y extras.";
+
+// The typed refusal the two item-editing writers return instead of writing anything.
+function orderItemPayloadInconsistentRefusal(orderId, err) {
+  return {
+    success: false,
+    error: ORDER_ITEM_PAYLOAD_INCONSISTENT,
+    code: ORDER_ITEM_PAYLOAD_INCONSISTENT,
+    id: typeof orderId === "string" ? orderId : undefined,
+    field: err && err.field ? err.field : undefined,
+    detail: err && err.message ? err.message : undefined,
+    message: ORDER_ITEM_PAYLOAD_INCONSISTENT_MESSAGE,
+  };
 }
 const { calcolaFornoOut, simulateDriverSchedule, computeDriverFields, proposeForNewOrder } = require("../utils/zones");
 const { resolveDeliveryFields } = require("./previewTiming");
@@ -699,7 +740,16 @@ async function modificaOrdine(ordenId, updates) {
   // Items: filtra sempre il fake item (sicurezza retrocompatibile con chiamate vecchie)
   // Phase A: existing items keep their accepted values (normalize is idempotent);
   // newly added items get the immutable snapshot too.
-  if (updates.items) upd.items = normalizeItemsForPersist(updates.items);
+  if (updates.items) {
+    // NF-1 / NF-2 — each edited line is reconciled by value (quantity, structured extras,
+    // price) or the whole edit is refused with a typed code, before anything is written.
+    try {
+      upd.items = normalizeItemsForEdit(updates.items);
+    } catch (e) {
+      if (e && e.code === ORDER_ITEM_PAYLOAD_INCONSISTENT) return orderItemPayloadInconsistentRefusal(ordenId, e);
+      throw e;
+    }
+  }
   if (updates.nota !== undefined) upd.nota = updates.nota;
   if (updates.hora) upd.hora = updates.hora;
   if (updates.nota_cucina !== undefined) upd.nota_cucina = updates.nota_cucina;
@@ -1159,10 +1209,19 @@ async function aggiungiItems(ordenId, newItems) {
     return economicBasisLockRefusal(ordenId);
   }
   // Filtriamo via il fake item anche dagli newItems per sicurezza
-  // Phase A: normalize only the NEW items. Already-persisted items keep their original
-  // accepted snapshot and are never re-priced.
+  // Phase A: NEW items get the immutable snapshot; already-persisted lines keep their
+  // accepted values (re-normalizing a saved snapshot is idempotent, never a re-price).
   const cleanedNew = normalizeItemsForPersist(newItems);
-  const merged = mergeItemsBevande((rows[0].items || []).filter(i => i.n !== "Entrega a domicilio"), cleanedNew);
+  // NF-1 / NF-2 — merge canonically: an identical line sums its canonical quantity (the old
+  // name-based merge bumped only the `q` mirror and left a stale `quantity` behind), and a
+  // same-named product with different extras, removals, note or price stays its own line.
+  let merged;
+  try {
+    merged = mergeOrderLines((rows[0].items || []).filter(i => i.n !== "Entrega a domicilio"), cleanedNew);
+  } catch (e) {
+    if (e && e.code === ORDER_ITEM_PAYLOAD_INCONSISTENT) return orderItemPayloadInconsistentRefusal(ordenId, e);
+    throw e;
+  }
   const tipoConsegna = rows[0].tipo_consegna || "RITIRO";
   // N-5 — adding items to an order that has already been paid moves what is owed. The
   // conversational flow must be told, not handed a merged item list that was never stored.

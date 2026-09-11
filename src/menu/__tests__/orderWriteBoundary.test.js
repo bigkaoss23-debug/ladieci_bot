@@ -72,9 +72,13 @@ t("createOrden/modificaOrdine/aggiungiItems all call the normalizer", () => {
   const crea = src.slice(src.indexOf("async function creaOrdine"), src.indexOf("async function", src.indexOf("async function creaOrdine") + 1));
   assert.ok(/itemsFinali\s*=\s*normalizeItemsForPersist\(/.test(crea), "creaOrdine not wired");
   // modificaOrdine
-  assert.ok(/upd\.items\s*=\s*normalizeItemsForPersist\(updates\.items\)/.test(src), "modificaOrdine not wired");
+  // NF-1 / NF-2: the edit boundary (normalizeItemsForEdit) reconciles each line by value, then normalizes it.
+  // language-guard: allow-legacy modificaOrdine is the existing writer name in this assertion message, not new vocabulary
+  assert.ok(/upd\.items\s*=\s*normalizeItemsForEdit\(updates\.items\)/.test(src), "modificaOrdine not wired");
+  assert.ok(/return normalizeEditedOrderItem\(it\)/.test(src), "edit boundary does not normalize each line");
   // aggiungiItems
   assert.ok(/cleanedNew\s*=\s*normalizeItemsForPersist\(newItems\)/.test(src), "aggiungiItems not wired");
+  assert.ok(/merged\s*=\s*mergeOrderLines\(/.test(src), "addition merge is not canonical");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
