@@ -678,14 +678,19 @@ async function modificaOrdine(ordenId, updates) {
     }
     // Economic Writer Hardening V1 (E-1, migration 126) — anticipated rejection, BEFORE
     // constructing `upd`, for Mesa orders and orders that already carry a commercial
-    // adjustment. Cancelled orders are already caught above. Scoped to edits that would
-    // actually reach the economic recompute block below (same fields it tests): an
-    // hora-only or nota-only edit on a Mesa order is not this guard's business, and the
-    // DB fence remains the fail-closed authority regardless of what this best-effort
-    // pre-check decides.
+    // adjustment. Cancelled orders are already caught above. R-1 fix
+    // (ECONOMIC_WRITER_HARDENING_REVIEW_FAIL_FIX_REQUIRED): scoped to fields that can
+    // actually MOVE totale/delivery_fee/descuento_* below (calcolaTotaleOrdine/
+    // deliveryFeeFor depend only on items and tipo_consegna — see helpers.js). `hora` was
+    // wrongly included here: it still enters the recompute block below, but recomputes
+    // totale/delivery_fee from the SAME items/tipo_consegna already on the row, so the
+    // values never move and the DB fence's IS DISTINCT FROM check would pass it anyway —
+    // this pre-check was refusing an edit the real fence never would have. A nota-only or
+    // hora-only edit on a Mesa/adjusted order is not this guard's business; the DB fence
+    // remains the fail-closed authority regardless of what this best-effort pre-check
+    // decides.
     const touchesEconomicFields = updates.items !== undefined
       || updates.tipo_consegna !== undefined
-      || updates.hora !== undefined
       || updates.direccion !== undefined
       || updates.durata_andata_min !== undefined
       || updates.descuento_tipo !== undefined

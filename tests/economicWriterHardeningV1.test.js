@@ -147,6 +147,88 @@ console.log("\n── Patch B — mesa_post_payment_v1 early order lock ──")
     ["MESA_NO_COVERS_REMAINING", "MESA_LINE_SELECTION_INVALID", "MESA_ALLOCATION_MISMATCH"].every((t) => mesaBody.includes(t)));
 }
 
+console.log("\n── B-1 fix — M126 $post$ Patch B self-check (structural, mutation-tested) ──");
+{
+  // The migration's own $post$ block cannot be executed here (no local Postgres -- same
+  // limitation the file's own header documents). What CAN be proven statically: (1) the
+  // fragile old check is gone from the SQL text, (2) the new check's algorithm -- strip
+  // comments, cut at the function's top-level BEGIN to drop the DECLARE section, then look
+  // for FOR UPDATE / ORDER BY o.id before the first EXECUTABLE occurrence of v_total_cents
+  // -- is a faithful JS mirror of what the SQL now does (regexp_replace + substring FROM
+  // '(?s)\mBEGIN\M(.*)' + position()), run against the REAL extracted mesa_post_payment_v1
+  // body plus three mutated variants covering exactly the four cases the review demanded.
+  check("the old fragile check (position('v_total_cents' IN prosrc), no BEGIN-cut, no comment-strip) is gone",
+    !/substring\(prosrc FROM 1 FOR position\('v_total_cents' IN prosrc\)\)/.test(sql));
+  check("the new check reads prosrc into a variable and validates it was found",
+    /SELECT prosrc INTO v_mesa_prosrc FROM pg_proc/.test(sql) && /IF v_mesa_prosrc IS NULL THEN/.test(sql));
+  check("the new check strips both comment styles before locating BEGIN",
+    /regexp_replace\(v_mesa_prosrc, '\/\\\*\.\*\?\\\*\/', '', 'gs'\)/.test(sql)
+      && /regexp_replace\(v_mesa_clean, '--\[\^\\n\]\*', '', 'g'\)/.test(sql));
+  check("the new check cuts at the top-level BEGIN (word-bounded) to drop the DECLARE section",
+    /substring\(v_mesa_clean FROM '\(\?s\)\\mBEGIN\\M\(\.\*\)'\)/.test(sql));
+  check("the new check locates the marker ONLY inside the post-BEGIN executable text (v_mesa_exec), not raw prosrc",
+    /v_marker_pos := position\('v_total_cents' IN v_mesa_exec\)/.test(sql));
+  check("the new check still requires BOTH FOR UPDATE and ORDER BY o.id before the marker",
+    /position\('FOR UPDATE' IN substring\(v_mesa_exec FROM 1 FOR v_marker_pos\)\) = 0/.test(sql)
+      && /position\('ORDER BY o\.id' IN substring\(v_mesa_exec FROM 1 FOR v_marker_pos\)\) = 0/.test(sql));
+
+  // JS mirror of the SQL algorithm above (Postgres \m/\M word-boundary escapes approximated
+  // by JS \b, which is equivalent here: BEGIN is always preceded by a newline and followed
+  // by whitespace, both non-word characters on both engines).
+  function m126PatchBOrderingCheck(prosrc) {
+    let clean = prosrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
+    const m = /\bBEGIN\b([\s\S]*)/.exec(clean);
+    if (!m) return { pass: false, reason: "no top-level BEGIN" };
+    const execBody = m[1];
+    const markerPos = execBody.indexOf("v_total_cents");
+    if (markerPos === -1) return { pass: false, reason: "v_total_cents not found in executable body" };
+    const prefix = execBody.slice(0, markerPos);
+    const pass = prefix.includes("FOR UPDATE") && prefix.includes("ORDER BY o.id");
+    return { pass, reason: pass ? "ok" : "lock missing or not before first obligation computation" };
+  }
+
+  const mesaStart2 = sql.indexOf("CREATE OR REPLACE FUNCTION public.mesa_post_payment_v1");
+  const mesaEnd2 = sql.indexOf("\n$function$;", mesaStart2);
+  const realMesaBody = sql.slice(mesaStart2, mesaEnd2);
+  const LOCK_RE = /\s*PERFORM 1 FROM public\.ordenes o\s*\n\s*WHERE o\.table_session_id = v_session\.id\s*\n\s*ORDER BY o\.id\s*\n\s*FOR UPDATE;/;
+  check("fixture sanity: the real body contains exactly one Patch B lock statement to mutate",
+    LOCK_RE.test(realMesaBody));
+  const lockMatch = LOCK_RE.exec(realMesaBody);
+  const lockText = lockMatch[0];
+
+  // 1. Correct body, as installed today → passes.
+  const r1 = m126PatchBOrderingCheck(realMesaBody);
+  check("(1) correct installed body → post-check PASSES", r1.pass === true);
+
+  // 2. Lock statement removed entirely → fails (no FOR UPDATE / ORDER BY o.id at all before
+  //    the marker — the other FOR UPDATE locks earlier in the function, on workspaces/
+  //    auth_actors/table_sessions, never carry "ORDER BY o.id").
+  const lockRemoved = realMesaBody.replace(LOCK_RE, "");
+  const r2 = m126PatchBOrderingCheck(lockRemoved);
+  check("(2) lock statement removed → post-check FAILS", r2.pass === false);
+
+  // 3. Lock present but moved to AFTER the first obligation computation (right after
+  //    v_outstanding_cents is derived from v_total_cents) → fails, because the marker is
+  //    now reached before the relocated lock text.
+  const AFTER_CALC_ANCHOR = "v_outstanding_cents := GREATEST(0, v_total_cents - v_paid_cents);";
+  const lockAfterCalc = realMesaBody
+    .replace(LOCK_RE, "")
+    .replace(AFTER_CALC_ANCHOR, AFTER_CALC_ANCHOR + "\n" + lockText.trim());
+  check("fixture sanity: lock-after-calc variant still contains the lock text exactly once",
+    (lockAfterCalc.match(/FOR UPDATE;/g) || []).length === (realMesaBody.match(/FOR UPDATE;/g) || []).length);
+  const r3 = m126PatchBOrderingCheck(lockAfterCalc);
+  check("(3) lock moved to AFTER the first obligation computation → post-check FAILS", r3.pass === false);
+
+  // 4. Lock kept, but its deterministic ORDER BY o.id removed → fails on the second
+  //    condition even though FOR UPDATE is still present before the marker.
+  const orderByRemoved = realMesaBody.replace(
+    LOCK_RE,
+    "\n  PERFORM 1 FROM public.ordenes o\n   WHERE o.table_session_id = v_session.id\n   FOR UPDATE;"
+  );
+  const r4 = m126PatchBOrderingCheck(orderByRemoved);
+  check("(4) ORDER BY o.id removed from the lock → post-check FAILS", r4.pass === false);
+}
+
 console.log("\n── cancelled-order payment defense — order_post_payment_v1 ──");
 {
   const opStart = sql.indexOf("CREATE OR REPLACE FUNCTION public.order_post_payment_v1");
@@ -239,6 +321,77 @@ console.log("\n── ROLLBACK ──");
       && /order_void is still the retirement stub/.test(rollbackSql));
   check("rollback writes no business DML (only DDL + the trigger-function bodies it restores)",
     /No table\/column\/index change in either direction\. No DML in either direction\./.test(rollbackSql));
+}
+
+console.log("\n── B-2 fix — rollback ledger contract (matches M124/M125 convention exactly) ──");
+{
+  const m124RollbackPath = path.join(__dirname, "..", "migrations", "2026-09-09_refund_paid_state_constraint_gap_v1_migration_124.ROLLBACK.sql");
+  const m125RollbackPath = path.join(__dirname, "..", "migrations", "2026-09-09_service_closeout_net_sales_legacy_contract_hardening_v1_migration_125.ROLLBACK.sql");
+  const m124Rollback = fs.readFileSync(m124RollbackPath, "utf8");
+  const m125Rollback = fs.readFileSync(m125RollbackPath, "utf8");
+
+  // The OLD (broken) contract checked the PREDECESSOR's row (125) and then REFUSED if
+  // 126's own row existed, demanding it be "rolled back" first -- structurally impossible,
+  // since ladieci_schema_migrations is append-only: DELETE always raises and UPDATE only
+  // ever allows bootstrapped_unverified -> verified (2026-08-15_s4_ladieci_schema_
+  // migrations_ledger.sql:104-146). That text must be gone.
+  check("the old broken check ('refuses if apply_order=126 already exists / roll back the ledger entry first') is gone",
+    !/already has an apply_order=126 row -- roll back the ledger entry first/.test(rollbackSql));
+  check("the old broken check no longer gates on apply_order = 125 (the predecessor's row)",
+    !/ladieci_schema_migrations has no apply_order=125 row/.test(rollbackSql));
+
+  // The NEW contract must check the SAME thing 124/125's rollbacks check: THIS migration's
+  // own apply_order row.
+  const M126_OWN_ROW_CHECK = /IF NOT EXISTS \(SELECT 1 FROM public\.ladieci_schema_migrations WHERE apply_order = 126\) THEN\s*\n\s*RAISE EXCEPTION 'M126 ROLLBACK refused: ladieci_schema_migrations has no apply_order=126 row -- forward migration was never registered as applied';/;
+  check("rollback now requires its OWN apply_order=126 row to exist (proves M126 was registered as applied)",
+    M126_OWN_ROW_CHECK.test(rollbackSql));
+
+  // Structural parity with 124/125: same guard shape (to_regclass NULL-check wrapper, same
+  // RAISE message template with only the apply_order number and migration id swapped), same
+  // "own row, not predecessor" semantics, same absence of DELETE/UPDATE on the ledger table.
+  const shapeFor = (n) => new RegExp(
+    `IF NOT EXISTS \\(SELECT 1 FROM public\\.ladieci_schema_migrations WHERE apply_order = ${n}\\) THEN\\s*\\n\\s*RAISE EXCEPTION 'M${n} ROLLBACK refused: ladieci_schema_migrations has no apply_order=${n} row -- forward migration was never registered as applied';`
+  );
+  check("M124's rollback checks its OWN apply_order=124 row (reference convention)", shapeFor(124).test(m124Rollback));
+  check("M125's rollback checks its OWN apply_order=125 row (reference convention)", shapeFor(125).test(m125Rollback));
+  check("M126's rollback now follows the identical convention, own-number-for-own-number",
+    shapeFor(126).test(rollbackSql));
+
+  // No DELETE/UPDATE of the ledger anywhere in this file, in either direction -- the
+  // append-only trigger would refuse it anyway, but this rollback must not even attempt it
+  // (matching 124/125, which never touch the ledger table at all beyond the read-only guard
+  // check above).
+  check("rollback contains no DELETE against ladieci_schema_migrations",
+    !/DELETE\s+FROM\s+public\.ladieci_schema_migrations/i.test(rollbackSql));
+  check("rollback contains no UPDATE against ladieci_schema_migrations",
+    !/UPDATE\s+public\.ladieci_schema_migrations/i.test(rollbackSql));
+  check("rollback contains no INSERT into ladieci_schema_migrations (registration stays a separate, later statement, exactly like the forward file)",
+    !/INSERT\s+INTO\s+public\.ladieci_schema_migrations/i.test(rollbackSql));
+  check("124/125's own rollbacks likewise never DELETE/UPDATE/INSERT the ledger (parity, not a rule invented for 126)",
+    ![m124Rollback, m125Rollback].some((f) =>
+      /DELETE\s+FROM\s+public\.ladieci_schema_migrations/i.test(f)
+      || /UPDATE\s+public\.ladieci_schema_migrations/i.test(f)
+      || /INSERT\s+INTO\s+public\.ladieci_schema_migrations/i.test(f)));
+
+  // Catalog/schema parity for the objects this rollback restores: the function signatures
+  // it recreates must match the exact signatures the FORWARD file (candidate 65c53a5)
+  // installs -- same parameter list, same order, so PostgREST/pg_proc identity (which is
+  // keyed on name+arg-types) resolves to the SAME functions in both directions.
+  const restoredSignatures = [
+    "public._ledger_write_payment(p_order_id text, p_payment_method text, p_reason text, p_by_actor text, p_by_role text, p_ip_hash text, p_meta jsonb, p_idem_scope_key text)",
+    "public.order_mark_paid(p_order_id text, p_payment_method text, p_reason text, p_by_actor text, p_session_version integer, p_ip_hash text, p_meta jsonb, p_idem_scope_key text)",
+    "public.order_void(p_order_id text, p_reason text, p_by_actor text, p_session_version integer, p_ip_hash text, p_meta jsonb, p_idem_scope_key text)",
+    "public.order_import_legacy_payment(p_order_id text, p_amount numeric, p_payment_method text, p_reason text, p_by_actor text, p_session_version integer, p_ip_hash text, p_meta jsonb, p_idem_scope_key text, p_confirm text)",
+    "public.order_refund(p_order_id text, p_reason text, p_by_actor text, p_session_version integer, p_ip_hash text, p_meta jsonb, p_idem_scope_key text)",
+  ];
+  for (const sig of restoredSignatures) {
+    const fnName = sig.slice("public.".length, sig.indexOf("("));
+    check(`rollback's restored signature for ${fnName} matches the forward file's signature exactly`,
+      sql.includes(`CREATE OR REPLACE FUNCTION ${sig}`) && rollbackSql.includes(`CREATE OR REPLACE FUNCTION ${sig}`));
+  }
+  check("rollback's mesa_post_payment_v1 signature (incl. all 5 DEFAULTs) matches the forward file's exactly",
+    sql.includes("CREATE OR REPLACE FUNCTION public.mesa_post_payment_v1(p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid, p_payment_method text, p_mode text, p_client_request_id text, p_request_hash text, p_amount numeric DEFAULT NULL::numeric, p_covers_settled integer DEFAULT NULL::integer, p_line_ids uuid[] DEFAULT NULL::uuid[], p_meta jsonb DEFAULT '{}'::jsonb, p_confirm_duplicate boolean DEFAULT false)")
+    && rollbackSql.includes("CREATE OR REPLACE FUNCTION public.mesa_post_payment_v1(p_workspace_id uuid, p_by_actor text, p_by_sid_hash text, p_table_session_id uuid, p_payment_method text, p_mode text, p_client_request_id text, p_request_hash text, p_amount numeric DEFAULT NULL::numeric, p_covers_settled integer DEFAULT NULL::integer, p_line_ids uuid[] DEFAULT NULL::uuid[], p_meta jsonb DEFAULT '{}'::jsonb, p_confirm_duplicate boolean DEFAULT false)"));
 }
 
 console.log("\n── manifest ──");
@@ -405,6 +558,59 @@ async function testWriters() {
       r.success === true);
   }
 
+  console.log("\n── modificaOrdine — R-1 fix: non-economic edits on Mesa/adjusted orders ──");
+  // R-1 (ECONOMIC_WRITER_HARDENING_REVIEW_FAIL_FIX_REQUIRED): the JS pre-check used to
+  // treat `hora` as an economic field, so an hora-only edit on a Mesa or adjusted order was
+  // wrongly refused even though calcolaTotaleOrdine/deliveryFeeFor (src/utils/helpers.js)
+  // depend only on items and tipo_consegna -- an hora-only edit always recomputes totale/
+  // delivery_fee to the SAME values already on the row, which the DB fence's own
+  // IS DISTINCT FROM check would have let through anyway. These cases prove the fix; #T5
+  // above already proved the pre-existing nota-only/Mesa case never regressed.
+  {
+    updateCalls.length = 0;
+    seed("#T6", { table_session_id: "11111111-0000-0000-0000-000000000006" });
+    const r = await modificaOrdine("#T6", { hora: "20:30" });
+    check("Mesa order + hora only → allowed (R-1 fix)", r.success === true);
+    check("Mesa order + hora only → sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23T6")));
+  }
+  {
+    updateCalls.length = 0;
+    const uid = "22222222-0000-0000-0000-000000000007";
+    OBLIGATIONS[uid] = true;
+    seed("#T7", { order_uid: uid });
+    const r = await modificaOrdine("#T7", { nota: "sin cebolla" });
+    check("adjusted order + note only → allowed", r.success === true);
+  }
+  {
+    updateCalls.length = 0;
+    const uid = "22222222-0000-0000-0000-000000000008";
+    OBLIGATIONS[uid] = true;
+    seed("#T8", { order_uid: uid });
+    const r = await modificaOrdine("#T8", { hora: "21:00" });
+    check("adjusted order + time only → allowed (R-1 fix, the concrete defect the review found)", r.success === true);
+    check("adjusted order + time only → sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23T8")));
+  }
+  {
+    updateCalls.length = 0;
+    const uid = "22222222-0000-0000-0000-000000000009";
+    OBLIGATIONS[uid] = true;
+    seed("#T9", { order_uid: uid });
+    const r = await modificaOrdine("#T9", { items: [{ n: "Pizza", q: 2, p: 10 }] });
+    check("adjusted order + items changed → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
+    check("adjusted order + items changed → no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
+  }
+  {
+    updateCalls.length = 0;
+    const uid = "22222222-0000-0000-0000-000000000010";
+    OBLIGATIONS[uid] = true;
+    seed("#T10", { order_uid: uid });
+    // tipo_consegna is the one field genuinely driving delivery_fee/totale
+    // (deliveryFeeFor depends only on it) -- the R-1 "total changed" case.
+    const r = await modificaOrdine("#T10", { tipo_consegna: "DOMICILIO" });
+    check("adjusted order + total-affecting change (tipo_consegna) → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
+    check("adjusted order + total-affecting change → no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
+  }
+
   console.log("\n── aggiungiItems ──");
   {
     updateCalls.length = 0;
@@ -495,6 +701,68 @@ console.log("\n── index.js — legacy operator-collection branches retired �
   check("registerOperatorPayment.js exports LEGACY_OPERATOR_COLLECTION_RETIRED",
     /LEGACY_OPERATOR_COLLECTION_RETIRED: 'LEGACY_OPERATOR_COLLECTION_RETIRED'|LEGACY_OPERATOR_COLLECTION_RETIRED = 'LEGACY_OPERATOR_COLLECTION_RETIRED'/.test(registerOp)
       && /module\.exports = \{[\s\S]*LEGACY_OPERATOR_COLLECTION_RETIRED[\s\S]*\}/.test(registerOp));
+}
+
+console.log("\n── index.js — false-success UX fix (backend reject ≠ success) ──");
+{
+  // The review's finding: this dispatcher's "modificaOrdine"/"updateOrden" branches fall
+  // through to a single shared `res.json(result)` at the end of the big action switch,
+  // which Express sends with an implicit 200 regardless of `result.success`. A caller that
+  // reads HTTP status instead of the JSON body (the reported case: a dashboard modal
+  // showing "✏️ Pedido actualizado" off response.ok) would report success on a refused
+  // economic edit (ORDER_ECONOMIC_BASIS_LOCKED), the pre-existing N-5 paid-order refusal,
+  // or a terminal-state refusal. No frontend file exists in this repository to fix
+  // (backend-only worktree) -- and none is needed: the fix is entirely in how this backend
+  // sets the HTTP status, proven here statically plus by direct execution of the extracted
+  // guard logic below.
+  const indexJs = fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8");
+  const GUARD_RE = /if \(result && result\.success === false\) return res\.status\(409\)\.json\(result\);/g;
+  const guardCount = (indexJs.match(GUARD_RE) || []).length;
+  check("both modificaOrdine and updateOrden branches carry the false-success guard (2 occurrences)",
+    guardCount === 2);
+
+  const modBranchStart = indexJs.indexOf('action === "modificaOrdine"');
+  const modCallIdx = indexJs.indexOf("result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });", modBranchStart);
+  const modGuardIdx = indexJs.indexOf("if (result && result.success === false) return res.status(409).json(result);", modCallIdx);
+  const nextBranchIdx = indexJs.indexOf('} else if (action === "aggiornaRispostaBot")', modCallIdx);
+  check("modificaOrdine branch: the guard runs immediately after the writer call, inside the SAME branch",
+    modCallIdx !== -1 && modGuardIdx !== -1 && modGuardIdx > modCallIdx && modGuardIdx < nextBranchIdx);
+
+  const updBranchStart = indexJs.indexOf('action === "updateOrden"');
+  const updCallIdx = indexJs.indexOf("result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });", updBranchStart);
+  const updGuardIdx = indexJs.indexOf("if (result && result.success === false) return res.status(409).json(result);", updCallIdx);
+  const updNextBranchIdx = indexJs.indexOf('} else if (action === "updateEstado")', updCallIdx);
+  check("updateOrden branch: the guard runs immediately after the writer call, inside the SAME branch",
+    updCallIdx !== -1 && updGuardIdx !== -1 && updGuardIdx > updCallIdx && updGuardIdx < updNextBranchIdx);
+
+  const finalResJsonIdx = indexJs.lastIndexOf("res.json(result);");
+  check("both guards run BEFORE the shared fallthrough res.json(result) (so a refusal never reaches the bare-200 path)",
+    modGuardIdx < finalResJsonIdx && updGuardIdx < finalResJsonIdx);
+
+  check("the status code (409) matches this file's own existing convention for a rejected write (creaOrdine's intentA.ok check)",
+    /if \(!intentA\.ok\) \{\s*\n\s*return res\.status\(409\)\.json/.test(indexJs));
+
+  // Direct execution of the extracted guard, against the three concrete refusal shapes
+  // modificaOrdine can actually return, plus the success case -- not just a text match.
+  function simulateDispatch(result) {
+    const calls = [];
+    const res = {
+      status(code) { calls.push(["status", code]); return this; },
+      json(body) { calls.push(["json", body]); return this; },
+    };
+    if (result && result.success === false) { res.status(409).json(result); return calls; }
+    res.json(result);
+    return calls;
+  }
+  const basisLocked = guard.economicBasisLockRefusal("#T9");
+  check("simulated dispatch: ORDER_ECONOMIC_BASIS_LOCKED refusal → status(409) called, body echoes the refusal",
+    JSON.stringify(simulateDispatch(basisLocked)) === JSON.stringify([["status", 409], ["json", basisLocked]]));
+  const terminalRefusal = { success: false, error: "estado_terminal", estado: "CANCELADO", message: "No se puede modificar un pedido en estado terminal." };
+  check("simulated dispatch: estado_terminal refusal → ALSO status(409), not the bare-200 fallthrough",
+    JSON.stringify(simulateDispatch(terminalRefusal)) === JSON.stringify([["status", 409], ["json", terminalRefusal]]));
+  const okResult = { success: true };
+  check("simulated dispatch: a real success → falls through to the plain res.json(result), no status() call",
+    JSON.stringify(simulateDispatch(okResult)) === JSON.stringify([["json", okResult]]));
 }
 
 console.log("\n── candidate compatibility (static) ──");

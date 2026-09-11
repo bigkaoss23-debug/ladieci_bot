@@ -1286,6 +1286,11 @@ REVOKE ALL ON FUNCTION public.order_has_economic_evidence_v1(text) FROM PUBLIC, 
 
 -- ── POST-CONDITION ────────────────────────────────────────────────────────────
 DO $post$
+DECLARE
+  v_mesa_prosrc text;
+  v_mesa_clean  text;
+  v_mesa_exec   text;
+  v_marker_pos  int;
 BEGIN
   -- E-1: function, comment, trigger, grants.
   IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -1344,15 +1349,40 @@ BEGIN
   THEN RAISE EXCEPTION 'M126 post-condition failed: order_refund does not carry the Mesa fence'; END IF;
 
   -- Patch B: the lock statement is present, and it is textually BEFORE the first
-  -- obligation computation (v_total_cents) in the installed body.
-  IF position('FOR UPDATE' IN (
-        SELECT substring(prosrc FROM 1 FOR position('v_total_cents' IN prosrc))
-          FROM pg_proc WHERE proname = 'mesa_post_payment_v1' AND pronamespace = 'public'::regnamespace
-     )) = 0
-     OR position('ORDER BY o.id' IN (
-        SELECT substring(prosrc FROM 1 FOR position('v_total_cents' IN prosrc))
-          FROM pg_proc WHERE proname = 'mesa_post_payment_v1' AND pronamespace = 'public'::regnamespace
-     )) = 0
+  -- obligation computation (v_total_cents), measured over the EXECUTABLE body only.
+  -- B-1 fix (ECONOMIC_WRITER_HARDENING_REVIEW_FAIL_FIX_REQUIRED): the previous check took
+  -- position('v_total_cents' IN prosrc) -- the FIRST occurrence of that name anywhere in
+  -- the source, which is its own DECLARE line, and DECLARE always precedes BEGIN. That made
+  -- the captured prefix end before any executable statement at all, so this guard failed
+  -- unconditionally no matter where the real lock sat. Fixed structurally, not by picking a
+  -- different fragile symbol:
+  --   (1) strip `--` and `/* */` comments first, so neither hides nor fakes a keyword;
+  --   (2) cut at the function's single top-level BEGIN (word-bounded \m/\M) to drop the
+  --       DECLARE section entirely -- mesa_post_payment_v1 has exactly one BEGIN/END block
+  --       and no nested one, so this reliably isolates the executable body;
+  --   (3) only THEN take the first occurrence of v_total_cents as the "before" cutoff --
+  --       now necessarily its actual computation, since nothing reads or writes it earlier
+  --       in executable code.
+  SELECT prosrc INTO v_mesa_prosrc FROM pg_proc
+   WHERE proname = 'mesa_post_payment_v1' AND pronamespace = 'public'::regnamespace;
+  IF v_mesa_prosrc IS NULL THEN
+    RAISE EXCEPTION 'M126 post-condition failed: mesa_post_payment_v1 body could not be read';
+  END IF;
+
+  v_mesa_clean := regexp_replace(v_mesa_prosrc, '/\*.*?\*/', '', 'gs');
+  v_mesa_clean := regexp_replace(v_mesa_clean, '--[^\n]*', '', 'g');
+  v_mesa_exec  := substring(v_mesa_clean FROM '(?s)\mBEGIN\M(.*)');
+  IF v_mesa_exec IS NULL THEN
+    RAISE EXCEPTION 'M126 post-condition failed: mesa_post_payment_v1 has no top-level BEGIN -- cannot isolate its executable body';
+  END IF;
+
+  v_marker_pos := position('v_total_cents' IN v_mesa_exec);
+  IF v_marker_pos = 0 THEN
+    RAISE EXCEPTION 'M126 post-condition failed: mesa_post_payment_v1 no longer computes v_total_cents in its executable body';
+  END IF;
+
+  IF position('FOR UPDATE' IN substring(v_mesa_exec FROM 1 FOR v_marker_pos)) = 0
+     OR position('ORDER BY o.id' IN substring(v_mesa_exec FROM 1 FOR v_marker_pos)) = 0
   THEN RAISE EXCEPTION 'M126 post-condition failed: Patch B lock is missing or not before the first obligation computation'; END IF;
 
   -- Cancelled-order payment defense.

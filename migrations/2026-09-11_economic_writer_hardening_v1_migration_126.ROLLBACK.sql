@@ -37,12 +37,25 @@ BEGIN
        NOT LIKE '%LEGACY_VOID_RETIRED_USE_ORDER_CANCEL%'
   THEN RAISE EXCEPTION 'M126 ROLLBACK refused: order_void is not the M126 retirement stub -- not at the expected M126 epoch'; END IF;
 
+  -- B-2 fix (ECONOMIC_WRITER_HARDENING_REVIEW_FAIL_FIX_REQUIRED): this must check the
+  -- SAME thing migrations 124/125's own rollbacks check -- that THIS migration's OWN
+  -- apply_order row (126) exists, proving the forward migration was actually registered
+  -- as applied (see M124 ROLLBACK.sql:80-84, M125 ROLLBACK.sql:53-55). The previous text
+  -- did the opposite: it checked the PREDECESSOR's row (125) and then REFUSED if 126's own
+  -- row existed, demanding it be "rolled back" first -- but ladieci_schema_migrations is
+  -- append-only (ladieci_schema_migrations_immutability_v1, migration
+  -- 2026-08-15_s4_ladieci_schema_migrations_ledger.sql): DELETE always raises, and UPDATE
+  -- only ever allows the single bootstrapped_unverified -> verified transition. There is no
+  -- lawful way to make the 126 row disappear or change its apply_order, so the previous
+  -- check made this rollback impossible to run whenever it would legitimately apply (i.e.
+  -- whenever 126 was actually applied). This file never touches
+  -- ladieci_schema_migrations in either direction -- exactly like 124/125's rollbacks --
+  -- and expects any "this migration was rolled back" fact to be recorded the same way a
+  -- forward apply is: a separate, later ledger row (kind='repair'), never a rewrite of
+  -- row 126 itself.
   IF to_regclass('public.ladieci_schema_migrations') IS NOT NULL THEN
-    IF NOT EXISTS (SELECT 1 FROM public.ladieci_schema_migrations WHERE apply_order = 125) THEN
-      RAISE EXCEPTION 'M126 ROLLBACK refused: ladieci_schema_migrations has no apply_order=125 row';
-    END IF;
-    IF EXISTS (SELECT 1 FROM public.ladieci_schema_migrations WHERE apply_order = 126) THEN
-      RAISE EXCEPTION 'M126 ROLLBACK refused: ladieci_schema_migrations already has an apply_order=126 row -- roll back the ledger entry first';
+    IF NOT EXISTS (SELECT 1 FROM public.ladieci_schema_migrations WHERE apply_order = 126) THEN
+      RAISE EXCEPTION 'M126 ROLLBACK refused: ladieci_schema_migrations has no apply_order=126 row -- forward migration was never registered as applied';
     END IF;
   END IF;
 

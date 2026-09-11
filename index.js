@@ -1009,6 +1009,16 @@ app.post("/api", async (req, res) => {
     } else if (action === "modificaOrdine") {
       // Dashboard operatore: geo/durata ri-risolti server-side, hora preservata.
       result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });
+      // ECONOMIC_WRITER_HARDENING_REVIEW_FAIL_FIX_REQUIRED (false-success UX) — this whole
+      // dispatcher falls through to a single `res.json(result)` (below) with the implicit
+      // 200 status Express gives every response it doesn't set explicitly, regardless of
+      // `result.success`. modificaOrdine can now refuse with success:false for a Mesa/
+      // adjusted/cancelled economic edit (ORDER_ECONOMIC_BASIS_LOCKED), the pre-existing
+      // N-5 paid-order refusal, or a terminal-state refusal — any caller that reads HTTP
+      // status instead of the JSON body (the reported case: a modal showing "success" off
+      // response.ok) would show success on a refused write. Same 409 convention creaOrdine
+      // already uses above for a rejected intent (line ~998) — status only, body unchanged.
+      if (result && result.success === false) return res.status(409).json(result);
     } else if (action === "aggiornaRispostaBot") {
       await sbUpdate("wa_msgs", `id=eq.${req.body.id}`, { bot_risposta: req.body.bot_risposta });
       result = { success: true };
@@ -1082,6 +1092,9 @@ app.post("/api", async (req, res) => {
     } else if (action === "updateOrden") {
       // Dashboard operatore: geo/durata ri-risolti server-side, hora preservata.
       result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });
+      // ECONOMIC_WRITER_HARDENING_REVIEW_FAIL_FIX_REQUIRED (false-success UX) — see the
+      // identical guard on the "modificaOrdine" branch above for the full rationale.
+      if (result && result.success === false) return res.status(409).json(result);
     } else if (action === "updateEstado") {
       // Accetta campi timing/repartidor/descuento in unica scrittura atomica.
       // S2-7D6E2 — `cobrado` e `ya_pagado` NON sono più accettati dal client: erano
