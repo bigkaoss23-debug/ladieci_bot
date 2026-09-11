@@ -1381,8 +1381,17 @@ BEGIN
     RAISE EXCEPTION 'M126 post-condition failed: mesa_post_payment_v1 no longer computes v_total_cents in its executable body';
   END IF;
 
-  IF position('FOR UPDATE' IN substring(v_mesa_exec FROM 1 FOR v_marker_pos)) = 0
-     OR position('ORDER BY o.id' IN substring(v_mesa_exec FROM 1 FOR v_marker_pos)) = 0
+  -- B-1 round-2 strengthening (NB-1, independent review of 826a9b0): mesa_post_payment_v1
+  -- already takes THREE other FOR UPDATE locks earlier in the same function (workspaces,
+  -- auth_actors, table_sessions) -- all unconditionally present before the marker
+  -- regardless of Patch B. Checking "does FOR UPDATE occur anywhere before the marker?" and
+  -- "does ORDER BY o.id occur anywhere before the marker?" as two INDEPENDENT conditions was
+  -- therefore vacuous on the FOR UPDATE half: removing ONLY Patch B's own FOR UPDATE (while
+  -- leaving its ORDER BY o.id, and leaving the three earlier locks untouched) still passed
+  -- (review's M4 case). Replaced with a single match on PATCH B'S OWN STATEMENT AS ONE
+  -- CONTIGUOUS UNIT, so an unrelated earlier lock can no longer stand in for it.
+  IF substring(v_mesa_exec FROM 1 FOR v_marker_pos)
+       !~ 'PERFORM 1 FROM public\.ordenes o\s+WHERE o\.table_session_id = v_session\.id\s+ORDER BY o\.id\s+FOR UPDATE'
   THEN RAISE EXCEPTION 'M126 post-condition failed: Patch B lock is missing or not before the first obligation computation'; END IF;
 
   -- Cancelled-order payment defense.

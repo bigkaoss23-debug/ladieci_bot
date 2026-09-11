@@ -168,13 +168,23 @@ console.log("\n── B-1 fix — M126 $post$ Patch B self-check (structural, mu
     /substring\(v_mesa_clean FROM '\(\?s\)\\mBEGIN\\M\(\.\*\)'\)/.test(sql));
   check("the new check locates the marker ONLY inside the post-BEGIN executable text (v_mesa_exec), not raw prosrc",
     /v_marker_pos := position\('v_total_cents' IN v_mesa_exec\)/.test(sql));
-  check("the new check still requires BOTH FOR UPDATE and ORDER BY o.id before the marker",
-    /position\('FOR UPDATE' IN substring\(v_mesa_exec FROM 1 FOR v_marker_pos\)\) = 0/.test(sql)
-      && /position\('ORDER BY o\.id' IN substring\(v_mesa_exec FROM 1 FOR v_marker_pos\)\) = 0/.test(sql));
+  check("the new check no longer treats FOR UPDATE and ORDER BY o.id as two independent conditions (NB-1 fix, round 2)",
+    !/position\('FOR UPDATE' IN substring\(v_mesa_exec FROM 1 FOR v_marker_pos\)\) = 0/.test(sql));
+  check("the new check matches Patch B's own statement as ONE contiguous unit (round 2, closes NB-1's M4 gap)",
+    /substring\(v_mesa_exec FROM 1 FOR v_marker_pos\)\s*\n\s*!~ 'PERFORM 1 FROM public\\\.ordenes o\\s\+WHERE o\\\.table_session_id = v_session\\\.id\\s\+ORDER BY o\\\.id\\s\+FOR UPDATE'/.test(sql));
 
   // JS mirror of the SQL algorithm above (Postgres \m/\M word-boundary escapes approximated
   // by JS \b, which is equivalent here: BEGIN is always preceded by a newline and followed
   // by whitespace, both non-word characters on both engines).
+  //
+  // NB-1 fix (round 2, independent review of 826a9b0): mesa_post_payment_v1 takes THREE
+  // OTHER FOR UPDATE locks earlier in the function (workspaces, auth_actors,
+  // table_sessions) -- all unconditionally present before the marker regardless of Patch B.
+  // Checking "FOR UPDATE anywhere in the prefix" and "ORDER BY o.id anywhere in the prefix"
+  // as two INDEPENDENT conditions was vacuous on the FOR UPDATE half: removing ONLY Patch
+  // B's own FOR UPDATE (leaving ORDER BY o.id, leaving the three earlier locks untouched)
+  // still passed. Fixed by matching Patch B's own statement as ONE contiguous unit.
+  const PATCH_B_STATEMENT_RE = /PERFORM 1 FROM public\.ordenes o\s+WHERE o\.table_session_id = v_session\.id\s+ORDER BY o\.id\s+FOR UPDATE/;
   function m126PatchBOrderingCheck(prosrc) {
     let clean = prosrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
     const m = /\bBEGIN\b([\s\S]*)/.exec(clean);
@@ -183,8 +193,8 @@ console.log("\n── B-1 fix — M126 $post$ Patch B self-check (structural, mu
     const markerPos = execBody.indexOf("v_total_cents");
     if (markerPos === -1) return { pass: false, reason: "v_total_cents not found in executable body" };
     const prefix = execBody.slice(0, markerPos);
-    const pass = prefix.includes("FOR UPDATE") && prefix.includes("ORDER BY o.id");
-    return { pass, reason: pass ? "ok" : "lock missing or not before first obligation computation" };
+    const pass = PATCH_B_STATEMENT_RE.test(prefix);
+    return { pass, reason: pass ? "ok" : "Patch B's own lock statement missing or not before first obligation computation" };
   }
 
   const mesaStart2 = sql.indexOf("CREATE OR REPLACE FUNCTION public.mesa_post_payment_v1");
@@ -227,6 +237,20 @@ console.log("\n── B-1 fix — M126 $post$ Patch B self-check (structural, mu
   );
   const r4 = m126PatchBOrderingCheck(orderByRemoved);
   check("(4) ORDER BY o.id removed from the lock → post-check FAILS", r4.pass === false);
+
+  // 5. OBLIGATORY (round 2, NB-1/M4): SOLO Patch B's own FOR UPDATE removed -- ORDER BY o.id
+  //    kept, and the function's other three FOR UPDATE locks (workspaces, auth_actors,
+  //    table_sessions) left completely untouched. Under the round-1 check this PASSED
+  //    incorrectly (an earlier, unrelated FOR UPDATE satisfied the "FOR UPDATE anywhere in
+  //    the prefix" half); the round-2 single-statement regex must now FAIL it.
+  const onlyForUpdateRemoved = realMesaBody.replace(
+    LOCK_RE,
+    "\n  PERFORM 1 FROM public.ordenes o\n   WHERE o.table_session_id = v_session.id\n   ORDER BY o.id;"
+  );
+  check("fixture sanity: the other three FOR UPDATE locks (workspaces/auth_actors/table_sessions) are still present",
+    (onlyForUpdateRemoved.match(/FOR UPDATE/g) || []).length === (realMesaBody.match(/FOR UPDATE/g) || []).length - 1);
+  const r5 = m126PatchBOrderingCheck(onlyForUpdateRemoved);
+  check("(5) OBLIGATORY: only Patch B's own FOR UPDATE removed (ORDER BY o.id + other locks untouched) → post-check FAILS", r5.pass === false);
 }
 
 console.log("\n── cancelled-order payment defense — order_post_payment_v1 ──");
@@ -609,6 +633,129 @@ async function testWriters() {
     const r = await modificaOrdine("#T10", { tipo_consegna: "DOMICILIO" });
     check("adjusted order + total-affecting change (tipo_consegna) → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
     check("adjusted order + total-affecting change → no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
+  }
+
+  console.log("\n── modificaOrdine — R-1 round 2: the REAL modal payload (not a synthetic {hora}/{nota}) ──");
+  // Round-2 review finding: the real "Modificar" modal (ServicioPage.jsx's modificaOrden,
+  // ~line 863: `api.post({action:"updateOrden", id, items:o.items, nota:o.nota, hora:o.hora,
+  // ...(DOMICILIO ? {direccion,zona,zona_lat,zona_lon,zona_manuale} : {})})`) ALWAYS resends
+  // `items` (and the full geo block on DOMICILIO) unchanged alongside whatever the operator
+  // actually edited. Round-1's test suite only ever sent minimal synthetic payloads
+  // ({hora}, {nota}), which never exercised this. This helper reproduces that EXACT call
+  // shape, byte for byte, so these tests would have failed against round 1's key-presence
+  // check the same way the real modal did.
+  function realModalPayload(orden, changes = {}) {
+    const o = { ...orden, ...changes };
+    return {
+      items: o.items, nota: o.nota, hora: o.hora,
+      ...(o.tipo_consegna === "DOMICILIO" ? {
+        direccion: o.direccion ?? null,
+        zona: o.zona ?? null,
+        zona_lat: o.zona_lat ?? null,
+        zona_lon: o.zona_lon ?? null,
+        zona_manuale: !!o.zona_manuale,
+      } : {}),
+    };
+  }
+  {
+    // A. adjusted order + modal payload + sola nota modificata + items invariati → PASS
+    updateCalls.length = 0;
+    const uid = "33333333-0000-0000-0000-0000000000a1";
+    OBLIGATIONS[uid] = true;
+    seed("#R2A", { order_uid: uid, hora: "20:00", nota: "original" });
+    const payload = realModalPayload(STORE["#R2A"], { nota: "sin cebolla" });
+    const r = await modificaOrdine("#R2A", payload);
+    check("A. adjusted + real modal payload + note only → allowed", r.success === true);
+    check("A. sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23R2A")));
+  }
+  {
+    // B. adjusted order + modal payload + sola ora modificata + items invariati → PASS
+    updateCalls.length = 0;
+    const uid = "33333333-0000-0000-0000-0000000000b1";
+    OBLIGATIONS[uid] = true;
+    seed("#R2B", { order_uid: uid, hora: "20:00", nota: "original" });
+    const payload = realModalPayload(STORE["#R2B"], { hora: "21:15" });
+    const r = await modificaOrdine("#R2B", payload);
+    check("B. adjusted + real modal payload + time only → allowed (the concrete review defect)", r.success === true);
+    check("B. sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23R2B")));
+  }
+  {
+    // C. adjusted order + modal payload + solo indirizzo modificato + items invariati → PASS
+    updateCalls.length = 0;
+    const uid = "33333333-0000-0000-0000-0000000000c1";
+    OBLIGATIONS[uid] = true;
+    seed("#R2C", {
+      order_uid: uid, hora: "20:00", nota: "original",
+      tipo_consegna: "DOMICILIO", delivery_fee: 2.5, totale: 12.5,
+      direccion: "Calle Vieja 1", zona: "Q1", zona_lat: 1, zona_lon: 1, zona_manuale: false,
+    });
+    const payload = realModalPayload(STORE["#R2C"], { direccion: "Calle Nueva 2" });
+    const r = await modificaOrdine("#R2C", payload);
+    check("C. adjusted DOMICILIO + real modal payload + address only → allowed", r.success === true);
+    check("C. sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23R2C")));
+  }
+  {
+    // D. adjusted order + modal payload + quantità diversa → REJECT
+    updateCalls.length = 0;
+    const uid = "33333333-0000-0000-0000-0000000000d1";
+    OBLIGATIONS[uid] = true;
+    seed("#R2D", { order_uid: uid, hora: "20:00", nota: "original" });
+    const payload = realModalPayload(STORE["#R2D"], { items: [{ n: "Pizza", q: 2, p: 10 }] });
+    const r = await modificaOrdine("#R2D", payload);
+    check("D. adjusted + real modal payload + quantity changed → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
+    check("D. no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
+  }
+  {
+    // E. adjusted order + modal payload + prodotto diverso → REJECT
+    updateCalls.length = 0;
+    const uid = "33333333-0000-0000-0000-0000000000e1";
+    OBLIGATIONS[uid] = true;
+    seed("#R2E", { order_uid: uid, hora: "20:00", nota: "original" });
+    const payload = realModalPayload(STORE["#R2E"], { items: [{ n: "Diavola", q: 1, p: 10 }] });
+    const r = await modificaOrdine("#R2E", payload);
+    check("E. adjusted + real modal payload + product changed → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
+    check("E. no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
+  }
+  {
+    // F. adjusted order + modal payload + totale economico diverso (stesso prodotto/quantità,
+    // prezzo diverso) → REJECT — distinta da D (quantità) ed E (prodotto)
+    updateCalls.length = 0;
+    const uid = "33333333-0000-0000-0000-0000000000f1";
+    OBLIGATIONS[uid] = true;
+    seed("#R2F", { order_uid: uid, hora: "20:00", nota: "original" });
+    const payload = realModalPayload(STORE["#R2F"], { items: [{ n: "Pizza", q: 1, p: 15 }] });
+    const r = await modificaOrdine("#R2F", payload);
+    check("F. adjusted + real modal payload + price/total changed → rejected", r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
+    check("F. no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
+  }
+  {
+    // G. ordine normale non pagato/non adjusted + vera modifica economica → comportamento
+    // preesistente ammesso (E-1 non si applica fuori da Mesa/adjusted/cancelled)
+    updateCalls.length = 0;
+    seed("#R2G", { hora: "20:00", nota: "original" });
+    const payload = realModalPayload(STORE["#R2G"], { items: [{ n: "Pizza", q: 5, p: 10 }] });
+    const r = await modificaOrdine("#R2G", payload);
+    check("G. normal non-Mesa/non-adjusted + real modal payload + genuine economic change → still allowed", r.success === true);
+    check("G. sbUpdate WAS attempted", updateCalls.some((c) => c.table === "ordenes" && c.filter.includes("%23R2G")));
+  }
+  {
+    // NB-3 from the review (§6.5): a Mesa row whose legacy `ordenes.items` is empty while
+    // `ordenes.totale` still holds a stale pre-Mesa value -- an hora-only edit here WOULD
+    // zero the total (itemsFinali=[] recomputes totale=0 while ord.totale=100 differs), so
+    // it must be REJECTED even though the operator only touched the hour. This is exactly
+    // the case round 1's blanket "just drop hora from the trigger list" would have silently
+    // let through to the DB (safe only because E-1 itself would still catch it there); the
+    // value-based check here catches it in JS too.
+    updateCalls.length = 0;
+    seed("#R2NB3", {
+      table_session_id: "11111111-0000-0000-0000-0000000000nb",
+      items: [], totale: 100, delivery_fee: 0, hora: "20:00", nota: "original",
+    });
+    const payload = realModalPayload(STORE["#R2NB3"], { hora: "21:00" });
+    const r = await modificaOrdine("#R2NB3", payload);
+    check("NB-3. Mesa row with stale non-zero totale + empty items + hora-only edit → rejected (totale would move 100→0)",
+      r.success === false && r.error === "ORDER_ECONOMIC_BASIS_LOCKED");
+    check("NB-3. no sbUpdate attempted", updateCalls.filter((c) => c.table === "ordenes").length === 0);
   }
 
   console.log("\n── aggiungiItems ──");
