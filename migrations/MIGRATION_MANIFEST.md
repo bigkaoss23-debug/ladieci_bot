@@ -388,3 +388,26 @@ is one atomic migration that creates every `mesa_*` function/trigger and drops e
 > `PGRST202`/function-not-found, not silent corruption, but it is a hard outage for the Mesa
 > surface until row 51 lands. Keep this window as short as possible and apply row 51
 > immediately before or immediately after the backend deploy, never hours apart.
+
+## Reserved / Planned Migration Numbers
+
+This section is separate from the migration table above and does **not** describe real,
+authored, or applied migrations. It exists only to coordinate the next migration numbers
+across concurrent workstreams so they don't collide.
+
+Numbers below are the **migration number embedded in the file name** (e.g. `..._migration_127.sql`),
+not a row number in this document.
+
+| Migration | Owner / Workstream | Purpose | Status |
+|---|---|---|---|
+| 127 | Order Canonicalization / S4 | M-A — content_revision | RESERVED / NOT AUTHORED |
+| 128 | Order Canonicalization / S4 | M-A2 — paid line basis guard | RESERVED / NOT AUTHORED |
+| 129 | Order Canonicalization / S4 | M-L — linked child | RESERVED / NOT AUTHORED |
+| 130 | Planner W3 | Giro Authority + Projection | RESERVED / CANDIDATE SQL CERTIFIED, NOT APPLIED |
+
+Notes:
+- These numbers are coordination reservations only.
+- A reservation does not mean the migration exists.
+- A reservation does not mean the migration has been applied.
+- The migration table above continues to represent only real, authored migrations.
+- The migration number is the one in the file name, never the row number of this document.
