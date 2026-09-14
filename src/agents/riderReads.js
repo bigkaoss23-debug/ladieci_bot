@@ -8,9 +8,32 @@
 // financial-ledger internals). Admin/operator reads are untouched (this module is only
 // invoked on the rider branch).
 //
-// All DB access is injected (deps.sbSelect) so the logic is unit-testable offline.
+// All ORDER/TRIP DB access is injected (deps.sbSelect) so the logic is unit-testable
+// offline. W4 Packet 02A: giro facts (membership/state/salida/hora_ref/dissolved) come
+// exclusively from the canonical Giro Authority projection (public.giro_projection_v1,
+// Planner W3) via giroProjectionReader/giroProjectionPort — required directly here (same
+// pattern as previewTiming.js's W4 Packet 01 cutover), not injected via deps, so no
+// caller (index.js) needs to change. ordenes.manual_giro_id and the raw manual_giros
+// table are no longer truth for giro facts in this module; entrega_ref is the one
+// legacy-metadata field the Projection doesn't claim, kept as a narrow, explicit raw
+// enrichment read (see getRiderManualGiros).
 
 "use strict";
+
+const { readGiroProjection } = require("../core/delivery/giroProjectionReader");
+const {
+  effectiveGiroIdByOrderId,
+  projectionAvailability,
+} = require("../core/delivery/giroProjectionPort");
+
+// PostgREST in.(…) literal builder for giro ids. Giro ids are always mg_<yymmdd>_<seq>
+// (see manualGiros.generateManualGiroId) — alphanumeric/underscore only, never a
+// character PostgREST's CSV list needs quoting for. A local, tiny, pure duplicate of
+// manualGiros.js's encodeIdList, kept local on purpose: this module must not depend on
+// manualGiros.js (writer-adjacent, out of Packet 02A scope) for a two-line helper.
+function encodeGiroIdList(ids) {
+  return (ids || []).map((id) => encodeURIComponent(String(id))).join(",");
+}
 
 const DELIVERY_TYPE = "DOMICILIO";
 const PRE_TRIP_STATES = ["LISTO", "EN_ENTREGA"];
@@ -113,22 +136,82 @@ async function getRiderOrdenes(deps) {
       PRE_TRIP_STATES.includes(o.estado) &&
       !TERMINAL.has(o.estado));
   }
-  return filtered.map((o) => project(o, RIDER_ORDER_FIELDS));
+
+  // W4 Packet 02A — canonical giro membership. One Projection read per request, reused
+  // for every order below. ordenes.manual_giro_id is never read for this DTO field: a
+  // Projection failure degrades every order's manual_giro_id to null (orders themselves
+  // stay fully readable — their I/O above is independent of this), it never falls back
+  // to the raw column and never raises/blocks the request.
+  let giroIdByOrderId = new Map();
+  try {
+    const projection = await readGiroProjection();
+    giroIdByOrderId = effectiveGiroIdByOrderId(projection);
+  } catch (_) {
+    // giroIdByOrderId stays empty -> every order's manual_giro_id below is null
+  }
+
+  return filtered.map((o) => {
+    const dto = project(o, RIDER_ORDER_FIELDS);
+    dto.manual_giro_id = giroIdByOrderId.get(String(o.id)) || null;
+    return dto;
+  });
 }
 
 // getRiderManualGiros — active-trip giros only (or operational giros pre-trip), fail-closed.
+//
+// W4 Packet 02A — canonical giro facts. Membership, state, salida, hora_ref and
+// dissolved facts come exclusively from the Giro Authority projection; the raw
+// manual_giros table is never read as truth for any of those. A single Projection
+// read serves the whole request. Projection unavailable/degraded -> [] (no
+// trustworthy giro facts to show — never a guessed list, never a raw fallback).
+// entrega_ref is NOT a canonical W3 fact (absent from the projection by design,
+// see migrations/2026-09-14_giro_authority_v1_migration_130.sql) and is kept as a
+// narrow, explicit legacy-metadata enrichment read, scoped to only the giro ids
+// the Projection already returned — it can never override a canonical fact because
+// it supplies a field the Projection doesn't claim at all.
 async function getRiderManualGiros(deps) {
   const m = await resolveTripMode(deps);
   if (m.mode === "fail-closed") return { error: "rider_read_unavailable", reason: m.reason };
-  const rows = (await deps.sbSelect("manual_giros", "order=id.asc")) || [];
+
+  let projection = null;
+  try {
+    projection = await readGiroProjection();
+  } catch (_) {
+    projection = null;
+  }
+  if (!projectionAvailability(projection).available) {
+    return [];
+  }
+
   let filtered;
   if (m.mode === "in-trip") {
     const gids = new Set((m.trip.manual_giro_ids || []).map(String));
-    filtered = rows.filter((g) => gids.has(String(g.id)));
+    filtered = projection.giros.filter((g) => gids.has(String(g.giro_id)));
   } else {
-    filtered = rows.filter((g) => g.dissolved !== true && g.completed !== true);
+    filtered = projection.giros.filter((g) => g.giro_state !== "DISSOLVED");
   }
-  return filtered.map((g) => project(g, RIDER_GIRO_FIELDS));
+
+  const giroIds = filtered.map((g) => g.giro_id);
+  let entregaRefById = new Map();
+  if (giroIds.length > 0) {
+    try {
+      const rows = (await deps.sbSelect(
+        "manual_giros",
+        `id=in.(${encodeGiroIdList(giroIds)})&select=id,entrega_ref`
+      )) || [];
+      for (const r of rows) entregaRefById.set(String(r.id), r.entrega_ref ?? null);
+    } catch (_) {
+      // best-effort legacy metadata only: on failure entrega_ref is null below,
+      // canonical giro facts (already resolved above) are entirely unaffected
+    }
+  }
+
+  return filtered.map((g) => ({
+    id: g.giro_id,
+    salida_ref: g.salida ?? null,
+    hora_ref: g.hora_ref ?? null,
+    entrega_ref: entregaRefById.get(String(g.giro_id)) ?? null,
+  }));
 }
 
 module.exports = {

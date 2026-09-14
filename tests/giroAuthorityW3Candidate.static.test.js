@@ -1,21 +1,25 @@
 'use strict';
 // tests/giroAuthorityW3Candidate.static.test.js — Planner W3 (Giro Authority + Projection)
-// + W4 (canonical read-boundary cutover, Packet 01) static guard. OFFLINE: no DB, no
-// network. The behavioural certification ran on an ephemeral PostgreSQL in
+// + W4 (canonical read-boundary cutover, Packets 01 + 02A) static guard. OFFLINE: no DB,
+// no network. The behavioural certification ran on an ephemeral PostgreSQL in
 // ci/giro-authority-certification/harness/run.js (W3-N01..N30 matrix, provenance kept
 // byte-identical below); migration 130 is now applied to STAGING (see
 // MIGRATION_MANIFEST.md). This file pins what must stay true in the repository:
 //   * the untouched candidate provenance file still says DEFERRED/not-reserved (it is a
 //     historical artifact); the REAL numbered migration is verified separately by
 //     filename + checksum;
-//   * previewTiming.js (W4 Packet 01) is the ONLY live consumer of giroProjectionPort;
-//     giroProjectionReader.js is the ONLY live I/O boundary onto giro_projection_v1;
-//     nothing else references the Authority or the projection, no H1B entry;
+//   * previewTiming.js (W4 Packet 01) and riderReads.js (W4 Packet 02A) are the ONLY
+//     live consumers of giroProjectionPort; giroProjectionReader.js is the ONLY live
+//     I/O boundary onto giro_projection_v1; nothing else references the Authority or
+//     the projection, no H1B entry;
 //   * giroFactsPort.js (the W2 temporary shim) is still required by nothing live —
 //     the cutover went straight to the canonical projection, never through it;
-//   * previewTiming.js no longer reads raw manual_giro_id / manual_giros;
-//     giroProjectionReader.js reads none of manual_giro_id / manual_giros / salida_ref /
-//     dissolved_at / pending_giro_intent — pure I/O only;
+//   * previewTiming.js no longer reads raw manual_giro_id / manual_giros; riderReads.js
+//     no longer treats them as giro-fact truth (only its narrow entrega_ref
+//     legacy-metadata enrichment select remains, extended detail in
+//     tests/riderReadsW4Packet02A.static.test.js); giroProjectionReader.js reads none
+//     of manual_giro_id / manual_giros / salida_ref / dissolved_at / pending_giro_intent
+//     — pure I/O only;
 //   * timingAssessmentV3 (W2 core) is untouched by this packet;
 //   * the forward SQL never writes/alters ordenes, salida_*, config, money, publications,
 //     never reads the raw manual_giro_id inside the bounded context, and never defines
@@ -95,8 +99,11 @@ const srcFiles = fs.readdirSync(path.join(ROOT, 'src'), { recursive: true })
   .filter((f) => /\.(js|mjs|ts)$/.test(f)).map((f) => path.join(ROOT, 'src', f));
 const READER = path.join(ROOT, 'src', 'core', 'delivery', 'giroProjectionReader.js');
 const PREVIEW_TIMING = path.join(ROOT, 'src', 'agents', 'previewTiming.js');
+const RIDER_READS = path.join(ROOT, 'src', 'agents', 'riderReads.js');
 const GIRO_FACTS_PORT = path.join(ROOT, 'src', 'core', 'delivery', 'giroFactsPort.js');
-const ALLOWED_PROJECTION_CONSUMERS = new Set([ADAPTER, READER, PREVIEW_TIMING]);
+// Packet 01 (previewTiming.js) + Packet 02A (riderReads.js). Packet 02B (manualGiros.js)
+// is NOT in this set yet — adding it there is that packet's own job, not this one's.
+const ALLOWED_PROJECTION_CONSUMERS = new Set([ADAPTER, READER, PREVIEW_TIMING, RIDER_READS]);
 const live = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => !ALLOWED_PROJECTION_CONSUMERS.has(f));
 const mentions = live.filter((f) => /giro_authority|giro_projection_v1/.test(read(f)));
 assert('no live src/** or index.js file outside the allowlisted W4 chain references the Authority or the projection',
@@ -105,12 +112,21 @@ const requirers = live.filter((f) => /giroProjectionPort|giroProjectionReader/.t
 assert('nothing outside the allowlisted W4 chain requires giroProjectionPort/giroProjectionReader',
   requirers.length === 0, requirers.join(', '));
 const portRequirers = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => f !== ADAPTER && /require\([^)]*giroProjectionPort/.test(read(f)));
-assert('previewTiming.js is the ONLY live requirer of giroProjectionPort (First Packet scope)',
-  portRequirers.length === 1 && portRequirers[0] === PREVIEW_TIMING, portRequirers.join(', '));
+assert('exactly previewTiming.js + riderReads.js require giroProjectionPort (Packet 01 + 02A scope, nothing more)',
+  portRequirers.length === 2 &&
+  portRequirers.includes(PREVIEW_TIMING) && portRequirers.includes(RIDER_READS),
+  portRequirers.join(', '));
 assert('previewTiming.js requires giroProjectionReader (the canonical I/O boundary)',
   /require\([^)]*giroProjectionReader/.test(read(PREVIEW_TIMING)));
+assert('riderReads.js requires giroProjectionReader (the canonical I/O boundary)',
+  /require\([^)]*giroProjectionReader/.test(read(RIDER_READS)));
 assert('previewTiming.js no longer reads raw manual_giro_id / manual_giros in executable code (getManualGiros, findCompatibleManualGiro, or the table name outside comments)',
   !/getManualGiros|findCompatibleManualGiro|\bmanual_giros\b/.test(jsCode(read(PREVIEW_TIMING))));
+assert('riderReads.js does not require manualGiros.js (no dependency on the writer-adjacent module)',
+  !/require\([^)]*\/manualGiros["')]/.test(jsCode(read(RIDER_READS))));
+assert('riderReads.js no longer treats raw manual_giro_id / manual_giros as giro-fact truth (only the id+entrega_ref legacy-metadata enrichment select remains)',
+  !/g\.dissolved\s*!==\s*true|g\.completed\s*!==\s*true|manual_giro_id=eq\.|manual_giro_id=in\./.test(jsCode(read(RIDER_READS))) &&
+  (jsCode(read(RIDER_READS)).match(/sbSelect\(\s*"manual_giros"/g) || []).length === 1);
 assert('giroFactsPort.js is required by nothing live (not introduced into the live path)',
   fs.existsSync(GIRO_FACTS_PORT) &&
   ![...srcFiles, path.join(ROOT, 'index.js')].some((f) => f !== GIRO_FACTS_PORT && /require\([^)]*giroFactsPort/.test(read(f))));
