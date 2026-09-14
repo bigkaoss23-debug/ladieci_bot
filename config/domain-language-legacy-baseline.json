@@ -3582,6 +3582,16 @@
       "count": 1
     },
     {
+      "file": "tests/timingAssessmentV3.test.js",
+      "term": "chiuso",
+      "count": 2
+    },
+    {
+      "file": "tests/timingAssessmentV3.test.js",
+      "term": "consegna",
+      "count": 6
+    },
+    {
       "file": "tests/twoServiceMigration.test.js",
       "term": "archivio",
       "count": 5
@@ -3845,6 +3855,21 @@
       "file": "src/core/delivery/strategicOpportunities.js",
       "term": "pizze",
       "count": 2
+    },
+    {
+      "file": "src/core/delivery/timingAssessmentV3.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/timingAssessmentV3.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/timingAssessmentV3.js",
+      "term": "consegna",
+      "count": 1
     },
     {
       "file": "tests/port55PlannerD1SafetyParity.test.js",
