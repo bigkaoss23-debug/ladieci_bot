@@ -645,56 +645,18 @@ function seedGiro(g) {
   });
 
   // ── getManualGiros ────────────────────────────────────────────
-
-  await t("getManualGiros: returns active giros with order_ids", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1 });
-    seedGiro({ id: "mg_260525_2", seq: 2 });
-    seedGiro({ id: "mg_260525_3", seq: 3, dissolved_at: new Date().toISOString() });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#C", manual_giro_id: "mg_260525_2" });
-    const list = await mg.getManualGiros();
-    assert.strictEqual(list.length, 2);
-    const byId = Object.fromEntries(list.map(g => [g.id, g]));
-    assert.deepStrictEqual(byId["mg_260525_1"].order_ids.sort(), ["#A", "#B"]);
-    assert.deepStrictEqual(byId["mg_260525_2"].order_ids, ["#C"]);
-  });
-
-  await t("getManualGiros: returns hora_ref + anchor_order_id", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1, hora_ref: "21:30", anchor_order_id: "#A" });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
-    const list = await mg.getManualGiros();
-    assert.strictEqual(list.length, 1);
-    assert.strictEqual(list[0].hora_ref, "21:30");
-    assert.strictEqual(list[0].anchor_order_id, "#A");
-  });
-
-  await t("getManualGiros: returns entrega_ref alongside hora_ref", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1, hora_ref: "17:49", anchor_order_id: "#B", entrega_ref: "18:12" });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
-    const list = await mg.getManualGiros();
-    assert.strictEqual(list.length, 1);
-    assert.strictEqual(list[0].hora_ref, "17:49");
-    assert.strictEqual(list[0].entrega_ref, "18:12");
-    assert.strictEqual(list[0].anchor_order_id, "#B");
-    // entrega_ref must be in the select string for real PostgREST
-    const q = observedSelectQueries.find(x => x.table === "manual_giros")?.query || "";
-    assert.ok(q.includes("entrega_ref"), q);
-  });
-
-  await t("getManualGiros: onlyActive=false includes dissolved", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1, dissolved_at: new Date().toISOString() });
-    const list = await mg.getManualGiros({ onlyActive: false });
-    assert.strictEqual(list.length, 1);
-    assert.strictEqual(list[0].id, "mg_260525_1");
-  });
-
-  await t("getManualGiros: empty list when no giros for day", async () => {
-    const list = await mg.getManualGiros({ day: "2026-05-26" });
-    assert.deepStrictEqual(list, []);
-  });
+  // W4 Packet 02B (2026-09-14): getManualGiros() is now a thin delegate onto
+  // manualGiroReads.getManualGirosRead() (current business day -> canonical Giro
+  // Authority projection; historical business day -> the exact legacy reader
+  // this file used to test directly). That split, its historical-parity proof,
+  // and a direct assertion that this delegation forwards args/results
+  // unchanged now live in tests/manualGiroReads.test.js, with the correct
+  // stubs for readGiroProjection/getCurrentOperationalBusinessDate — this
+  // file's fake-DB harness intentionally does not stub those, so it must not
+  // exercise getManualGiros() directly any more (day-omitted requests would
+  // silently fall through to the real, unstubbed projection/session chain).
+  // The writer this section used to sit beside (createManualGiro and friends,
+  // below and above) is completely unmodified and still fully covered here.
 
   // ── softDissolveActiveManualGirosForClose ─────────────────────
 

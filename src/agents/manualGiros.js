@@ -30,6 +30,11 @@
 
 const { sbSelect, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { madridDateStr } = require("../utils/servizio");
+// W4 Packet 02B — getManualGiros() below is a thin delegate onto
+// manualGiroReads.js's canonical-current/historical-explicit split. Every
+// writer in this file is untouched: this require and the one function body it
+// feeds are the entire product diff of that packet.
+const { getManualGirosRead } = require("./manualGiroReads");
 
 // ─── Constants ───────────────────────────────────────────────────
 
@@ -408,27 +413,17 @@ async function dissolveManualGiro(giroId) {
 
 // Returns active (non-dissolved) giros for a given service day plus
 // the order_ids belonging to each. Used by GET getManualGiros.
-async function getManualGiros({ day, onlyActive = true } = {}) {
-  const giroDay = day || madridDateStr();
-  const filter = onlyActive ? "dissolved_at=is.null&" : "";
-  const giros = await sbSelect(
-    "manual_giros",
-    `${filter}giro_day=eq.${encodeURIComponent(giroDay)}&select=id,seq,giro_day,created_at,created_by,dissolved_at,hora_ref,anchor_order_id,entrega_ref&order=seq.asc`
-  );
-  if (!Array.isArray(giros) || giros.length === 0) return [];
-
-  const ids = giros.map(g => g.id);
-  const orders = await sbSelect(
-    "ordenes",
-    `manual_giro_id=in.(${encodeIdList(ids)})&select=id,manual_giro_id`
-  );
-  const byGiro = {};
-  if (Array.isArray(orders)) {
-    for (const o of orders) {
-      (byGiro[o.manual_giro_id] = byGiro[o.manual_giro_id] || []).push(o.id);
-    }
-  }
-  return giros.map(g => ({ ...g, order_ids: byGiro[g.id] || [] }));
+//
+// W4 Packet 02B: delegates entirely to manualGiroReads.getManualGirosRead(),
+// which sources the CURRENT operational business day from the canonical Giro
+// Authority projection and any HISTORICAL business day from the exact
+// pre-cutover reader (the two branches that used to be this function's own
+// body, byte-for-byte, live there now). Signature and response contract are
+// unchanged; day still defaults to "today" from this function's own point of
+// view -- deciding CURRENT vs HISTORICAL for an explicit day is
+// manualGiroReads.js's job, not this wrapper's.
+async function getManualGiros(args) {
+  return getManualGirosRead(args);
 }
 
 // Closure-time hook: soft-dissolve every still-active giro and detach
