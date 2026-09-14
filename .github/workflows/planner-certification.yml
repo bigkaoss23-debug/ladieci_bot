@@ -137,8 +137,12 @@ jobs:
 
           for f in tests/*.test.js; do
             total=$((total + 1))
-            out="$(node "$f" 2>&1)"
-            if [ $? -ne 0 ]; then
+            if out="$(node "$f" 2>&1)"; then
+              rc=0
+            else
+              rc=$?
+            fi
+            if [ "$rc" -ne 0 ]; then
               if [ "$f" = "$ALLOWLISTED_FAILURE" ]; then
                 known+=("$f")
                 echo "::warning::known pre-existing failure (allowlisted): $f"
