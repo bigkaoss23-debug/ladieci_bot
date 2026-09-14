@@ -1,0 +1,165 @@
+name: Planner Certification (W3, dormant)
+
+# Certifies the dormant Giro Authority + Projection work on this prep branch only.
+# Everything here runs against an ephemeral, throwaway PostgreSQL container created
+# and destroyed inside this job. It never touches staging or production: no Supabase
+# credentials are read, requested, or required.
+
+on:
+  push:
+    branches:
+      - feature/planner-canonical-prep
+  pull_request:
+    branches:
+      - feature/planner-canonical-prep
+
+permissions:
+  contents: read
+
+concurrency:
+  group: planner-certification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Ephemeral, job-local password for the throwaway container started in this run.
+  # Not a real secret: the container is destroyed with the job and never exposed
+  # outside this runner's private Docker network. Same placeholder value already
+  # used by the local embedded-Postgres path in harness/pgRuntime.js.
+  W3_PG_PASSWORD: ci_only_ephemeral_not_a_secret
+
+jobs:
+  certify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Install pg client for the W3 harness only (not a project dependency)
+        run: |
+          mkdir -p "${{ runner.temp }}/w3-pgenv"
+          cd "${{ runner.temp }}/w3-pgenv"
+          npm init -y >/dev/null
+          npm install pg@8.23.0
+
+      - name: Start ephemeral PostgreSQL 17.6 (matches staging's minor; local dev uses embedded 17.7.0-beta.16)
+        run: |
+          docker run -d --name w3_pg \
+            -e POSTGRES_USER=supabase_admin \
+            -e POSTGRES_PASSWORD="${W3_PG_PASSWORD}" \
+            -e POSTGRES_DB=postgres \
+            -p 5432:5432 \
+            postgres:17.6 \
+            -c wal_level=logical -c max_replication_slots=8 -c max_wal_senders=8 \
+            -c fsync=off -c max_connections=120
+
+          echo "Waiting for the ephemeral PostgreSQL container to accept connections..."
+          for i in $(seq 1 30); do
+            if docker exec w3_pg pg_isready -U supabase_admin -h localhost >/dev/null 2>&1; then
+              echo "postgres ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          docker exec w3_pg pg_isready -U supabase_admin -h localhost
+
+      - name: Domain-language guard
+        run: node scripts/check-domain-language.js
+
+      - name: W3 static guard (candidate SQL offline checks, dormancy + numbering deferral)
+        run: node tests/giroAuthorityW3Candidate.static.test.js
+
+      - name: Giro Projection adapter (pure, offline)
+        run: node tests/giroProjectionPort.test.js
+
+      - name: Timing Assessment v3 core (W2)
+        run: node tests/timingAssessmentV3.test.js
+
+      - name: T1 canonical delivery-planner test net (12 files)
+        run: |
+          set -e
+          for f in \
+            tests/deliveryChannels.test.js \
+            tests/deliveryLegs.test.js \
+            tests/deliveryProposalSelector.test.js \
+            tests/geoResolverReadOnly.test.js \
+            tests/premiumPlannerBridge.test.js \
+            tests/premiumPlannerBridgeE2E.test.js \
+            tests/premiumPlannerOpportunities.test.js \
+            tests/previewManualGiroRoute.test.js \
+            tests/previewStrategicOpportunities.test.js \
+            tests/routeImpact.test.js \
+            tests/routeTimeline.test.js \
+            tests/strategicOpportunities.test.js \
+          ; do
+            echo "::group::$f"
+            node "$f"
+            echo "::endgroup::"
+          done
+
+      - name: W3 Giro Authority certification (ephemeral PostgreSQL, N01-N30 matrix, concurrency, rollback)
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: supabase_admin
+          PGPASSWORD: ${{ env.W3_PG_PASSWORD }}
+          W3_PG_NODE_MODULES: ${{ runner.temp }}/w3-pgenv/node_modules
+          W3_EVIDENCE_OUT: ${{ runner.temp }}/w3-evidence.json
+        run: node ci/giro-authority-certification/harness/run.js
+
+      - name: Upload W3 certification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: w3-certification-evidence
+          path: ${{ runner.temp }}/w3-evidence.json
+          if-no-files-found: ignore
+
+      - name: Full backend suite (strict allowlist for the one known pre-existing failure)
+        run: |
+          set -uo pipefail
+          # The ONLY test file allowed to fail. Any other failure is a real regression
+          # and must fail this job -- never widen this list without explicit review.
+          ALLOWLISTED_FAILURE="tests/getOrdenesArchivadosSesionAuthorizationParity.test.js"
+
+          total=0
+          unexpected=()
+          known=()
+
+          for f in tests/*.test.js; do
+            total=$((total + 1))
+            out="$(node "$f" 2>&1)"
+            if [ $? -ne 0 ]; then
+              if [ "$f" = "$ALLOWLISTED_FAILURE" ]; then
+                known+=("$f")
+                echo "::warning::known pre-existing failure (allowlisted): $f"
+              else
+                unexpected+=("$f")
+                echo "::error::UNEXPECTED failure: $f"
+                echo "$out"
+              fi
+            fi
+          done
+
+          echo "TOTAL=$total KNOWN_FAILURES=${#known[@]} NEW_FAILURES=${#unexpected[@]}"
+
+          if [ ${#unexpected[@]} -gt 0 ]; then
+            echo "::error::${#unexpected[@]} new/unexpected test failure(s), failing the job:"
+            printf ' - %s\n' "${unexpected[@]}"
+            exit 1
+          fi
+
+          echo "NEW_FAILURES=0"
+
+      - name: Stop ephemeral PostgreSQL
+        if: always()
+        run: docker rm -f w3_pg || true
