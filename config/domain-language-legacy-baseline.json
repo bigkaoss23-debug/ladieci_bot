@@ -2522,6 +2522,21 @@
       "count": 2
     },
     {
+      "file": "tests/deliveryProposalSelector.test.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "tests/deliveryProposalSelector.test.js",
+      "term": "ordine",
+      "count": 3
+    },
+    {
+      "file": "tests/deliveryProposalSelector.test.js",
+      "term": "pizze",
+      "count": 2
+    },
+    {
       "file": "tests/driverScheduleSeparation.test.js",
       "term": "consegna",
       "count": 10
@@ -2857,6 +2872,16 @@
       "count": 1
     },
     {
+      "file": "tests/geoResolverReadOnly.test.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "tests/geoResolverReadOnly.test.js",
+      "term": "ordini",
+      "count": 4
+    },
+    {
       "file": "tests/incidentSafeRollover.test.js",
       "term": "chiudi",
       "count": 5
@@ -3122,6 +3147,31 @@
       "count": 3
     },
     {
+      "file": "tests/premiumPlannerBridgeE2E.test.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "tests/premiumPlannerBridgeE2E.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/premiumPlannerBridgeE2E.test.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "tests/previewManualGiroRoute.test.js",
+      "term": "consegna",
+      "count": 14
+    },
+    {
+      "file": "tests/previewManualGiroRoute.test.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
       "file": "tests/previewOrderTiming.test.js",
       "term": "consegna",
       "count": 11
@@ -3140,6 +3190,41 @@
       "file": "tests/previewOrderTiming.test.js",
       "term": "ritiro",
       "count": 2
+    },
+    {
+      "file": "tests/previewStrategicOpportunities.test.js",
+      "term": "chiuso",
+      "count": 2
+    },
+    {
+      "file": "tests/previewStrategicOpportunities.test.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "tests/previewStrategicOpportunities.test.js",
+      "term": "consegna",
+      "count": 16
+    },
+    {
+      "file": "tests/previewStrategicOpportunities.test.js",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "tests/previewStrategicOpportunities.test.js",
+      "term": "pizze",
+      "count": 16
+    },
+    {
+      "file": "tests/previewStrategicOpportunities.test.js",
+      "term": "ritiro",
+      "count": 6
+    },
+    {
+      "file": "tests/previewStrategicOpportunities.test.js",
+      "term": "serata",
+      "count": 1
     },
     {
       "file": "tests/previousCloseoutIncidentSummary.test.js",
@@ -3215,6 +3300,16 @@
       "file": "tests/rolloverClassifier.test.js",
       "term": "pranzo",
       "count": 1
+    },
+    {
+      "file": "tests/routeImpact.test.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "tests/routeImpact.test.js",
+      "term": "pizze",
+      "count": 5
     },
     {
       "file": "tests/sAEnsureServiceSessionPeriodReuse.static.test.js",
