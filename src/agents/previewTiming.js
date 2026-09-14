@@ -10,7 +10,9 @@
 //   - Questo modulo NON si fida di valori delivery calcolati dal client:
 //     risolve l'indirizzo via risolviIndirizzo (stesso engine del bot),
 //     ricava durata/zona/source server-side, calcola forno_out server-side,
-//     legge ordini attivi e manual_giros live da Supabase.
+//     legge ordenes activas live da Supabase e i giro facts dalla Projection
+//     canonica (Planner W4 — giroProjectionReader/giroProjectionPort, MAI
+//     ordenes.manual_giro_id / manual_giros raw).
 //
 // Regole prodotto (FASE 4):
 //   - Ordine manuale: `hora` richiesta dall'operatore è una PREFERENZA.
@@ -35,15 +37,13 @@ const {
   assegnaZonaDaKeyword,
   ZONE_DELIVERY,
 } = require("../utils/zones");
-const { getManualGiros } = require("./manualGiros");
+// W4 — canonical read boundary (Planner W3 giro_projection_v1). previewOrderTiming's
+// giro-compatibility advisory now sources from the Giro Authority projection, never
+// from ordenes.manual_giro_id / manual_giros / salida_ref / dissolved_at directly.
+const { readGiroProjection } = require("../core/delivery/giroProjectionReader");
+const { findCompatibleGiroFromProjection } = require("../core/delivery/giroProjectionPort");
 
 // ── Helpers tempo (wrap 24h: mai "24:08"/"25:..") ────────────────
-const toMin = (t) => {
-  if (!t) return null;
-  const [h, m] = String(t).split(":").map(Number);
-  if (!Number.isFinite(h)) return null;
-  return h * 60 + (m || 0);
-};
 const toH = (m) =>
   `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 
@@ -189,31 +189,6 @@ async function resolveDeliveryFields(params = {}) {
   return out;
 }
 
-// Trova un manual giro ATTIVO compatibile (stessa zona) a cui l'operatore
-// potrebbe aggregare il nuovo ordine. Advisory: non muove nulla.
-function findCompatibleManualGiro(manualGiros, activeOrders, zona, horaRichiestaMin) {
-  if (!zona) return null;
-  const orderById = new Map((activeOrders || []).map((o) => [o.id, o]));
-  const AGGREGATION_WINDOW_MIN = 15;
-  for (const g of manualGiros || []) {
-    const members = (g.order_ids || []).map((id) => orderById.get(id)).filter(Boolean);
-    if (!members.length) continue;
-    const sameZona = members.some((m) => m.zona === zona);
-    if (!sameZona) continue;
-    // Prossimità temporale: hora_ref del giro, o la prima hora membro.
-    if (horaRichiestaMin != null) {
-      const refMin =
-        toMin(g.hora_ref) ??
-        Math.min(...members.map((m) => toMin(m.hora)).filter((x) => x != null));
-      if (Number.isFinite(refMin) && Math.abs(refMin - horaRichiestaMin) > AGGREGATION_WINDOW_MIN) {
-        continue;
-      }
-    }
-    return { id: g.id, order_ids: g.order_ids || [], hora_ref: g.hora_ref || null };
-  }
-  return null;
-}
-
 // ── Endpoint principale ──────────────────────────────────────────
 // params: { tipo_consegna, direccion, tel, hora, items, zona_manuale, zona, force_refresh }
 async function previewOrderTiming(params = {}) {
@@ -254,9 +229,8 @@ async function previewOrderTiming(params = {}) {
     driverLiberoMin: 0,
   });
 
-  // ── Ordini attivi + manual giros live (server-side). ──────────────
+  // ── Ordenes activas (server-side) + Giro Authority projection (W4 canonical). ──
   let activeOrders = [];
-  let manualGiros = [];
   try {
     activeOrders =
       (await sbSelect(
@@ -266,17 +240,20 @@ async function previewOrderTiming(params = {}) {
   } catch (e) {
     console.warn("[previewOrderTiming] read ordenes failed:", e?.message || e);
   }
+  // W4: the ONLY source of giro facts. readGiroProjection() fails closed to null
+  // on any scope/RPC/transport failure; findCompatibleGiroFromProjection then
+  // treats that as PROJECTION_MISSING (no compatible giro), never a raw fallback.
+  let giroProjection = null;
   try {
-    manualGiros = (await getManualGiros({ onlyActive: true })) || [];
+    giroProjection = await readGiroProjection();
   } catch (e) {
-    console.warn("[previewOrderTiming] read manual_giros failed:", e?.message || e);
+    console.warn("[previewOrderTiming] read giro projection failed:", e?.message || e);
   }
 
   // ── Conflitto driver / orario alternativo (advisory, non sposta hora). ──
   let driverConflict = false;
   let driverMessage = null;
   let suggestedHora = null;
-  const horaRichiestaMin = toMin(horaRichiesta);
 
   if (zona && horaRichiesta) {
     const nowMin = nowMadridMinutes();
@@ -315,13 +292,9 @@ async function previewOrderTiming(params = {}) {
     }
   }
 
-  // ── Manual giro compatibile (advisory). ───────────────────────────
-  const compatible = findCompatibleManualGiro(
-    manualGiros,
-    activeOrders,
-    zona,
-    horaRichiestaMin
-  );
+  // ── Giro compatibile (advisory) — canonical Projection, never raw manual_giro_id. ──
+  const ordersById = new Map((activeOrders || []).map((o) => [o.id, o]));
+  const compatible = findCompatibleGiroFromProjection(giroProjection, zona, ordersById);
 
   return buildResult({
     tipo_consegna: "DOMICILIO",
@@ -339,10 +312,13 @@ async function previewOrderTiming(params = {}) {
     forno_out: fo.forno_out,
     warnings,
     driver: { has_conflict: driverConflict, message: driverMessage },
+    // W4 compat alias: manual_giro_id is the giro's EFFECTIVE id from the canonical
+    // Projection (TB-1/TB-1A). Never the raw ordenes.manual_giro_id column — this
+    // reader doesn't touch it. Removal wave: W7 (see MIGRATION_MANIFEST.md row 130).
     giro: {
       suggested: !!compatible,
-      manual_giro_id: compatible?.id || null,
-      orders: compatible?.order_ids || [],
+      manual_giro_id: compatible?.giro_id || null,
+      orders: (compatible?.effective_members || []).map((m) => m.order_id),
     },
   });
 }

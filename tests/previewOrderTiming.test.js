@@ -1,4 +1,5 @@
-// Test per previewOrderTiming (Step 1 anti-cerotto, 2026-06-01).
+// Test per previewOrderTiming (Step 1 anti-cerotto, 2026-06-01; W4 Packet 01 canonical
+// giro cutover, 2026-09-14).
 // Eseguire: node tests/previewOrderTiming.test.js
 //
 // Boundary: questi test verificano la LOGICA di previewOrderTiming (mapping
@@ -6,6 +7,11 @@
 // conflitto driver advisory, giro compatibile). La risoluzione indirizzo reale
 // (Google/cache/haversine) è già coperta da geoResolverEnrich.test.js → qui
 // risolviIndirizzo è stubbato per restituire shape note e deterministiche.
+//
+// W4: il giro compatibile ora viene SOLO dalla Projection canonica
+// (giroProjectionReader → giroProjectionPort), mai da ordenes.manual_giro_id /
+// manual_giros raw. T5 prova la parity di shape esterna sul path canonico; T8-T11
+// (sotto) provano il disaccordo raw-vs-projection, DISSOLVED, e degraded/unavailable.
 //
 // Stub via require.cache PRIMA di caricare previewTiming (così i `require`
 // destrutturati dentro il modulo raccolgono gli stub). Nessuna rete, nessun DB.
@@ -32,11 +38,12 @@ const geoPath = require.resolve("../src/utils/geoResolver");
 require(geoPath);
 require.cache[geoPath].exports.risolviIndirizzo = async () => STUB_RESOLVED;
 
-// ── Stub manualGiros.getManualGiros ─────────────────────────────
-let STUB_GIROS = [];
-const mgPath = require.resolve("../src/agents/manualGiros");
-require(mgPath);
-require.cache[mgPath].exports.getManualGiros = async () => STUB_GIROS;
+// ── Stub giroProjectionReader.readGiroProjection (W4 canonical source) ──────
+// null = unavailable/degraded (fail-closed); an object = a real giro_projection_v1 body.
+let STUB_PROJECTION = null;
+const readerPath = require.resolve("../src/core/delivery/giroProjectionReader");
+require(readerPath);
+require.cache[readerPath].exports.readGiroProjection = async () => STUB_PROJECTION;
 
 const { previewOrderTiming } = require("../src/agents/previewTiming");
 
@@ -54,7 +61,7 @@ const hasWarn = (r, code) => r.warnings.some((w) => w.code === code);
   section("T1 — Q1 vicino (Reino de España 46), hora 21:00");
   {
     STUB_ORDERS = [];
-    STUB_GIROS = [];
+    STUB_PROJECTION = null;
     STUB_RESOLVED = {
       zona: "Q1", lat: 36.7718052, lon: -2.6090218,
       durataAndataMin: 8, googleMin: 8, haversineMin: 9,
@@ -76,7 +83,7 @@ const hasWarn = (r, code) => r.warnings.some((w) => w.code === code);
   // ═══════════════════════════════════════════════════════════════
   section("T2 — Anade 35: cache-street arricchita da Google");
   {
-    STUB_ORDERS = []; STUB_GIROS = [];
+    STUB_ORDERS = []; STUB_PROJECTION = null;
     STUB_RESOLVED = {
       zona: "Q5", lat: 36.7238183, lon: -2.6395996,
       durataAndataMin: 12, googleMin: 12, haversineMin: 26,
@@ -97,7 +104,7 @@ const hasWarn = (r, code) => r.warnings.some((w) => w.code === code);
   // ═══════════════════════════════════════════════════════════════
   section("T3 — Google fail → fallback haversine + warning estimado");
   {
-    STUB_ORDERS = []; STUB_GIROS = [];
+    STUB_ORDERS = []; STUB_PROJECTION = null;
     STUB_RESOLVED = {
       zona: "Q5", lat: 36.7238183, lon: -2.6395996,
       durataAndataMin: null, googleMin: null, haversineMin: 26,
@@ -123,7 +130,7 @@ const hasWarn = (r, code) => r.warnings.some((w) => w.code === code);
       { id: "#007", tipo_consegna: "DOMICILIO", hora: "22:44", zona: "Q5", estado: "EN_COCINA",
         durata_andata_min: 26, zona_lat: 36.7238183, zona_lon: -2.6395996 },
     ];
-    STUB_GIROS = [];
+    STUB_PROJECTION = null;
     STUB_RESOLVED = {
       zona: "Q5", lat: 36.7238183, lon: -2.6395996,
       durataAndataMin: 26, googleMin: 26, haversineMin: 26,
@@ -141,32 +148,129 @@ const hasWarn = (r, code) => r.warnings.some((w) => w.code === code);
   }
 
   // ═══════════════════════════════════════════════════════════════
-  section("T5 — Same-zone manual giro activo → giro compatible sugerido");
+  section("T5 — Giro compatible desde la Projection canonica (W4-N01/N08); raw manual_giro_id en desacuerdo se IGNORA (W4-N02)");
+  {
+    // #A carries a deliberately WRONG/STALE raw manual_giro_id (as a real ordenes row
+    // could, if the legacy writer left it dangling). The canonical Projection says the
+    // real effective giro is mg_260601_1. previewOrderTiming must answer mg_260601_1 —
+    // never the raw column — proving W4's core principle: canonical wins.
+    // Zona Q2 (canal sur), NOT the Q1 hub: isRouteChannelCompatible treats a hub-only
+    // route as undecidable (routeChannel([Q1]) has zero non-hub channels -> null ->
+    // NOT compatible, by design — same rule giroFactsPort.findCompatibleGiro already
+    // used). Q2+Q2 is unambiguously same-channel ("sur"), matching this fixture's intent.
+    STUB_ORDERS = [
+      // language-guard: allow-legacy tipo_consegna is the existing ordenes column name, reproduced verbatim in this fixture
+      { id: "#A", tipo_consegna: "DOMICILIO", hora: "21:00", zona: "Q2", estado: "EN_COCINA",
+        durata_andata_min: 8, zona_lat: 36.7718052, zona_lon: -2.6090218, manual_giro_id: "WRONG_STALE_RAW_ID" },
+    ];
+    STUB_PROJECTION = {
+      contract: "giro_projection_v1", scope_valid: true, degraded: false,
+      giros: [
+        { giro_id: "mg_260601_1", giro_state: "PLANNED", salida: "21:00", effective_members: [{ order_uid: "u-a", order_id: "#A" }] },
+      ],
+      orders: [{ order_uid: "u-a", order_id: "#A", effective_giro_id: "mg_260601_1" }],
+      intents: [],
+    };
+    STUB_RESOLVED = {
+      zona: "Q2", lat: 36.7718052, lon: -2.6090218,
+      durataAndataMin: 8, googleMin: 8, haversineMin: 9,
+      source: "google", cached: true, fuoriZona: false, error: null,
+    };
+    const r = await previewOrderTiming({
+      // language-guard: allow-legacy tipo_consegna is the existing previewOrderTiming param name, reproduced verbatim in this fixture
+      tipo_consegna: "DOMICILIO", direccion: "Reino de España 50", hora: "21:00",
+    });
+    assert("giro.suggested = true", r.giro.suggested === true);
+    assert("giro.manual_giro_id = mg_260601_1 (from the Projection's effective_giro_id)", r.giro.manual_giro_id === "mg_260601_1", `id=${r.giro.manual_giro_id}`);
+    assert("giro.manual_giro_id NEVER the raw stale column value (W4-N02: canonical wins)", r.giro.manual_giro_id !== "WRONG_STALE_RAW_ID");
+    assert("giro.orders incluye #A", r.giro.orders.includes("#A"));
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  section("T8 — DISSOLVED giro en la Projection → ningún giro sugerido (W4-N03)");
   {
     STUB_ORDERS = [
+      // language-guard: allow-legacy tipo_consegna is the existing ordenes column name, reproduced verbatim in this fixture
       { id: "#A", tipo_consegna: "DOMICILIO", hora: "21:00", zona: "Q1", estado: "EN_COCINA",
-        durata_andata_min: 8, zona_lat: 36.7718052, zona_lon: -2.6090218, manual_giro_id: "mg_260601_1" },
+        durata_andata_min: 8, zona_lat: 36.7718052, zona_lon: -2.6090218 },
     ];
-    STUB_GIROS = [
-      { id: "mg_260601_1", seq: 1, hora_ref: "21:00", order_ids: ["#A"], dissolved_at: null },
-    ];
+    STUB_PROJECTION = {
+      contract: "giro_projection_v1", scope_valid: true, degraded: false,
+      giros: [{ giro_id: "mg_dissolved_1", giro_state: "DISSOLVED", salida: null, effective_members: [] }],
+      orders: [], intents: [],
+    };
     STUB_RESOLVED = {
       zona: "Q1", lat: 36.7718052, lon: -2.6090218,
       durataAndataMin: 8, googleMin: 8, haversineMin: 9,
       source: "google", cached: true, fuoriZona: false, error: null,
     };
     const r = await previewOrderTiming({
+      // language-guard: allow-legacy tipo_consegna is the existing previewOrderTiming param name, reproduced verbatim in this fixture
       tipo_consegna: "DOMICILIO", direccion: "Reino de España 50", hora: "21:00",
     });
-    assert("giro.suggested = true", r.giro.suggested === true);
-    assert("giro.manual_giro_id = mg_260601_1", r.giro.manual_giro_id === "mg_260601_1", `id=${r.giro.manual_giro_id}`);
-    assert("giro.orders incluye #A", r.giro.orders.includes("#A"));
+    assert("giro.suggested = false (DISSOLVED is never offered)", r.giro.suggested === false);
+    assert("giro.manual_giro_id = null", r.giro.manual_giro_id === null);
+    assert("giro.orders = []", Array.isArray(r.giro.orders) && r.giro.orders.length === 0);
+    assert("no crash / ok:true still returned", r.ok === true);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  section("T9 — Projection no disponible (null) → sin giro, sin raw fallback, sin crash (W4-N07/N13)");
+  {
+    // #A still carries a raw manual_giro_id here too — proves that even when the
+    // canonical source is entirely unavailable, the reader NEVER falls back to it.
+    STUB_ORDERS = [
+      // language-guard: allow-legacy tipo_consegna is the existing ordenes column name, reproduced verbatim in this fixture
+      { id: "#A", tipo_consegna: "DOMICILIO", hora: "21:00", zona: "Q1", estado: "EN_COCINA",
+        durata_andata_min: 8, zona_lat: 36.7718052, zona_lon: -2.6090218, manual_giro_id: "SOME_RAW_ID" },
+    ];
+    STUB_PROJECTION = null;
+    STUB_RESOLVED = {
+      zona: "Q1", lat: 36.7718052, lon: -2.6090218,
+      durataAndataMin: 8, googleMin: 8, haversineMin: 9,
+      source: "google", cached: true, fuoriZona: false, error: null,
+    };
+    const r = await previewOrderTiming({
+      // language-guard: allow-legacy tipo_consegna is the existing previewOrderTiming param name, reproduced verbatim in this fixture
+      tipo_consegna: "DOMICILIO", direccion: "Reino de España 50", hora: "21:00",
+    });
+    assert("giro.suggested = false (never a guess)", r.giro.suggested === false);
+    assert("giro.manual_giro_id = null (never the raw column)", r.giro.manual_giro_id === null);
+    assert("no crash / ok:true still returned", r.ok === true);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  section("T10 — Projection degraded:true (trip facts unavailable) → sin giro, sin crash (W4-N07/N13)");
+  {
+    STUB_ORDERS = [
+      // language-guard: allow-legacy tipo_consegna is the existing ordenes column name, reproduced verbatim in this fixture
+      { id: "#A", tipo_consegna: "DOMICILIO", hora: "21:00", zona: "Q1", estado: "EN_COCINA",
+        durata_andata_min: 8, zona_lat: 36.7718052, zona_lon: -2.6090218 },
+    ];
+    STUB_PROJECTION = {
+      contract: "giro_projection_v1", scope_valid: true, degraded: true, reasons: ["TRIP_FACTS_UNAVAILABLE"],
+      giros: [{ giro_id: "mg_x", giro_state: "PLANNED", salida: "21:00", effective_members: [{ order_uid: "u-a", order_id: "#A" }] }],
+      orders: [{ order_uid: "u-a", order_id: "#A", effective_giro_id: "mg_x" }],
+      intents: [],
+    };
+    STUB_RESOLVED = {
+      zona: "Q1", lat: 36.7718052, lon: -2.6090218,
+      durataAndataMin: 8, googleMin: 8, haversineMin: 9,
+      source: "google", cached: true, fuoriZona: false, error: null,
+    };
+    const r = await previewOrderTiming({
+      // language-guard: allow-legacy tipo_consegna is the existing previewOrderTiming param name, reproduced verbatim in this fixture
+      tipo_consegna: "DOMICILIO", direccion: "Reino de España 50", hora: "21:00",
+    });
+    assert("degraded projection -> giro.suggested = false (never trusts a giro it can't verify)", r.giro.suggested === false);
+    assert("giro.manual_giro_id = null", r.giro.manual_giro_id === null);
+    assert("no crash / ok:true still returned", r.ok === true);
   }
 
   // ═══════════════════════════════════════════════════════════════
   section("T6 — RITIRO: sin durata delivery, forno_out = hora");
   {
-    STUB_ORDERS = []; STUB_GIROS = []; STUB_RESOLVED = null;
+    STUB_ORDERS = []; STUB_PROJECTION = null; STUB_RESOLVED = null;
     const r = await previewOrderTiming({ tipo_consegna: "RITIRO", hora: "21:00" });
     assert("zona null", r.zona === null);
     assert("durata_andata_min null", r.durata_andata_min === null);
@@ -178,7 +282,7 @@ const hasWarn = (r, code) => r.warnings.some((w) => w.code === code);
   // ═══════════════════════════════════════════════════════════════
   section("T7 — Después de medianoche: hora - durata wrappa, no clamp 00:00");
   {
-    STUB_ORDERS = []; STUB_GIROS = [];
+    STUB_ORDERS = []; STUB_PROJECTION = null;
     STUB_RESOLVED = {
       zona: "Q1", lat: 36.7718052, lon: -2.6090218,
       durataAndataMin: 12, googleMin: 12, haversineMin: 13,

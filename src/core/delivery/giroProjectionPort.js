@@ -111,9 +111,29 @@ function effectiveGiroIdByOrderId(projection) {
   return out;
 }
 
+// Standalone advisory (no intended target yet): is there a compatible PLANNED giro
+// right now that a new order could join? Mirrors giroFactsPort.findCompatibleGiro's
+// contract exactly, sourced from the projection instead of the legacy shape. Never
+// offers a departed (IN_TRIP/DONE) or DISSOLVED giro. Unavailable projection -> null
+// (visible "no giro", never a guess).
+function findCompatibleGiroFromProjection(projection, newOrderZona, ordersById) {
+  if (!newOrderZona) return null;
+  if (!projectionAvailability(projection).available) return null;
+  const lookup = makeLookup(ordersById);
+  for (const g of projection.giros || []) {
+    if (!g || g.giro_state !== "PLANNED") continue;
+    const zonas = memberZonas(g, lookup);
+    if (zonas.length > 0 && absorbs(zonas, newOrderZona)) {
+      return { giro_id: g.giro_id, effective_members: g.effective_members || [] };
+    }
+  }
+  return null;
+}
+
 module.exports = {
   projectionAvailability,
   projectionGiroFacts,
   resolveIntendedGiroFromProjection,
   effectiveGiroIdByOrderId,
+  findCompatibleGiroFromProjection,
 };

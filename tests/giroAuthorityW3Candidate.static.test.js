@@ -1,17 +1,27 @@
 'use strict';
-// tests/giroAuthorityW3Candidate.static.test.js — Planner W3 (Giro Authority + Projection,
-// DORMANT) static guard. OFFLINE: no DB, no network. The behavioural certification runs
-// on an ephemeral PostgreSQL in ci/giro-authority-certification/harness/run.js (with the
-// W3-N01..N30 matrix); this file pins what must stay true in the repository until the
-// migration number is reserved:
-//   * the candidate is NOT a ledger migration (FINAL_MIGRATION_NUMBER = DEFERRED);
-//   * nothing is wired (the prepared projection adapter is required by nothing live,
-//     no H1B entry, no new dependency);
+// tests/giroAuthorityW3Candidate.static.test.js — Planner W3 (Giro Authority + Projection)
+// + W4 (canonical read-boundary cutover, Packet 01) static guard. OFFLINE: no DB, no
+// network. The behavioural certification ran on an ephemeral PostgreSQL in
+// ci/giro-authority-certification/harness/run.js (W3-N01..N30 matrix, provenance kept
+// byte-identical below); migration 130 is now applied to STAGING (see
+// MIGRATION_MANIFEST.md). This file pins what must stay true in the repository:
+//   * the untouched candidate provenance file still says DEFERRED/not-reserved (it is a
+//     historical artifact); the REAL numbered migration is verified separately by
+//     filename + checksum;
+//   * previewTiming.js (W4 Packet 01) is the ONLY live consumer of giroProjectionPort;
+//     giroProjectionReader.js is the ONLY live I/O boundary onto giro_projection_v1;
+//     nothing else references the Authority or the projection, no H1B entry;
+//   * giroFactsPort.js (the W2 temporary shim) is still required by nothing live —
+//     the cutover went straight to the canonical projection, never through it;
+//   * previewTiming.js no longer reads raw manual_giro_id / manual_giros;
+//     giroProjectionReader.js reads none of manual_giro_id / manual_giros / salida_ref /
+//     dissolved_at / pending_giro_intent — pure I/O only;
+//   * timingAssessmentV3 (W2 core) is untouched by this packet;
 //   * the forward SQL never writes/alters ordenes, salida_*, config, money, publications,
 //     never reads the raw manual_giro_id inside the bounded context, and never defines
 //     the operational service or the calendar day on its own;
 //   * lock order, private boundary and DEFINER shape are declared;
-//   * the capture trigger exists only as the W5 artifact.
+//   * the capture trigger exists only as the W5 artifact (still not installed).
 //
 // Run: node tests/giroAuthorityW3Candidate.static.test.js
 
@@ -36,6 +46,10 @@ const ADAPTER = path.join(ROOT, 'src', 'core', 'delivery', 'giroProjectionPort.j
 // Removes `--` comments (full-line and trailing) so prose can never satisfy or defeat
 // an assertion about executable SQL. The candidate has no `--` inside string literals.
 const code = (s) => s.split('\n').map((l) => l.replace(/--.*$/, '')).join('\n');
+// Same principle for JS: strips `//` line comments so an explanatory comment describing
+// what a module does NOT do (e.g. "never reads raw manual_giro_id") can never itself
+// trip a raw-reader assertion. None of the guarded files use `//` inside string literals.
+const jsCode = (s) => s.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
 section('FILES');
 for (const f of [FWD_FILE, RB_FILE, W5_FILE, ADAPTER, path.join(CERT, 'fixture', 'staging_shape_v1.sql'),
@@ -48,26 +62,62 @@ const RB = code(read(RB_FILE));
 const W5_RAW = read(W5_FILE);
 const W5 = code(W5_RAW);
 
-section('NUMBERING DEFERRED — not a ledger migration, S4 reservation untouched');
+section('NUMBERING — candidate header intact; migration 130 is now the real, applied ledger migration');
 assert('header declares FINAL_MIGRATION_NUMBER = DEFERRED', FWD_RAW.includes('FINAL_MIGRATION_NUMBER = DEFERRED'));
 assert('header records PLANNER_NEXT_MIGRATION_CANDIDATE = 130 (not reserved)', FWD_RAW.includes('PLANNER_NEXT_MIGRATION_CANDIDATE = 130'));
+// The candidate file above (ci/giro-authority-certification/candidate/giro_authority_v1.sql)
+// intentionally still says DEFERRED/not-reserved — it is untouched provenance, byte-identical
+// to what was certified. The REAL, numbered migration is a separate, later file under
+// migrations/ (packaged and applied to STAGING before this W4 packet), verified here by
+// exact filename and checksum rather than by absence.
 const migFiles = fs.readdirSync(path.join(ROOT, 'migrations'));
-assert('no file under migrations/ references giro_authority',
-  !migFiles.some((f) => read(path.join(ROOT, 'migrations', f)).includes('giro_authority')));
-assert('MIGRATION_MANIFEST.md has no giro_authority row', !read(path.join(ROOT, 'migrations', 'MIGRATION_MANIFEST.md')).includes('giro_authority'));
-assert('no migration-127 file of any kind (CASE L still holds)',
+const MIGRATION_130_FILE = path.join(ROOT, 'migrations', '2026-09-14_giro_authority_v1_migration_130.sql');
+const crypto = require('crypto');
+assert('migration-130 file exists under migrations/ (packaged + applied to staging, not just a candidate)',
+  migFiles.includes('2026-09-14_giro_authority_v1_migration_130.sql'));
+assert('migration-130 file checksum matches the certified/applied sha256',
+  fs.existsSync(MIGRATION_130_FILE) &&
+  crypto.createHash('sha256').update(fs.readFileSync(MIGRATION_130_FILE)).digest('hex') ===
+    'ef7e52ad2a60cbdf1e31ae5b6f7d66b181ae9ef302c1e823702c439301c4d3ab');
+const giroAuthoritySqlFiles = migFiles.filter((f) => f.endsWith('.sql') && read(path.join(ROOT, 'migrations', f)).includes('giro_authority')).sort();
+assert('exactly the migration-130 forward+rollback pair references giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
+  JSON.stringify(giroAuthoritySqlFiles) === JSON.stringify([
+    '2026-09-14_giro_authority_v1_migration_130.ROLLBACK.sql',
+    '2026-09-14_giro_authority_v1_migration_130.sql',
+  ]), giroAuthoritySqlFiles.join(', '));
+assert('MIGRATION_MANIFEST.md documents migration 130 (giro_authority row present)',
+  read(path.join(ROOT, 'migrations', 'MIGRATION_MANIFEST.md')).includes('giro_authority'));
+assert('no migration-127 file of any kind (CASE L still holds, S4 untouched)',
   !migFiles.some((f) => /_migration_127\b/.test(f) || /^2026-\d\d-\d\d_.*127/.test(f)));
-assert('no migration-130 file either (130 is only a candidate)', !migFiles.some((f) => /_migration_130\b/.test(f)));
 
-section('DORMANT — nothing wired; the adapter is prepared, not cut over');
+section('W4 CUTOVER — canonical reader chain is the ONLY live consumer, nothing else touches it');
 const srcFiles = fs.readdirSync(path.join(ROOT, 'src'), { recursive: true })
   .filter((f) => /\.(js|mjs|ts)$/.test(f)).map((f) => path.join(ROOT, 'src', f));
-const live = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => f !== ADAPTER);
+const READER = path.join(ROOT, 'src', 'core', 'delivery', 'giroProjectionReader.js');
+const PREVIEW_TIMING = path.join(ROOT, 'src', 'agents', 'previewTiming.js');
+const GIRO_FACTS_PORT = path.join(ROOT, 'src', 'core', 'delivery', 'giroFactsPort.js');
+const ALLOWED_PROJECTION_CONSUMERS = new Set([ADAPTER, READER, PREVIEW_TIMING]);
+const live = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => !ALLOWED_PROJECTION_CONSUMERS.has(f));
 const mentions = live.filter((f) => /giro_authority|giro_projection_v1/.test(read(f)));
-assert('no live src/** or index.js file references the Authority or the projection (adapter excluded)', mentions.length === 0, mentions.join(', '));
-const requirers = live.filter((f) => /giroProjectionPort/.test(read(f)));
-assert('nothing in src/** or index.js requires giroProjectionPort (no cutover before W4)', requirers.length === 0, requirers.join(', '));
-assert('timingAssessmentV3 still consumes GiroFacts only (no projection import)', !/giroProjectionPort|giro_projection/.test(read(path.join(ROOT, 'src', 'core', 'delivery', 'timingAssessmentV3.js'))));
+assert('no live src/** or index.js file outside the allowlisted W4 chain references the Authority or the projection',
+  mentions.length === 0, mentions.join(', '));
+const requirers = live.filter((f) => /giroProjectionPort|giroProjectionReader/.test(read(f)));
+assert('nothing outside the allowlisted W4 chain requires giroProjectionPort/giroProjectionReader',
+  requirers.length === 0, requirers.join(', '));
+const portRequirers = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => f !== ADAPTER && /require\([^)]*giroProjectionPort/.test(read(f)));
+assert('previewTiming.js is the ONLY live requirer of giroProjectionPort (First Packet scope)',
+  portRequirers.length === 1 && portRequirers[0] === PREVIEW_TIMING, portRequirers.join(', '));
+assert('previewTiming.js requires giroProjectionReader (the canonical I/O boundary)',
+  /require\([^)]*giroProjectionReader/.test(read(PREVIEW_TIMING)));
+assert('previewTiming.js no longer reads raw manual_giro_id / manual_giros in executable code (getManualGiros, findCompatibleManualGiro, or the table name outside comments)',
+  !/getManualGiros|findCompatibleManualGiro|\bmanual_giros\b/.test(jsCode(read(PREVIEW_TIMING))));
+assert('giroFactsPort.js is required by nothing live (not introduced into the live path)',
+  fs.existsSync(GIRO_FACTS_PORT) &&
+  ![...srcFiles, path.join(ROOT, 'index.js')].some((f) => f !== GIRO_FACTS_PORT && /require\([^)]*giroFactsPort/.test(read(f))));
+assert('giroProjectionReader.js is pure I/O in executable code: no raw manual_giro_id / manual_giros / salida_ref / dissolved_at / pending_giro_intent outside comments',
+  fs.existsSync(READER) && !/manual_giro_id|manual_giros|salida_ref|dissolved_at|pending_giro_intent/.test(jsCode(read(READER))));
+assert('timingAssessmentV3 still consumes GiroFacts only (no projection import — W2 core untouched by this packet)',
+  !/giroProjectionPort|giro_projection/.test(read(path.join(ROOT, 'src', 'core', 'delivery', 'timingAssessmentV3.js'))));
 assert('H1B registry has no Giro Authority resource or RPC',
   !/giro_authority|giro_projection|giro_members|giro_intents/.test(read(path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js'))));
 const pkg = JSON.parse(read(path.join(ROOT, 'package.json')));
