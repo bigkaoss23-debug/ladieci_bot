@@ -87,7 +87,14 @@ if (fs.existsSync(MANUAL_GIRO_STATIC_GUARD)) {
     byteIdentical('src/agents/manualGiros.js'));
 }
 
-section('MIGRATIONS — completely unchanged');
+section('MIGRATIONS — completely unchanged (W5 Packet 01\'s own migration excepted)');
+const W5_STATIC_GUARD = path.join(ROOT, 'tests', 'manualGirosW5Packet01.static.test.js');
+const w5Applied = fs.existsSync(W5_STATIC_GUARD);
+const W5_MIGRATION_FILES = new Set([
+  'migrations/MIGRATION_MANIFEST.md',
+  'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
+  'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
+]);
 let migrationsChanged = [];
 try {
   const diffOut = execSync(`git diff --name-only ${BASE_HEAD} -- migrations/`, { cwd: ROOT, encoding: 'utf8' });
@@ -95,7 +102,8 @@ try {
 } catch (e) {
   migrationsChanged = ['<git diff failed: ' + (e && e.message) + '>'];
 }
-assert('migrations/** has zero changes vs BASE_HEAD', migrationsChanged.length === 0, migrationsChanged.join(', '));
+const unexpectedMigrationsChanged = migrationsChanged.filter((f) => !(w5Applied && W5_MIGRATION_FILES.has(f)));
+assert('migrations/** has zero UNEXPECTED changes vs BASE_HEAD (W5 Packet 01\'s own migration excepted)', unexpectedMigrationsChanged.length === 0, unexpectedMigrationsChanged.join(', '));
 
 section('FRONTEND — no frontend/ or ladieci-app33 path in this packet\'s diff');
 let feChanged = [];
@@ -128,6 +136,17 @@ const FINAL_W4_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW4FinalCutover.st
 const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
   ...(fs.existsSync(MANUAL_GIRO_STATIC_GUARD) ? ['src/agents/manualGiros.js', 'src/agents/manualGiroReads.js'] : []), // Packet 02B
   ...(fs.existsSync(FINAL_W4_STATIC_GUARD) ? ['src/core/delivery/plannerSnapshot.js'] : []), // Final W4 Read-Cutover Packet
+  ...(w5Applied ? [ // W5 Packet 01 — single-writer Authority cutover + facts signal
+    'migrations/MIGRATION_MANIFEST.md',
+    'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
+    'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w5_packet01_v1.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w5_packet01_v1.ROLLBACK.sql',
+    'ci/giro-authority-certification/harness/runW5Packet01.js',
+    'ci/giro-authority-certification/harness/groups/w5packet01.js',
+    'ci/giro-authority-certification/harness/groups/boundary.js',
+    'ci/giro-authority-certification/harness/groups/noMoney.js',
+  ] : []),
 ]);
 const allowedProductFiles = new Set([PACKET_02A_OWN_PRODUCT_FILE, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));

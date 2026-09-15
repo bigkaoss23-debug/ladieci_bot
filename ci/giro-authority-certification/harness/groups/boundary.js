@@ -60,7 +60,11 @@ async function run(env) {
     assert('every Authority function is owned by postgres', fns.length > 20 && fns.every((f) => f.owner === 'postgres'));
     assert('every Authority function pins search_path=pg_catalog, pg_temp',
       fns.every((f) => JSON.stringify(f.proconfig) === JSON.stringify(['search_path=pg_catalog, pg_temp'])));
-    assert('8 public entry points, all SECURITY DEFINER', pub.length === 8 && pub.every((f) => f.prosecdef));
+    // W5 Packet 01 legitimately adds 2 new public entry points (create_or_move_v1,
+    // attach_or_move_v1) on top of W3's original 8 -- detected via the new commands'
+    // own presence, same forward-compatible pattern used throughout this codebase.
+    const w5PublicCount = pub.some((f) => f.proname === 'giro_authority_create_or_move_v1') ? 10 : 8;
+    assert(`${w5PublicCount} public entry points, all SECURITY DEFINER`, pub.length === w5PublicCount && pub.every((f) => f.prosecdef), pub.map((f) => f.proname));
     assert('capture function is SECURITY DEFINER (fires for service_role inserts)',
       fns.some((f) => f.proname === 'capture_giro_intent_v1' && f.prosecdef));
 

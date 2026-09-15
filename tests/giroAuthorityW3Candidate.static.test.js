@@ -84,10 +84,15 @@ assert('migration-130 file checksum matches the certified/applied sha256',
   crypto.createHash('sha256').update(fs.readFileSync(MIGRATION_130_FILE)).digest('hex') ===
     'ef7e52ad2a60cbdf1e31ae5b6f7d66b181ae9ef302c1e823702c439301c4d3ab');
 const giroAuthoritySqlFiles = migFiles.filter((f) => f.endsWith('.sql') && read(path.join(ROOT, 'migrations', f)).includes('giro_authority')).sort();
-assert('exactly the migration-130 forward+rollback pair references giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
+// W5 Packet 01 (migration 131) is the first additive migration onto the giro_authority
+// schema since W3 -- it adds two new composite commands and touches detach_v1/dissolve_v1,
+// so its forward+rollback pair legitimately joins 130's here.
+assert('exactly the migration-130 and migration-131 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
   JSON.stringify(giroAuthoritySqlFiles) === JSON.stringify([
     '2026-09-14_giro_authority_v1_migration_130.ROLLBACK.sql',
     '2026-09-14_giro_authority_v1_migration_130.sql',
+    '2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
+    '2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
   ]), giroAuthoritySqlFiles.join(', '));
 assert('MIGRATION_MANIFEST.md documents migration 130 (giro_authority row present)',
   read(path.join(ROOT, 'migrations', 'MIGRATION_MANIFEST.md')).includes('giro_authority'));
@@ -103,9 +108,13 @@ const RIDER_READS = path.join(ROOT, 'src', 'agents', 'riderReads.js');
 const MANUAL_GIRO_READS = path.join(ROOT, 'src', 'agents', 'manualGiroReads.js');
 const PLANNER_SNAPSHOT = path.join(ROOT, 'src', 'core', 'delivery', 'plannerSnapshot.js');
 const GIRO_FACTS_PORT = path.join(ROOT, 'src', 'core', 'delivery', 'giroFactsPort.js');
+const MANUAL_GIROS = path.join(ROOT, 'src', 'agents', 'manualGiros.js');
 // Packet 01 (previewTiming.js) + Packet 02A (riderReads.js) + Packet 02B (manualGiroReads.js)
-// + Final W4 Read-Cutover Packet (plannerSnapshot.js).
-const ALLOWED_PROJECTION_CONSUMERS = new Set([ADAPTER, READER, PREVIEW_TIMING, RIDER_READS, MANUAL_GIRO_READS, PLANNER_SNAPSHOT]);
+// + Final W4 Read-Cutover Packet (plannerSnapshot.js) + W5 Packet 01 (manualGiros.js, the
+// single Authority WRITER -- it calls giro_authority_create_or_move_v1/attach_or_move_v1/
+// detach_v1/dissolve_v1 directly via sbRpc, never through giroProjectionPort/Reader, which
+// stay the read-only boundary).
+const ALLOWED_PROJECTION_CONSUMERS = new Set([ADAPTER, READER, PREVIEW_TIMING, RIDER_READS, MANUAL_GIRO_READS, PLANNER_SNAPSHOT, MANUAL_GIROS]);
 const live = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => !ALLOWED_PROJECTION_CONSUMERS.has(f));
 const mentions = live.filter((f) => /giro_authority|giro_projection_v1/.test(read(f)));
 assert('no live src/** or index.js file outside the allowlisted W4 chain references the Authority or the projection',

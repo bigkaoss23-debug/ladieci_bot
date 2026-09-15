@@ -64,6 +64,19 @@ function extractFunction(src, name) {
 }
 
 section('WRITER FUNCTION BODIES — mechanical per-function comparison against BASE_HEAD');
+// W5 Packet 01 is a LATER, separately-authorized packet on this same branch that
+// legitimately rewrites the four real writers (single-writer Authority cutover) and
+// retires 3 writer-support helpers with no external caller (nextSeqForDay,
+// validateManualGiroOrders, verifyOrdersAttachedToGiro). Its own static guard
+// (tests/manualGirosW5Packet01.static.test.js) certifies the new writer state in
+// depth -- mirrors the identical "later packet extends the allowed diff" resolution
+// already applied to the product-files list below and to
+// riderReadsW4Packet02A.static.test.js. Detected the same way: presence of that
+// later packet's own guard on the branch.
+const W5_STATIC_GUARD = path.join(ROOT, 'tests', 'manualGirosW5Packet01.static.test.js');
+const w5Applied = fs.existsSync(W5_STATIC_GUARD);
+const RETIRED_BY_W5 = new Set(['nextSeqForDay', 'validateManualGiroOrders', 'verifyOrdersAttachedToGiro']);
+const REWRITTEN_BY_W5 = new Set(['createManualGiro', 'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro']);
 const WRITER_AND_WRITER_SUPPORT_FUNCTIONS = [
   // pure helpers feeding the writers
   'generateManualGiroId', 'isValidHoraRef', 'normalizeHoraRef', 'isOrderEligibleForGiro',
@@ -73,16 +86,31 @@ const WRITER_AND_WRITER_SUPPORT_FUNCTIONS = [
   // real writers
   'autoDissolveIfBelowThreshold', 'createManualGiro', 'addOrderToManualGiro',
   'removeOrderFromManualGiro', 'dissolveManualGiro', 'softDissolveActiveManualGirosForClose',
-];
+].filter((fn) => !(w5Applied && RETIRED_BY_W5.has(fn)));
 const baseManualGiros = baseContent('src/agents/manualGiros.js');
 const curManualGiros = currentContent('src/agents/manualGiros.js');
 assert('BASE_HEAD copy of manualGiros.js readable', baseManualGiros !== null);
 assert('current copy of manualGiros.js readable', curManualGiros !== null);
 
+if (w5Applied) {
+  for (const fn of RETIRED_BY_W5) {
+    assert(`${fn}(): retired by W5 Packet 01 (no external caller), confirmed absent from current manualGiros.js`,
+      curManualGiros !== null && extractFunction(curManualGiros, fn) === null);
+  }
+}
+
 let allIdentical = true;
 for (const fn of WRITER_AND_WRITER_SUPPORT_FUNCTIONS) {
   const baseFn = baseManualGiros ? extractFunction(baseManualGiros, fn) : null;
   const curFn = curManualGiros ? extractFunction(curManualGiros, fn) : null;
+  if (w5Applied && REWRITTEN_BY_W5.has(fn)) {
+    // Rewritten by W5's authorized single-writer cutover -- certified in depth by
+    // W5's own guard, not by byte-identity here. Just confirm it still exists.
+    const ok = curFn !== null;
+    if (!ok) allIdentical = false;
+    assert(`${fn}(): body present (rewritten by W5 Packet 01, certified by tests/manualGirosW5Packet01.static.test.js)`, ok);
+    continue;
+  }
   const ok = baseFn !== null && curFn !== null && baseFn === curFn;
   if (!ok) allIdentical = false;
   assert(`${fn}(): body byte-identical to BASE_HEAD`, ok, ok ? '' : `base=${baseFn === null ? 'NOT FOUND' : baseFn.length + ' chars'} cur=${curFn === null ? 'NOT FOUND' : curFn.length + ' chars'}`);
@@ -99,13 +127,14 @@ section('getManualGiros — the ONE function allowed to change, confirm it actua
   assert('getManualGiros() body no longer contains the raw manual_giros/ordenes select logic itself', !/manual_giro_id=in\.\(/.test(curFn));
 }
 
-section('WRITER EXPORT SURFACE — module.exports key list unchanged');
+section('WRITER EXPORT SURFACE — module.exports key list unchanged (minus W5-retired helpers)');
 {
   const baseExports = (baseManualGiros.match(/module\.exports = \{[\s\S]*?\};/) || [''])[0];
   const curExports = (curManualGiros.match(/module\.exports = \{[\s\S]*?\};/) || [''])[0];
   const keysOf = (s) => (s.match(/^\s*(\w+),?\s*$/gm) || []).map((l) => l.trim().replace(/,$/, '')).filter(Boolean).sort();
-  assert('module.exports key list unchanged', JSON.stringify(keysOf(baseExports)) === JSON.stringify(keysOf(curExports)),
-    JSON.stringify({ base: keysOf(baseExports), cur: keysOf(curExports) }));
+  const expectedBaseKeys = keysOf(baseExports).filter((k) => !(w5Applied && RETIRED_BY_W5.has(k)));
+  assert('module.exports key list unchanged (W5-retired helpers excepted)', JSON.stringify(expectedBaseKeys) === JSON.stringify(keysOf(curExports)),
+    JSON.stringify({ base: expectedBaseKeys, cur: keysOf(curExports) }));
 }
 
 section('OTHER FORBIDDEN FILES — byte-identical to BASE_HEAD');
@@ -120,13 +149,22 @@ for (const f of [
   assert(`${f} is byte-identical to BASE_HEAD`, byteIdentical(f));
 }
 
-section('MIGRATIONS + FRONTEND — completely unchanged');
+section('MIGRATIONS + FRONTEND — completely unchanged (W5 Packet 01\'s own migration excepted)');
 let migrationsChanged = [];
 try {
   migrationsChanged = execSync(`git diff --name-only ${BASE_HEAD} -- migrations/`, { cwd: ROOT, encoding: 'utf8' })
     .split('\n').map((l) => l.trim()).filter(Boolean);
 } catch (e) { migrationsChanged = ['<git diff failed>']; }
-assert('migrations/** has zero changes vs BASE_HEAD', migrationsChanged.length === 0, migrationsChanged.join(', '));
+// W5 Packet 01 is a later, separately-authorized packet that adds its own numbered
+// migration (131) + rollback + the manifest row/reservation documenting it -- same
+// "later packet extends the allowed diff" resolution as everywhere else in this file.
+const W5_MIGRATION_FILES = new Set([
+  'migrations/MIGRATION_MANIFEST.md',
+  'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
+  'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
+]);
+const unexpectedMigrationsChanged = migrationsChanged.filter((f) => !(w5Applied && W5_MIGRATION_FILES.has(f)));
+assert('migrations/** has zero UNEXPECTED changes vs BASE_HEAD (W5 Packet 01\'s own migration excepted)', unexpectedMigrationsChanged.length === 0, unexpectedMigrationsChanged.join(', '));
 
 let feChanged = [];
 try {
@@ -150,9 +188,22 @@ try {
 // is neither this packet's own nor a later packet's already-certified one.
 const FINAL_W4_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW4FinalCutover.static.test.js');
 const PACKET_02B_OWN_PRODUCT_FILES = new Set(['src/agents/manualGiros.js', 'src/agents/manualGiroReads.js']);
-const LATER_PACKET_CERTIFIED_PRODUCT_FILES = fs.existsSync(FINAL_W4_STATIC_GUARD)
-  ? new Set(['src/core/delivery/plannerSnapshot.js']) // Final W4 Read-Cutover Packet
-  : new Set();
+const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
+  ...(fs.existsSync(FINAL_W4_STATIC_GUARD) ? ['src/core/delivery/plannerSnapshot.js'] : []), // Final W4 Read-Cutover Packet
+  // W5 Packet 01 — single-writer Authority cutover + facts signal: its own migration,
+  // certification harness additions, and manifest row (certified by its own guard).
+  ...(w5Applied ? [
+    'migrations/MIGRATION_MANIFEST.md',
+    'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
+    'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w5_packet01_v1.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w5_packet01_v1.ROLLBACK.sql',
+    'ci/giro-authority-certification/harness/runW5Packet01.js',
+    'ci/giro-authority-certification/harness/groups/w5packet01.js',
+    'ci/giro-authority-certification/harness/groups/boundary.js',
+    'ci/giro-authority-certification/harness/groups/noMoney.js',
+  ] : []),
+]);
 const allowedProductFiles = new Set([...PACKET_02B_OWN_PRODUCT_FILES, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));
 assert('every non-test changed file is either this packet\'s own product file or a later packet\'s own already-certified product file', nonTestNonAllowed.length === 0, nonTestNonAllowed.join(', '));

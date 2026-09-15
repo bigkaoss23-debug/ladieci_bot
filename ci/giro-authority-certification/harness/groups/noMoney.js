@@ -20,13 +20,28 @@ async function run(env) {
     const Y = await mk({ estado: 'POR_CONFIRMAR', intent: intentInput('ANCHOR', D.id) });
     for (const o of [X, Y]) await c.fx.setEstado(o.id, 'EN_COCINA');
 
+    // W5 Packet 01 legitimately extends this invariant: detach_v1/dissolve_v1 now
+    // bump GIRO_FACTS_SIGNAL on a real state change (by design -- section 9 of the
+    // W5 Packet 01 runbook). Detected via the new command's presence rather than a
+    // hardcoded epoch flag, mirroring every other forward-compatible guard adapted
+    // in this codebase's history. When absent (pure W3 harness), the original
+    // strict "zero config byte changes at all" assertion is unchanged.
+    const w5Applied = (await c.su.query(
+      "SELECT to_regprocedure('public.giro_authority_create_or_move_v1(uuid[],text,uuid,text,uuid[])') IS NOT NULL AS v"
+    )).rows[0].v;
+    const configExpr = w5Applied
+      ? "(SELECT md5(COALESCE(string_agg(chiave || valore, ',' ORDER BY chiave), '')) FROM public.config WHERE chiave <> 'GIRO_FACTS_SIGNAL') AS config"
+      : "(SELECT md5(COALESCE(string_agg(chiave || valore, ',' ORDER BY chiave), '')) FROM public.config) AS config";
+    const signalExpr = w5Applied
+      ? ", (SELECT (valore::jsonb->>'version')::bigint FROM public.config WHERE chiave = 'GIRO_FACTS_SIGNAL') AS signal_version"
+      : ", NULL::bigint AS signal_version";
     const snap = async () => (await c.su.query(`SELECT
-        (SELECT max(id) FROM fixture_audit.writes) AS audit,
+        (SELECT count(*) FROM fixture_audit.writes WHERE tbl <> 'config')::int AS audit,
         (SELECT string_agg(id || ':' || xmin::text, ',' ORDER BY id) FROM public.ordenes) AS xmins,
         (SELECT count(*) FROM public.order_obligations)::int AS obligations,
         (SELECT count(*) FROM public.order_financial_events)::int AS events,
         (SELECT count(*) FROM public.payment_transactions)::int AS payments,
-        (SELECT md5(COALESCE(string_agg(chiave || valore, ',' ORDER BY chiave), '')) FROM public.config) AS config`)).rows[0];
+        ${configExpr}${signalExpr}`)).rows[0];
     const before = await snap();
 
     const outs = [];
@@ -45,12 +60,20 @@ async function run(env) {
 
     assert('every command in the window succeeded (the window is meaningful)',
       outs.every((o) => o.ok === true && ['OK', 'CONSUMED'].includes(o.code) || o.replay === true), outs.map((o) => o.code));
-    assert('zero statements against ordenes / order_entities / config / economic tables', before.audit === after.audit,
-      { before: before.audit, after: after.audit });
+    assert('zero statements against ordenes / order_entities / economic tables (config excluded, checked precisely below)',
+      before.audit === after.audit, { before: before.audit, after: after.audit });
     assert('no new row version of any order (xmin unchanged)', before.xmins === after.xmins);
     assert('obligations / financial events / payments untouched',
       before.obligations === after.obligations && before.events === after.events && before.payments === after.payments);
-    assert('config (DRIVER_STATO) untouched', before.config === after.config);
+    assert('config untouched except GIRO_FACTS_SIGNAL (W5 Packet 01\'s own authorized bump; DRIVER_STATO and every other key byte-identical)',
+      before.config === after.config, { before: before.config, after: after.config });
+    if (w5Applied) {
+      // bigint columns come back from node-pg as strings; Number() them before
+      // arithmetic (string + number would silently concatenate, not add).
+      assert('GIRO_FACTS_SIGNAL bumped by exactly the number of real (non-idempotent) mutations in this window (detach + dissolve = 2)',
+        Number(after.signal_version) === Number(before.signal_version) + 2,
+        { before: before.signal_version, after: after.signal_version });
+    }
   } finally {
     await c.close();
   }

@@ -1,28 +1,42 @@
-// tests/manualGiros.test.js — P1C.1 of DELIVERY-MANUAL-GIRO-01
+// tests/manualGiros.test.js — P1C.1 of DELIVERY-MANUAL-GIRO-01 / W5 Packet 01
 // Unit tests for src/agents/manualGiros.js. No real DB. Supabase and
-// servizio.madridDateStr are stubbed via require.cache before the
+// currentOperationalSession are stubbed via require.cache before the
 // module-under-test is loaded (same pattern as closingTimeGuard.test.js).
+//
+// W5 Packet 01: the four public writers (createManualGiro/addOrderToManualGiro/
+// removeOrderFromManualGiro/dissolveManualGiro) no longer touch raw DB rows
+// directly for membership/state -- each calls exactly ONE Authority RPC via
+// sbRpc. This file's job is to prove the WRAPPER layer's own correctness (id
+// resolution, exact RPC name/args, response mapping, best-effort legacy
+// metadata) against STUBBED, controlled RPC responses -- it does not
+// re-simulate the Authority's own decision logic in JS (that is exhaustively
+// certified separately by ci/giro-authority-certification/harness/runW5Packet01.js
+// against a real ephemeral Postgres, 299/299). autoDissolveIfBelowThreshold/
+// countActiveMembers/softDissolveActiveManualGirosForClose remain byte-identical
+// language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
+// raw-DB functions (agentOrdini.js dependency) and keep the original fake-DB
+// harness below unchanged for them.
 
 const assert = require("assert");
 
-// ─── In-memory fake DB ───────────────────────────────────────────
+// ─── In-memory fake DB (raw tables — still used by the legacy-support tests) ──
 const db = {
   manual_giros: [],
   ordenes: [],
 };
 
-let FAKE_TODAY = "2026-05-25";
-let collideOnceOnInsert = false; // forces 1 UNIQUE-violation retry path
 const observedSelectQueries = [];
 const observedUpdateQueries = [];
+const observedRpcCalls = [];
+let rpcHandler = null; // (fn, args) => body|null, set per-test
 
 function resetDb() {
   db.manual_giros = [];
   db.ordenes = [];
-  FAKE_TODAY = "2026-05-25";
-  collideOnceOnInsert = false;
   observedSelectQueries.length = 0;
   observedUpdateQueries.length = 0;
+  observedRpcCalls.length = 0;
+  rpcHandler = null;
 }
 
 function simulateUrlSearch(query) {
@@ -113,28 +127,8 @@ require.cache[supabasePath] = {
     sbInsert: async (table, data) => {
       const row = { ...data };
       if (table === "manual_giros") {
-        if (collideOnceOnInsert) {
-          // Simulate a concurrent inserter that wins the race: push a
-          // phantom row with the same (giro_day, seq) and return the
-          // PostgREST UNIQUE-violation code. The retry loop in
-          // createManualGiro will recompute the seq and succeed.
-          collideOnceOnInsert = false;
-          db.manual_giros.push({
-            id: `phantom_${row.seq}`,
-            seq: row.seq,
-            giro_day: row.giro_day,
-            created_at: new Date().toISOString(),
-            created_by: "concurrent_tester",
-            dissolved_at: null,
-          });
-          return { code: "23505" };
-        }
         if (!row.created_at) row.created_at = new Date().toISOString();
         if (row.dissolved_at === undefined) row.dissolved_at = null;
-        const dup = db.manual_giros.find(
-          r => r.giro_day === row.giro_day && r.seq === row.seq
-        );
-        if (dup) return { code: "23505" };
       }
       db[table].push(row);
       return [{ ...row }];
@@ -164,16 +158,35 @@ require.cache[supabasePath] = {
     },
     sbUpsert: async () => [],
     getConfig: async () => ({}),
+    // W5 Packet 01 — the sole mutation transport now. rpcHandler is set per
+    // test to a pure (fn, args) => body function; observedRpcCalls records
+    // every call for the "exactly one RPC" mechanical proofs.
+    sbRpc: async (fn, args) => {
+      observedRpcCalls.push({ fn, args });
+      if (!rpcHandler) throw new Error(`sbRpc(${fn}) called with no rpcHandler installed`);
+      const body = rpcHandler(fn, args);
+      return { httpStatus: 200, ok: true, body };
+    },
   },
 };
 
-const servizioPath = require.resolve("../src/utils/servizio");
-require.cache[servizioPath] = {
-  id: servizioPath,
-  filename: servizioPath,
+const sessionPath = require.resolve("../src/serviceSessions/currentOperationalSession");
+let SCOPE_IDS = ["11111111-1111-1111-1111-111111111111"];
+let SCOPE_THROWS = false;
+require.cache[sessionPath] = {
+  id: sessionPath,
+  filename: sessionPath,
   loaded: true,
   exports: {
-    madridDateStr: () => FAKE_TODAY,
+    async getOperationalSessionIds() {
+      if (SCOPE_THROWS) throw new Error("scope_unavailable_stub");
+      return SCOPE_IDS;
+    },
+    async getCurrentOperationalSession() { return null; },
+    async getCurrentOperationalBusinessDate() { return null; },
+    async getPriorDayCarryoverSessionIds() { return []; },
+    serviceSessionQuery: () => "",
+    serviceSessionsQuery: () => "",
   },
 };
 
@@ -185,6 +198,8 @@ const failures = [];
 async function t(name, fn) {
   try {
     resetDb();
+    SCOPE_IDS = ["11111111-1111-1111-1111-111111111111"];
+    SCOPE_THROWS = false;
     await fn();
     console.log(`  ok  ${name}`);
   } catch (e) {
@@ -195,9 +210,15 @@ async function t(name, fn) {
 }
 
 // Helpers to seed
+let uidSeq = 0;
+function nextUid() {
+  uidSeq += 1;
+  return `00000000-0000-0000-0000-${String(uidSeq).padStart(12, "0")}`;
+}
 function seedOrder(o) {
   const row = {
     id: o.id,
+    order_uid: o.order_uid || nextUid(),
     tipo_consegna: o.tipo_consegna || "DOMICILIO",
     estado: o.estado || "EN_COCINA",
     manual_giro_id: o.manual_giro_id || null,
@@ -209,7 +230,7 @@ function seedGiro(g) {
   const row = {
     id: g.id,
     seq: g.seq,
-    giro_day: g.giro_day || FAKE_TODAY,
+    giro_day: g.giro_day || "2026-05-25",
     created_at: g.created_at || new Date().toISOString(),
     created_by: g.created_by || "pin_dashboard",
     dissolved_at: g.dissolved_at || null,
@@ -220,6 +241,7 @@ function seedGiro(g) {
   db.manual_giros.push(row);
   return row;
 }
+const orderUid = (id) => db.ordenes.find((o) => o.id === id).order_uid;
 
 (async () => {
   // ── Pure helpers ───────────────────────────────────────────────
@@ -254,11 +276,9 @@ function seedGiro(g) {
     assert.strictEqual(mg.isValidHoraRef("9:05"), true);
     assert.strictEqual(mg.isValidHoraRef("00:00"), true);
     assert.strictEqual(mg.isValidHoraRef("23:59"), true);
-    // empty / null = "no operational time" → valid (optional field)
     assert.strictEqual(mg.isValidHoraRef(null), true);
     assert.strictEqual(mg.isValidHoraRef(undefined), true);
     assert.strictEqual(mg.isValidHoraRef(""), true);
-    // invalid
     assert.strictEqual(mg.isValidHoraRef("25:99"), false);
     assert.strictEqual(mg.isValidHoraRef("24:00"), false);
     assert.strictEqual(mg.isValidHoraRef("21:60"), false);
@@ -282,332 +302,297 @@ function seedGiro(g) {
     assert.strictEqual(mg.encodeIdList(null), "");
   });
 
-  await t("validateManualGiroOrders: # ids remain intact through URL parsing", async () => {
-    seedOrder({ id: "#001" });
-    seedOrder({ id: "#002" });
-    const res = await mg.validateManualGiroOrders(["#001", "#002"]);
-    assert.strictEqual(res.ok, true);
-    assert.deepStrictEqual(res.uniqIds, ["#001", "#002"]);
-    const q = observedSelectQueries.find(x => x.table === "ordenes")?.query || "";
-    assert.ok(q.includes('id=in.("%23001","%23002")'), q);
-    assert.strictEqual(new URL(`https://example.test/rest/v1/ordenes?select=*&${q}`).hash, "");
-  });
-
   await t("encodeEqValue: URL-encodes", async () => {
     assert.strictEqual(mg.encodeEqValue("mg_260525_1"), "mg_260525_1");
     assert.strictEqual(mg.encodeEqValue("#001"), "%23001");
   });
 
-  // ── createManualGiro ───────────────────────────────────────────
+  // ── createManualGiro (W5: sbRpc giro_authority_create_or_move_v1) ─
 
-  await t("createManualGiro: happy path 2 fresh orders", async () => {
+  await t("createManualGiro: happy path -> exactly one create_or_move RPC with resolved uids", async () => {
     seedOrder({ id: "#A" });
     seedOrder({ id: "#B" });
+    rpcHandler = (fn, args) => {
+      assert.strictEqual(fn, "giro_authority_create_or_move_v1");
+      assert.deepStrictEqual(args.p_order_uids.sort(), [orderUid("#A"), orderUid("#B")].sort());
+      assert.strictEqual(args.p_actor, "pin_dashboard");
+      assert.deepStrictEqual(args.p_operational_session_ids, SCOPE_IDS);
+      return { ok: true, code: "OK", giro_id: "mg_260525_1", business_date: "2026-05-25", moved_from: [] };
+    };
     const res = await mg.createManualGiro(["#A", "#B"]);
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.giro.id, "mg_260525_1");
-    assert.strictEqual(res.giro.seq, 1);
     assert.deepStrictEqual(res.giro.order_ids.sort(), ["#A", "#B"]);
-    assert.strictEqual(res.giro.created_by, "pin_dashboard");
     assert.deepStrictEqual(res.moved_from, []);
-    assert.strictEqual(db.manual_giros.length, 1);
-    assert.strictEqual(db.ordenes.find(o => o.id === "#A").manual_giro_id, "mg_260525_1");
-    assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, "mg_260525_1");
+    assert.strictEqual(observedRpcCalls.filter((c) => c.fn === "giro_authority_create_or_move_v1").length, 1,
+      "exactly one create_or_move RPC per logical mutation");
   });
 
-  await t("createManualGiro: attach UPDATE supports # ids with PostgREST empty body", async () => {
-    seedOrder({ id: "#001" });
-    seedOrder({ id: "#002" });
-    const res = await mg.createManualGiro(["#001", "#002"]);
-    assert.strictEqual(res.ok, true);
-    assert.deepStrictEqual(res.giro.order_ids, ["#001", "#002"]);
-    const q = observedUpdateQueries.find(x => x.table === "ordenes" && x.query.startsWith("id=in."))?.query || "";
-    assert.strictEqual(q, 'id=in.("%23001","%23002")');
-    assert.strictEqual(new URL(`https://example.test/rest/v1/ordenes?select=*&${q}`).hash, "");
-    assert.strictEqual(db.ordenes.find(o => o.id === "#001").manual_giro_id, "mg_260525_1");
-    assert.strictEqual(db.ordenes.find(o => o.id === "#002").manual_giro_id, "mg_260525_1");
-  });
-
-  await t("createManualGiro: writes hora_ref + anchor_order_id (normalized)", async () => {
+  await t("createManualGiro: writes hora_ref/anchor_order_id/entrega_ref via best-effort legacy metadata update", async () => {
     seedOrder({ id: "#A" });
     seedOrder({ id: "#B" });
-    const res = await mg.createManualGiro(["#A", "#B"], "9:05", "#A");
+    rpcHandler = () => ({ ok: true, code: "OK", giro_id: "mg_260525_1", business_date: "2026-05-25", moved_from: [] });
+    const res = await mg.createManualGiro(["#A", "#B"], "9:05", "#A", "18:12");
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.giro.hora_ref, "09:05");
     assert.strictEqual(res.giro.anchor_order_id, "#A");
-    const row = db.manual_giros.find(g => g.id === res.giro.id);
-    assert.strictEqual(row.hora_ref, "09:05");
-    assert.strictEqual(row.anchor_order_id, "#A");
+    assert.strictEqual(res.giro.entrega_ref, "18:12");
+    const metaUpdate = observedUpdateQueries.find((u) => u.table === "manual_giros");
+    assert.ok(metaUpdate, "expected a best-effort manual_giros metadata UPDATE");
+    assert.strictEqual(metaUpdate.data.entrega_ref, "18:12");
+    assert.strictEqual(metaUpdate.data.anchor_order_id, "#A");
   });
 
-  await t("createManualGiro: retro-compatible without hora_ref → null fields", async () => {
+  await t("createManualGiro: retro-compatible without hora_ref/anchor/entrega -> no metadata write, all null", async () => {
     seedOrder({ id: "#A" });
     seedOrder({ id: "#B" });
+    rpcHandler = () => ({ ok: true, code: "OK", giro_id: "mg_260525_1", business_date: "2026-05-25", moved_from: [] });
     const res = await mg.createManualGiro(["#A", "#B"]);
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.giro.hora_ref, null);
     assert.strictEqual(res.giro.anchor_order_id, null);
     assert.strictEqual(res.giro.entrega_ref, null);
-    const row = db.manual_giros.find(g => g.id === res.giro.id);
-    assert.strictEqual(row.hora_ref, null);
-    assert.strictEqual(row.anchor_order_id, null);
-    assert.strictEqual(row.entrega_ref, null);
+    assert.strictEqual(observedUpdateQueries.find((u) => u.table === "manual_giros"), undefined,
+      "no metadata write when nothing to write");
   });
 
-  await t("createManualGiro: writes entrega_ref (normalized) separate from hora_ref", async () => {
+  await t("createManualGiro: invalid entrega_ref rejected BEFORE any RPC call", async () => {
     seedOrder({ id: "#A" });
     seedOrder({ id: "#B" });
-    const res = await mg.createManualGiro(["#A", "#B"], "17:49", "#B", "9:05");
-    assert.strictEqual(res.ok, true);
-    assert.strictEqual(res.giro.hora_ref, "17:49");
-    assert.strictEqual(res.giro.anchor_order_id, "#B");
-    assert.strictEqual(res.giro.entrega_ref, "09:05");
-    const row = db.manual_giros.find(g => g.id === res.giro.id);
-    assert.strictEqual(row.hora_ref, "17:49");
-    assert.strictEqual(row.entrega_ref, "09:05");
-  });
-
-  await t("createManualGiro: entrega_ref independent of hora_ref (only entrega set)", async () => {
-    seedOrder({ id: "#A" });
-    seedOrder({ id: "#B" });
-    const res = await mg.createManualGiro(["#A", "#B"], null, null, "18:12");
-    assert.strictEqual(res.ok, true);
-    assert.strictEqual(res.giro.hora_ref, null);
-    assert.strictEqual(res.giro.entrega_ref, "18:12");
-    const row = db.manual_giros.find(g => g.id === res.giro.id);
-    assert.strictEqual(row.hora_ref, null);
-    assert.strictEqual(row.entrega_ref, "18:12");
-  });
-
-  await t("createManualGiro: invalid entrega_ref rejected, no giro created", async () => {
-    seedOrder({ id: "#A" });
-    seedOrder({ id: "#B" });
+    rpcHandler = () => { throw new Error("must not call the Authority on local validation failure"); };
     const res = await mg.createManualGiro(["#A", "#B"], "17:49", "#B", "25:99");
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.error, "invalid_entrega_ref");
-    assert.strictEqual(db.manual_giros.length, 0);
-    assert.strictEqual(db.ordenes.find(o => o.id === "#A").manual_giro_id, null);
+    assert.strictEqual(observedRpcCalls.length, 0);
   });
 
-  await t("createManualGiro: invalid hora_ref rejected, no giro created", async () => {
+  await t("createManualGiro: invalid hora_ref rejected BEFORE any RPC call", async () => {
     seedOrder({ id: "#A" });
     seedOrder({ id: "#B" });
+    rpcHandler = () => { throw new Error("must not call the Authority"); };
     const res = await mg.createManualGiro(["#A", "#B"], "25:99");
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.error, "invalid_hora_ref");
-    assert.strictEqual(db.manual_giros.length, 0);
-    // orders untouched
-    assert.strictEqual(db.ordenes.find(o => o.id === "#A").manual_giro_id, null);
+    assert.strictEqual(observedRpcCalls.length, 0);
   });
 
-  await t("createManualGiro: < 2 orders rejected", async () => {
+  await t("createManualGiro: < 2 orders rejected locally, no RPC", async () => {
     seedOrder({ id: "#A" });
+    rpcHandler = () => { throw new Error("must not call the Authority"); };
     const r1 = await mg.createManualGiro(["#A"]);
     assert.strictEqual(r1.ok, false);
     assert.strictEqual(r1.error, "need_at_least_2_orders");
     const r2 = await mg.createManualGiro([]);
     assert.strictEqual(r2.ok, false);
+    assert.strictEqual(observedRpcCalls.length, 0);
   });
 
-  await t("createManualGiro: duplicate ids collapse to single distinct → rejected", async () => {
+  await t("createManualGiro: duplicate ids collapse to single distinct -> rejected locally, no RPC", async () => {
     seedOrder({ id: "#A" });
+    rpcHandler = () => { throw new Error("must not call the Authority"); };
     const res = await mg.createManualGiro(["#A", "#A"]);
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.error, "need_at_least_2_distinct_orders");
+    assert.strictEqual(observedRpcCalls.length, 0);
   });
 
-  await t("createManualGiro: some_orders_not_found", async () => {
+  await t("createManualGiro: some_orders_not_found resolved BEFORE calling the Authority (id->uid lookup)", async () => {
     seedOrder({ id: "#A" });
+    rpcHandler = () => { throw new Error("must not call the Authority when an id can't be resolved"); };
     const res = await mg.createManualGiro(["#A", "#GHOST"]);
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.error, "some_orders_not_found");
+    assert.strictEqual(observedRpcCalls.length, 0);
   });
 
-  await t("createManualGiro: invalid_orders (non-DOMICILIO)", async () => {
-    seedOrder({ id: "#A" });
-    seedOrder({ id: "#B", tipo_consegna: "RITIRO" });
-    const res = await mg.createManualGiro(["#A", "#B"]);
-    assert.strictEqual(res.ok, false);
-    assert.strictEqual(res.error, "invalid_orders");
-    assert.deepStrictEqual(res.details, ["#B"]);
-  });
-
-  await t("createManualGiro: invalid_orders (non-selectable estado)", async () => {
-    seedOrder({ id: "#A" });
-    seedOrder({ id: "#B", estado: "ENTREGADO" });
-    const res = await mg.createManualGiro(["#A", "#B"]);
-    assert.strictEqual(res.ok, false);
-    assert.strictEqual(res.error, "invalid_orders");
-  });
-
-  await t("createManualGiro: move-silent + auto-dissolve prev giro orphan", async () => {
-    // Seed prev giro with 2 members (#A,#B). Creating new giro from
-    // (#A, #C) must move #A out of prev → prev has only #B left
-    // (still >=2? no, 1) → prev auto-dissolves.
-    seedGiro({ id: "mg_260525_1", seq: 1 });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#C" });
-
-    const res = await mg.createManualGiro(["#A", "#C"]);
-    assert.strictEqual(res.ok, true);
-    assert.strictEqual(res.giro.seq, 2);
-    assert.deepStrictEqual(res.moved_from, ["mg_260525_1"]);
-
-    const prev = db.manual_giros.find(g => g.id === "mg_260525_1");
-    assert.ok(prev.dissolved_at, "prev giro must be soft-dissolved");
-    // #B should have been detached by autoDissolveIfBelowThreshold
-    assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, null);
-    // #A now belongs to the new giro
-    assert.strictEqual(db.ordenes.find(o => o.id === "#A").manual_giro_id, "mg_260525_2");
-  });
-
-  await t("createManualGiro: move-silent keeps prev alive when it still has >=2", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1 });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#C", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#D" });
-
-    const res = await mg.createManualGiro(["#A", "#D"]);
-    assert.strictEqual(res.ok, true);
-    const prev = db.manual_giros.find(g => g.id === "mg_260525_1");
-    assert.strictEqual(prev.dissolved_at, null, "prev giro must stay alive (B,C remain)");
-    assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, "mg_260525_1");
-    assert.strictEqual(db.ordenes.find(o => o.id === "#C").manual_giro_id, "mg_260525_1");
-  });
-
-  await t("createManualGiro: retries on UNIQUE(giro_day,seq) violation", async () => {
+  await t("createManualGiro: Authority ORDER_NOT_ELIGIBLE refusal mapped to invalid_orders", async () => {
     seedOrder({ id: "#A" });
     seedOrder({ id: "#B" });
-    collideOnceOnInsert = true;
+    rpcHandler = () => ({ ok: false, code: "ORDER_NOT_ELIGIBLE", reason: "NOT_DOMICILIO" });
     const res = await mg.createManualGiro(["#A", "#B"]);
-    assert.strictEqual(res.ok, true);
-    // Phantom inserted seq=1, retry computed seq=2.
-    assert.strictEqual(res.giro.seq, 2);
-    assert.strictEqual(res.giro.id, "mg_260525_2");
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.error, "invalid_orders");
+    assert.strictEqual(res.details, "NOT_DOMICILIO");
   });
 
-  // ── addOrderToManualGiro ──────────────────────────────────────
-
-  await t("addOrderToManualGiro: happy path attaches order", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1 });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
+  await t("createManualGiro: move-silent -> moved_from reported verbatim from the Authority (one RPC, no JS detach)", async () => {
+    seedOrder({ id: "#A" });
     seedOrder({ id: "#C" });
+    rpcHandler = (fn) => {
+      assert.strictEqual(fn, "giro_authority_create_or_move_v1");
+      return { ok: true, code: "OK", giro_id: "mg_260525_2", business_date: "2026-05-25", moved_from: ["mg_260525_1"] };
+    };
+    const res = await mg.createManualGiro(["#A", "#C"]);
+    assert.strictEqual(res.ok, true);
+    assert.deepStrictEqual(res.moved_from, ["mg_260525_1"]);
+    assert.strictEqual(observedRpcCalls.length, 1, "one RPC handles create + all internal moves atomically");
+  });
+
+  await t("createManualGiro: Authority transport failure -> explicit typed error, never a fabricated success", async () => {
+    seedOrder({ id: "#A" });
+    seedOrder({ id: "#B" });
+    rpcHandler = () => null; // simulates a non-2xx/non-JSON transport failure
+    const res = await mg.createManualGiro(["#A", "#B"]);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.error, "authority_call_failed");
+  });
+
+  await t("createManualGiro: scope unavailable -> explicit 503, no RPC call at all", async () => {
+    seedOrder({ id: "#A" });
+    seedOrder({ id: "#B" });
+    SCOPE_THROWS = true;
+    rpcHandler = () => { throw new Error("must not call the Authority without a resolved scope"); };
+    const res = await mg.createManualGiro(["#A", "#B"]);
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.error, "authority_scope_unavailable");
+    assert.strictEqual(observedRpcCalls.length, 0);
+  });
+
+  // ── addOrderToManualGiro (W5: sbRpc giro_authority_attach_or_move_v1) ─
+
+  await t("addOrderToManualGiro: happy path -> exactly one attach_or_move RPC", async () => {
+    seedOrder({ id: "#C" });
+    rpcHandler = (fn, args) => {
+      assert.strictEqual(fn, "giro_authority_attach_or_move_v1");
+      assert.strictEqual(args.p_giro_id, "mg_260525_1");
+      assert.strictEqual(args.p_order_uid, orderUid("#C"));
+      return { ok: true, code: "OK", giro_id: "mg_260525_1", order_uid: orderUid("#C"), moved_from: null };
+    };
     const res = await mg.addOrderToManualGiro("mg_260525_1", "#C");
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.moved_from, null);
-    assert.strictEqual(db.ordenes.find(o => o.id === "#C").manual_giro_id, "mg_260525_1");
+    assert.strictEqual(observedRpcCalls.filter((c) => c.fn === "giro_authority_attach_or_move_v1").length, 1);
   });
 
-  await t("addOrderToManualGiro: missing args", async () => {
+  await t("addOrderToManualGiro: missing args rejected locally, no RPC", async () => {
+    rpcHandler = () => { throw new Error("must not call the Authority"); };
     const r1 = await mg.addOrderToManualGiro(null, "#A");
     assert.strictEqual(r1.error, "missing_args");
     const r2 = await mg.addOrderToManualGiro("g", null);
     assert.strictEqual(r2.error, "missing_args");
+    assert.strictEqual(observedRpcCalls.length, 0);
   });
 
-  await t("addOrderToManualGiro: dissolved giro → 404", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1, dissolved_at: new Date().toISOString() });
+  await t("addOrderToManualGiro: order not found resolved locally, no RPC", async () => {
+    rpcHandler = () => { throw new Error("must not call the Authority"); };
+    const res = await mg.addOrderToManualGiro("mg_260525_1", "#GHOST");
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.error, "order_not_found");
+    assert.strictEqual(observedRpcCalls.length, 0);
+  });
+
+  await t("addOrderToManualGiro: Authority GIRO_NOT_PLANNED (dissolved/departed) mapped to a 409, not a false success", async () => {
     seedOrder({ id: "#A" });
+    rpcHandler = () => ({ ok: false, code: "GIRO_NOT_PLANNED", state_reason: "BELOW_MIN_MEMBERS" });
     const res = await mg.addOrderToManualGiro("mg_260525_1", "#A");
     assert.strictEqual(res.ok, false);
-    assert.strictEqual(res.error, "giro_not_found_or_dissolved");
+    assert.strictEqual(res.status, 409);
+    assert.strictEqual(res.error, "giro_not_planned");
   });
 
-  await t("addOrderToManualGiro: ineligible order", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1 });
-    seedOrder({ id: "#A", estado: "ENTREGADO" });
-    const res = await mg.addOrderToManualGiro("mg_260525_1", "#A");
-    assert.strictEqual(res.ok, false);
-    assert.strictEqual(res.error, "order_not_eligible");
-  });
-
-  await t("addOrderToManualGiro: same giro → no_op", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1 });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
+  await t("addOrderToManualGiro: same giro -> IDEMPOTENT -> no_op", async () => {
+    seedOrder({ id: "#A" });
+    rpcHandler = () => ({ ok: true, code: "IDEMPOTENT", giro_id: "mg_260525_1" });
     const res = await mg.addOrderToManualGiro("mg_260525_1", "#A");
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.no_op, true);
   });
 
-  await t("addOrderToManualGiro: move-silent triggers prev auto-dissolve when prev<2", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1 });
-    seedGiro({ id: "mg_260525_2", seq: 2 });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#C", manual_giro_id: "mg_260525_2" });
-    seedOrder({ id: "#D", manual_giro_id: "mg_260525_2" });
-
+  await t("addOrderToManualGiro: move (other giro -> target) -> ONE RPC reports moved_from, no JS branching/second call", async () => {
+    seedOrder({ id: "#A" });
+    let calls = 0;
+    rpcHandler = (fn) => {
+      calls++;
+      assert.strictEqual(fn, "giro_authority_attach_or_move_v1");
+      return { ok: true, code: "OK", giro_id: "mg_260525_2", order_uid: orderUid("#A"), moved_from: "mg_260525_1" };
+    };
     const res = await mg.addOrderToManualGiro("mg_260525_2", "#A");
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.moved_from, "mg_260525_1");
-    assert.strictEqual(res.auto_dissolved_prev, true);
-    const prev = db.manual_giros.find(g => g.id === "mg_260525_1");
-    assert.ok(prev.dissolved_at);
+    assert.strictEqual(calls, 1, "the Authority decides unattached/same-target/other-giro internally -- one call");
   });
 
-  // ── removeOrderFromManualGiro ─────────────────────────────────
+  // ── removeOrderFromManualGiro (W5: sbRpc giro_authority_detach_v1) ─
 
-  await t("removeOrderFromManualGiro: no manual_giro_id → no_op", async () => {
-    seedOrder({ id: "#A" });
-    const res = await mg.removeOrderFromManualGiro("#A");
-    assert.strictEqual(res.ok, true);
-    assert.strictEqual(res.no_op, true);
-  });
-
-  await t("removeOrderFromManualGiro: detaches and keeps giro alive if >=2 remain", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1 });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#C", manual_giro_id: "mg_260525_1" });
-    const res = await mg.removeOrderFromManualGiro("#A");
-    assert.strictEqual(res.ok, true);
-    assert.strictEqual(res.auto_dissolved, false);
-    assert.strictEqual(db.ordenes.find(o => o.id === "#A").manual_giro_id, null);
-    const giro = db.manual_giros.find(g => g.id === "mg_260525_1");
-    assert.strictEqual(giro.dissolved_at, null);
-  });
-
-  await t("removeOrderFromManualGiro: triggers auto-dissolve when prev<2", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1 });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
-    const res = await mg.removeOrderFromManualGiro("#A");
-    assert.strictEqual(res.ok, true);
-    assert.strictEqual(res.auto_dissolved, true);
-    const giro = db.manual_giros.find(g => g.id === "mg_260525_1");
-    assert.ok(giro.dissolved_at);
-    assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, null);
-  });
-
-  await t("removeOrderFromManualGiro: order_not_found", async () => {
+  await t("removeOrderFromManualGiro: order not found resolved locally, no RPC", async () => {
+    rpcHandler = () => { throw new Error("must not call the Authority"); };
     const res = await mg.removeOrderFromManualGiro("#GHOST");
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.error, "order_not_found");
+    assert.strictEqual(observedRpcCalls.length, 0);
   });
 
-  // ── dissolveManualGiro ────────────────────────────────────────
+  await t("removeOrderFromManualGiro: not a member -> IDEMPOTENT -> no_op", async () => {
+    seedOrder({ id: "#A" });
+    rpcHandler = (fn, args) => {
+      assert.strictEqual(fn, "giro_authority_detach_v1");
+      assert.strictEqual(args.p_order_uid, orderUid("#A"));
+      return { ok: true, code: "IDEMPOTENT", reason: "NOT_A_MEMBER" };
+    };
+    const res = await mg.removeOrderFromManualGiro("#A");
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.no_op, true);
+    assert.strictEqual(res.auto_dissolved, false);
+  });
 
-  await t("dissolveManualGiro: detaches all + soft-dissolves", async () => {
-    seedGiro({ id: "mg_260525_1", seq: 1 });
-    seedOrder({ id: "#A", manual_giro_id: "mg_260525_1" });
-    seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
+  await t("removeOrderFromManualGiro: detaches, giro stays PLANNED -> auto_dissolved false", async () => {
+    seedOrder({ id: "#A" });
+    rpcHandler = () => ({ ok: true, code: "OK", giro_id: "mg_260525_1", giro_state_after: "PLANNED" });
+    const res = await mg.removeOrderFromManualGiro("#A");
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.auto_dissolved, false);
+  });
+
+  await t("removeOrderFromManualGiro: detach drops below threshold -> giro_state_after DISSOLVED -> auto_dissolved true", async () => {
+    seedOrder({ id: "#A" });
+    rpcHandler = () => ({ ok: true, code: "OK", giro_id: "mg_260525_1", giro_state_after: "DISSOLVED" });
+    const res = await mg.removeOrderFromManualGiro("#A");
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.auto_dissolved, true);
+    assert.strictEqual(observedRpcCalls.length, 1, "one detach RPC -- the Authority derives below-threshold dissolution itself");
+  });
+
+  // ── dissolveManualGiro (W5: sbRpc giro_authority_dissolve_v1) ────
+
+  await t("dissolveManualGiro: happy path -> exactly one dissolve RPC", async () => {
+    rpcHandler = (fn, args) => {
+      assert.strictEqual(fn, "giro_authority_dissolve_v1");
+      assert.strictEqual(args.p_giro_id, "mg_260525_1");
+      return { ok: true, code: "OK", giro_id: "mg_260525_1" };
+    };
     const res = await mg.dissolveManualGiro("mg_260525_1");
     assert.strictEqual(res.ok, true);
-    assert.strictEqual(db.ordenes.find(o => o.id === "#A").manual_giro_id, null);
-    assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, null);
-    assert.ok(db.manual_giros.find(g => g.id === "mg_260525_1").dissolved_at);
+    assert.strictEqual(observedRpcCalls.filter((c) => c.fn === "giro_authority_dissolve_v1").length, 1);
   });
 
-  await t("dissolveManualGiro: missing id → 400", async () => {
+  await t("dissolveManualGiro: missing id -> 400, no RPC", async () => {
+    rpcHandler = () => { throw new Error("must not call the Authority"); };
     const res = await mg.dissolveManualGiro(null);
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.error, "missing_giro_id");
+    assert.strictEqual(observedRpcCalls.length, 0);
   });
 
-  // ── autoDissolveIfBelowThreshold ──────────────────────────────
+  await t("dissolveManualGiro: Authority GIRO_NOT_FOUND -> disclosed, safety-motivated 404 (legacy always silently succeeded here)", async () => {
+    rpcHandler = () => ({ ok: false, code: "GIRO_NOT_FOUND" });
+    const res = await mg.dissolveManualGiro("mg_ghost");
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.error, "giro_not_found_or_dissolved");
+  });
+
+  await t("dissolveManualGiro: already dissolved -> IDEMPOTENT -> still ok:true", async () => {
+    rpcHandler = () => ({ ok: true, code: "IDEMPOTENT", giro_id: "mg_260525_1" });
+    const res = await mg.dissolveManualGiro("mg_260525_1");
+    assert.strictEqual(res.ok, true);
+  });
+
+  // ── autoDissolveIfBelowThreshold / countActiveMembers ─────────────
+  // Byte-identical to pre-W5-Packet-01 -- unreachable from the writers above
+  // language-guard: allow-legacy agentOrdini.js/cambiaStato are the existing file/function names being cited, not new vocabulary
+  // now, kept solely because agentOrdini.js's cambiaStato() still imports and
+  // calls autoDissolveIfBelowThreshold directly. Original raw-DB fake-DB
+  // harness, unchanged.
 
   await t("autoDissolveIfBelowThreshold: no-op when >=2 active", async () => {
     seedGiro({ id: "mg_260525_1", seq: 1 });
@@ -625,7 +610,6 @@ function seedGiro(g) {
     const r = await mg.autoDissolveIfBelowThreshold("mg_260525_1");
     assert.strictEqual(r, true);
     assert.ok(db.manual_giros[0].dissolved_at);
-    // All orders detached, even the non-active one
     assert.strictEqual(db.ordenes.find(o => o.id === "#A").manual_giro_id, null);
     assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, null);
   });
@@ -645,20 +629,11 @@ function seedGiro(g) {
   });
 
   // ── getManualGiros ────────────────────────────────────────────
-  // W4 Packet 02B (2026-09-14): getManualGiros() is now a thin delegate onto
-  // manualGiroReads.getManualGirosRead() (current business day -> canonical Giro
-  // Authority projection; historical business day -> the exact legacy reader
-  // this file used to test directly). That split, its historical-parity proof,
-  // and a direct assertion that this delegation forwards args/results
-  // unchanged now live in tests/manualGiroReads.test.js, with the correct
-  // stubs for readGiroProjection/getCurrentOperationalBusinessDate — this
-  // file's fake-DB harness intentionally does not stub those, so it must not
-  // exercise getManualGiros() directly any more (day-omitted requests would
-  // silently fall through to the real, unstubbed projection/session chain).
-  // The writer this section used to sit beside (createManualGiro and friends,
-  // below and above) is completely unmodified and still fully covered here.
+  // Unchanged since Packet 02B — see tests/manualGiroReads.test.js.
 
   // ── softDissolveActiveManualGirosForClose ─────────────────────
+  // Byte-identical; confirmed zero live callers anywhere (see manualGiros.js's
+  // own header) — kept and tested only as a dormant, still-correct artifact.
 
   await t("softDissolveActiveManualGirosForClose: detaches + dissolves all", async () => {
     seedGiro({ id: "mg_260525_1", seq: 1 });

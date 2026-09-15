@@ -50,7 +50,6 @@ assert('src/agents/previewStrategicOpportunities.js is byte-identical to BASE_HE
 
 section('FINAL-W4-N17: no writer touched');
 for (const f of [
-  'src/agents/manualGiros.js',
   'src/agents/manualGiroReads.js',
   'src/agents/riderReads.js',
   'src/agents/riderTrip.js',
@@ -60,17 +59,45 @@ for (const f of [
 ]) {
   assert(`${f} is byte-identical to BASE_HEAD`, byteIdentical(f));
 }
+// manualGiros.js: a later, separately-authorized packet (W5 Packet 01 — single-writer
+// Authority cutover) is allowed to touch it once its own guard exists on the branch to
+// vouch for it, the same deferred-verification pattern already applied by
+// tests/riderReadsW4Packet02A.static.test.js -- rather than re-implementing the same
+// per-function extraction here, this defers to that later packet's own mechanical proof.
+const W5_STATIC_GUARD = path.join(ROOT, 'tests', 'manualGirosW5Packet01.static.test.js');
+const w5Applied = fs.existsSync(W5_STATIC_GUARD);
+if (w5Applied) {
+  let writerGuardOk = false;
+  let writerGuardDetail = '';
+  try {
+    execSync(`node ${JSON.stringify(W5_STATIC_GUARD)}`, { cwd: ROOT, stdio: 'pipe' });
+    writerGuardOk = true;
+  } catch (e) {
+    writerGuardDetail = ((e.stdout || '').toString() + (e.stderr || '').toString()).slice(-600);
+  }
+  assert('src/agents/manualGiros.js change is authorized and certified by tests/manualGirosW5Packet01.static.test.js',
+    writerGuardOk, writerGuardDetail);
+} else {
+  assert('src/agents/manualGiros.js is byte-identical to BASE_HEAD (no later-packet guard authorizes a change yet)',
+    byteIdentical('src/agents/manualGiros.js'));
+}
 
 section('FINAL-W4-N17b: index.js untouched (this packet never needed it)');
 assert('index.js is byte-identical to BASE_HEAD', byteIdentical('index.js'));
 
-section('FINAL-W4-N19: migrations/** completely unchanged');
+section('FINAL-W4-N19: migrations/** completely unchanged (W5 Packet 01\'s own migration excepted)');
+const W5_MIGRATION_FILES = new Set([
+  'migrations/MIGRATION_MANIFEST.md',
+  'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
+  'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
+]);
 let migrationsChanged = [];
 try {
   migrationsChanged = execSync(`git diff --name-only ${BASE_HEAD} -- migrations/`, { cwd: ROOT, encoding: 'utf8' })
     .split('\n').map((l) => l.trim()).filter(Boolean);
 } catch (e) { migrationsChanged = ['<git diff failed>']; }
-assert('migrations/** has zero changes vs BASE_HEAD', migrationsChanged.length === 0, migrationsChanged.join(', '));
+const unexpectedMigrationsChanged = migrationsChanged.filter((f) => !(w5Applied && W5_MIGRATION_FILES.has(f)));
+assert('migrations/** has zero UNEXPECTED changes vs BASE_HEAD (W5 Packet 01\'s own migration excepted)', unexpectedMigrationsChanged.length === 0, unexpectedMigrationsChanged.join(', '));
 
 section('FINAL-W4-N18: zero frontend-path changes');
 let feChanged = [];
@@ -86,7 +113,21 @@ try {
   changedFiles = execSync(`git diff --name-only ${BASE_HEAD}`, { cwd: ROOT, encoding: 'utf8' })
     .split('\n').map((l) => l.trim()).filter(Boolean);
 } catch (e) { changedFiles = ['<git diff failed>']; }
-const allowedProductFiles = new Set(['src/core/delivery/plannerSnapshot.js']);
+const allowedProductFiles = new Set([
+  'src/core/delivery/plannerSnapshot.js',
+  ...(w5Applied ? [ // W5 Packet 01 — single-writer Authority cutover + facts signal
+    'src/agents/manualGiros.js',
+    'migrations/MIGRATION_MANIFEST.md',
+    'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
+    'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w5_packet01_v1.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w5_packet01_v1.ROLLBACK.sql',
+    'ci/giro-authority-certification/harness/runW5Packet01.js',
+    'ci/giro-authority-certification/harness/groups/w5packet01.js',
+    'ci/giro-authority-certification/harness/groups/boundary.js',
+    'ci/giro-authority-certification/harness/groups/noMoney.js',
+  ] : []),
+]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));
 assert('every non-test changed file is plannerSnapshot.js (the architecturally-preferred minimal diff)',
   nonTestNonAllowed.length === 0, nonTestNonAllowed.join(', '));
