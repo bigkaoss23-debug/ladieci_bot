@@ -377,6 +377,27 @@ const REGISTRY = Object.freeze([
   entry('rpc/order_import_legacy_payment', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'financialDao.js'),
   entry('rpc/order_refund', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'financialDao.js'),
   entry('rpc/order_void', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'financialDao.js'),
+
+  // ── W5 Packet 01 single-writer RPCs — giro_authority manual giro commands ──
+  // agents/manualGiros.js's createManualGiro/addOrderToManualGiro/removeOrderFromManualGiro/
+  // dissolveManualGiro call these via callAuthority()->sbRpc(), the same gated transport as
+  // every other resource here. Found unregistered (never part of the W5 Packet 01 diff) during
+  // the W5 intent-activation resource-policy audit below — without these, every manual-giro
+  // create/attach/detach/dissolve call fails closed with authority_call_failed (502).
+  entry('rpc/giro_authority_create_or_move_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'manualGiros.js createManualGiro'),
+  entry('rpc/giro_authority_attach_or_move_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'manualGiros.js addOrderToManualGiro'),
+  entry('rpc/giro_authority_detach_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'manualGiros.js removeOrderFromManualGiro'),
+  entry('rpc/giro_authority_dissolve_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'manualGiros.js dissolveManualGiro'),
+
+  // ── W5 intent activation RPCs — giro_authority intent capture consumption ──
+  entry('rpc/giro_authority_consume_intent_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'agentOrdini.js cambiaStato automatic consume hooks, delivery/giroIntentReconciler.js'),  // language-guard: allow-legacy agentOrdini is the existing module filename being cross-referenced, not new vocabulary
+  entry('rpc/giro_authority_list_pending_intents_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'delivery/giroIntentReconciler.js'),
 ]);
 
 const BY_RESOURCE = new Map(REGISTRY.map((e) => [e.resource, e]));

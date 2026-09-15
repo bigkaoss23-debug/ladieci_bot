@@ -251,6 +251,10 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
     'index.js',
     // language-guard: allow-legacy agentOrdini is the existing identifier being cited, not new vocabulary
     'src/agents/agentOrdini.js',
+    // H1B registry fix-forward: registers the 6 approved giro_authority_* RPCs (the 4
+    // W5 Packet 01 manualGiros.js writer RPCs missed by that packet's own diff, plus the
+    // 2 W5 Intent Activation RPCs) so the gated sbRpc transport actually allows them.
+    'src/utils/supabaseResourcePolicy.js',
   ] : []),
 ]);
 const allowedProductFiles = new Set([...PACKET_02B_OWN_PRODUCT_FILES, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);

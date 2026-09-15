@@ -191,6 +191,12 @@ const ALLOWED_PRODUCT_PREFIXES = [
   // S4's own second commit: isGiro transport-only addition to the Planner opportunity
   // enrichment boundary, certified by tests/s4PlannerIsGiroTransport.test.js.
   'src/agents/previewStrategicOpportunities.js',
+  // H1B registry fix-forward (later, separately-authorized packet): registers the 6
+  // approved giro_authority_* RPCs — the 4 W5 Packet 01 manualGiros.js writer RPCs this
+  // packet's own diff missed, plus the 2 W5 Intent Activation RPCs — so the gated sbRpc
+  // transport actually allows them, certified by tests/supabaseResourcePolicy.test.js
+  // and the strengthened W3_REGISTRY_INVARIANT in tests/giroAuthorityW3Candidate.static.test.js.
+  'src/utils/supabaseResourcePolicy.js',
 ];
 const nonTest = changedFiles.filter((f) => !f.startsWith('tests/'));
 const unexpected = nonTest.filter((f) => !ALLOWED_PRODUCT_PREFIXES.some((p) => f === p || f.startsWith(p)));

@@ -116,6 +116,7 @@ const MANUAL_GIROS = path.join(ROOT, 'src', 'agents', 'manualGiros.js');
 // language-guard: allow-legacy AGENT_ORDINI is the existing identifier being cited, not new vocabulary
 const AGENT_ORDINI = path.join(ROOT, 'src', 'agents', 'agentOrdini.js');
 const GIRO_INTENT_RECONCILER = path.join(ROOT, 'src', 'delivery', 'giroIntentReconciler.js');
+const RESOURCE_POLICY = path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js');
 // Packet 01 (previewTiming.js) + Packet 02A (riderReads.js) + Packet 02B (manualGiroReads.js)
 // + Final W4 Read-Cutover Packet (plannerSnapshot.js) + W5 Packet 01 (manualGiros.js, the
 // single Authority WRITER -- it calls giro_authority_create_or_move_v1/attach_or_move_v1/
@@ -129,7 +130,14 @@ const ALLOWED_PROJECTION_CONSUMERS = new Set([
   // language-guard: allow-legacy AGENT_ORDINI is the existing identifier being cited, not new vocabulary
   AGENT_ORDINI, GIRO_INTENT_RECONCILER,
 ]);
-const live = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => !ALLOWED_PROJECTION_CONSUMERS.has(f));
+// The H1B access-control registry is not a live caller of the Authority or the projection —
+// it only declares the {resource, method, sensitivity} the 6 approved giro_authority_* RPCs
+// are allowed to be invoked with (proven exactly by the W3_REGISTRY_INVARIANT check below).
+// Its own resource-name string literals legitimately contain "giro_authority", so it needs a
+// narrower, separate allowlist rather than being folded into ALLOWED_PROJECTION_CONSUMERS.
+const ALLOWED_NON_CONSUMER_REFERENCES = new Set([RESOURCE_POLICY]);
+const live = [...srcFiles, path.join(ROOT, 'index.js')]
+  .filter((f) => !ALLOWED_PROJECTION_CONSUMERS.has(f) && !ALLOWED_NON_CONSUMER_REFERENCES.has(f));
 const mentions = live.filter((f) => /giro_authority|giro_projection_v1/.test(read(f)));
 assert('no live src/** or index.js file outside the allowlisted W4 chain references the Authority or the projection',
   mentions.length === 0, mentions.join(', '));
@@ -160,8 +168,37 @@ assert('giroProjectionReader.js is pure I/O in executable code: no raw manual_gi
   fs.existsSync(READER) && !/manual_giro_id|manual_giros|salida_ref|dissolved_at|pending_giro_intent/.test(jsCode(read(READER))));
 assert('timingAssessmentV3 still consumes GiroFacts only (no projection import — W2 core untouched by this packet)',
   !/giroProjectionPort|giro_projection/.test(read(path.join(ROOT, 'src', 'core', 'delivery', 'timingAssessmentV3.js'))));
-assert('H1B registry has no Giro Authority resource or RPC',
-  !/giro_authority|giro_projection|giro_members|giro_intents/.test(read(path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js'))));
+// W3-era invariant was "H1B registry has no Giro Authority resource or RPC" — true only
+// while the Authority stayed dormant. W5 Packet 01 (manual giro writer cutover) and W5
+// Intent Activation now legitimately call it, so the invariant evolves into a stricter,
+// current least-privilege check: registered by NAME, not by absence.
+const POLICY = require(path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy'));
+const APPROVED_AUTHORITY_RPCS = new Set([
+  'rpc/giro_authority_create_or_move_v1',
+  'rpc/giro_authority_attach_or_move_v1',
+  'rpc/giro_authority_detach_v1',
+  'rpc/giro_authority_dissolve_v1',
+  'rpc/giro_authority_consume_intent_v1',
+  'rpc/giro_authority_list_pending_intents_v1',
+]);
+const registeredAuthorityRpcs = POLICY.REGISTRY.filter((e) => e.resource.startsWith('rpc/giro_authority_'));
+const registeredAuthorityRpcNames = new Set(registeredAuthorityRpcs.map((e) => e.resource));
+assert('W3_REGISTRY_INVARIANT: exactly the 6 approved Giro Authority RPCs are registered, no more, no fewer',
+  registeredAuthorityRpcs.length === 6 &&
+  APPROVED_AUTHORITY_RPCS.size === registeredAuthorityRpcNames.size &&
+  [...APPROVED_AUTHORITY_RPCS].every((r) => registeredAuthorityRpcNames.has(r)),
+  registeredAuthorityRpcs.map((e) => e.resource).join(', '));
+assert('every approved Giro Authority RPC is POST-only and INTERNAL_OPERATIONAL',
+  registeredAuthorityRpcs.every((e) =>
+    e.kind === POLICY.KIND.RPC &&
+    JSON.stringify(e.allowedMethods) === JSON.stringify(['POST']) &&
+    e.sensitivity === POLICY.SENSITIVITY.INTERNAL_OPERATIONAL));
+assert('no raw giro_projection resource is registered',
+  !POLICY.REGISTRY.some((e) => e.resource.includes('giro_projection')));
+assert('no raw giro_members resource is registered',
+  !POLICY.REGISTRY.some((e) => e.resource.includes('giro_members')));
+assert('no raw giro_intents resource is registered',
+  !POLICY.REGISTRY.some((e) => e.resource.includes('giro_intents')));
 const pkg = JSON.parse(read(path.join(ROOT, 'package.json')));
 assert('no DB runtime added to package.json (the harness brings its own)',
   !Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).some((d) => /^(pg|embedded-postgres|@electric-sql\/pglite)$/.test(d)));
