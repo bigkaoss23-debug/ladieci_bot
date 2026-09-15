@@ -69,13 +69,20 @@ function extractFunction(src, name) {
 }
 
 section('FORBIDDEN FILES — byte-identical to BASE_HEAD');
+// language-guard: allow-legacy agentOrdini.js/index.js are the existing file names being cited, not new vocabulary
+// src/agents/agentOrdini.js and index.js are EXCEPTED here as of the S4 operator-intent
+// prerequisite (DORMANT) packet -- a later, separately-authorized extension, same
+// deferred-verification pattern every prior packet already used for the one before it
+// language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
+// (see the DIFF SCOPE allowlist above). Their specific dangerous surface (creaOrdine's
+// own pending_giro_intent hard gate, and the single-writer guarantee below, which never
+// language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
+// touches creaOrdine at all) is re-proven by tests/s4DormantInsertGateGuard.static.test.js
+// and tests/s4PendingGiroIntentBuilder.test.js instead of by whole-file identity here.
 for (const f of [
-  // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
-  'src/agents/agentOrdini.js',
   'src/agents/riderReads.js',
   'src/agents/riderTrip.js',
   'src/agents/manualGiroReads.js',
-  'index.js',
   'src/core/delivery/planner.js',
   'src/agents/previewStrategicOpportunities.js',
 ]) {
@@ -161,6 +168,19 @@ const ALLOWED_PRODUCT_PREFIXES = [
   'migrations/MIGRATION_MANIFEST.md',
   'src/agents/manualGiros.js',
   'ci/giro-authority-certification/',
+  // S4 operator-intent prerequisite (DORMANT) — a later, separately-authorized packet,
+  // same deferred-verification pattern every prior packet already used for the one
+  // before it. Adds a new pure builder (src/delivery/) and threads it through the two
+  // language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
+  // trusted HTTP operator actions and creaOrdine()'s own INSERT payload, hard-gated to
+  // pending_giro_intent:null until a still-later packet installs the W5 capture
+  // trigger. Certified separately by tests/s4PendingGiroIntentBuilder.test.js and
+  // tests/s4DormantInsertGateGuard.static.test.js — this allowlist only needs to know
+  // the touch is authorized, not re-prove what it does.
+  'src/delivery/',
+  'index.js',
+  // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
+  'src/agents/agentOrdini.js',
 ];
 const nonTest = changedFiles.filter((f) => !f.startsWith('tests/'));
 const unexpected = nonTest.filter((f) => !ALLOWED_PRODUCT_PREFIXES.some((p) => f === p || f.startsWith(p)));

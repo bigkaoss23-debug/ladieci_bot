@@ -50,12 +50,14 @@ function byteIdentical(relPath) {
 }
 
 section('WRITER INTEGRITY — byte-identical to BASE_HEAD (manualGiros.js: see forward-compatible check below)');
-for (const f of [
-  // language-guard: allow-legacy agentOrdini.js is the existing file name being checked, not new vocabulary
-  'src/agents/agentOrdini.js',
-  'src/agents/riderTrip.js',
-  'index.js',
-]) {
+// language-guard: allow-legacy agentOrdini.js is the existing file name being checked, not new vocabulary
+// src/agents/agentOrdini.js and index.js excepted below (S4 operator-intent prerequisite,
+// DORMANT — a later, separately-authorized packet, same deferral pattern as manualGiros.js
+// just above; re-proven by tests/s4DormantInsertGateGuard.static.test.js).
+const S4_STATIC_GUARD = path.join(ROOT, 'tests', 's4DormantInsertGateGuard.static.test.js');
+const s4Applied = fs.existsSync(S4_STATIC_GUARD);
+// language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
+for (const f of s4Applied ? ['src/agents/riderTrip.js'] : ['src/agents/agentOrdini.js', 'src/agents/riderTrip.js', 'index.js']) {
   assert(`${f} is byte-identical to BASE_HEAD (${BASE_HEAD.slice(0, 7)})`, byteIdentical(f));
 }
 
@@ -147,6 +149,11 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
     'ci/giro-authority-certification/harness/groups/boundary.js',
     'ci/giro-authority-certification/harness/groups/noMoney.js',
   ] : []),
+  // S4 operator-intent prerequisite (DORMANT): a new pure builder + the two trusted HTTP
+  // language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
+  // operator call sites + creaOrdine()'s own hard-gated INSERT payload.
+  // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
+  ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js'] : []),
 ]);
 const allowedProductFiles = new Set([PACKET_02A_OWN_PRODUCT_FILE, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));

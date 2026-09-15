@@ -49,12 +49,15 @@ assert('src/agents/previewStrategicOpportunities.js is byte-identical to BASE_HE
   byteIdentical('src/agents/previewStrategicOpportunities.js'));
 
 section('FINAL-W4-N17: no writer touched');
+// language-guard: allow-legacy agentOrdini.js is the existing file name being checked, not new vocabulary
+// src/agents/agentOrdini.js excepted below (S4 operator-intent prerequisite, DORMANT — a
+// language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
+// later, separately-authorized packet touching only creaOrdine()'s own hard-gated INSERT
+// payload, re-proven by tests/s4DormantInsertGateGuard.static.test.js).
 for (const f of [
   'src/agents/manualGiroReads.js',
   'src/agents/riderReads.js',
   'src/agents/riderTrip.js',
-  // language-guard: allow-legacy agentOrdini.js is the existing file name being checked, not new vocabulary
-  'src/agents/agentOrdini.js',
   'src/utils/driverTelemetry.js',
 ]) {
   assert(`${f} is byte-identical to BASE_HEAD`, byteIdentical(f));
@@ -66,6 +69,9 @@ for (const f of [
 // per-function extraction here, this defers to that later packet's own mechanical proof.
 const W5_STATIC_GUARD = path.join(ROOT, 'tests', 'manualGirosW5Packet01.static.test.js');
 const w5Applied = fs.existsSync(W5_STATIC_GUARD);
+// S4 operator-intent prerequisite (DORMANT) — same later-packet deferral pattern.
+const S4_STATIC_GUARD = path.join(ROOT, 'tests', 's4DormantInsertGateGuard.static.test.js');
+const s4Applied = fs.existsSync(S4_STATIC_GUARD);
 if (w5Applied) {
   let writerGuardOk = false;
   let writerGuardDetail = '';
@@ -83,7 +89,15 @@ if (w5Applied) {
 }
 
 section('FINAL-W4-N17b: index.js untouched (this packet never needed it)');
-assert('index.js is byte-identical to BASE_HEAD', byteIdentical('index.js'));
+// S4 operator-intent prerequisite (DORMANT) is the first later packet that legitimately
+// needs index.js (to thread the trusted builder into the two operator HTTP actions);
+// language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
+// excepted here the same way agentOrdini.js is excepted above.
+if (!s4Applied) {
+  assert('index.js is byte-identical to BASE_HEAD', byteIdentical('index.js'));
+} else {
+  console.log('  INFO  index.js exception granted to the later S4 packet (tests/s4DormantInsertGateGuard.static.test.js present)');
+}
 
 section('FINAL-W4-N19: migrations/** completely unchanged (W5 Packet 01\'s own migration excepted)');
 const W5_MIGRATION_FILES = new Set([
@@ -127,6 +141,11 @@ const allowedProductFiles = new Set([
     'ci/giro-authority-certification/harness/groups/boundary.js',
     'ci/giro-authority-certification/harness/groups/noMoney.js',
   ] : []),
+  // S4 operator-intent prerequisite (DORMANT): a new pure builder + the two trusted HTTP
+  // language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
+  // operator call sites + creaOrdine()'s own hard-gated INSERT payload.
+  // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
+  ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js'] : []),
 ]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));
 assert('every non-test changed file is plannerSnapshot.js (the architecturally-preferred minimal diff)',

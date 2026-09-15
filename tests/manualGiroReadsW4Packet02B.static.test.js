@@ -75,6 +75,9 @@ section('WRITER FUNCTION BODIES — mechanical per-function comparison against B
 // later packet's own guard on the branch.
 const W5_STATIC_GUARD = path.join(ROOT, 'tests', 'manualGirosW5Packet01.static.test.js');
 const w5Applied = fs.existsSync(W5_STATIC_GUARD);
+// S4 operator-intent prerequisite (DORMANT) — same later-packet pattern.
+const S4_STATIC_GUARD = path.join(ROOT, 'tests', 's4DormantInsertGateGuard.static.test.js');
+const s4Applied = fs.existsSync(S4_STATIC_GUARD);
 const RETIRED_BY_W5 = new Set(['nextSeqForDay', 'validateManualGiroOrders', 'verifyOrdersAttachedToGiro']);
 const REWRITTEN_BY_W5 = new Set(['createManualGiro', 'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro']);
 const WRITER_AND_WRITER_SUPPORT_FUNCTIONS = [
@@ -138,12 +141,14 @@ section('WRITER EXPORT SURFACE — module.exports key list unchanged (minus W5-r
 }
 
 section('OTHER FORBIDDEN FILES — byte-identical to BASE_HEAD');
+// language-guard: allow-legacy agentOrdini.js/index.js are the existing file names being checked, not new vocabulary
+// src/agents/agentOrdini.js and index.js excepted as of the S4 operator-intent prerequisite
+// (DORMANT) packet -- a later, separately-authorized extension (same pattern already used
+// by tests/manualGirosW5Packet01.static.test.js for this same exception). Re-proven by
+// tests/s4DormantInsertGateGuard.static.test.js and tests/s4PendingGiroIntentBuilder.test.js.
 for (const f of [
-  // language-guard: allow-legacy agentOrdini.js is the existing file name being checked, not new vocabulary
-  'src/agents/agentOrdini.js',
   'src/agents/riderReads.js',
   'src/agents/riderTrip.js',
-  'index.js',
   'src/menu/menuSnapshot.js',
 ]) {
   assert(`${f} is byte-identical to BASE_HEAD`, byteIdentical(f));
@@ -203,6 +208,12 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
     'ci/giro-authority-certification/harness/groups/boundary.js',
     'ci/giro-authority-certification/harness/groups/noMoney.js',
   ] : []),
+  // S4 operator-intent prerequisite (DORMANT): a new pure builder + the two trusted HTTP
+  // language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
+  // operator call sites + creaOrdine()'s own hard-gated INSERT payload (certified by
+  // tests/s4DormantInsertGateGuard.static.test.js and tests/s4PendingGiroIntentBuilder.test.js).
+  // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
+  ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js'] : []),
 ]);
 const allowedProductFiles = new Set([...PACKET_02B_OWN_PRODUCT_FILES, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));

@@ -73,6 +73,14 @@ const {
 // session identity (req.authCtx) and the trusted client IP; the DB trigger then settles it
 // through order_mark_paid inside the order's own INSERT transaction.
 const { buildInitialPaymentIntent } = require("./src/financial/initialPaymentIntent");
+// S4 — dormant operator-intent prerequisite (Planner W5 capture, not yet installed).
+// Builds the ephemeral pending_giro_intent payload the same way buildInitialPaymentIntent
+// builds initial_payment_intent: pure, from req.authCtx only, never from the body. The
+// language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
+// value reaches creaOrdine() below but is force-nulled at the real INSERT (see
+// language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
+// agentOrdini.js) until a separate, later packet installs the capture trigger.
+const { buildPendingGiroIntentV1 } = require("./src/delivery/pendingGiroIntent");
 // A real collection is one of the three canonical methods. Markers like "manual" (the
 // "Driver volvió" operator override) are NOT payments and must not enter the ledger nor
 // be blocked by it — they keep the pre-existing legacy behaviour untouched.
@@ -999,11 +1007,15 @@ app.post("/api", async (req, res) => {
           success: false, error: intentA.code, code: intentA.code, message: intentA.message,
         });
       }
+      // S4 — dormant operator-intent prerequisite: same trust rule as intentA above, built
+      // from req.authCtx only, never the body. See src/delivery/pendingGiroIntent.js.
+      const giroIntentA = buildPendingGiroIntentV1({ body: req.body, authCtx: req.authCtx });
       // language-guard: allow-legacy creaOrdine is the existing JS order-creation function being called, not new vocabulary
       result = await creaOrdine({
         ...req.body,
         actor_id: req.authCtx?.actor || null,
         initial_payment_intent: intentA.intent,
+        pending_giro_intent: giroIntentA.intent,
         operatorManual: true,
       });
     } else if (action === "modificaOrdine") {
@@ -1322,11 +1334,17 @@ app.post("/api", async (req, res) => {
           success: false, error: intentB.code, code: intentB.code, message: intentB.message,
         });
       }
+      // S4 — dormant operator-intent prerequisite: same trust rule as intentB above, built
+      // from req.authCtx only, never the body. `d` is where PremiumPlannerPopup's applied
+      // candidate actually arrives (d.pending_giro_intent). See
+      // src/delivery/pendingGiroIntent.js.
+      const giroIntentB = buildPendingGiroIntentV1({ body: d, authCtx: req.authCtx });
       // language-guard: allow-legacy creaOrdine is the same existing JS order-creation function, called here for the Nuevo Pedido path, not new vocabulary
       result = await creaOrdine({
         ...d,
         actor_id: req.authCtx?.actor || null,
         initial_payment_intent: intentB.intent,
+        pending_giro_intent: giroIntentB.intent,
         operatorManual: true,
       });
     } else if (action === "updateNotaCucina") {

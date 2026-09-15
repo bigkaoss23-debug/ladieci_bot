@@ -351,6 +351,20 @@ async function creaOrdine(params) {
   // against a total that is still moving.
   const initialPaymentIntent = params.initial_payment_intent || null;
 
+  // S4 — DORMANT operator-intent prerequisite (Planner W5 capture). The trusted builder
+  // (src/delivery/pendingGiroIntent.js, called from index.js) is live and may already
+  // produce a real, well-formed intent here in `params.pending_giro_intent` -- but the W5
+  // capture trigger (candidate SQL: ci/giro-authority-certification/candidate/
+  // giro_intent_capture_trigger_v1.W5_DORMANT.sql, a BEFORE INSERT trigger on ordenes)
+  // is NOT installed. Without that trigger nothing ever nulls this jsonb value
+  // back out, so persisting it now would leak a transient operator choice into every
+  // matching order row FOREVER. HARD INVARIANT: while the capture trigger is absent, every
+  // new ordenes.pending_giro_intent must be NULL, unconditionally. The line below is the
+  // enforcement point -- do not replace it with `params.pending_giro_intent` until a
+  // separate, later, explicitly authorized packet installs the capture trigger; that same
+  // packet is the only place this override should be removed.
+  const pendingGiroIntent = null; // S4 dormant: see comment above; DO NOT read params.pending_giro_intent here yet
+
   // ── Step 2 anti-cerotto: geo/durata autoritativi (dashboard operatore) ──
   // Per ordini operatore (operatorManual:true) il backend NON si fida di
   // zona/durata/geo_source calcolati dal frontend: ri-risolve server-side con
@@ -589,6 +603,10 @@ async function creaOrdine(params) {
       ya_pagado:      false,
       metodo_pago:    initialPaymentIntent ? "" : (params.metodo_pago || ""),
       initial_payment_intent: initialPaymentIntent,
+      // S4 DORMANT HARD GATE: always null (pendingGiroIntent above), never
+      // params.pending_giro_intent, while the W5 capture trigger is absent. See the
+      // comment at pendingGiroIntent's declaration.
+      pending_giro_intent: pendingGiroIntent,
       descuento_tipo:    (descTipo && descuentoImporte > 0) ? descTipo  : null,
       descuento_valor:   (descTipo && descuentoImporte > 0) ? descValor : null,
       descuento_importe: descuentoImporte > 0 ? descuentoImporte : null,
