@@ -78,6 +78,12 @@ const w5Applied = fs.existsSync(W5_STATIC_GUARD);
 // S4 operator-intent prerequisite (DORMANT) — same later-packet pattern.
 const S4_STATIC_GUARD = path.join(ROOT, 'tests', 's4DormantInsertGateGuard.static.test.js');
 const s4Applied = fs.existsSync(S4_STATIC_GUARD);
+// W5 Intent Activation (132) — same later-packet pattern: migration 132 (capture
+// trigger + consume signal-bump fix + bounded read helper + close-session sweep)
+// plus its own JS activation (agentOrdini.js hooks, the new reconciler module,
+// index.js wiring). Detected the same way: presence of its own guard on the branch.
+const W5IA_STATIC_GUARD = path.join(ROOT, 'tests', 'w5IntentActivationReconciler.test.js');
+const w5iaApplied = fs.existsSync(W5IA_STATIC_GUARD);
 const RETIRED_BY_W5 = new Set(['nextSeqForDay', 'validateManualGiroOrders', 'verifyOrdersAttachedToGiro']);
 const REWRITTEN_BY_W5 = new Set(['createManualGiro', 'addOrderToManualGiro', 'removeOrderFromManualGiro', 'dissolveManualGiro']);
 const WRITER_AND_WRITER_SUPPORT_FUNCTIONS = [
@@ -168,7 +174,14 @@ const W5_MIGRATION_FILES = new Set([
   'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
   'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
 ]);
-const unexpectedMigrationsChanged = migrationsChanged.filter((f) => !(w5Applied && W5_MIGRATION_FILES.has(f)));
+// W5 Intent Activation (132) — same exception, one packet later.
+const W5IA_MIGRATION_FILES = new Set([
+  'migrations/MIGRATION_MANIFEST.md',
+  'migrations/2026-09-15_w5_intent_activation_v1_migration_132.sql',
+  'migrations/2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
+]);
+const unexpectedMigrationsChanged = migrationsChanged.filter((f) =>
+  !(w5Applied && W5_MIGRATION_FILES.has(f)) && !(w5iaApplied && W5IA_MIGRATION_FILES.has(f)));
 assert('migrations/** has zero UNEXPECTED changes vs BASE_HEAD (W5 Packet 01\'s own migration excepted)', unexpectedMigrationsChanged.length === 0, unexpectedMigrationsChanged.join(', '));
 
 let feChanged = [];
@@ -216,6 +229,26 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
   // transport-only, certified by tests/s4PlannerIsGiroTransport.test.js).
   // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
   ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js', 'src/agents/previewStrategicOpportunities.js'] : []),
+  // W5 Intent Activation (132): migration 132 + rollback + its own certification
+  // candidate/harness/group additions, the shared harness files it needed to make
+  // forward-compatible, its new reconciler module, and the agentOrdini.js/index.js
+  // activation wiring (certified by ci/giro-authority-certification/harness/
+  // runW5IntentActivation.js and tests/w5IntentActivationReconciler.test.js).
+  ...(w5iaApplied ? [
+    'migrations/2026-09-15_w5_intent_activation_v1_migration_132.sql',
+    'migrations/2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w5_intent_activation_v1.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w5_intent_activation_v1.ROLLBACK.sql',
+    'ci/giro-authority-certification/harness/runW5IntentActivation.js',
+    'ci/giro-authority-certification/harness/groups/w5IntentActivation.js',
+    'ci/giro-authority-certification/harness/groups/_ctx.js',
+    'ci/giro-authority-certification/harness/groups/capture.js',
+    'ci/giro-authority-certification/harness/groups/concurrency.js',
+    'ci/giro-authority-certification/harness/groups/consume.js',
+    'src/delivery/giroIntentReconciler.js',
+    'index.js',
+    'src/agents/agentOrdini.js',
+  ] : []),
 ]);
 const allowedProductFiles = new Set([...PACKET_02B_OWN_PRODUCT_FILES, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));

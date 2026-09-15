@@ -46,6 +46,10 @@ const { integrateMesaRoutes } = require("./src/tables/mesaHttpIntegration");
 // UNIFIED_CASH_UI_SURFACE_V1 — additive canonical-obligation projection for the
 // two operator order-list reads (getOrdenes / getOrdenesArchivadosSesion).
 const { attachOrderFinancial } = require("./src/tables/orderObligationProjection");
+// W5 INTENT ACTIVATION V1 — bounded, fail-open Giro intent reconciliation, piggybacked
+// on this same getOrdenes poll (the Cocina/Entregas/Repartidor/Manual-Giro-dashboard
+// ≤10s cadence). Never awaited inline with the response; see giroIntentReconciler.js.
+const { reconcilePendingGiroIntents } = require("./src/delivery/giroIntentReconciler");
 const { integrateCashRoutes } = require("./src/cash/cashHttpIntegration");
 const { integrateEconomyRoutes } = require("./src/economy/economyHttpIntegration");
 const authDao = require("./src/auth/dao");
@@ -447,6 +451,10 @@ app.get("/api", async (req, res) => {
       // per order, ONE batched order_obligations read. Nothing else changes;
       // ordenes.totale is never written. Empty list short-circuits inside.
       result = await attachOrderFinancial(ordenesRows, { select: sbSelect });
+      // W5 INTENT ACTIVATION V1 — bounded reconciliation backstop, fire-and-forget:
+      // never awaited, never allowed to delay or fail this read. sessionIds is
+      // already resolved above; reconcilePendingGiroIntents itself never throws.
+      reconcilePendingGiroIntents({ operationalSessionIds: sessionIds }).catch(() => {});
     } else if (action === "getOrdenesArchivadosSesion") {
       // LISTOS_ARCHIVADOS_V1 — sibling of getOrdenes above: same session-scoping
       // (getOperationalSessionIds/serviceSessionsQuery, P0-C2), same "no open

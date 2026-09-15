@@ -166,6 +166,12 @@ try {
 const ALLOWED_PRODUCT_PREFIXES = [
   'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
   'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
+  // W5 Intent Activation (132) — a later, separately-authorized packet, same
+  // deferred-verification pattern: capture trigger + consume signal-bump fix +
+  // bounded read helper + close-session sweep, certified by
+  // ci/giro-authority-certification/harness/runW5IntentActivation.js (337/337).
+  'migrations/2026-09-15_w5_intent_activation_v1_migration_132.sql',
+  'migrations/2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
   'migrations/MIGRATION_MANIFEST.md',
   'src/agents/manualGiros.js',
   'ci/giro-authority-certification/',

@@ -97,6 +97,14 @@ const W5_MIGRATION_FILES = new Set([
   'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
   'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
 ]);
+// W5 Intent Activation (132) — same later-packet pattern, one packet later.
+const W5IA_STATIC_GUARD = path.join(ROOT, 'tests', 'w5IntentActivationReconciler.test.js');
+const w5iaApplied = fs.existsSync(W5IA_STATIC_GUARD);
+const W5IA_MIGRATION_FILES = new Set([
+  'migrations/MIGRATION_MANIFEST.md',
+  'migrations/2026-09-15_w5_intent_activation_v1_migration_132.sql',
+  'migrations/2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
+]);
 let migrationsChanged = [];
 try {
   const diffOut = execSync(`git diff --name-only ${BASE_HEAD} -- migrations/`, { cwd: ROOT, encoding: 'utf8' });
@@ -104,7 +112,8 @@ try {
 } catch (e) {
   migrationsChanged = ['<git diff failed: ' + (e && e.message) + '>'];
 }
-const unexpectedMigrationsChanged = migrationsChanged.filter((f) => !(w5Applied && W5_MIGRATION_FILES.has(f)));
+const unexpectedMigrationsChanged = migrationsChanged.filter((f) =>
+  !(w5Applied && W5_MIGRATION_FILES.has(f)) && !(w5iaApplied && W5IA_MIGRATION_FILES.has(f)));
 assert('migrations/** has zero UNEXPECTED changes vs BASE_HEAD (W5 Packet 01\'s own migration excepted)', unexpectedMigrationsChanged.length === 0, unexpectedMigrationsChanged.join(', '));
 
 section('FRONTEND — no frontend/ or ladieci-app33 path in this packet\'s diff');
@@ -154,6 +163,25 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
   // operator call sites + creaOrdine()'s own hard-gated INSERT payload.
   // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
   ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js', 'src/agents/previewStrategicOpportunities.js'] : []),
+  // W5 Intent Activation (132): migration 132 + rollback + its own certification
+  // candidate/harness/group additions, the shared harness files it needed to make
+  // forward-compatible, its new reconciler module, and the agentOrdini.js/index.js
+  // activation wiring.
+  ...(w5iaApplied ? [
+    'migrations/2026-09-15_w5_intent_activation_v1_migration_132.sql',
+    'migrations/2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w5_intent_activation_v1.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w5_intent_activation_v1.ROLLBACK.sql',
+    'ci/giro-authority-certification/harness/runW5IntentActivation.js',
+    'ci/giro-authority-certification/harness/groups/w5IntentActivation.js',
+    'ci/giro-authority-certification/harness/groups/_ctx.js',
+    'ci/giro-authority-certification/harness/groups/capture.js',
+    'ci/giro-authority-certification/harness/groups/concurrency.js',
+    'ci/giro-authority-certification/harness/groups/consume.js',
+    'src/delivery/giroIntentReconciler.js',
+    'index.js',
+    'src/agents/agentOrdini.js',
+  ] : []),
 ]);
 const allowedProductFiles = new Set([PACKET_02A_OWN_PRODUCT_FILE, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));

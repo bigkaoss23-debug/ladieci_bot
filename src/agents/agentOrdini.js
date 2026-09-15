@@ -2,13 +2,14 @@
 // agentOrdini.js — CRUD ordini. Solo questo. Mai in cucina.
 // ===============================================================
 
-const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
+const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete, sbRpc } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
 const {
   normalizeOrderItem, OrderItemValidationError,
   normalizeEditedOrderItem, mergeOrderLines, ORDER_ITEM_PAYLOAD_INCONSISTENT,
 } = require("../menu/menuSnapshot");
 const { getOperationalSessionIds, serviceSessionsQuery } = require("../serviceSessions/currentOperationalSession");
+const { GIRO_INTENT_AUTO_CONSUME_ACTOR } = require("../delivery/giroIntentReconciler");
 
 // P0-C3 — shared helper for the two driver-schedule-simulation call sites
 // below (calcolaFornoOutFallback, risincronizzaGiro). Both used to scan
@@ -351,19 +352,16 @@ async function creaOrdine(params) {
   // against a total that is still moving.
   const initialPaymentIntent = params.initial_payment_intent || null;
 
-  // S4 — DORMANT operator-intent prerequisite (Planner W5 capture). The trusted builder
-  // (src/delivery/pendingGiroIntent.js, called from index.js) is live and may already
-  // produce a real, well-formed intent here in `params.pending_giro_intent` -- but the W5
-  // capture trigger (candidate SQL: ci/giro-authority-certification/candidate/
-  // giro_intent_capture_trigger_v1.W5_DORMANT.sql, a BEFORE INSERT trigger on ordenes)
-  // is NOT installed. Without that trigger nothing ever nulls this jsonb value
-  // back out, so persisting it now would leak a transient operator choice into every
-  // matching order row FOREVER. HARD INVARIANT: while the capture trigger is absent, every
-  // new ordenes.pending_giro_intent must be NULL, unconditionally. The line below is the
-  // enforcement point -- do not replace it with `params.pending_giro_intent` until a
-  // separate, later, explicitly authorized packet installs the capture trigger; that same
-  // packet is the only place this override should be removed.
-  const pendingGiroIntent = null; // S4 dormant: see comment above; DO NOT read params.pending_giro_intent here yet
+  // W5 INTENT ACTIVATION V1 — the S4 operator-intent prerequisite is now LIVE. The
+  // trusted builder (src/delivery/pendingGiroIntent.js, called from index.js) produces
+  // the only well-formed shape that ever reaches here; the client cannot override its
+  // output. Migration 132 (feature/w5-intent-activation-v1, NOT yet applied to staging)
+  // installs the capture trigger ordenes_zz_giro_intent_capture_v1 that nulls this value
+  // out on every INSERT via giro_authority.capture_giro_intent_v1() — this line must
+  // never reach staging before that migration is applied there first (see migration
+  // 132's own header and MIGRATION_MANIFEST.md row 132). WhatsApp and Mesa never pass
+  // pending_giro_intent, so they are unaffected either way.
+  const pendingGiroIntent = params.pending_giro_intent || null;
 
   // ── Step 2 anti-cerotto: geo/durata autoritativi (dashboard operatore) ──
   // Per ordini operatore (operatorManual:true) il backend NON si fida di
@@ -948,6 +946,32 @@ async function modificaOrdine(ordenId, updates) {
 // snapshot reconciliation; the RPC's membership check keeps pickup/non-member safe.
 const RECONCILE_TERMINAL_STATES = new Set(["RETIRADO", "COMPLETADO", "COMPLETATO", "CANCELADO", "ANULADO"]);
 
+// W5 INTENT ACTIVATION V1 — best-effort attempt to resolve a captured Giro intent for
+// one order. Called from two points below: EN_COCINA entry (the common case — the
+// order has just become operative) and the RECONCILE_TERMINAL_STATES block (a backstop
+// retry, since giro_authority_consume_intent_v1 is idempotent and NO_INTENT/terminal-
+// replay are safe no-ops — this costs nothing for an order that never had an intent,
+// or whose intent already resolved). A continuous, bounded reconciler also runs on the
+// getOrdenes poll (src/delivery/giroIntentReconciler.js) as a third, independent
+// backstop, and close_service_session_v3 sweeps any leftovers at service close
+// (migration 132) — this function is deliberately NOT the only place this can happen.
+// Never throws, never blocks the caller: cambiaStato's own return value must never
+// depend on whether a Giro intent existed or resolved.
+async function attemptGiroIntentConsume(orderUid, nuovoStato) {
+  if (!orderUid) return;
+  try {
+    const sessionIds = await getOperationalSessionIds({ select: sbSelect });
+    if (!sessionIds.length) return;
+    await sbRpc("giro_authority_consume_intent_v1", {
+      p_order_uid: orderUid,
+      p_actor: GIRO_INTENT_AUTO_CONSUME_ACTOR,
+      p_operational_session_ids: sessionIds,
+    });
+  } catch (e) {
+    console.warn(`[giroIntent] consume attempt for ${orderUid} at ${nuovoStato} failed:`, e?.message || e);
+  }
+}
+
 // extras: { metodo_pago, cobrado, hora_entrega, hora_salida, repartidor, llegado, cucina_check, actor_type, actor_id, origin }
 // Scrittura atomica singola — niente cerotti, niente race tra metodo_pago e estado.
 async function cambiaStato(ordenId, nuovoStato, extras = {}) {
@@ -1165,6 +1189,10 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     // Ordine appena entrato in cucina → il giro può aver cambiato composizione
     if (ord1?.[0]?.tipo_consegna === "DOMICILIO") {
       await risincronizzaGiro(ord1[0].zona, ord1[0].hora);
+      // W5 INTENT ACTIVATION V1 — the primary consume trigger: an order just became
+      // operative (EN_COCINA is the earliest estado consume will ever accept). See
+      // attemptGiroIntentConsume's own header for why this isn't the only call site.
+      await attemptGiroIntentConsume(ord1[0].order_uid, nuovoStato);
     }
   }
   if (!_isNoop && nuovoStato === "RETIRADO") {
@@ -1196,14 +1224,23 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   // controlled no-op. No global count is used; there is no "driver out" writer. Any RPC
   // failure is swallowed with a warn and never triggers a legacy direct write.
   if (!_isNoop && RECONCILE_TERMINAL_STATES.has(nuovoStato)) {
-    try {
-      const dRows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,tipo_consegna,zona,manual_giro_id`);
-      const dOrd = dRows?.[0];
-      if (dOrd && dOrd.tipo_consegna === "DOMICILIO") {
+    const dRows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,order_uid,tipo_consegna,zona,manual_giro_id`);
+    const dOrd = dRows?.[0];
+    if (dOrd && dOrd.tipo_consegna === "DOMICILIO") {
+      try {
         await recordDeliveryAndMaybeReturn(dOrd);
+      } catch (e) {
+        console.warn(`[driverTelemetry] cambiaStato reconciliation (${nuovoStato}) for ${ordenId} failed:`, e?.message || e);
       }
-    } catch (e) {
-      console.warn(`[driverTelemetry] cambiaStato reconciliation (${nuovoStato}) for ${ordenId} failed:`, e?.message || e);
+      // W5 INTENT ACTIVATION V1 — backstop retry: covers the crash window where the
+      // EN_COCINA hook above fired but the process died before its consume call
+      // completed (the order still reaches SOME terminal state eventually), and
+      // resolves a pre-kitchen CANCELADO/ANULADO intent to REJECTED via the RPC's
+      // own existing cancelled-order branch — no separate terminalization path.
+      // attemptGiroIntentConsume never throws, so no separate try/catch is needed
+      // here, and a failure inside it can never suppress the driver-telemetry work
+      // above (already complete by this point either way).
+      await attemptGiroIntentConsume(dOrd.order_uid, nuovoStato);
     }
   }
 

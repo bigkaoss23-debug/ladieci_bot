@@ -86,13 +86,17 @@ assert('migration-130 file checksum matches the certified/applied sha256',
 const giroAuthoritySqlFiles = migFiles.filter((f) => f.endsWith('.sql') && read(path.join(ROOT, 'migrations', f)).includes('giro_authority')).sort();
 // W5 Packet 01 (migration 131) is the first additive migration onto the giro_authority
 // schema since W3 -- it adds two new composite commands and touches detach_v1/dissolve_v1,
-// so its forward+rollback pair legitimately joins 130's here.
-assert('exactly the migration-130 and migration-131 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
+// so its forward+rollback pair legitimately joins 130's here. W5 Intent Activation
+// (migration 132) is the next: capture trigger + consume signal-bump fix + the new
+// read-only pending-intent helper + the close_service_session_v3 sweep.
+assert('exactly the migration-130, migration-131 and migration-132 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
   JSON.stringify(giroAuthoritySqlFiles) === JSON.stringify([
     '2026-09-14_giro_authority_v1_migration_130.ROLLBACK.sql',
     '2026-09-14_giro_authority_v1_migration_130.sql',
     '2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
     '2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
+    '2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
+    '2026-09-15_w5_intent_activation_v1_migration_132.sql',
   ]), giroAuthoritySqlFiles.join(', '));
 assert('MIGRATION_MANIFEST.md documents migration 130 (giro_authority row present)',
   read(path.join(ROOT, 'migrations', 'MIGRATION_MANIFEST.md')).includes('giro_authority'));
@@ -109,12 +113,19 @@ const MANUAL_GIRO_READS = path.join(ROOT, 'src', 'agents', 'manualGiroReads.js')
 const PLANNER_SNAPSHOT = path.join(ROOT, 'src', 'core', 'delivery', 'plannerSnapshot.js');
 const GIRO_FACTS_PORT = path.join(ROOT, 'src', 'core', 'delivery', 'giroFactsPort.js');
 const MANUAL_GIROS = path.join(ROOT, 'src', 'agents', 'manualGiros.js');
+const AGENT_ORDINI = path.join(ROOT, 'src', 'agents', 'agentOrdini.js');
+const GIRO_INTENT_RECONCILER = path.join(ROOT, 'src', 'delivery', 'giroIntentReconciler.js');
 // Packet 01 (previewTiming.js) + Packet 02A (riderReads.js) + Packet 02B (manualGiroReads.js)
 // + Final W4 Read-Cutover Packet (plannerSnapshot.js) + W5 Packet 01 (manualGiros.js, the
 // single Authority WRITER -- it calls giro_authority_create_or_move_v1/attach_or_move_v1/
 // detach_v1/dissolve_v1 directly via sbRpc, never through giroProjectionPort/Reader, which
-// stay the read-only boundary).
-const ALLOWED_PROJECTION_CONSUMERS = new Set([ADAPTER, READER, PREVIEW_TIMING, RIDER_READS, MANUAL_GIRO_READS, PLANNER_SNAPSHOT, MANUAL_GIROS]);
+// stay the read-only boundary) + W5 Intent Activation (agentOrdini.js's cambiaStato() hooks
+// and the new giroIntentReconciler.js module, both calling giro_authority_consume_intent_v1/
+// giro_authority_list_pending_intents_v1 directly via sbRpc, same non-projection pattern).
+const ALLOWED_PROJECTION_CONSUMERS = new Set([
+  ADAPTER, READER, PREVIEW_TIMING, RIDER_READS, MANUAL_GIRO_READS, PLANNER_SNAPSHOT, MANUAL_GIROS,
+  AGENT_ORDINI, GIRO_INTENT_RECONCILER,
+]);
 const live = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => !ALLOWED_PROJECTION_CONSUMERS.has(f));
 const mentions = live.filter((f) => /giro_authority|giro_projection_v1/.test(read(f)));
 assert('no live src/** or index.js file outside the allowlisted W4 chain references the Authority or the projection',
