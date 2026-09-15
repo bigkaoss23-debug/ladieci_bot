@@ -80,6 +80,7 @@ const S4_STATIC_GUARD = path.join(ROOT, 'tests', 's4DormantInsertGateGuard.stati
 const s4Applied = fs.existsSync(S4_STATIC_GUARD);
 // W5 Intent Activation (132) — same later-packet pattern: migration 132 (capture
 // trigger + consume signal-bump fix + bounded read helper + close-session sweep)
+// language-guard: allow-legacy agentOrdini is the existing identifier being cited, not new vocabulary
 // plus its own JS activation (agentOrdini.js hooks, the new reconciler module,
 // index.js wiring). Detected the same way: presence of its own guard on the branch.
 const W5IA_STATIC_GUARD = path.join(ROOT, 'tests', 'w5IntentActivationReconciler.test.js');
@@ -231,6 +232,7 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
   ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js', 'src/agents/previewStrategicOpportunities.js'] : []),
   // W5 Intent Activation (132): migration 132 + rollback + its own certification
   // candidate/harness/group additions, the shared harness files it needed to make
+  // language-guard: allow-legacy agentOrdini is the existing identifier being cited, not new vocabulary
   // forward-compatible, its new reconciler module, and the agentOrdini.js/index.js
   // activation wiring (certified by ci/giro-authority-certification/harness/
   // runW5IntentActivation.js and tests/w5IntentActivationReconciler.test.js).
@@ -247,6 +249,7 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
     'ci/giro-authority-certification/harness/groups/consume.js',
     'src/delivery/giroIntentReconciler.js',
     'index.js',
+    // language-guard: allow-legacy agentOrdini is the existing identifier being cited, not new vocabulary
     'src/agents/agentOrdini.js',
   ] : []),
 ]);

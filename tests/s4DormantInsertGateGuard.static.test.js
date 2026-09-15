@@ -3,8 +3,10 @@
 // ===============================================================
 // W5 INTENT ACTIVATION V1 — the S4 dormant hard gate has ACTIVATED.
 //
+// language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
 // HISTORY. This file's original purpose (S4-D01..D05, 2026-09-14) was to prove
 // the S4 operator-intent prerequisite stayed dormant: a real, well-formed
+// language-guard: allow-legacy creaOrdine is the existing identifier being cited, not new vocabulary
 // pending_giro_intent value could already reach creaOrdine()'s params, but
 // the INSERT itself still hard-coded a null literal, because the W5 capture
 // trigger was not yet installed. That guard is now superseded, not deleted —
@@ -32,6 +34,7 @@
 //     packet identified and ruled out -- this assertion is the mechanical
 //     proof that state cannot exist in this repo at this commit.
 //   S4-A05 — the same closed 3-file allowlist for who may even mention
+// language-guard: allow-legacy agentOrdini is the existing identifier being cited, not new vocabulary
 //     ordenes.pending_giro_intent, unchanged (index.js, agentOrdini.js,
 //     pendingGiroIntent.js) -- the reconciler/close-sweep additions never
 //     touch that literal field name, they operate on already-captured
@@ -56,9 +59,10 @@ function check(l, c) { if (c) { pass++; console.log('  ✓ ' + l); } else { fail
 
 const ROOT = path.join(__dirname, '..');
 const indexJs = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8');
-// language-guard: allow-legacy agentOrdiniSrc/agentOrdini.js are the existing variable/file names being cited, not new vocabulary
-const agentOrdiniSrc = fs.readFileSync(path.join(ROOT, 'src', 'agents', 'agentOrdini.js'), 'utf8');
+// language-guard: allow-legacy writerModuleSrc/agentOrdini.js are the existing variable/file names being cited, not new vocabulary
+const writerModuleSrc = fs.readFileSync(path.join(ROOT, 'src', 'agents', 'agentOrdini.js'), 'utf8');
 
+// language-guard: allow-legacy creaOrdine is the existing identifier being cited, not new vocabulary
 console.log('\n── S4-A01 valid builder output still reaches creaOrdine params (unchanged wiring) ──');
 {
   // language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
@@ -71,8 +75,8 @@ console.log('\n── S4-A01 valid builder output still reaches creaOrdine param
 
 console.log('\n── S4-A02 the producer is LIVE: pendingGiroIntent reads params.pending_giro_intent ──');
 {
-  // language-guard: allow-legacy agentOrdiniSrc is the existing local variable name (source text of agentOrdini.js) being read, not new vocabulary
-  const declMatch = agentOrdiniSrc.match(/const pendingGiroIntent = ([^;]+);/);
+  // language-guard: allow-legacy writerModuleSrc is the existing local variable name (source text of agentOrdini.js) being read, not new vocabulary
+  const declMatch = writerModuleSrc.match(/const pendingGiroIntent = ([^;]+);/);
   check('pendingGiroIntent local variable exists', !!declMatch);
   check('pendingGiroIntent reads params.pending_giro_intent with a null fallback (the exact activation target), never a hardcoded null literal',
     !!declMatch && declMatch[1].trim() === 'params.pending_giro_intent || null');
@@ -80,15 +84,15 @@ console.log('\n── S4-A02 the producer is LIVE: pendingGiroIntent reads param
 
 console.log('\n── S4-A03 sbInsert("ordenes") still only ever persists the local, never a raw/alternate expression ──');
 {
-  // language-guard: allow-legacy agentOrdiniSrc is the existing local variable name being read, not new vocabulary
-  const insertMatch = agentOrdiniSrc.match(/pending_giro_intent: (\w+),/);
+  // language-guard: allow-legacy writerModuleSrc is the existing local variable name being read, not new vocabulary
+  const insertMatch = writerModuleSrc.match(/pending_giro_intent: (\w+),/);
   check('sbInsert("ordenes", ...) carries a pending_giro_intent key', !!insertMatch);
   check('that key\'s value is the local (pendingGiroIntent) -- never params.pending_giro_intent inlined directly, never any other expression',
     !!insertMatch && insertMatch[1] === 'pendingGiroIntent');
 
-  const insertObjStart = agentOrdiniSrc.indexOf('const result = await sbInsert("ordenes", {');
-  const insertObjEnd = insertObjStart === -1 ? -1 : agentOrdiniSrc.indexOf('\n    });', insertObjStart);
-  const insertObjText = insertObjStart === -1 || insertObjEnd === -1 ? '' : agentOrdiniSrc.slice(insertObjStart, insertObjEnd);
+  const insertObjStart = writerModuleSrc.indexOf('const result = await sbInsert("ordenes", {');
+  const insertObjEnd = insertObjStart === -1 ? -1 : writerModuleSrc.indexOf('\n    });', insertObjStart);
+  const insertObjText = insertObjStart === -1 || insertObjEnd === -1 ? '' : writerModuleSrc.slice(insertObjStart, insertObjEnd);
   check('sbInsert("ordenes", ...) call located for scoped inspection', insertObjStart !== -1 && insertObjEnd !== -1);
   check('the INSERT object itself never ASSIGNS params.pending_giro_intent directly (must go through the validated local)',
     !/pending_giro_intent:\s*params\.pending_giro_intent/.test(insertObjText));
@@ -106,7 +110,7 @@ console.log('\n── S4-A04 COUPLING: producer live IFF the capture trigger shi
   // The unsafe intermediate this whole guard exists to rule out: a producer-live
   // commit where the trigger migration is ABSENT would leave every matching
   // pending_giro_intent persisted forever (nothing ever nulls it back out).
-  const declMatch = agentOrdiniSrc.match(/const pendingGiroIntent = ([^;]+);/);
+  const declMatch = writerModuleSrc.match(/const pendingGiroIntent = ([^;]+);/);
   const producerLive = !!declMatch && declMatch[1].trim() !== 'null';
   check('producer-live implies the trigger migration is present in this commit (the UNSAFE intermediate cannot exist here)',
     !producerLive || !!triggerFile);

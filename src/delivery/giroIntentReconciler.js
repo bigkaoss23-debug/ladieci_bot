@@ -1,6 +1,7 @@
 'use strict';
 // W5 INTENT ACTIVATION V1 — bounded, best-effort Giro intent reconciler.
 //
+// language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
 // WHY THIS EXISTS. cambiaStato()'s EN_COCINA hook (agentOrdini.js) attempts an
 // immediate consume the moment an order enters the kitchen — the common case.
 // But that hook can only fire once, on a genuine transition: if the process
@@ -34,6 +35,7 @@
 // request's own req.authCtx.actor, since attributing an automatic
 // consume attempt to whichever operator's tablet happened to trigger it
 // would be misleading audit data. Shared (imported, not duplicated) by
+// language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
 // agentOrdini.js's cambiaStato() hooks below, which are the same kind of
 // automatic, non-interactive consume attempt as this module's own.
 
@@ -41,6 +43,7 @@ const { sbRpc } = require("../utils/supabase");
 
 // Shared by every automatic (non-interactive) consume call site: this
 // reconciler's own batch AND cambiaStato()'s EN_COCINA / RECONCILE_TERMINAL_
+// language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
 // STATES hooks (agentOrdini.js) — one actor identity for "the automatic Giro
 // intent consumption system", not three different ones.
 const GIRO_INTENT_AUTO_CONSUME_ACTOR = "giro_intent_auto_consume";

@@ -2,6 +2,7 @@
 -- already-applied migrations 130 (giro_authority_v1) and 131 (W5 Packet 01).
 -- Certified only on ephemeral PostgreSQL (ci/giro-authority-certification/harness).
 -- Never applied to staging/production by this session. Producer activation
+-- language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
 -- (agentOrdini.js pendingGiroIntent) and the reconciler/hook JS all stay
 -- feature-branch-only until Phase 2 -- this migration is Phase 1 only.
 --
@@ -10,6 +11,7 @@
 --      capture trigger verbatim from candidate/giro_intent_capture_trigger_v1.
 --      W5_DORMANT.sql (guards, WHEN clause, trigger-ordering post-condition all
 --      unchanged). Stays a structural no-op today: the real INSERT boundary
+--      language-guard: allow-legacy agentOrdini.js/creaOrdine are the existing file/function names being cited, not new vocabulary
 --      (src/agents/agentOrdini.js creaOrdine) still hard-forces
 --      pendingGiroIntent = null, so NEW.pending_giro_intent is never non-NULL
 --      until the Phase 2 JS deploy flips that one line.
@@ -48,6 +50,7 @@
 --      close itself -- the close's own writes (service_sessions, service_
 --      session_state, business_day_lifecycle_state, service_session_audit) are
 --      all still byte-identical and still happen first, exactly as today.
+--      language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this correction discusses, not new vocabulary
 --      CORRECTION TO THE PRIOR DESIGN AUDIT: that audit assumed CHIUSO_FORZATO
 --      was still an active write bypassing cambiaStato(). It is not -- migration
 --      2026-08-23_n1_mesa_force_close_estado_write_removal retired that write

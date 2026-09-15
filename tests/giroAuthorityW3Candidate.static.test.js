@@ -113,17 +113,20 @@ const MANUAL_GIRO_READS = path.join(ROOT, 'src', 'agents', 'manualGiroReads.js')
 const PLANNER_SNAPSHOT = path.join(ROOT, 'src', 'core', 'delivery', 'plannerSnapshot.js');
 const GIRO_FACTS_PORT = path.join(ROOT, 'src', 'core', 'delivery', 'giroFactsPort.js');
 const MANUAL_GIROS = path.join(ROOT, 'src', 'agents', 'manualGiros.js');
+// language-guard: allow-legacy AGENT_ORDINI is the existing identifier being cited, not new vocabulary
 const AGENT_ORDINI = path.join(ROOT, 'src', 'agents', 'agentOrdini.js');
 const GIRO_INTENT_RECONCILER = path.join(ROOT, 'src', 'delivery', 'giroIntentReconciler.js');
 // Packet 01 (previewTiming.js) + Packet 02A (riderReads.js) + Packet 02B (manualGiroReads.js)
 // + Final W4 Read-Cutover Packet (plannerSnapshot.js) + W5 Packet 01 (manualGiros.js, the
 // single Authority WRITER -- it calls giro_authority_create_or_move_v1/attach_or_move_v1/
 // detach_v1/dissolve_v1 directly via sbRpc, never through giroProjectionPort/Reader, which
+// language-guard: allow-legacy agentOrdini is the existing identifier being cited, not new vocabulary
 // stay the read-only boundary) + W5 Intent Activation (agentOrdini.js's cambiaStato() hooks
 // and the new giroIntentReconciler.js module, both calling giro_authority_consume_intent_v1/
 // giro_authority_list_pending_intents_v1 directly via sbRpc, same non-projection pattern).
 const ALLOWED_PROJECTION_CONSUMERS = new Set([
   ADAPTER, READER, PREVIEW_TIMING, RIDER_READS, MANUAL_GIRO_READS, PLANNER_SNAPSHOT, MANUAL_GIROS,
+  // language-guard: allow-legacy AGENT_ORDINI is the existing identifier being cited, not new vocabulary
   AGENT_ORDINI, GIRO_INTENT_RECONCILER,
 ]);
 const live = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => !ALLOWED_PROJECTION_CONSUMERS.has(f));

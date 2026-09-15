@@ -165,6 +165,7 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
   ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js', 'src/agents/previewStrategicOpportunities.js'] : []),
   // W5 Intent Activation (132): migration 132 + rollback + its own certification
   // candidate/harness/group additions, the shared harness files it needed to make
+  // language-guard: allow-legacy agentOrdini is the existing identifier being cited, not new vocabulary
   // forward-compatible, its new reconciler module, and the agentOrdini.js/index.js
   // activation wiring.
   ...(w5iaApplied ? [
@@ -180,6 +181,7 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
     'ci/giro-authority-certification/harness/groups/consume.js',
     'src/delivery/giroIntentReconciler.js',
     'index.js',
+    // language-guard: allow-legacy agentOrdini is the existing identifier being cited, not new vocabulary
     'src/agents/agentOrdini.js',
   ] : []),
 ]);
