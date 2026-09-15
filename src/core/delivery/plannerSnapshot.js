@@ -4,8 +4,38 @@
 //
 // This module only accepts injected DB dependencies and only uses `select`.
 // It returns planner-compatible raw facts without PII by default.
-// ===============================================================
+//
+// Final W4 Read-Cutover Packet — canonicalized at THIS boundary only.
+// CURRENT business day: each order's manual_giro_id is the canonical
+// compatibility alias (= giro_projection_v1's own effective_giro_id for that
+// order), resolved from ONE Projection read per snapshot. It fully REPLACES
+// the raw column — a raw/canonical disagreement is decided by the Projection,
+// never merged. planner.js (Stage 1 bucketing) and previewStrategicOpportunities.js
+// (giro-anchor merge) are UNCHANGED: they already key purely off this field's
+// VALUE, so the canonical fact flows through them transparently. Stage M
+// (manual_route rider-block: route_order/block_start/manual_duration_min/
+// created_by_operator/force) has no equivalent in the Authority schema at all
+// — deliberately left on the raw `manual_giros` read, W6-deferred, and
+// structurally unable to override the canonical alias (Stage M keys off
+// manual_giros.order_ids, never off ordenes.manual_giro_id).
+//
+// HISTORICAL day (an explicit date different from the current operational
+// business date): byte-for-byte the pre-cutover raw reader — a distinct
+// capability, not a fallback. The Projection has no notion of a past day.
+//
+// Degraded current-day Projection (unavailable/scope-invalid/degraded/RPC
+// error): throws explicitly (never silently defaults every order's alias to
+// null, which would misrepresent "membership unknown" as "no giro exists").
+// Both existing callers (previewOrderPlanner.js, previewStrategicOpportunities.js)
+// already catch a rejected loadPlannerSnapshot() and return their own existing
+// `snapshot_unavailable`/`planner_unavailable` typed error — this is not a new
+// public contract, it is the same failure path a raw db.select() error already
+// took before this packet.
 "use strict";
+
+const { getCurrentOperationalBusinessDate } = require("../../serviceSessions/currentOperationalSession");
+const { readGiroProjection } = require("./giroProjectionReader");
+const { projectionAvailability, effectiveGiroIdByOrderId } = require("./giroProjectionPort");
 
 const DEFAULT_LIMIT = 1000;
 
@@ -126,10 +156,19 @@ function countPizzas(items) {
   }, 0);
 }
 
-function normalizeOrder(row = {}) {
+// effectiveGiroIdMap: null on the HISTORICAL path (raw column used verbatim,
+// byte-for-byte pre-cutover behavior). On the CURRENT-day path it is always a
+// Map (possibly empty) built from the Projection — its presence, not its
+// contents, is what selects canonical-alias behavior, so a giro-less current
+// order (absent from the map) correctly gets `null`, never falls back to the
+// raw column value.
+function normalizeOrder(row = {}, effectiveGiroIdMap = null) {
   const estado = row.estado || "NUEVO";
   const estadoUp = String(estado).toUpperCase();
   if (TERMINAL_STATES.has(estadoUp) || NON_PLANNER_STATES.has(estadoUp)) return null;
+  const canonicalGiroId = effectiveGiroIdMap
+    ? (effectiveGiroIdMap.get(String(row.id)) || null)
+    : (row.manual_giro_id || null);
   const out = {
     id: row.id,
     tipo_consegna: row.tipo_consegna || "DOMICILIO",
@@ -138,7 +177,7 @@ function normalizeOrder(row = {}) {
     hora: row.hora ?? null,
     items: Array.isArray(row.items) ? row.items : [],
     n_pizze: Number.isFinite(Number(row.n_pizze)) ? Number(row.n_pizze) : countPizzas(row.items),
-    manual_giro_id: row.manual_giro_id || null,
+    manual_giro_id: canonicalGiroId,
     forzado: !!row.forzado,
   };
 
@@ -172,6 +211,23 @@ function defaultNow() {
   return "19:00";
 }
 
+// Routing rule identical to Packet 02B's getManualGirosRead: `date` absent, or
+// equal to the DB-authoritative current operational business date, is the
+// CURRENT-day capability (canonical). `date` present and genuinely different
+// (or the current date is itself unknowable -- fail closed) is HISTORICAL, a
+// distinct capability, decided BEFORE either read path runs -- never a
+// try-Projection/catch-legacy fallback.
+async function resolveIsHistorical(date) {
+  if (date == null) return false;
+  let currentBusinessDate = null;
+  try {
+    currentBusinessDate = await getCurrentOperationalBusinessDate();
+  } catch (_) {
+    currentBusinessDate = null;
+  }
+  return currentBusinessDate == null || date !== currentBusinessDate;
+}
+
 async function loadPlannerSnapshot({
   db,
   date,
@@ -181,14 +237,36 @@ async function loadPlannerSnapshot({
 } = {}) {
   void includePii;
   const safeDb = requireDb(db);
+  const isHistorical = await resolveIsHistorical(date);
+
   const [orderRows, giroRows] = await Promise.all([
     safeDb.select("ordenes", buildOrdersQuery({ date, limit })),
     safeDb.select("manual_giros", buildManualGirosQuery({ limit })),
   ]);
 
+  let effectiveGiroIdMap = null;
+  if (!isHistorical) {
+    let projection = null;
+    try {
+      projection = await readGiroProjection();
+    } catch (_) {
+      projection = null;
+    }
+    if (!projectionAvailability(projection).available) {
+      // Explicit, typed failure -- never a silent "every order has no giro".
+      // Both existing callers already catch this exact shape (their own
+      // pre-cutover db.select() failures threw the same way) and surface
+      // their own snapshot_unavailable/planner_unavailable typed error.
+      throw safeError("giro_projection_snapshot_unavailable", "giro_projection_snapshot_unavailable");
+    }
+    effectiveGiroIdMap = effectiveGiroIdByOrderId(projection);
+  }
+
   return {
     now: now || defaultNow(),
-    orders: (Array.isArray(orderRows) ? orderRows : []).map(normalizeOrder).filter(Boolean),
+    orders: (Array.isArray(orderRows) ? orderRows : [])
+      .map((row) => normalizeOrder(row, effectiveGiroIdMap))
+      .filter(Boolean),
     manual_giros: (Array.isArray(giroRows) ? giroRows : []).map(normalizeManualGiro).filter((g) => g.id),
     driver: null,
     driver_events: [],

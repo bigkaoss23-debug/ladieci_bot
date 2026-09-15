@@ -124,9 +124,11 @@ try {
 // packet's already-certified one (e.g. riderTrip.js/agentOrdini.js changing
 // without authorization still fails this check).
 const PACKET_02A_OWN_PRODUCT_FILE = 'src/agents/riderReads.js';
-const LATER_PACKET_CERTIFIED_PRODUCT_FILES = fs.existsSync(MANUAL_GIRO_STATIC_GUARD)
-  ? new Set(['src/agents/manualGiros.js', 'src/agents/manualGiroReads.js']) // Packet 02B
-  : new Set();
+const FINAL_W4_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW4FinalCutover.static.test.js');
+const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
+  ...(fs.existsSync(MANUAL_GIRO_STATIC_GUARD) ? ['src/agents/manualGiros.js', 'src/agents/manualGiroReads.js'] : []), // Packet 02B
+  ...(fs.existsSync(FINAL_W4_STATIC_GUARD) ? ['src/core/delivery/plannerSnapshot.js'] : []), // Final W4 Read-Cutover Packet
+]);
 const allowedProductFiles = new Set([PACKET_02A_OWN_PRODUCT_FILE, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));
 assert('every non-test changed file is either riderReads.js or a later packet\'s own already-certified product file',

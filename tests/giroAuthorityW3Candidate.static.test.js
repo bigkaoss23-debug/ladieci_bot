@@ -101,9 +101,11 @@ const READER = path.join(ROOT, 'src', 'core', 'delivery', 'giroProjectionReader.
 const PREVIEW_TIMING = path.join(ROOT, 'src', 'agents', 'previewTiming.js');
 const RIDER_READS = path.join(ROOT, 'src', 'agents', 'riderReads.js');
 const MANUAL_GIRO_READS = path.join(ROOT, 'src', 'agents', 'manualGiroReads.js');
+const PLANNER_SNAPSHOT = path.join(ROOT, 'src', 'core', 'delivery', 'plannerSnapshot.js');
 const GIRO_FACTS_PORT = path.join(ROOT, 'src', 'core', 'delivery', 'giroFactsPort.js');
-// Packet 01 (previewTiming.js) + Packet 02A (riderReads.js) + Packet 02B (manualGiroReads.js).
-const ALLOWED_PROJECTION_CONSUMERS = new Set([ADAPTER, READER, PREVIEW_TIMING, RIDER_READS, MANUAL_GIRO_READS]);
+// Packet 01 (previewTiming.js) + Packet 02A (riderReads.js) + Packet 02B (manualGiroReads.js)
+// + Final W4 Read-Cutover Packet (plannerSnapshot.js).
+const ALLOWED_PROJECTION_CONSUMERS = new Set([ADAPTER, READER, PREVIEW_TIMING, RIDER_READS, MANUAL_GIRO_READS, PLANNER_SNAPSHOT]);
 const live = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => !ALLOWED_PROJECTION_CONSUMERS.has(f));
 const mentions = live.filter((f) => /giro_authority|giro_projection_v1/.test(read(f)));
 assert('no live src/** or index.js file outside the allowlisted W4 chain references the Authority or the projection',
@@ -112,9 +114,10 @@ const requirers = live.filter((f) => /giroProjectionPort|giroProjectionReader/.t
 assert('nothing outside the allowlisted W4 chain requires giroProjectionPort/giroProjectionReader',
   requirers.length === 0, requirers.join(', '));
 const portRequirers = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => f !== ADAPTER && /require\([^)]*giroProjectionPort/.test(read(f)));
-assert('exactly previewTiming.js + riderReads.js + manualGiroReads.js require giroProjectionPort (Packet 01 + 02A + 02B scope, nothing more)',
-  portRequirers.length === 3 &&
-  portRequirers.includes(PREVIEW_TIMING) && portRequirers.includes(RIDER_READS) && portRequirers.includes(MANUAL_GIRO_READS),
+assert('exactly previewTiming.js + riderReads.js + manualGiroReads.js + plannerSnapshot.js require giroProjectionPort (Packet 01 + 02A + 02B + Final W4 scope, nothing more)',
+  portRequirers.length === 4 &&
+  portRequirers.includes(PREVIEW_TIMING) && portRequirers.includes(RIDER_READS) &&
+  portRequirers.includes(MANUAL_GIRO_READS) && portRequirers.includes(PLANNER_SNAPSHOT),
   portRequirers.join(', '));
 assert('previewTiming.js requires giroProjectionReader (the canonical I/O boundary)',
   /require\([^)]*giroProjectionReader/.test(read(PREVIEW_TIMING)));

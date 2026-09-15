@@ -135,32 +135,39 @@ try {
 } catch (e) { feChanged = ['<git diff failed>']; }
 assert('zero frontend-path changes in this packet\'s diff', feChanged.length === 0, feChanged.join(', '));
 
-section('DIFF SCOPE — product changes limited to manualGiros.js + the new manualGiroReads.js module');
+section('DIFF SCOPE — product changes limited to manualGiros.js + manualGiroReads.js (+ later packets\' own certified files)');
 let changedFiles = [];
 try {
   changedFiles = execSync(`git diff --name-only ${BASE_HEAD}`, { cwd: ROOT, encoding: 'utf8' })
     .split('\n').map((l) => l.trim()).filter(Boolean);
 } catch (e) { changedFiles = ['<git diff failed>']; }
-const allowedProductFiles = new Set(['src/agents/manualGiros.js', 'src/agents/manualGiroReads.js']);
+// manualGiros.js + manualGiroReads.js are this packet's own product files. A
+// later, separately-authorized W4 packet on this same branch is allowed to
+// extend the cumulative diff with its OWN certified product files -- named
+// here only once that packet's own static guard exists on the branch to vouch
+// for them (mirrors the identical, already-reviewed pattern applied to
+// riderReadsW4Packet02A.static.test.js), so this still fails on any file that
+// is neither this packet's own nor a later packet's already-certified one.
+const FINAL_W4_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW4FinalCutover.static.test.js');
+const PACKET_02B_OWN_PRODUCT_FILES = new Set(['src/agents/manualGiros.js', 'src/agents/manualGiroReads.js']);
+const LATER_PACKET_CERTIFIED_PRODUCT_FILES = fs.existsSync(FINAL_W4_STATIC_GUARD)
+  ? new Set(['src/core/delivery/plannerSnapshot.js']) // Final W4 Read-Cutover Packet
+  : new Set();
+const allowedProductFiles = new Set([...PACKET_02B_OWN_PRODUCT_FILES, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));
-assert('every non-test changed file is one of the two allowed product files', nonTestNonAllowed.length === 0, nonTestNonAllowed.join(', '));
+assert('every non-test changed file is either this packet\'s own product file or a later packet\'s own already-certified product file', nonTestNonAllowed.length === 0, nonTestNonAllowed.join(', '));
 
-section('NO NEW RAW GIRO TRUTH READER — allowlisted W4 chain extended by exactly one module, nothing else');
-const srcFiles = fs.readdirSync(path.join(ROOT, 'src'), { recursive: true })
-  .filter((f) => /\.(js|mjs|ts)$/.test(f)).map((f) => path.join('src', f));
-const ALLOWED_PROJECTION_FILES = new Set([
-  'src/core/delivery/giroProjectionPort.js',
-  'src/core/delivery/giroProjectionReader.js',
-  'src/agents/previewTiming.js',
-  'src/agents/riderReads.js',
-  'src/agents/manualGiroReads.js',
-]);
+// NOTE: this file used to keep its own repo-wide sweep here for "no file
+// outside a hardcoded roster references the Authority/projection". That is a
+// SYSTEM-WIDE invariant, not a Packet-02B-local one, and duplicating it in a
+// packet-scoped snapshot goes stale the moment any later packet legitimately
+// adds a new certified consumer (exactly what happened with the Final W4
+// Read-Cutover Packet's plannerSnapshot.js). The canonical, always-current
+// version of this sweep lives in tests/giroAuthorityW3Candidate.static.test.js's
+// own ALLOWED_PROJECTION_CONSUMERS roster -- removed here rather than
+// re-duplicated (same resolution already applied to
+// riderReadsW4Packet02A.static.test.js).
 const readRaw = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
-const mentionsAuthority = [...srcFiles, 'index.js']
-  .filter((f) => !ALLOWED_PROJECTION_FILES.has(f))
-  .filter((f) => /giro_authority|giro_projection_v1/.test(readRaw(f)));
-assert('no file outside the allowlisted W4 chain references the Authority or the projection',
-  mentionsAuthority.length === 0, mentionsAuthority.join(', '));
 
 section('manualGiroReads.js ITSELF — no dependency on manualGiros.js, one Projection call site per read function');
 const readsSrc = readRaw('src/agents/manualGiroReads.js');

@@ -1,0 +1,112 @@
+'use strict';
+// tests/plannerW4FinalCutover.static.test.js — Final W4 Read-Cutover Packet static guard.
+// OFFLINE except for local `git show` against this repo's own history (no network).
+//
+// This packet's architectural success: plannerSnapshot.js is the ONLY product
+// file changed. planner.js (Stage 1 AND Stage M) and previewStrategicOpportunities.js
+// are proven byte-identical to BASE_HEAD below -- not just "not intentionally
+// touched", mechanically verified.
+//
+// Run: node tests/plannerW4FinalCutover.static.test.js
+
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+let pass = 0, fail = 0;
+const assert = (n, c, d = '') => {
+  if (c) { pass++; console.log('  PASS  ' + n); }
+  else { fail++; console.log('  FAIL  ' + n + (d ? '  -> ' + d : '')); }
+};
+const section = (t) => console.log('\n── ' + t + ' ──');
+
+const ROOT = path.join(__dirname, '..');
+const BASE_HEAD = 'bf687d6bdd2ac791fedd153609680107a7fba8b7';
+
+function baseContent(relPath) {
+  try {
+    return execSync(`git show ${BASE_HEAD}:${relPath}`, { cwd: ROOT, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+  } catch (e) {
+    return null;
+  }
+}
+function currentContent(relPath) {
+  const p = path.join(ROOT, relPath);
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+}
+function byteIdentical(relPath) {
+  const base = baseContent(relPath);
+  const cur = currentContent(relPath);
+  return base !== null && cur !== null && base === cur;
+}
+
+section('FINAL-W4-N12 (HARD GATE): planner.js -- Stage M AND Stage 1 -- whole-file byte-identical to BASE_HEAD');
+assert('src/core/delivery/planner.js is byte-identical to BASE_HEAD (not touched at all -- stronger than a Stage-M-only proof)',
+  byteIdentical('src/core/delivery/planner.js'));
+
+section('previewStrategicOpportunities.js -- byte-identical to BASE_HEAD (architectural preference achieved)');
+assert('src/agents/previewStrategicOpportunities.js is byte-identical to BASE_HEAD',
+  byteIdentical('src/agents/previewStrategicOpportunities.js'));
+
+section('FINAL-W4-N17: no writer touched');
+for (const f of [
+  'src/agents/manualGiros.js',
+  'src/agents/manualGiroReads.js',
+  'src/agents/riderReads.js',
+  'src/agents/riderTrip.js',
+  // language-guard: allow-legacy agentOrdini.js is the existing file name being checked, not new vocabulary
+  'src/agents/agentOrdini.js',
+  'src/utils/driverTelemetry.js',
+]) {
+  assert(`${f} is byte-identical to BASE_HEAD`, byteIdentical(f));
+}
+
+section('FINAL-W4-N17b: index.js untouched (this packet never needed it)');
+assert('index.js is byte-identical to BASE_HEAD', byteIdentical('index.js'));
+
+section('FINAL-W4-N19: migrations/** completely unchanged');
+let migrationsChanged = [];
+try {
+  migrationsChanged = execSync(`git diff --name-only ${BASE_HEAD} -- migrations/`, { cwd: ROOT, encoding: 'utf8' })
+    .split('\n').map((l) => l.trim()).filter(Boolean);
+} catch (e) { migrationsChanged = ['<git diff failed>']; }
+assert('migrations/** has zero changes vs BASE_HEAD', migrationsChanged.length === 0, migrationsChanged.join(', '));
+
+section('FINAL-W4-N18: zero frontend-path changes');
+let feChanged = [];
+try {
+  feChanged = execSync(`git diff --name-only ${BASE_HEAD}`, { cwd: ROOT, encoding: 'utf8' })
+    .split('\n').map((l) => l.trim()).filter((l) => l && /frontend|ladieci-app33/i.test(l));
+} catch (e) { feChanged = ['<git diff failed>']; }
+assert('zero frontend-path changes in this packet\'s diff', feChanged.length === 0, feChanged.join(', '));
+
+section('DIFF GATE: product changes limited to plannerSnapshot.js');
+let changedFiles = [];
+try {
+  changedFiles = execSync(`git diff --name-only ${BASE_HEAD}`, { cwd: ROOT, encoding: 'utf8' })
+    .split('\n').map((l) => l.trim()).filter(Boolean);
+} catch (e) { changedFiles = ['<git diff failed>']; }
+const allowedProductFiles = new Set(['src/core/delivery/plannerSnapshot.js']);
+const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));
+assert('every non-test changed file is plannerSnapshot.js (the architecturally-preferred minimal diff)',
+  nonTestNonAllowed.length === 0, nonTestNonAllowed.join(', '));
+assert('plannerSnapshot.js is actually in the changed-files list (the packet did something)',
+  changedFiles.includes('src/core/delivery/plannerSnapshot.js'), changedFiles.join(', '));
+
+section('plannerSnapshot.js ITSELF -- one Projection call site, canonical sources, no wall-clock computation');
+const readsSrc = currentContent('src/core/delivery/plannerSnapshot.js');
+assert('requires giroProjectionReader and giroProjectionPort', /require\([^)]*giroProjectionReader/.test(readsSrc) && /require\([^)]*giroProjectionPort/.test(readsSrc));
+assert('requires getCurrentOperationalBusinessDate (DB-authoritative, not a calendar-day computation)', /getCurrentOperationalBusinessDate/.test(readsSrc));
+// language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
+assert('does not require manualGiros.js or agentOrdini.js (no dependency on the writer-adjacent modules)',
+  // language-guard: allow-legacy agentOrdini.js is the existing file name being checked, not new vocabulary
+  !/require\([^)]*\/manualGiros["')]/.test(readsSrc) && !/require\([^)]*agentOrdini["')]/.test(readsSrc));
+assert('no wall-clock/calendar-day computation anywhere in this module',
+  !/new Date\(\)\.toISOString|\.getHours\(\)|\.getDate\(\)|madridDateStr|plannerBusinessDate/.test(readsSrc.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n')));
+assert('exactly one readGiroProjection() call site (current-day path only; historical never calls it)',
+  (readsSrc.match(/await readGiroProjection\(\)/g) || []).length === 1);
+assert('order-level alias fully replaces the raw column on the canonical path (no same-expression ?? / || merge between the map lookup and row.manual_giro_id)',
+  !/effectiveGiroIdMap\.get\([^)]*\)\s*(\?\?|\|\|)\s*row\.manual_giro_id/.test(readsSrc.replace(/\n/g, ' ')));
+
+console.log('\n═══ RESULT: ' + pass + ' passed, ' + fail + ' failed ═══');
+process.exit(fail === 0 ? 0 : 1);
