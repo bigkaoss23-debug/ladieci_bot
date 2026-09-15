@@ -93,8 +93,11 @@ const giroAuthoritySqlFiles = migFiles.filter((f) => f.endsWith('.sql') && read(
 // read-only pending-intent helper + the close_service_session_v3 sweep. W6.1 Lock-Order
 // Unification (migration 133) is the next: inserts the L0 dispatch-lock acquisition into
 // create_or_move_v1/attach_or_move_v1/detach_v1/dissolve_v1/consume_intent_v1, matching
-// what start_rider_trip/rider_collect_and_complete_stop already take first.
-assert('exactly the migration-130, migration-131, migration-132 and migration-133 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
+// what start_rider_trip/rider_collect_and_complete_stop already take first. W6.2 Trip
+// Authority Foundation (migration 134) is the next: adds the dormant private trip_authority
+// schema (trips/trip_members) + dormant public.start_rider_trip_v2/trip_projection_v1, and
+// re-points giro_authority.trip_facts_v1 to prefer canonical trip data when present.
+assert('exactly the migration-130, migration-131, migration-132, migration-133 and migration-134 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
   JSON.stringify(giroAuthoritySqlFiles) === JSON.stringify([
     '2026-09-14_giro_authority_v1_migration_130.ROLLBACK.sql',
     '2026-09-14_giro_authority_v1_migration_130.sql',
@@ -102,6 +105,8 @@ assert('exactly the migration-130, migration-131, migration-132 and migration-13
     '2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
     '2026-09-15_planner_w6_lock_order_unification_v1_migration_133.ROLLBACK.sql',
     '2026-09-15_planner_w6_lock_order_unification_v1_migration_133.sql',
+    '2026-09-15_planner_w6_trip_authority_v1_migration_134.ROLLBACK.sql',
+    '2026-09-15_planner_w6_trip_authority_v1_migration_134.sql',
     '2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
     '2026-09-15_w5_intent_activation_v1_migration_132.sql',
   ]), giroAuthoritySqlFiles.join(', '));

@@ -105,6 +105,21 @@ const W5IA_MIGRATION_FILES = new Set([
   'migrations/2026-09-15_w5_intent_activation_v1_migration_132.sql',
   'migrations/2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
 ]);
+// W6.1 Lock-Order Unification (133) / W6.2 Trip Authority Foundation (134) — same
+// later-packet pattern, DB-only (no dedicated JS guard file for either), detected by
+// presence of each one's own migration file.
+const w61Applied = fs.existsSync(path.join(ROOT, 'migrations', '2026-09-15_planner_w6_lock_order_unification_v1_migration_133.sql'));
+const W6_1_MIGRATION_FILES = new Set([
+  'migrations/MIGRATION_MANIFEST.md',
+  'migrations/2026-09-15_planner_w6_lock_order_unification_v1_migration_133.sql',
+  'migrations/2026-09-15_planner_w6_lock_order_unification_v1_migration_133.ROLLBACK.sql',
+]);
+const w62Applied = fs.existsSync(path.join(ROOT, 'migrations', '2026-09-15_planner_w6_trip_authority_v1_migration_134.sql'));
+const W6_2_MIGRATION_FILES = new Set([
+  'migrations/MIGRATION_MANIFEST.md',
+  'migrations/2026-09-15_planner_w6_trip_authority_v1_migration_134.sql',
+  'migrations/2026-09-15_planner_w6_trip_authority_v1_migration_134.ROLLBACK.sql',
+]);
 let migrationsChanged = [];
 try {
   const diffOut = execSync(`git diff --name-only ${BASE_HEAD} -- migrations/`, { cwd: ROOT, encoding: 'utf8' });
@@ -113,7 +128,8 @@ try {
   migrationsChanged = ['<git diff failed: ' + (e && e.message) + '>'];
 }
 const unexpectedMigrationsChanged = migrationsChanged.filter((f) =>
-  !(w5Applied && W5_MIGRATION_FILES.has(f)) && !(w5iaApplied && W5IA_MIGRATION_FILES.has(f)));
+  !(w5Applied && W5_MIGRATION_FILES.has(f)) && !(w5iaApplied && W5IA_MIGRATION_FILES.has(f))
+  && !(w61Applied && W6_1_MIGRATION_FILES.has(f)) && !(w62Applied && W6_2_MIGRATION_FILES.has(f)));
 assert('migrations/** has zero UNEXPECTED changes vs BASE_HEAD (W5 Packet 01\'s own migration excepted)', unexpectedMigrationsChanged.length === 0, unexpectedMigrationsChanged.join(', '));
 
 section('FRONTEND — no frontend/ or ladieci-app33 path in this packet\'s diff');
@@ -187,6 +203,26 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
     // W5 Packet 01 manualGiros.js writer RPCs missed by that packet's own diff, plus the
     // 2 W5 Intent Activation RPCs) so the gated sbRpc transport actually allows them.
     'src/utils/supabaseResourcePolicy.js',
+  ] : []),
+  // W6.1 Lock-Order Unification (133): DB-only, no product JS.
+  ...(w61Applied ? [
+    'migrations/MIGRATION_MANIFEST.md',
+    'migrations/2026-09-15_planner_w6_lock_order_unification_v1_migration_133.sql',
+    'migrations/2026-09-15_planner_w6_lock_order_unification_v1_migration_133.ROLLBACK.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w6_lock_order_unification_v1.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w6_lock_order_unification_v1.ROLLBACK.sql',
+    'ci/giro-authority-certification/harness/runW6LockOrder.js',
+    'ci/giro-authority-certification/harness/groups/w6LockOrder.js',
+  ] : []),
+  // W6.2 Trip Authority Foundation (134): DB-only dormant foundation, no product JS.
+  ...(w62Applied ? [
+    'migrations/MIGRATION_MANIFEST.md',
+    'migrations/2026-09-15_planner_w6_trip_authority_v1_migration_134.sql',
+    'migrations/2026-09-15_planner_w6_trip_authority_v1_migration_134.ROLLBACK.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w6_trip_authority_v1.sql',
+    'ci/giro-authority-certification/candidate/giro_authority_w6_trip_authority_v1.ROLLBACK.sql',
+    'ci/giro-authority-certification/harness/runW6TripAuthority.js',
+    'ci/giro-authority-certification/harness/groups/w6TripAuthority.js',
   ] : []),
 ]);
 const allowedProductFiles = new Set([PACKET_02A_OWN_PRODUCT_FILE, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);

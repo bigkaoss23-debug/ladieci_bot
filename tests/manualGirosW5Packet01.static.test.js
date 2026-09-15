@@ -172,6 +172,18 @@ const ALLOWED_PRODUCT_PREFIXES = [
   // ci/giro-authority-certification/harness/runW5IntentActivation.js (337/337).
   'migrations/2026-09-15_w5_intent_activation_v1_migration_132.sql',
   'migrations/2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
+  // W6.1 Lock-Order Unification (133) — same later-packet pattern, DB-only (no
+  // product JS): inserts the L0 dispatch-lock acquisition into the five live Giro
+  // Authority commands. Certified by ci/giro-authority-certification/harness/
+  // runW6LockOrder.js (already covered by the blanket prefix below; listed here only
+  // for the migration files themselves).
+  'migrations/2026-09-15_planner_w6_lock_order_unification_v1_migration_133.sql',
+  'migrations/2026-09-15_planner_w6_lock_order_unification_v1_migration_133.ROLLBACK.sql',
+  // W6.2 Trip Authority Foundation (134) — same pattern: dormant trip_authority
+  // schema + start_rider_trip_v2/trip_projection_v1, no product JS. Certified by
+  // ci/giro-authority-certification/harness/runW6TripAuthority.js.
+  'migrations/2026-09-15_planner_w6_trip_authority_v1_migration_134.sql',
+  'migrations/2026-09-15_planner_w6_trip_authority_v1_migration_134.ROLLBACK.sql',
   'migrations/MIGRATION_MANIFEST.md',
   'src/agents/manualGiros.js',
   'ci/giro-authority-certification/',
