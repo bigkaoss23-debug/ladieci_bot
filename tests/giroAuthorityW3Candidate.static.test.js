@@ -90,13 +90,18 @@ const giroAuthoritySqlFiles = migFiles.filter((f) => f.endsWith('.sql') && read(
 // schema since W3 -- it adds two new composite commands and touches detach_v1/dissolve_v1,
 // so its forward+rollback pair legitimately joins 130's here. W5 Intent Activation
 // (migration 132) is the next: capture trigger + consume signal-bump fix + the new
-// read-only pending-intent helper + the close_service_session_v3 sweep.
-assert('exactly the migration-130, migration-131 and migration-132 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
+// read-only pending-intent helper + the close_service_session_v3 sweep. W6.1 Lock-Order
+// Unification (migration 133) is the next: inserts the L0 dispatch-lock acquisition into
+// create_or_move_v1/attach_or_move_v1/detach_v1/dissolve_v1/consume_intent_v1, matching
+// what start_rider_trip/rider_collect_and_complete_stop already take first.
+assert('exactly the migration-130, migration-131, migration-132 and migration-133 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
   JSON.stringify(giroAuthoritySqlFiles) === JSON.stringify([
     '2026-09-14_giro_authority_v1_migration_130.ROLLBACK.sql',
     '2026-09-14_giro_authority_v1_migration_130.sql',
     '2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
     '2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
+    '2026-09-15_planner_w6_lock_order_unification_v1_migration_133.ROLLBACK.sql',
+    '2026-09-15_planner_w6_lock_order_unification_v1_migration_133.sql',
     '2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
     '2026-09-15_w5_intent_activation_v1_migration_132.sql',
   ]), giroAuthoritySqlFiles.join(', '));
