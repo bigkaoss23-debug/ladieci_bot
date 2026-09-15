@@ -11,9 +11,17 @@ async function run(env) {
   section('N15 CAPTURE — dormant W5 trigger in the ephemeral DB only; best-effort, never blocks the order');
   const c = await open(env, 'capture');
   try {
-    let err = null;
-    try { await rt.applyAsPostgres(c.su, 'candidate/giro_intent_capture_trigger_v1.W5_DORMANT.sql'); } catch (e) { err = e; }
-    assert('W5 artifact installs (guards + post-condition: last BEFORE INSERT)', !err, err && err.message);
+    // Some templates (w5ia_tpl, once migration 132 is applied) already carry the
+    // trigger -- installed by that real migration, not by this standalone candidate.
+    // Only assert the "installs cleanly" proof when THIS group is the one installing it.
+    const already = (await c.su.query(
+      `SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.ordenes'::regclass AND tgname = 'ordenes_zz_giro_intent_capture_v1'`
+    )).rows.length === 1;
+    if (!already) {
+      let err = null;
+      try { await rt.applyAsPostgres(c.su, 'candidate/giro_intent_capture_trigger_v1.W5_DORMANT.sql'); } catch (e) { err = e; }
+      assert('W5 artifact installs (guards + post-condition: last BEFORE INSERT)', !err, err && err.message);
+    }
     const trg = (await c.su.query(`
       SELECT t.tgname, pg_get_triggerdef(t.oid) AS def FROM pg_trigger t
        WHERE t.tgrelid = 'public.ordenes'::regclass AND NOT t.tgisinternal

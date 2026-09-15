@@ -2,15 +2,14 @@
 // N14 — no monetary (or order) effect: the full command set + consume + projection write
 // nothing to ordenes, order_entities, config or the economic tables, and create no new
 // row version of any order (xmin unchanged; FOR SHARE only touches the lock bits).
-const rt = require('../pgRuntime');
 const { section, assert, call, intentInput } = require('../lib');
-const { open } = require('./_ctx');
+const { open, ensureCaptureTrigger } = require('./_ctx');
 
 async function run(env) {
   section('N14 NO MONEY — zero writes to ordenes / economic / config across every Authority call');
   const c = await open(env, 'nomoney');
   try {
-    await rt.applyAsPostgres(c.su, 'candidate/giro_intent_capture_trigger_v1.W5_DORMANT.sql');
+    await ensureCaptureTrigger(c.su);
     const s = await c.fx.day('2026-09-14');
     const scope = [s];
     const mk = (o) => c.fx.order(c.svc, { session: s, ...o });
@@ -68,10 +67,19 @@ async function run(env) {
     assert('config untouched except GIRO_FACTS_SIGNAL (W5 Packet 01\'s own authorized bump; DRIVER_STATO and every other key byte-identical)',
       before.config === after.config, { before: before.config, after: after.config });
     if (w5Applied) {
+      // W5 Intent Activation (132) legitimately extends this further: consume_intent_v1
+      // now also bumps on a real CONSUMED mutation. This window's two consume calls are
+      // X (real GIRO attach onto G0) and Y's FIRST call (real ANCHOR create onto D) --
+      // Y's second call is an intent-level replay (already resolved), so it must NOT
+      // bump again. Detected via the same new-command-presence pattern as w5Applied above.
+      const w5iaApplied = (await c.su.query(
+        "SELECT to_regprocedure('public.giro_authority_list_pending_intents_v1(uuid[],integer)') IS NOT NULL AS v"
+      )).rows[0].v;
+      const expectedBumps = 2 + (w5iaApplied ? 2 : 0);
       // bigint columns come back from node-pg as strings; Number() them before
       // arithmetic (string + number would silently concatenate, not add).
-      assert('GIRO_FACTS_SIGNAL bumped by exactly the number of real (non-idempotent) mutations in this window (detach + dissolve = 2)',
-        Number(after.signal_version) === Number(before.signal_version) + 2,
+      assert(`GIRO_FACTS_SIGNAL bumped by exactly the number of real (non-idempotent) mutations in this window (detach + dissolve${w5iaApplied ? ' + 2 real consumes, not the replay' : ''} = ${expectedBumps})`,
+        Number(after.signal_version) === Number(before.signal_version) + expectedBumps,
         { before: before.signal_version, after: after.signal_version });
     }
   } finally {

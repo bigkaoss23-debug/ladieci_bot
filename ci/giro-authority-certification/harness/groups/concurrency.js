@@ -2,9 +2,8 @@
 // N06 and the TB-1 section C races, with REAL concurrent transactions. Interleavings
 // are forced by holding a transaction open and proving (pg_stat_activity) that the
 // other side is waiting on a lock, so each ordering is deterministic.
-const rt = require('../pgRuntime');
 const { section, assert, call } = require('../lib');
-const { open } = require('./_ctx');
+const { open, ensureCaptureTrigger } = require('./_ctx');
 
 const W4_CONTRACT_FIXTURE = `
 CREATE SCHEMA fixture_w4;
@@ -53,7 +52,7 @@ async function run(env) {
   section('CONCURRENCY — N06 attach vs departure (both orders), TB-1 section C races, no deadlock');
   const c = await open(env, 'concurrency');
   try {
-    await rt.applyAsPostgres(c.su, 'candidate/giro_intent_capture_trigger_v1.W5_DORMANT.sql');
+    await ensureCaptureTrigger(c.su);
     await c.su.query(W4_CONTRACT_FIXTURE);
     await c.su.query('GRANT USAGE ON SCHEMA fixture_w4 TO service_role; GRANT EXECUTE ON FUNCTION fixture_w4.start_trip_contract_v1(text, uuid[]) TO service_role');
     const s = await c.fx.day('2026-09-14');

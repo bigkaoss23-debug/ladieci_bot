@@ -61,9 +61,11 @@ async function run(env) {
     assert('every Authority function pins search_path=pg_catalog, pg_temp',
       fns.every((f) => JSON.stringify(f.proconfig) === JSON.stringify(['search_path=pg_catalog, pg_temp'])));
     // W5 Packet 01 legitimately adds 2 new public entry points (create_or_move_v1,
-    // attach_or_move_v1) on top of W3's original 8 -- detected via the new commands'
-    // own presence, same forward-compatible pattern used throughout this codebase.
-    const w5PublicCount = pub.some((f) => f.proname === 'giro_authority_create_or_move_v1') ? 10 : 8;
+    // attach_or_move_v1) on top of W3's original 8, and W5 Intent Activation (132)
+    // legitimately adds 1 more (giro_authority_list_pending_intents_v1) on top of
+    // that -- each detected via its own presence, same forward-compatible pattern.
+    let w5PublicCount = pub.some((f) => f.proname === 'giro_authority_create_or_move_v1') ? 10 : 8;
+    if (pub.some((f) => f.proname === 'giro_authority_list_pending_intents_v1')) w5PublicCount += 1;
     assert(`${w5PublicCount} public entry points, all SECURITY DEFINER`, pub.length === w5PublicCount && pub.every((f) => f.prosecdef), pub.map((f) => f.proname));
     assert('capture function is SECURITY DEFINER (fires for service_role inserts)',
       fns.some((f) => f.proname === 'capture_giro_intent_v1' && f.prosecdef));

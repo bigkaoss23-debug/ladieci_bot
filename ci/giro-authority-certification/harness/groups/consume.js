@@ -2,9 +2,8 @@
 // Consume: N01-lite, N03 (idempotent under parallel calls), N04 (stale target), N05
 // (departed target), N08 (service closed -> EXPIRED), N12 (unverifiable -> fail closed),
 // every consume code, and the one-shot guard.
-const rt = require('../pgRuntime');
 const { section, assert, sqlstate, call, intentInput, sortUids } = require('../lib');
-const { open } = require('./_ctx');
+const { open, ensureCaptureTrigger } = require('./_ctx');
 
 const logical = (r) => JSON.stringify({ s: r.status, c: r.resolution_code, g: r.resulting_giro_id, t: r.resolved_at });
 
@@ -12,7 +11,7 @@ async function run(env) {
   section('CONSUME — N01-lite, N03, N04, N05, N08, N12, codes, one-shot guard');
   const c = await open(env, 'consume');
   try {
-    await rt.applyAsPostgres(c.su, 'candidate/giro_intent_capture_trigger_v1.W5_DORMANT.sql');
+    await ensureCaptureTrigger(c.su);
     const s = await c.fx.day('2026-09-14');
     const scope = [s];
     const mk = (o) => c.fx.order(c.svc, { session: s, ...o });
