@@ -81,12 +81,33 @@ section('FORBIDDEN FILES — byte-identical to BASE_HEAD');
 // and tests/s4PendingGiroIntentBuilder.test.js instead of by whole-file identity here.
 // src/agents/previewStrategicOpportunities.js ALSO excepted (S4's own second commit:
 // isGiro transport-only addition, re-proven by tests/s4PlannerIsGiroTransport.test.js).
+// Planner W6.3 (migration 135) — the packet that ACTIVATES the canonical departure, so
+// src/agents/riderTrip.js is ITS own product file, authorized and certified by
+// tests/plannerW6RiderLifecycle.static.test.js (one canonical call site, no identity or
+// scope read from a client body, exactly one new H1B registry entry). Same later-packet
+// deferral pattern every guard above already uses. Absent that guard, nothing has earned
+// the right to change the file and the original whole-file check still applies.
+const W6_3_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW6RiderLifecycle.static.test.js');
+const w63Applied = fs.existsSync(W6_3_STATIC_GUARD);
+const W6_3_PRODUCT_FILES = [
+  'migrations/MIGRATION_MANIFEST.md',
+  'migrations/2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135.sql',
+  'migrations/2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135.ROLLBACK.sql',
+  'ci/giro-authority-certification/candidate/giro_authority_w6_rider_lifecycle_v1.sql',
+  'ci/giro-authority-certification/candidate/giro_authority_w6_rider_lifecycle_v1.ROLLBACK.sql',
+  'ci/giro-authority-certification/harness/runW6RiderLifecycle.js',
+  'ci/giro-authority-certification/harness/groups/w6RiderLifecycle.js',
+  'ci/giro-authority-certification/harness/groups/w6TripAuthority.js',
+  'src/agents/riderTrip.js',
+  'src/utils/supabaseResourcePolicy.js',
+  'index.js',
+];
 for (const f of [
   'src/agents/riderReads.js',
   'src/agents/riderTrip.js',
   'src/agents/manualGiroReads.js',
   'src/core/delivery/planner.js',
-]) {
+].filter((f) => !(w63Applied && W6_3_PRODUCT_FILES.includes(f)))) {
   assert(`${f} is byte-identical to BASE_HEAD`, byteIdentical(f));
 }
 
@@ -209,6 +230,16 @@ const ALLOWED_PRODUCT_PREFIXES = [
   // transport actually allows them, certified by tests/supabaseResourcePolicy.test.js
   // and the strengthened W3_REGISTRY_INVARIANT in tests/giroAuthorityW3Candidate.static.test.js.
   'src/utils/supabaseResourcePolicy.js',
+  // W6.3/W6.4 Canonical Rider Lifecycle + Giro Projection Cutover (135): the first W6
+  // packet with product JS. Its migration pair and riderTrip.js activation, certified by
+  // tests/plannerW6RiderLifecycle.static.test.js (the ci/ and index.js/registry paths are
+  // already covered by the prefixes above).
+  ...(w63Applied ? [
+    'migrations/2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135.sql',
+    'migrations/2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135.ROLLBACK.sql',
+    'src/agents/riderTrip.js',
+    'scripts/check-domain-language.js',
+  ] : []),
 ];
 const nonTest = changedFiles.filter((f) => !f.startsWith('tests/'));
 const unexpected = nonTest.filter((f) => !ALLOWED_PRODUCT_PREFIXES.some((p) => f === p || f.startsWith(p)));

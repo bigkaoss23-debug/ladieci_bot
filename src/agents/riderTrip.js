@@ -12,7 +12,8 @@
 
 "use strict";
 
-const { sbRpc } = require("../utils/supabase");
+const { sbRpc, sbSelect } = require("../utils/supabase");
+const { getOperationalSessionIds } = require("../serviceSessions/currentOperationalSession");
 
 // Structured RPC code -> backend HTTP status. Deterministic, no leakage.
 const CODE_TO_HTTP = Object.freeze({
@@ -46,6 +47,27 @@ const CODE_TO_HTTP = Object.freeze({
   AUTH_ACTOR_NOT_FOUND: 401,
   AUTH_INITIATOR_INACTIVE: 401,
   AUTH_FORBIDDEN_ROLE: 403,
+  // Planner W6.3 — the canonical departure (start_rider_trip_v2, migration 135) speaks
+  // the Giro/Trip Authority refusal vocabulary rather than the legacy v1 one. Each code
+  // below is mapped explicitly; without these an ordinary operational refusal would fall
+  // through mapResult's default and surface as a generic 500.
+  INVALID_INPUT: 400,
+  // Not a delivery order / a table order — the legacy RPC answered BAD_REQUEST (400)
+  // for exactly this case, so the status the frontend already handles is preserved.
+  ORDER_NOT_ELIGIBLE: 400,
+  ORDER_NOT_FOUND: 404,
+  // The order exists but carries no canonical order_uid, so it has no Trip Authority
+  // identity. Fail closed rather than departing something the canonical lifecycle
+  // could not then track.
+  ORDER_NOT_CANONICAL: 409,
+  SCOPE_MISMATCH: 409,
+  // The operational scope could not be resolved, or the DRIVER_STATO compatibility
+  // signal could not be read. Both are explicit degraded states, never a silent start.
+  SCOPE_UNAVAILABLE: 409,
+  UNVERIFIABLE: 409,
+  // The verified rider identity did not reach this boundary — refuse rather than
+  // depart unattributed (same discipline as marcarEntregado's payment context).
+  TRIP_CONTEXT_UNAVAILABLE: 401,
 });
 
 function mapResult(rpcResult) {
@@ -63,8 +85,68 @@ function mapResult(rpcResult) {
   return { status, payload: { error: code } };
 }
 
-async function startTrip(anchorOrderId) {
-  const r = await sbRpc("start_rider_trip", { p_anchor_order_id: String(anchorOrderId) });
+// Planner W6.3 — THE canonical departure.
+//
+// The frontend contract is unchanged: it still posts the display order id it always
+// has. Everything the canonical RPC additionally needs is resolved HERE, server-side,
+// from sources the client cannot influence:
+//   * order_uid   — looked up from public.ordenes by that display id;
+//   * actor + session_version — from `ctx`, which index.js builds from the VERIFIED
+//     req.authCtx (the Bearer token), spread last so a `__authCtx` in the request body
+//     is overwritten, never trusted — exactly the marcarEntregado discipline;
+//   * operational session ids — from the existing lifecycle authority
+//     (getOperationalSessionIds), never from the body.
+//
+// Every resolution failure fails CLOSED with a structured code: an unresolvable
+// identity, an unknown order, an order with no canonical identity, or an unresolvable
+// operational scope all refuse instead of departing something the canonical lifecycle
+// could not track. `deps` exists only so the offline tests can drive this without a
+// live database — the defaults are the live wiring, and the RPC itself is called
+// through the literal sbRpc(...) form the H1B registry scanner reads.
+async function startTrip(anchorOrderId, ctx = {}, deps = {}) {
+  const select = typeof deps.select === "function" ? deps.select : sbSelect;
+  const resolveScope = typeof deps.resolveScope === "function" ? deps.resolveScope : getOperationalSessionIds;
+
+  const actor = typeof ctx.byActor === "string" ? ctx.byActor.trim() : "";
+  const sessionVersion = ctx.sessionVersion;
+  if (!actor || !Number.isInteger(sessionVersion) || sessionVersion < 1) {
+    return { status: CODE_TO_HTTP.TRIP_CONTEXT_UNAVAILABLE, payload: { error: "TRIP_CONTEXT_UNAVAILABLE" } };
+  }
+
+  const displayId = anchorOrderId == null ? "" : String(anchorOrderId).trim();
+  if (!displayId) {
+    return { status: CODE_TO_HTTP.BAD_REQUEST, payload: { error: "BAD_REQUEST" } };
+  }
+
+  let row;
+  try {
+    const rows = await select("ordenes", `id=eq.${encodeURIComponent(displayId)}`);
+    row = Array.isArray(rows) ? rows[0] : null;
+  } catch (_) {
+    return { status: 500, payload: { error: "internal_error" } };
+  }
+  if (!row) return { status: CODE_TO_HTTP.ORDER_NOT_FOUND, payload: { error: "ORDER_NOT_FOUND" } };
+  const orderUid = typeof row.order_uid === "string" && row.order_uid ? row.order_uid : null;
+  if (!orderUid) {
+    return { status: CODE_TO_HTTP.ORDER_NOT_CANONICAL, payload: { error: "ORDER_NOT_CANONICAL" } };
+  }
+
+  let sessionIds;
+  try {
+    sessionIds = await resolveScope({ select });
+  } catch (_) {
+    sessionIds = null;
+  }
+  if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
+    return { status: CODE_TO_HTTP.SCOPE_UNAVAILABLE, payload: { error: "SCOPE_UNAVAILABLE" } };
+  }
+
+  const r = await sbRpc("start_rider_trip_v2", {
+    p_anchor_order_uid: orderUid,
+    p_actor: actor,
+    p_session_version: sessionVersion,
+    p_operational_session_ids: sessionIds,
+  });
   return mapResult(r);
 }
 

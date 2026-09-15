@@ -46,10 +46,73 @@ function check(label, cond) { if (cond) { pass++; console.log("  ✓ " + label);
   check("transport failure -> 500", riderTrip.mapResult({ ok: false, httpStatus: 500, body: null }).status === 500);
   check("500 payload generic", riderTrip.mapResult({ ok: false, httpStatus: 500, body: null }).payload.error === "internal_error");
 
-  // startTrip forwards only anchor
-  STUB = () => ({ httpStatus: 200, ok: true, body: { ok: true, code: "OK", snapshot: {} } });
-  await riderTrip.startTrip("ORD1");
-  check("startTrip -> start_rider_trip(p_anchor_order_id)", lastRpc.fn === "start_rider_trip" && lastRpc.args.p_anchor_order_id === "ORD1" && Object.keys(lastRpc.args).length === 1);
+  // Planner W6.3 — startTrip now targets the CANONICAL departure. The frontend still
+  // sends only the display order id; order_uid, the verified actor/session_version and
+  // the operational scope are all resolved server-side and are the ONLY things that
+  // cross this boundary. `cobrado`, amounts, giro ids and raw manual_giro_id never do.
+  STUB = () => ({ httpStatus: 200, ok: true, body: { ok: true, code: "OK", trip_id: "t-1" } });
+  const RIDER_CTX = { byActor: "rider-1", sessionVersion: 7 };
+  const okDeps = {
+    select: async (table, q) => {
+      lastSelect = { table, q };
+      return table === "ordenes" ? [{ id: "ORD1", order_uid: "uid-ORD1" }] : [];
+    },
+    resolveScope: async () => ["sess-a", "sess-b"],
+  };
+  let lastSelect = null;
+  lastRpc = null;
+  const started = await riderTrip.startTrip("ORD1", RIDER_CTX, okDeps);
+  check("startTrip -> start_rider_trip_v2 (canonical departure, not the legacy v1 RPC)",
+    lastRpc.fn === "start_rider_trip_v2");
+  check("startTrip forwards exactly {order_uid, actor, session_version, operational_session_ids}",
+    lastRpc.args.p_anchor_order_uid === "uid-ORD1" &&
+    lastRpc.args.p_actor === "rider-1" &&
+    lastRpc.args.p_session_version === 7 &&
+    Array.isArray(lastRpc.args.p_operational_session_ids) &&
+    lastRpc.args.p_operational_session_ids.length === 2 &&
+    Object.keys(lastRpc.args).length === 4);
+  check("startTrip resolves order_uid from the display id server-side",
+    lastSelect && lastSelect.table === "ordenes" && lastSelect.q.includes("id=eq.ORD1"));
+  check("startTrip maps a successful canonical departure to 200", started.status === 200);
+
+  // Fail-closed resolution contract: nothing departs on an unverifiable input.
+  lastRpc = null;
+  const noCtx = await riderTrip.startTrip("ORD1", {}, okDeps);
+  check("startTrip without a verified rider identity -> 401 TRIP_CONTEXT_UNAVAILABLE",
+    noCtx.status === 401 && noCtx.payload.error === "TRIP_CONTEXT_UNAVAILABLE" && lastRpc === null);
+  const staleSv = await riderTrip.startTrip("ORD1", { byActor: "rider-1", sessionVersion: 0 }, okDeps);
+  check("startTrip with an invalid session_version -> 401, no RPC issued",
+    staleSv.status === 401 && lastRpc === null);
+  const blankId = await riderTrip.startTrip("   ", RIDER_CTX, okDeps);
+  check("startTrip with a blank order id -> 400 BAD_REQUEST, no RPC issued",
+    blankId.status === 400 && blankId.payload.error === "BAD_REQUEST" && lastRpc === null);
+  const missing = await riderTrip.startTrip("GHOST", RIDER_CTX, { ...okDeps, select: async () => [] });
+  check("startTrip on an unknown order -> 404 ORDER_NOT_FOUND, no RPC issued",
+    missing.status === 404 && missing.payload.error === "ORDER_NOT_FOUND" && lastRpc === null);
+  const noUid = await riderTrip.startTrip("ORD1", RIDER_CTX,
+    { ...okDeps, select: async () => [{ id: "ORD1", order_uid: null }] });
+  check("startTrip on an order with no canonical order_uid -> 409 ORDER_NOT_CANONICAL, no RPC issued",
+    noUid.status === 409 && noUid.payload.error === "ORDER_NOT_CANONICAL" && lastRpc === null);
+  const noScope = await riderTrip.startTrip("ORD1", RIDER_CTX, { ...okDeps, resolveScope: async () => [] });
+  check("startTrip with an unresolvable operational scope -> 409 SCOPE_UNAVAILABLE, no RPC issued",
+    noScope.status === 409 && noScope.payload.error === "SCOPE_UNAVAILABLE" && lastRpc === null);
+  const throwScope = await riderTrip.startTrip("ORD1", RIDER_CTX,
+    { ...okDeps, resolveScope: async () => { throw new Error("db down"); } });
+  check("startTrip fails closed when the scope resolver throws -> 409 SCOPE_UNAVAILABLE",
+    throwScope.status === 409 && lastRpc === null);
+
+  // The canonical refusal vocabulary must map to real HTTP statuses, never a generic 500.
+  for (const [code, http] of [
+    ["INVALID_INPUT", 400], ["ORDER_NOT_ELIGIBLE", 400], ["ORDER_NOT_FOUND", 404],
+    ["ORDER_NOT_CANONICAL", 409], ["SCOPE_MISMATCH", 409], ["SCOPE_UNAVAILABLE", 409],
+    ["UNVERIFIABLE", 409], ["TRIP_CONTEXT_UNAVAILABLE", 401],
+    ["AUTH_FORBIDDEN_ROLE", 403], ["AUTH_SESSION_STALE", 401], ["SERVICE_CLOSING", 409],
+    ["ACTIVE_TRIP_CONFLICT", 409], ["INVALID_STATE", 409],
+  ]) {
+    const r = riderTrip.mapResult({ httpStatus: 200, ok: true, body: { ok: false, code } });
+    check(`canonical departure code ${code} -> ${http} (never a generic 500)`,
+      r.status === http && r.payload.error === code);
+  }
 
   // S2-7D6E2 — completeStop now targets the DEDICATED rider collection contract. The old
   // `p_cobrado` boolean is GONE: it came from the client and the RPC wrote it straight onto

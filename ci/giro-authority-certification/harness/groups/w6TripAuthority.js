@@ -243,8 +243,18 @@ async function run(env) {
 
       // 12: attach_or_move_v1 vs v2 departure -- the Giro command holds L0 first,
       // departure blocks, then proceeds normally afterward.
+      //
+      // W6.3 MAINTENANCE (migration 135): the attached member is now created LISTO.
+      // This case previously attached an EN_COCINA order and relied on the departure
+      // silently narrowing the giro to its ready subset -- the PARTIAL DEPARTURE that
+      // migration 135 forbids outright (CANONICAL_GIRO_DEPARTURE_IS_ATOMIC). The
+      // lock-ordering property under test here is unchanged and still asserted exactly
+      // as before; the fixture is simply made valid under the corrected rule, and the
+      // assertion is strengthened to prove the newly-attached member departed WITH the
+      // giro. The refusal path for a not-ready member is certified in its own right by
+      // the w6RiderLifecycle group (cases 2 and 19).
       {
-        const A = await mk({ estado: 'LISTO' }); const B = await mk({ estado: 'LISTO' }); const F1 = await mk({});
+        const A = await mk({ estado: 'LISTO' }); const B = await mk({ estado: 'LISTO' }); const F1 = await mk({ estado: 'LISTO' });
         const G = await createOrMove([A, B]);
         await t1.query('BEGIN');
         const held = await call(t1, 'giro_authority_attach_or_move_v1', [G.giro_id, F1.order_uid, 'op-1', [s]]);
@@ -254,6 +264,8 @@ async function run(env) {
         const trip = (await pendingV2).rows[0].r;
         assert('12: Giro mutation winning first -> attach_or_move OK', held.code === 'OK', held);
         assert('12: v2 departure then proceeds normally (no deadlock)', trip.ok === true, trip);
+        const m12 = (await c.su.query('SELECT count(*)::int AS n FROM trip_authority.trip_members WHERE trip_id = $1', [trip.trip_id])).rows[0].n;
+        assert('12: the member attached just before departure left WITH the giro (atomic, 3 members)', m12 === 3, { m12 });
         for (const o of [A, B, F1]) await c.fx.setEstado(o.id, 'RETIRADO');
         await c.su.query(`UPDATE trip_authority.trips SET status='CLOSED', closed_at=now() WHERE status='ACTIVE'`);
         await c.svc.query('SELECT public.close_rider_trip(NULL)');

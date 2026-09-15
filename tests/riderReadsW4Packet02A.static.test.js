@@ -56,10 +56,40 @@ section('WRITER INTEGRITY — byte-identical to BASE_HEAD (manualGiros.js: see f
 // just above; re-proven by tests/s4DormantInsertGateGuard.static.test.js).
 const S4_STATIC_GUARD = path.join(ROOT, 'tests', 's4DormantInsertGateGuard.static.test.js');
 const s4Applied = fs.existsSync(S4_STATIC_GUARD);
+// Planner W6.3 (migration 135) is the packet that finally ACTIVATES the canonical
+// departure, so riderTrip.js is its own product file — the same deferral pattern used
+// for the sibling product-file exceptions declared above. Its own guard
+// (tests/plannerW6RiderLifecycle.static.test.js) proves, mechanically, that startTrip is
+// the ONE canonical call site, that it reads no identity/scope from a client body, and
+// that the H1B registry gained exactly one entry. If that guard is absent, no packet has
+// earned the right to change this file and the original whole-file check still applies.
+const W6_3_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW6RiderLifecycle.static.test.js');
+const w63Applied = fs.existsSync(W6_3_STATIC_GUARD);
+const W6_3_PRODUCT_FILES = [
+  'migrations/MIGRATION_MANIFEST.md',
+  'migrations/2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135.sql',
+  'migrations/2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135.ROLLBACK.sql',
+  'ci/giro-authority-certification/candidate/giro_authority_w6_rider_lifecycle_v1.sql',
+  'ci/giro-authority-certification/candidate/giro_authority_w6_rider_lifecycle_v1.ROLLBACK.sql',
+  'ci/giro-authority-certification/harness/runW6RiderLifecycle.js',
+  'ci/giro-authority-certification/harness/groups/w6RiderLifecycle.js',
+  'ci/giro-authority-certification/harness/groups/w6TripAuthority.js',
+  'src/agents/riderTrip.js',
+  'src/utils/supabaseResourcePolicy.js',
+  'index.js',
+  // The rollback restores two function bodies byte-identically, so the domain-language
+  // guard gets a narrow file-level exemption for it (the same resolution, for the same
+  // reason, as the pre-existing H-1 rollback entry). The forward migration is NOT exempt.
+  'scripts/check-domain-language.js',
+];
 // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
-for (const f of s4Applied ? ['src/agents/riderTrip.js'] : ['src/agents/agentOrdini.js', 'src/agents/riderTrip.js', 'index.js']) {
+const BYTE_IDENTICAL_TARGETS = (s4Applied ? ['src/agents/riderTrip.js'] : ['src/agents/agentOrdini.js', 'src/agents/riderTrip.js', 'index.js'])
+  .filter((f) => !(w63Applied && W6_3_PRODUCT_FILES.includes(f)));
+for (const f of BYTE_IDENTICAL_TARGETS) {
   assert(`${f} is byte-identical to BASE_HEAD (${BASE_HEAD.slice(0, 7)})`, byteIdentical(f));
 }
+assert('with the W6.3 guard present, riderTrip.js is authorized by it rather than pinned here',
+  !w63Applied || !BYTE_IDENTICAL_TARGETS.includes('src/agents/riderTrip.js'));
 
 // manualGiros.js: BASE_HEAD (fe0eacd, Packet 02A's own base) predates Packet 02B,
 // whose own, separately-authorized runbook explicitly permits changing this
@@ -129,7 +159,8 @@ try {
 }
 const unexpectedMigrationsChanged = migrationsChanged.filter((f) =>
   !(w5Applied && W5_MIGRATION_FILES.has(f)) && !(w5iaApplied && W5IA_MIGRATION_FILES.has(f))
-  && !(w61Applied && W6_1_MIGRATION_FILES.has(f)) && !(w62Applied && W6_2_MIGRATION_FILES.has(f)));
+  && !(w61Applied && W6_1_MIGRATION_FILES.has(f)) && !(w62Applied && W6_2_MIGRATION_FILES.has(f))
+  && !(w63Applied && W6_3_PRODUCT_FILES.includes(f)));
 assert('migrations/** has zero UNEXPECTED changes vs BASE_HEAD (W5 Packet 01\'s own migration excepted)', unexpectedMigrationsChanged.length === 0, unexpectedMigrationsChanged.join(', '));
 
 section('FRONTEND — no frontend/ or ladieci-app33 path in this packet\'s diff');
@@ -224,6 +255,10 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
     'ci/giro-authority-certification/harness/runW6TripAuthority.js',
     'ci/giro-authority-certification/harness/groups/w6TripAuthority.js',
   ] : []),
+  // W6.3/W6.4 Canonical Rider Lifecycle + Giro Projection Cutover (135): the first W6
+  // packet with product JS — it ACTIVATES the canonical departure, so riderTrip.js,
+  // index.js and the H1B registry are its own certified product files.
+  ...(w63Applied ? W6_3_PRODUCT_FILES : []),
 ]);
 const allowedProductFiles = new Set([PACKET_02A_OWN_PRODUCT_FILE, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));

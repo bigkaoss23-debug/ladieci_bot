@@ -174,6 +174,15 @@ const REGISTRY = Object.freeze([
   // ── operational RPCs — src/utils/supabase.js sbRpc consumers (riderTrip.js,
   // manualGiros.js, serviceSessions/*.js) ──
   entry('rpc/start_rider_trip', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'riderTrip.js'),
+  // Planner W6.3 — the canonical departure, activated by migration 135. The legacy v1
+  // entry above is deliberately KEPT registered alongside it until W7: reverting
+  // riderTrip.startTrip to rpc/start_rider_trip is the documented post-PONR rollback,
+  // and that rollback cannot work if the resource is unregistered. public.trip_projection_v1
+  // and the two public trip_authority_* helpers migration 135 adds stay UNREGISTERED on
+  // purpose — no Node caller exists for any of them, and the gated transport fails closed
+  // on an unregistered resource.
+  entry('rpc/start_rider_trip_v2', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'riderTrip.js startTrip() — canonical Trip Authority departure'),
   entry('rpc/rider_collect_and_complete_stop', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL, 'riderTrip.js'),
   entry('rpc/close_rider_trip', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'riderTrip.js'),
   entry('rpc/delete_order_if_not_active', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'riderTrip.js deleteOrder'),

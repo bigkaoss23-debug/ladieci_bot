@@ -66,12 +66,35 @@ section('FINAL-W4-N17: no writer touched');
 // language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
 // later, separately-authorized packet touching only creaOrdine()'s own hard-gated INSERT
 // payload, re-proven by tests/s4DormantInsertGateGuard.static.test.js).
+// Planner W6.3 (migration 135) — the packet that ACTIVATES the canonical departure, so
+// src/agents/riderTrip.js is ITS own product file, authorized and certified by
+// tests/plannerW6RiderLifecycle.static.test.js. Same later-packet deferral pattern already
+// used for the sibling product-file exceptions here and in every sibling guard.
+const W6_3_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW6RiderLifecycle.static.test.js');
+const w63Applied = fs.existsSync(W6_3_STATIC_GUARD);
+const W6_3_PRODUCT_FILES = [
+  'migrations/MIGRATION_MANIFEST.md',
+  'migrations/2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135.sql',
+  'migrations/2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135.ROLLBACK.sql',
+  'ci/giro-authority-certification/candidate/giro_authority_w6_rider_lifecycle_v1.sql',
+  'ci/giro-authority-certification/candidate/giro_authority_w6_rider_lifecycle_v1.ROLLBACK.sql',
+  'ci/giro-authority-certification/harness/runW6RiderLifecycle.js',
+  'ci/giro-authority-certification/harness/groups/w6RiderLifecycle.js',
+  'ci/giro-authority-certification/harness/groups/w6TripAuthority.js',
+  'src/agents/riderTrip.js',
+  'src/utils/supabaseResourcePolicy.js',
+  'index.js',
+  // The rollback restores two function bodies byte-identically, so the domain-language
+  // guard gets a narrow file-level exemption for it (the same resolution, for the same
+  // reason, as the pre-existing H-1 rollback entry). The forward migration is NOT exempt.
+  'scripts/check-domain-language.js',
+];
 for (const f of [
   'src/agents/manualGiroReads.js',
   'src/agents/riderReads.js',
   'src/agents/riderTrip.js',
   'src/utils/driverTelemetry.js',
-]) {
+].filter((f) => !(w63Applied && W6_3_PRODUCT_FILES.includes(f)))) {
   assert(`${f} is byte-identical to BASE_HEAD`, byteIdentical(f));
 }
 // manualGiros.js: a later, separately-authorized packet (W5 Packet 01 — single-writer
@@ -146,7 +169,8 @@ try {
 } catch (e) { migrationsChanged = ['<git diff failed>']; }
 const unexpectedMigrationsChanged = migrationsChanged.filter((f) =>
   !(w5Applied && W5_MIGRATION_FILES.has(f)) && !(w5iaApplied && W5IA_MIGRATION_FILES.has(f))
-  && !(w61Applied && W6_1_MIGRATION_FILES.has(f)) && !(w62Applied && W6_2_MIGRATION_FILES.has(f)));
+  && !(w61Applied && W6_1_MIGRATION_FILES.has(f)) && !(w62Applied && W6_2_MIGRATION_FILES.has(f))
+  && !(w63Applied && W6_3_PRODUCT_FILES.includes(f)));
 assert('migrations/** has zero UNEXPECTED changes vs BASE_HEAD (W5 Packet 01\'s own migration excepted)', unexpectedMigrationsChanged.length === 0, unexpectedMigrationsChanged.join(', '));
 
 section('FINAL-W4-N18: zero frontend-path changes');
@@ -227,6 +251,9 @@ const allowedProductFiles = new Set([
     'ci/giro-authority-certification/harness/runW6TripAuthority.js',
     'ci/giro-authority-certification/harness/groups/w6TripAuthority.js',
   ] : []),
+  // W6.3/W6.4 Canonical Rider Lifecycle + Giro Projection Cutover (135): the first W6
+  // packet with product JS — it ACTIVATES the canonical departure.
+  ...(w63Applied ? W6_3_PRODUCT_FILES : []),
 ]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));
 assert('every non-test changed file is plannerSnapshot.js (the architecturally-preferred minimal diff)',

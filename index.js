@@ -231,8 +231,19 @@ async function routeRiderTripAction(action, body) {
   // NB: uses a switch (not the router equality form) so it does not add duplicate
   // router-action literals that the authorization-contract coverage test counts.
   switch (action) {
-    case "marcarEnEntrega":
-      return riderTrip.startTrip(body && body.id);
+    case "marcarEnEntrega": {
+      // Planner W6.3 — the departure is now the canonical Trip Authority one
+      // (start_rider_trip_v2), so it needs the VERIFIED rider identity for the same
+      // reason marcarEntregado does: the canonical trip records WHO departed, and an
+      // unattributed departure cannot be reconciled afterwards. Fail closed rather
+      // than starting an anonymous trip. The order id is still the ONLY thing read
+      // from the body; order_uid and the operational scope are resolved server-side.
+      const ctx = body && body.__authCtx;
+      if (!ctx || typeof ctx.actor !== "string" || !ctx.actor || !Number.isInteger(ctx.sv) || ctx.sv < 1) {
+        return { status: 401, payload: { error: "TRIP_CONTEXT_UNAVAILABLE" } };
+      }
+      return riderTrip.startTrip(body && body.id, { byActor: ctx.actor, sessionVersion: ctx.sv });
+    }
     case "marcarEntregado": {
       // S2-7D6E2 — a rider stop may collect money, so it needs the VERIFIED session.
       // Fail closed: without a real actor + session_version we cannot write the ledger,

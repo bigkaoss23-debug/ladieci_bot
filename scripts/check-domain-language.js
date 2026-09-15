@@ -48,6 +48,17 @@ const ALLOWLIST_PATTERNS = [
   // guarantee. File-level exemption is the only correct resolution, and is
   // exactly what this allowlist is for.
   /^migrations\/2026-08-20_h1_legacy_lifecycle_writer_hardening\.ROLLBACK\.sql$/,
+  // Planner W6.3's rollback (migration 135) is the SAME case, for the same reason: it
+  // restores public.close_rider_trip and public.rider_collect_and_complete_stop to their
+  // pre-135 bodies BYTE-IDENTICALLY, and the certification harness proves it by comparing
+  // md5(pg_get_functiondef(...)) against the checksums captured live from staging. Those
+  // bodies legitimately contain the COMPLETATO terminal literal and the n_ordini
+  // delivery_logs column name; a suppression marker would have to sit INSIDE the function
+  // body, land in pg_proc.prosrc, and break exactly the byte-identity this file exists to
+  // guarantee. The FORWARD migration is deliberately NOT exempt -- it authors new function
+  // versions, so it carries ordinary inline suppressions instead.
+  /^migrations\/2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135\.ROLLBACK\.sql$/,
+  /^ci\/giro-authority-certification\/candidate\/giro_authority_w6_rider_lifecycle_v1\.ROLLBACK\.sql$/,
   // L-1's privilege+RLS lockdown names nine pre-existing legacy tables
   // (clientes/ordenes/storico/conv/wa_msgs/archivio_conv/analisi_serata/
   // suggerimenti/geo_cache) by identifier throughout its grants, policies

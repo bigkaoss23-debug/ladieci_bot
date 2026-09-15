@@ -97,7 +97,17 @@ const giroAuthoritySqlFiles = migFiles.filter((f) => f.endsWith('.sql') && read(
 // Authority Foundation (migration 134) is the next: adds the dormant private trip_authority
 // schema (trips/trip_members) + dormant public.start_rider_trip_v2/trip_projection_v1, and
 // re-points giro_authority.trip_facts_v1 to prefer canonical trip data when present.
-assert('exactly the migration-130, migration-131, migration-132, migration-133 and migration-134 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
+// W6.3/W6.4 Canonical Rider Lifecycle + Giro Projection Cutover (migration 135) is the
+// next: it corrects start_rider_trip_v2's partial-departure body, makes
+// rider_collect_and_complete_stop and close_rider_trip canonical-aware (with the legacy
+// DRIVER_STATO fallback intact), adds ONE-TRIP-PER-GIRO, and re-points derive_giros_v1
+// at the frozen trip membership + the real departure time once a giro has departed.
+// Admitted here ONLY because its own static guard exists on the branch to vouch for it,
+// exactly like every earlier successor above — an unauthorized new giro_authority
+// migration still fails this check.
+const W6_3_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW6RiderLifecycle.static.test.js');
+const w63Applied = fs.existsSync(W6_3_STATIC_GUARD);
+assert('exactly the migration-130, migration-131, migration-132, migration-133, migration-134 and (once its own guard is present) migration-135 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
   JSON.stringify(giroAuthoritySqlFiles) === JSON.stringify([
     '2026-09-14_giro_authority_v1_migration_130.ROLLBACK.sql',
     '2026-09-14_giro_authority_v1_migration_130.sql',
@@ -105,6 +115,10 @@ assert('exactly the migration-130, migration-131, migration-132, migration-133 a
     '2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
     '2026-09-15_planner_w6_lock_order_unification_v1_migration_133.ROLLBACK.sql',
     '2026-09-15_planner_w6_lock_order_unification_v1_migration_133.sql',
+    ...(w63Applied ? [
+      '2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135.ROLLBACK.sql',
+      '2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135.sql',
+    ] : []),
     '2026-09-15_planner_w6_trip_authority_v1_migration_134.ROLLBACK.sql',
     '2026-09-15_planner_w6_trip_authority_v1_migration_134.sql',
     '2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
