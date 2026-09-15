@@ -212,8 +212,10 @@ const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
   // language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
   // operator call sites + creaOrdine()'s own hard-gated INSERT payload (certified by
   // tests/s4DormantInsertGateGuard.static.test.js and tests/s4PendingGiroIntentBuilder.test.js).
+  // S4's own second commit adds src/agents/previewStrategicOpportunities.js (isGiro
+  // transport-only, certified by tests/s4PlannerIsGiroTransport.test.js).
   // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
-  ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js'] : []),
+  ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js', 'src/agents/previewStrategicOpportunities.js'] : []),
 ]);
 const allowedProductFiles = new Set([...PACKET_02B_OWN_PRODUCT_FILES, ...LATER_PACKET_CERTIFIED_PRODUCT_FILES]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));

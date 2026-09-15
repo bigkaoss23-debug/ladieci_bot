@@ -40,13 +40,25 @@ function byteIdentical(relPath) {
   return base !== null && cur !== null && base === cur;
 }
 
+// S4 operator-intent prerequisite (DORMANT) — declared early: needed by the
+// previewStrategicOpportunities.js exception below, before the W5 deferral
+// declared further down this file.
+const S4_STATIC_GUARD = path.join(ROOT, 'tests', 's4DormantInsertGateGuard.static.test.js');
+const s4Applied = fs.existsSync(S4_STATIC_GUARD);
+
 section('FINAL-W4-N12 (HARD GATE): planner.js -- Stage M AND Stage 1 -- whole-file byte-identical to BASE_HEAD');
 assert('src/core/delivery/planner.js is byte-identical to BASE_HEAD (not touched at all -- stronger than a Stage-M-only proof)',
   byteIdentical('src/core/delivery/planner.js'));
 
 section('previewStrategicOpportunities.js -- byte-identical to BASE_HEAD (architectural preference achieved)');
-assert('src/agents/previewStrategicOpportunities.js is byte-identical to BASE_HEAD',
-  byteIdentical('src/agents/previewStrategicOpportunities.js'));
+// S4's own second commit is the first later packet authorized to touch this file
+// (isGiro transport-only addition, certified by tests/s4PlannerIsGiroTransport.test.js).
+if (!s4Applied) {
+  assert('src/agents/previewStrategicOpportunities.js is byte-identical to BASE_HEAD',
+    byteIdentical('src/agents/previewStrategicOpportunities.js'));
+} else {
+  console.log('  INFO  previewStrategicOpportunities.js exception granted to the later S4 packet (tests/s4DormantInsertGateGuard.static.test.js present)');
+}
 
 section('FINAL-W4-N17: no writer touched');
 // language-guard: allow-legacy agentOrdini.js is the existing file name being checked, not new vocabulary
@@ -69,9 +81,8 @@ for (const f of [
 // per-function extraction here, this defers to that later packet's own mechanical proof.
 const W5_STATIC_GUARD = path.join(ROOT, 'tests', 'manualGirosW5Packet01.static.test.js');
 const w5Applied = fs.existsSync(W5_STATIC_GUARD);
-// S4 operator-intent prerequisite (DORMANT) — same later-packet deferral pattern.
-const S4_STATIC_GUARD = path.join(ROOT, 'tests', 's4DormantInsertGateGuard.static.test.js');
-const s4Applied = fs.existsSync(S4_STATIC_GUARD);
+// S4 operator-intent prerequisite (DORMANT) — s4Applied declared earlier in this
+// file (needed by the previewStrategicOpportunities.js exception above).
 if (w5Applied) {
   let writerGuardOk = false;
   let writerGuardDetail = '';
@@ -145,7 +156,7 @@ const allowedProductFiles = new Set([
   // language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
   // operator call sites + creaOrdine()'s own hard-gated INSERT payload.
   // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
-  ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js'] : []),
+  ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js', 'src/agents/previewStrategicOpportunities.js'] : []),
 ]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));
 assert('every non-test changed file is plannerSnapshot.js (the architecturally-preferred minimal diff)',

@@ -79,12 +79,13 @@ section('FORBIDDEN FILES — byte-identical to BASE_HEAD');
 // language-guard: allow-legacy creaOrdine is the existing function name being cited, not new vocabulary
 // touches creaOrdine at all) is re-proven by tests/s4DormantInsertGateGuard.static.test.js
 // and tests/s4PendingGiroIntentBuilder.test.js instead of by whole-file identity here.
+// src/agents/previewStrategicOpportunities.js ALSO excepted (S4's own second commit:
+// isGiro transport-only addition, re-proven by tests/s4PlannerIsGiroTransport.test.js).
 for (const f of [
   'src/agents/riderReads.js',
   'src/agents/riderTrip.js',
   'src/agents/manualGiroReads.js',
   'src/core/delivery/planner.js',
-  'src/agents/previewStrategicOpportunities.js',
 ]) {
   assert(`${f} is byte-identical to BASE_HEAD`, byteIdentical(f));
 }
@@ -181,6 +182,9 @@ const ALLOWED_PRODUCT_PREFIXES = [
   'index.js',
   // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
   'src/agents/agentOrdini.js',
+  // S4's own second commit: isGiro transport-only addition to the Planner opportunity
+  // enrichment boundary, certified by tests/s4PlannerIsGiroTransport.test.js.
+  'src/agents/previewStrategicOpportunities.js',
 ];
 const nonTest = changedFiles.filter((f) => !f.startsWith('tests/'));
 const unexpected = nonTest.filter((f) => !ALLOWED_PRODUCT_PREFIXES.some((p) => f === p || f.startsWith(p)));

@@ -932,6 +932,12 @@ async function previewStrategicOpportunities(input = {}, deps = {}) {
           mapped.opp.cocinaFrozen = cs.cocinaFrozen;
           mapped.opp.cocinaState = cs.cocinaState;
           if (cs.cocinaReason) mapped.opp.cocinaReason = cs.cocinaReason;
+          // S4 — transport only. groupAnchorsByGiro/buildGiroAnchor already set
+          // isGiro:true on `anch` when 2+ candidate anchors were merged under one
+          // real, existing manual_giro_id; a standalone single-order anchor never
+          // carries the flag. Strict boolean, taken verbatim from `anch` -- never
+          // derived from giroId/anchorId, never touching ranking/timing/grouping.
+          mapped.opp.isGiro = anch.isGiro === true;
         }
         opportunities.push(mapped.opp);
       }
