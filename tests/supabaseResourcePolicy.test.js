@@ -524,6 +524,93 @@ global.fetch = async (url, init) => {
     }
   }
 
+  // ── 31) W6.0 — canonical delivery read boundary: core/delivery/
+  //       giroProjectionReader.js's readGiroProjection() reaches Supabase via
+  //       an INJECTED `rpc` alias (default sbRpc), not the literal sbRpc(...)
+  //       pattern check 17's regex looks for — exactly the same DI-invisible
+  //       shape check 17's own comments already document for closeoutAttempts.
+  //       js / closeoutSnapshots.js / serviceIncidents.js / mesaDao.js. This
+  //       is the blind spot that let rpc/giro_projection_v1 ship unregistered
+  //       while riderReads.js and manualGiroReads.js — the only two modules
+  //       in src/agents/*Reads.js — silently degraded to PROJECTION_MISSING
+  //       on every real call (both call readGiroProjection() with NO args,
+  //       so neither has its own injectable resource literal; the ONE real
+  //       call site in src/core/delivery or src/agents/*Reads.js is this
+  //       file, at this one line — the "precise safe module set" this slice
+  //       was scoped to, not every export in either directory).
+  //
+  //       Deliberately NOT a repo-wide regex extension: check 17's pattern
+  //       list stays untouched below, because a bare `\brpc\(` scan would
+  //       also flag archivedOrderFinancialResolutions.js's call to the
+  //       DELIBERATELY-unregistered create_archived_order_financial_
+  //       resolution (see supabaseResourcePolicy.js's own comment on that
+  //       entry) as a false-positive "unregistered call site", and every
+  //       other DI `rpc(...)` wrapper in this codebase (financialDao.js,
+  //       cashDao.js, closeoutAttempts.js, serviceLifecycleEngine.js's
+  //       callees, manualGiros.js's callAuthority, …) along with it.
+  //
+  //   31a — STATIC: this exact file's source text still names this exact
+  //         resource literally, at its one real call site.
+  //   31b — RUNTIME: driving the real readGiroProjection() export (only its
+  //         scope-resolver dependency injected, to avoid a live DB lookup —
+  //         `rpc` stays the real sbRpc default) through the SAME test-mode
+  //         recorder check 30 uses proves the OBSERVED {resource, method}
+  //         pair — not a guess from source text — is registered.
+  {
+    const readerPath = path.join(__dirname, '..', 'src', 'core', 'delivery', 'giroProjectionReader.js');
+    const readerSrc = fs.readFileSync(readerPath, 'utf8');
+    assert('31a. giroProjectionReader.js still calls rpc("giro_projection_v1", ...) at its one real call site',
+      /\brpc\(\s*["']giro_projection_v1["']/.test(readerSrc));
+    assert('31a2. rpc/giro_projection_v1 is registered', policy.getResourcePolicy('rpc/giro_projection_v1') !== null);
+    assert('31a3. rpc/giro_projection_v1 allows POST', policy.isMethodAllowed('rpc/giro_projection_v1', 'POST'));
+    assert('31a4. rpc/giro_projection_v1 denies GET', !policy.isMethodAllowed('rpc/giro_projection_v1', 'GET'));
+
+    delete require.cache[require.resolve(readerPath)];
+    const { readGiroProjection } = require(readerPath);
+    const observed = [];
+    transport.setTestModeRecorder((hit) => observed.push(hit));
+    let result;
+    try {
+      result = await readGiroProjection({ getOperationalSessionIds: async () => ['mock-session-1'] });
+    } finally {
+      transport.setTestModeRecorder(null);
+    }
+    const pairs = [...new Map(observed.map((o) => [`${o.resource}::${o.method}`, o])).values()];
+    assert('31b. readGiroProjection(), driven with only its scope-resolver injected (rpc stays the real sbRpc default), actually reached the transport',
+      pairs.length > 0);
+    const giroHit = pairs.find((o) => o.resource === 'rpc/giro_projection_v1');
+    assert('31c. the OBSERVED call targeted exactly rpc/giro_projection_v1, method POST',
+      !!giroHit && giroHit.method === 'POST');
+    const unregistered = pairs.filter((o) => !policy.getResourcePolicy(o.resource) || !policy.isMethodAllowed(o.resource, o.method));
+    assert('31d. every {resource, method} pair OBSERVED from the real readGiroProjection() call is registered and allowed',
+      unregistered.length === 0, unregistered.map((o) => `${o.resource} ${o.method}`).join(', '));
+    assert('31e. with the fix in place, the mocked-success call returns a projection body (never null on a healthy path)',
+      result !== null && typeof result === 'object');
+
+    // HARD GATE — same discipline as check 30's 30f-30h: prove this check
+    // actually catches the W6.0 regression it exists to prevent, not merely
+    // pass by construction. Temporarily blind the live policy lookup to
+    // rpc/giro_projection_v1 only (REGISTRY itself stays frozen/untouched;
+    // this monkey-patches the two exported lookup functions exactly like
+    // 30's gate does), re-run the exact same observed-pairs-vs-policy check,
+    // and require it to now fail closed — restored in a finally block
+    // regardless of outcome, so no later check in this file is affected.
+    const GATED_RESOURCE = 'rpc/giro_projection_v1';
+    const originalGetResourcePolicy = policy.getResourcePolicy;
+    const originalIsMethodAllowed = policy.isMethodAllowed;
+    policy.getResourcePolicy = (resource) => (resource === GATED_RESOURCE ? null : originalGetResourcePolicy(resource));
+    policy.isMethodAllowed = (resource, method) => (resource === GATED_RESOURCE ? false : originalIsMethodAllowed(resource, method));
+    try {
+      const stillUnregistered = pairs.filter((o) => !policy.getResourcePolicy(o.resource) || !policy.isMethodAllowed(o.resource, o.method));
+      assert('31f. HARD GATE: with rpc/giro_projection_v1 unregistered, this check now fails closed (the exact W6.0 regression)',
+        stillUnregistered.some((o) => o.resource === GATED_RESOURCE));
+    } finally {
+      policy.getResourcePolicy = originalGetResourcePolicy;
+      policy.isMethodAllowed = originalIsMethodAllowed;
+    }
+    assert('31g. registry restored to its original state after the hard-gate test', policy.getResourcePolicy(GATED_RESOURCE) !== null);
+  }
+
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   delete global.fetch;
   process.exit(fail === 0 ? 0 : 1);

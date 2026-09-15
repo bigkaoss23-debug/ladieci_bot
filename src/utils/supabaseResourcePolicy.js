@@ -398,6 +398,22 @@ const REGISTRY = Object.freeze([
     'agentOrdini.js cambiaStato automatic consume hooks, delivery/giroIntentReconciler.js'),  // language-guard: allow-legacy agentOrdini is the existing module filename being cross-referenced, not new vocabulary
   entry('rpc/giro_authority_list_pending_intents_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'delivery/giroIntentReconciler.js'),
+
+  // ── W6.0 — canonical Giro Projection read boundary (Planner W4, TB-1/TB-1A).
+  // core/delivery/giroProjectionReader.js's readGiroProjection() calls this RPC
+  // via its injected `rpc` alias (default sbRpc) — invisible to the literal
+  // sbRpc(...) scanner (check 17) because the call site names the DI parameter
+  // `rpc`, not `sbRpc`, exactly like every other DI-based module in this
+  // registry's own provenance comments above. The DB function itself
+  // (migration 130, Planner W3) was already live and independently probed
+  // read-only healthy; only this registry entry was missing, so every real
+  // Node call failed closed with SUPABASE_RESOURCE_NOT_ALLOWED before any
+  // network request — degrading every canonical consumer (riderReads.js,
+  // manualGiroReads.js) to PROJECTION_MISSING. POST-only: PostgREST invokes
+  // every RPC via POST regardless of the underlying function's own read-only
+  // SQL volatility.
+  entry('rpc/giro_projection_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'core/delivery/giroProjectionReader.js readGiroProjection()'),
 ]);
 
 const BY_RESOURCE = new Map(REGISTRY.map((e) => [e.resource, e]));

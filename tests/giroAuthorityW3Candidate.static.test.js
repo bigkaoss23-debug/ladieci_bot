@@ -11,7 +11,9 @@
 //   * previewTiming.js (W4 Packet 01) and riderReads.js (W4 Packet 02A) are the ONLY
 //     live consumers of giroProjectionPort; giroProjectionReader.js is the ONLY live
 //     I/O boundary onto giro_projection_v1; nothing else references the Authority or
-//     the projection, no H1B entry;
+//     the projection. giro_projection_v1 has exactly one H1B registry entry (W6.0 —
+//     restoring the registration its real W4 caller always needed; see the
+//     W6_0_REGISTRY_INVARIANT below);
 //   * giroFactsPort.js (the W2 temporary shim) is still required by nothing live —
 //     the cutover went straight to the canonical projection, never through it;
 //   * previewTiming.js no longer reads raw manual_giro_id / manual_giros; riderReads.js
@@ -193,8 +195,25 @@ assert('every approved Giro Authority RPC is POST-only and INTERNAL_OPERATIONAL'
     e.kind === POLICY.KIND.RPC &&
     JSON.stringify(e.allowedMethods) === JSON.stringify(['POST']) &&
     e.sensitivity === POLICY.SENSITIVITY.INTERNAL_OPERATIONAL));
-assert('no raw giro_projection resource is registered',
-  !POLICY.REGISTRY.some((e) => e.resource.includes('giro_projection')));
+// W6.0 — giro_projection_v1 now has a real, confirmed live caller
+// (core/delivery/giroProjectionReader.js readGiroProjection(), consumed since
+// W4 Packets 01/02A). The raw-absence invariant this replaced predated that
+// cutover and, unlike the dormant Authority RPCs above, pinned a genuine
+// defect: the RPC had a live caller but no registry entry, so every real
+// Node call failed closed with SUPABASE_RESOURCE_NOT_ALLOWED before any
+// network request (see tests/giroProjectionTransportReachability.test.js).
+// Evolves exactly the way the Authority RPC invariant above already did:
+// registered by NAME, not by absence — exactly rpc/giro_projection_v1,
+// nothing else giro_projection-prefixed.
+const registeredProjectionResources = POLICY.REGISTRY.filter((e) => e.resource.includes('giro_projection'));
+assert('W6_0_REGISTRY_INVARIANT: exactly rpc/giro_projection_v1 is registered as the sole giro_projection resource, no more, no fewer',
+  registeredProjectionResources.length === 1 && registeredProjectionResources[0].resource === 'rpc/giro_projection_v1',
+  registeredProjectionResources.map((e) => e.resource).join(', '));
+assert('rpc/giro_projection_v1 is POST-only and INTERNAL_OPERATIONAL',
+  registeredProjectionResources.length === 1 &&
+  registeredProjectionResources[0].kind === POLICY.KIND.RPC &&
+  JSON.stringify(registeredProjectionResources[0].allowedMethods) === JSON.stringify(['POST']) &&
+  registeredProjectionResources[0].sensitivity === POLICY.SENSITIVITY.INTERNAL_OPERATIONAL);
 assert('no raw giro_members resource is registered',
   !POLICY.REGISTRY.some((e) => e.resource.includes('giro_members')));
 assert('no raw giro_intents resource is registered',
