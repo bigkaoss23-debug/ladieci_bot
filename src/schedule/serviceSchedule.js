@@ -150,12 +150,23 @@ function resolveSchedule(now = new Date(), schedule = DEFAULT_SCHEDULE) {
     });
   }
   if (min < schedule.lunchEnsureStartMin) {
-    // 04:00-08:00. A dinner still open here has crossed the escalation boundary.
+    // 04:00-08:00. A dinner still open here has crossed the escalation
+    // boundary (isEscalationBoundary stays true -- that fact is unchanged
+    // and unrelated to the one below). O-5 (PRE_UAT_LIFECYCLE_HYGIENE Part
+    // C) -- canCreateNewOrder now follows the Business Day rollover (04:00,
+    // schedule.rolloverMin) rather than the lunch-ensure start (08:00,
+    // schedule.lunchEnsureStartMin): a genuine first order after 04:00 with
+    // no service currently open may lazily open the day's first
+    // Operational Service, matching public.order_intake_policy_v1's
+    // mayCreateFirstService (migrations/2026-09-16_o5_order_intake_first_
+    // service_boundary_single_authority.sql), kept in parity by
+    // tests/rDay3ScheduleParity.test.js. canEnsureSession stays false
+    // (unaffected -- zero live consumers of that specific fact today).
     return frozen({
       state: SCHEDULE_STATE.OUTSIDE_WINDOWS,
       serviceKind: null,
       canEnsureSession: false,
-      canCreateNewOrder: false,
+      canCreateNewOrder: true,
       canAttemptClose: true,
       canContinueExistingOrders: true,
       isEscalationBoundary: true,

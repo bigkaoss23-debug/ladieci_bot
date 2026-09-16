@@ -131,10 +131,20 @@ const G1 = "2026-08-20_g1_autonomous_resume_operational_service.sql";
 // creator, open_operational_service_v1) is unchanged — only the "which file
 // last redefined this" pin moves to M120.
 const M120 = "2026-09-06_stale_service_protection_v1_migration_120.sql";
+// O-5 (2026-09-16, PRE_UAT_LIFECYCLE_HYGIENE Part C, consolidated on the
+// true remote baseline 99172f9b) redefines resolve_order_intake_context_v1
+// AGAIN, NOT applied: retires the independent 08:00 order-intake floor,
+// replacing it with a single canonical helper (order_intake_policy_v1)
+// reusing the SAME 04:00 rollover threshold already used for business-date
+// bucketing. No creation-surface change: still zero direct INSERT INTO
+// service_sessions, still calls open_operational_service_v1 for its only
+// lazy-open path. ensure_service_session is NOT touched by O-5 and stays
+// pinned to M120.
+const O5 = "2026-09-16_o5_order_intake_first_service_boundary_single_authority.sql";
 for (const [n, fn, expectedFile] of [["1b", "open_operational_service_v1", G1],
                        ["1c", "ensure_service_session", M120],
-                       ["1d", "resolve_order_intake_context_v1", M120]]) {
-  assert(`${n}: ${fn}'s latest definition is ${expectedFile === M120 ? "STALE SERVICE PROTECTION V1's (M120)" : "G-1's"} own migration file`,
+                       ["1d", "resolve_order_intake_context_v1", O5]]) {
+  assert(`${n}: ${fn}'s latest definition is ${expectedFile === O5 ? "O-5's" : expectedFile === M120 ? "STALE SERVICE PROTECTION V1's (M120)" : "G-1's"} own migration file`,
     latest[fn] && latest[fn].file === expectedFile,
     latest[fn] && latest[fn].file);
 }

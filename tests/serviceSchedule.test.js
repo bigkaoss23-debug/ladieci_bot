@@ -57,7 +57,14 @@ assert("00:00 stops new orders", S.resolveSchedule(summer(0, 0, 16)).canCreateNe
 assert("buffer accepts new orders too (O-1)", S.resolveSchedule(summer(17, 45)).canCreateNewOrder === true);
 assert("PRANZO_WINDOW accepts new orders", S.resolveSchedule(summer(12)).canCreateNewOrder === true);
 assert("AFTER_ORDER_CUTOFF accepts no new orders", S.resolveSchedule(summer(1, 0, 16)).canCreateNewOrder === false);
-assert("OUTSIDE_WINDOWS accepts no new orders", S.resolveSchedule(summer(6)).canCreateNewOrder === false);
+// O-5 (PRE_UAT_LIFECYCLE_HYGIENE Part C) — the independent 08:00 floor is
+// retired: 04:00-08:00 now follows the same Business Day rollover (04:00)
+// already governing AFTER_ORDER_CUTOFF's own boundary above, kept in SQL
+// parity by migrations/2026-09-16_o5_order_intake_first_service_boundary_
+// single_authority.sql and tests/rDay3ScheduleParity.test.js.
+// isEscalationBoundary (section D below) is untouched — a dinner still open
+// here is still notable, unrelated to whether a NEW order may create one.
+assert("OUTSIDE_WINDOWS now accepts new orders (O-5 -- 04:00 is the sole boundary, not 08:00)", S.resolveSchedule(summer(6)).canCreateNewOrder === true);
 
 console.log("\n══ D. escalation ══");
 assert("00:30 close attempt due, no escalation", S.resolveSchedule(summer(0, 30, 16)).canAttemptClose === true && S.resolveSchedule(summer(0, 30, 16)).isEscalationBoundary === false);
