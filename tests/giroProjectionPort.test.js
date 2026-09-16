@@ -88,6 +88,32 @@ gf = port.projectionGiroFacts({ projection: { scope_valid: false, giros: [] }, i
 out = run({ intendedGiro: gf.intendedGiro, scopeAvailable: gf.scopeAvailable });
 assert('invalid scope -> SCOPE_UNAVAILABLE reason and degraded=true', out.degraded === true && out.reasons.some((r) => r.code === 'SCOPE_UNAVAILABLE'));
 
+section('W6.6 FINAL CLEANUP — canonicalDepartedOrderIds: the one giro fact that survives its own trip closing');
+const DEPARTED_P = {
+  contract: 'giro_projection_v1', scope_valid: true, degraded: false,
+  giros: [
+    // linked to a real canonical trip (IN_TRIP or DONE, salida_source DEPARTED) -- included
+    { giro_id: 'mg_d1', giro_state: 'IN_TRIP', salida: '20:00', salida_source: 'DEPARTED',
+      effective_members: [{ order_uid: 'u-a', order_id: '#A' }, { order_uid: 'u-b', order_id: '#B' }] },
+    { giro_id: 'mg_d2', giro_state: 'DONE', salida: '19:00', salida_source: 'DEPARTED',
+      effective_members: [{ order_uid: 'u-c', order_id: '#C' }] },
+    // operator-planned salida (no canonical trip) -- never departed, excluded
+    { giro_id: 'mg_p1', giro_state: 'PLANNED', salida: '21:00', salida_source: 'OPERATOR',
+      effective_members: [{ order_uid: 'u-d', order_id: '#D' }] },
+    // dissolved -- excluded regardless of any stale salida_source
+    { giro_id: 'mg_x1', giro_state: 'DISSOLVED', salida: null, salida_source: 'NONE',
+      effective_members: [] },
+  ],
+  orders: [],
+};
+assert('DEPARTED giros contribute their effective members, in order', JSON.stringify(port.canonicalDepartedOrderIds(DEPARTED_P)) === JSON.stringify(['#A', '#B', '#C']));
+assert('OPERATOR/PLANNED salida never counts as departed', !port.canonicalDepartedOrderIds(DEPARTED_P).includes('#D'));
+assert('DISSOLVED giro never counts, whatever its stale salida_source', !port.canonicalDepartedOrderIds(DEPARTED_P).includes('#Z'));
+assert('unavailable projection -> empty (fail closed, never a guessed departure)', port.canonicalDepartedOrderIds({ scope_valid: false, giros: [] }).length === 0);
+assert('null projection -> empty', port.canonicalDepartedOrderIds(null).length === 0);
+assert('degraded projection -> empty', port.canonicalDepartedOrderIds({ ...DEPARTED_P, degraded: true }).length === 0);
+assert('a giro with no effective_members contributes nothing, never throws', port.canonicalDepartedOrderIds({ scope_valid: true, degraded: false, giros: [{ giro_id: 'mg_e', giro_state: 'DONE', salida_source: 'DEPARTED' }] }).length === 0);
+
 section('PURITY — no I/O, no clock, no raw membership, not wired');
 const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'delivery', 'giroProjectionPort.js'), 'utf8');
 const code = src.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');

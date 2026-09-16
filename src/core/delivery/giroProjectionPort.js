@@ -111,6 +111,27 @@ function effectiveGiroIdByOrderId(projection) {
   return out;
 }
 
+// Planner W6.6 final cleanup — the ONE way a caller may learn "did this order's
+// giro departure really happen" once the canonical trip that carried it may
+// already be CLOSED (trip_projection_v1 only ever reports the ACTIVE trip, so a
+// closed one reads back identically to "never departed" -- see
+// tripProjectionPort.js's own header). derive_giros_v1 (Planner W6.4, migration
+// 135) sets salida_source='DEPARTED' exactly when a real trip_authority.trips row
+// is linked to the giro, and that fact holds in every phase (IN_TRIP, DONE) and
+// after the linked trip formally closes -- it never reverts. Unavailable
+// projection -> empty (fail closed, never a guessed departure).
+function canonicalDepartedOrderIds(projection) {
+  if (!projectionAvailability(projection).available) return [];
+  const ids = [];
+  for (const g of projection.giros || []) {
+    if (!g || g.salida_source !== "DEPARTED") continue;
+    for (const m of g.effective_members || []) {
+      if (m && m.order_id != null) ids.push(String(m.order_id));
+    }
+  }
+  return ids;
+}
+
 // Standalone advisory (no intended target yet): is there a compatible PLANNED giro
 // right now that a new order could join? Mirrors giroFactsPort.findCompatibleGiro's
 // contract exactly, sourced from the projection instead of the legacy shape. Never
@@ -136,4 +157,5 @@ module.exports = {
   resolveIntendedGiroFromProjection,
   effectiveGiroIdByOrderId,
   findCompatibleGiroFromProjection,
+  canonicalDepartedOrderIds,
 };

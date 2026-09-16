@@ -167,6 +167,77 @@ const noGiro = async () => ({ scope_valid: true, degraded: false, giros: [], ord
     check("resolveGiroSalida(giro projection unavailable) -> {null,null}, degrades locally only", c.salida === null && c.salida_source === null, c);
   }
 
+  // ── W6.6 final cleanup: canonical_departed_order_ids survives the trip's
+  // own close, TabEntregas's replacement for the legacy DRIVER_STATO.partito_alle
+  // fallback (scenario C: trip formally closed, canonical historical departure
+  // still known via the giro's own salida_source) ──────────────────────────
+  {
+    // C: no active trip (already closed/never seen one this poll), but the
+    // giro this order departed with still carries salida_source='DEPARTED'
+    // (derive_giros_v1 sets this once a canonical trip is linked, and it never
+    // reverts -- true in IN_TRIP, true in DONE, true after CLOSE).
+    const CLOSED_GIRO_PROJECTION = {
+      scope_valid: true, degraded: false,
+      giros: [{
+        giro_id: "g-9", giro_state: "DONE", salida: "12:00", salida_source: "DEPARTED",
+        effective_members: [{ order_uid: "u-x", order_id: "X" }, { order_uid: "u-y", order_id: "Y" }],
+      }],
+      orders: [],
+    };
+    const r = await getTripOperationalState({
+      readProjection: async () => ({ ok: true, active: false }),
+      readGiro: async () => CLOSED_GIRO_PROJECTION,
+      now: () => NOW,
+    });
+    check("C: no active trip -> has_active_trip still false (this fact never lies)", r.has_active_trip === false, r);
+    check("C: closed-trip giro's DEPARTED members reach canonical_departed_order_ids", JSON.stringify(r.canonical_departed_order_ids.sort()) === JSON.stringify(["X", "Y"]), r);
+  }
+  {
+    // A: never departed -- a giro that exists but was never linked to a real
+    // trip (salida_source is the operator's planned hora_ref, not DEPARTED)
+    // must NOT appear, matching "no fact -> no claim of departure".
+    const PLANNED_GIRO_PROJECTION = {
+      scope_valid: true, degraded: false,
+      giros: [{ giro_id: "g-8", giro_state: "PLANNED", salida: "12:00", salida_source: "OPERATOR",
+                effective_members: [{ order_uid: "u-z", order_id: "Z" }] }],
+      orders: [],
+    };
+    const r = await getTripOperationalState({
+      readProjection: async () => ({ ok: true, active: false }),
+      readGiro: async () => PLANNED_GIRO_PROJECTION,
+      now: () => NOW,
+    });
+    check("A: PLANNED/OPERATOR salida (never departed) -> canonical_departed_order_ids empty", r.canonical_departed_order_ids.length === 0, r);
+  }
+  {
+    // Fail-closed: giro projection unavailable -> empty, never a guess, on
+    // every DTO shape (degraded trip read, no-active-trip, active-trip alike).
+    const rDegraded = await getTripOperationalState({ readProjection: async () => null, readGiro: async () => null, now: () => NOW });
+    check("degraded trip read + unavailable giro read -> canonical_departed_order_ids empty (fail closed)", Array.isArray(rDegraded.canonical_departed_order_ids) && rDegraded.canonical_departed_order_ids.length === 0, rDegraded);
+    const rNoTrip = await getTripOperationalState({ readProjection: async () => ({ ok: true, active: false }), readGiro: async () => null, now: () => NOW });
+    check("no-active-trip + unavailable giro read -> canonical_departed_order_ids empty (fail closed)", rNoTrip.canonical_departed_order_ids.length === 0, rNoTrip);
+  }
+  {
+    // The giro read must never cost a second RPC round trip on the active-trip
+    // path: resolveGiroSalida's own salida/salida_source reuse the ONE read
+    // this function already made for canonical_departed_order_ids.
+    let giroReadCount = 0;
+    const ACTIVE_PROJECTION = {
+      ok: true, active: true, trip_id: "t-1", giro_id: "g-1", anchor_order_uid: "u-a",
+      departed_at: "2026-09-16T12:00:00.000Z",
+      members: [{ order_uid: "u-a", stop_seq: 1 }],
+    };
+    const r = await getTripOperationalState({
+      readProjection: async () => ACTIVE_PROJECTION,
+      select: async () => [{ order_uid: "u-a", id: "A", estado: "EN_ENTREGA", zona: "Q1", durata_andata_min: 12 }],
+      readGiro: async () => { giroReadCount++; return { scope_valid: true, degraded: false, giros: [{ giro_id: "g-1", giro_state: "IN_TRIP", salida: "12:00", salida_source: "DEPARTED", effective_members: [{ order_uid: "u-a", order_id: "A" }] }], orders: [] }; },
+      now: () => NOW,
+    });
+    check("active-trip path reads the giro projection exactly once (no duplicate RPC)", giroReadCount === 1, giroReadCount);
+    check("active-trip DTO also carries canonical_departed_order_ids", JSON.stringify(r.canonical_departed_order_ids) === JSON.stringify(["A"]), r);
+    check("active-trip DTO's own salida_source is unaffected (still 'DEPARTED' from the shared read)", r.salida_source === "DEPARTED", r);
+  }
+
   // ── 15/16/17: static source-scope guards (no DRIVER_STATO, no manual_giro_id
   // membership rebuild, no money/economy mutation) ─────────────────────────
   // Executable code only: `//` line comments stripped, same convention as

@@ -8,6 +8,18 @@
 // into the DTO the HTTP action (getTripOperationalState, index.js) returns
 // on the wire. It never reads DRIVER_STATO and never reconstructs membership
 // from manual_giro_id/manual_giros.
+//
+// Planner W6.6 final cleanup — `canonical_departed_order_ids` closes the one
+// remaining gap: trip_projection_v1 only ever reports the ACTIVE trip (a
+// CLOSED one reads back identically to "never departed", see
+// tripProjectionPort.js's header), so once a trip closes this module's own
+// has_active_trip/members facts can no longer vouch for its former members.
+// giro_projection_v1's salida_source='DEPARTED' (derive_giros_v1, migration
+// 135) is the one canonical fact that survives that close, for any order whose
+// departure went out attached to a giro. It is read unconditionally, not only
+// on an active trip, and reported fail-closed (empty) alongside every DTO
+// shape below -- never merged into has_active_trip/members, which stay exactly
+// what trip_projection_v1 itself says.
 // ===============================================================
 "use strict";
 
@@ -15,7 +27,7 @@ const { sbSelect } = require("../../utils/supabase");
 const { readTripProjection } = require("./tripProjectionReader");
 const { activeTripFacts } = require("./tripProjectionPort");
 const { readGiroProjection } = require("./giroProjectionReader");
-const { projectionAvailability } = require("./giroProjectionPort");
+const { projectionAvailability, canonicalDepartedOrderIds } = require("./giroProjectionPort");
 
 // Same tiny local duplicate every read module in this codebase keeps on
 // purpose (riderReads.js, manualGiroReads.js) rather than sharing a utility.
@@ -46,7 +58,10 @@ function ordersByUid(rows) {
 
 // DEGRADED: never collapses to "no active trip". has_active_trip stays
 // unknown (null, not false) -- false would tell a caller "rider is free".
-function degradedDto(facts) {
+// `departedOrderIds` is the giro-sourced fact (see header): reported even
+// while the trip projection itself is degraded, since it is read separately
+// and fails closed (empty) on its own, never borrowing the trip read's state.
+function degradedDto(facts, departedOrderIds) {
   return {
     available: false,
     degraded: true,
@@ -69,10 +84,11 @@ function degradedDto(facts) {
     eta_reason: facts.eta.eta_reason,
     rider_actor: null,
     rider_known: false,
+    canonical_departed_order_ids: departedOrderIds,
   };
 }
 
-function noActiveTripDto(facts) {
+function noActiveTripDto(facts, departedOrderIds) {
   return {
     available: true,
     degraded: false,
@@ -95,6 +111,7 @@ function noActiveTripDto(facts) {
     eta_reason: facts.eta.eta_reason,
     rider_actor: null,
     rider_known: false,
+    canonical_departed_order_ids: departedOrderIds,
   };
 }
 
@@ -119,7 +136,7 @@ async function resolveGiroSalida(giroId, { readGiro = readGiroProjection } = {})
   return { salida: giro.salida ?? null, salida_source: giro.salida_source ?? null };
 }
 
-function activeTripDto(facts, salidaFacts) {
+function activeTripDto(facts, salidaFacts, departedOrderIds) {
   const trip = facts.trip;
   return {
     available: true,
@@ -143,6 +160,7 @@ function activeTripDto(facts, salidaFacts) {
     eta_reason: facts.eta.eta_reason,
     rider_actor: trip.rider_actor,
     rider_known: trip.rider_known,
+    canonical_departed_order_ids: departedOrderIds,
   };
 }
 
@@ -160,11 +178,22 @@ async function getTripOperationalState({
     projection = null;
   }
 
+  // Read unconditionally -- not only once a trip is found active -- because
+  // its one useful fact here (salida_source='DEPARTED') is exactly the signal
+  // that must still answer after the trip itself has closed (see header).
+  let giroProjection = null;
+  try {
+    giroProjection = await readGiro();
+  } catch (_) {
+    giroProjection = null;
+  }
+  const departedOrderIds = canonicalDepartedOrderIds(giroProjection);
+
   // Cheap pre-check with no order query at all: covers unavailable/no-active
   // trip without touching `ordenes`.
   const preview = activeTripFacts({ projection });
-  if (!preview.available) return degradedDto(preview);
-  if (!preview.active || !preview.trip) return noActiveTripDto(preview);
+  if (!preview.available) return degradedDto(preview, departedOrderIds);
+  if (!preview.active || !preview.trip) return noActiveTripDto(preview, departedOrderIds);
 
   // Active trip: resolve the frozen membership's order facts, scoped to
   // EXACTLY the trip's own order_uids (same narrow-query discipline as
@@ -181,10 +210,11 @@ async function getTripOperationalState({
     }
   }
   const facts = activeTripFacts({ projection, ordersByUid: ordersByUid(rows), nowIso: now() });
-  if (!facts.available) return degradedDto(facts);
-  if (!facts.active || !facts.trip) return noActiveTripDto(facts);
-  const salidaFacts = await resolveGiroSalida(facts.trip.giro_id, { readGiro });
-  return activeTripDto(facts, salidaFacts);
+  if (!facts.available) return degradedDto(facts, departedOrderIds);
+  if (!facts.active || !facts.trip) return noActiveTripDto(facts, departedOrderIds);
+  // Reuses the giro projection already read above -- never a second RPC round trip.
+  const salidaFacts = await resolveGiroSalida(facts.trip.giro_id, { readGiro: async () => giroProjection });
+  return activeTripDto(facts, salidaFacts, departedOrderIds);
 }
 
 module.exports = {
