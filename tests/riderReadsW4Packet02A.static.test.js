@@ -82,9 +82,31 @@ const W6_3_PRODUCT_FILES = [
   // reason, as the pre-existing H-1 rollback entry). The forward migration is NOT exempt.
   'scripts/check-domain-language.js',
 ];
+
+// ── W6.5 (Planner final backend canonicalization + legacy cleanup) ──────────
+// Stage M (the unreachable `manual_route` rider block) deleted and replaced by
+// the canonical ACTIVE TRIP from Trip Authority; the raw `manual_giros` read
+// removed from the planner snapshot path; the operational rider read moved off
+// DRIVER_STATO onto trip_projection_v1; giroFactsPort.js (superseded by
+// giroProjectionPort.js, zero requirers) deleted. Authorized here by the same
+// deferred-verification pattern this file already applies to W5/W6.3: its own
+// guard must be present on the branch to vouch for the change.
+const W6_5_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW65FinalBackendV1.static.test.js');
+const w65Applied = fs.existsSync(W6_5_STATIC_GUARD);
+const W6_5_PRODUCT_FILES = [
+  'src/core/delivery/tripProjectionReader.js',
+  'src/core/delivery/tripProjectionPort.js',
+  'src/core/delivery/planner.js',
+  'src/core/delivery/plannerSnapshot.js',
+  'src/core/delivery/readOnlyRestDb.js',
+  'src/core/delivery/giroFactsPort.js',
+  'src/agents/riderReads.js',
+  'src/utils/supabaseResourcePolicy.js',
+  'index.js',
+];
 // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
 const BYTE_IDENTICAL_TARGETS = (s4Applied ? ['src/agents/riderTrip.js'] : ['src/agents/agentOrdini.js', 'src/agents/riderTrip.js', 'index.js'])
-  .filter((f) => !(w63Applied && W6_3_PRODUCT_FILES.includes(f)));
+  .filter((f) => !(w63Applied && W6_3_PRODUCT_FILES.includes(f)) && !(w65Applied && W6_5_PRODUCT_FILES.includes(f)));
 for (const f of BYTE_IDENTICAL_TARGETS) {
   assert(`${f} is byte-identical to BASE_HEAD (${BASE_HEAD.slice(0, 7)})`, byteIdentical(f));
 }
@@ -192,6 +214,11 @@ try {
 const PACKET_02A_OWN_PRODUCT_FILE = 'src/agents/riderReads.js';
 const FINAL_W4_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW4FinalCutover.static.test.js');
 const LATER_PACKET_CERTIFIED_PRODUCT_FILES = new Set([
+  // W6.5 — Planner final backend canonicalization + legacy cleanup (certified by
+  // tests/plannerW65FinalBackendV1.static.test.js): Stage M deleted and replaced by
+  // the canonical active trip, the raw manual_giros read removed from the planner
+  // snapshot path, the rider read moved onto Trip Authority, giroFactsPort.js deleted.
+  ...(w65Applied ? W6_5_PRODUCT_FILES : []),
   ...(fs.existsSync(MANUAL_GIRO_STATIC_GUARD) ? ['src/agents/manualGiros.js', 'src/agents/manualGiroReads.js'] : []), // Packet 02B
   ...(fs.existsSync(FINAL_W4_STATIC_GUARD) ? ['src/core/delivery/plannerSnapshot.js'] : []), // Final W4 Read-Cutover Packet
   ...(w5Applied ? [ // W5 Packet 01 — single-writer Authority cutover + facts signal

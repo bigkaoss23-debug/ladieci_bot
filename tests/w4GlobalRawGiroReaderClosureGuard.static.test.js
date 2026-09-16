@@ -60,13 +60,13 @@ const ALLOWLIST = {
   'src/agents/manualGiros.js': { category: 'WRITER_SUPPORT_W5', reason: 'the sole writer module; every raw read here exists only to decide a write, proven untouched (17/17 mechanical) by manualGiroReadsW4Packet02B.static.test.js' },
   'src/agents/previewStrategicOpportunities.js': { category: 'CANONICALIZED_W4', reason: 'reads raw.manual_giro_id only from an ALREADY-canonicalized snapshot (plannerSnapshot.js resolves the alias before this file ever sees it) -- no DB access of its own, unmodified by this packet' },
   'src/agents/previewTiming.js': { category: 'NOT_GIRO_SEMANTICS', reason: 'comment-only references describing the pre-W4 shape it no longer reads (proven executable-code-clean by giroAuthorityW3Candidate.static.test.js)' },
-  'src/agents/riderReads.js': { category: 'CANONICALIZED_W4', reason: 'current-day membership/state/salida/hora fully canonical (Packet 02A); one narrow entrega_ref METADATA_ENRICHMENT select remains' },
+  'src/agents/riderReads.js': { category: 'CANONICALIZED_W4', reason: 'current-day membership/state/salida/hora fully canonical (Packet 02A); one narrow entrega_ref METADATA_ENRICHMENT select remains. W6.5 additionally moved TRIP MODE off DRIVER_STATO onto Trip Authority' },
   'src/auth/actionPolicyRegistry.js': { category: 'NOT_GIRO_SEMANTICS', reason: 'a policy "note" documentation string ("no manual_giros write"), not a Giro-fact read' },
-  'src/core/delivery/giroFactsPort.js': { category: 'DEAD_CODE', reason: 'zero requirers anywhere in src/ or index.js (superseded by giroProjectionPort.js in Packet 01) -- re-verified below' },
+  'src/core/delivery/tripProjectionReader.js': { category: 'NOT_GIRO_SEMANTICS', reason: 'W6.5 canonical Trip Authority I/O boundary; the match is its own header comment naming the raw/legacy facts it explicitly does NOT read (proven executable-code-clean by plannerW65FinalBackendV1.static.test.js)' },
   'src/core/delivery/giroProjectionReader.js': { category: 'NOT_GIRO_SEMANTICS', reason: 'this IS the canonical I/O boundary; the match is its own header comment naming the raw fields it replaces' },
-  'src/core/delivery/planner.js': { category: 'CANONICALIZED_W4', reason: 'Stage 1 consumes plannerSnapshot.js\'s already-canonical alias (no DB access of its own); Stage M (manual_route rider-block: route_order/block_start/manual_duration_min/created_by_operator/force) is TRIP_AUTHORITY_W6 -- the Authority schema models none of those fields. File proven byte-identical to BASE_HEAD by plannerW4FinalCutover.static.test.js' },
-  'src/core/delivery/plannerSnapshot.js': { category: 'CANONICALIZED_W4', reason: 'Final W4 Read-Cutover Packet: current-day order-level alias is Projection-sourced (one RPC, replaces the raw column); historical path is HISTORICAL_EXPLICIT; the raw manual_giros select is retained ONLY for Stage M\'s TRIP_AUTHORITY_W6 metadata (route_order/block_start/etc, fields the Authority does not model)' },
-  'src/core/delivery/readOnlyRestDb.js': { category: 'NOT_GIRO_SEMANTICS', reason: 'PII-safety table/field allowlist gate; transports plannerSnapshot.js\'s queries, computes no Giro fact of its own' },
+  'src/core/delivery/planner.js': { category: 'CANONICALIZED_W4', reason: 'Stage 1 consumes plannerSnapshot.js\'s already-canonical alias (no DB access of its own). W6.5 DELETED Stage M outright -- the manual_route rider block read seven columns that do not exist in public.manual_giros, so it was unreachable -- and replaced it with the canonical active trip from Trip Authority. The remaining matches are comment-only; proven by plannerW65FinalBackendV1.static.test.js' },
+  'src/core/delivery/plannerSnapshot.js': { category: 'CANONICALIZED_W4', reason: 'Final W4 Read-Cutover Packet: current-day order-level alias is Projection-sourced (one RPC, replaces the raw column); historical path is HISTORICAL_EXPLICIT. W6.5 REMOVED the raw manual_giros select entirely (its only consumer, Stage M, is deleted), so the remaining matches are comment-only' },
+  'src/core/delivery/readOnlyRestDb.js': { category: 'NOT_GIRO_SEMANTICS', reason: 'PII-safety table/field allowlist gate; transports plannerSnapshot.js\'s queries, computes no Giro fact of its own. W6.5 removed manual_giros from the table allowlist (nothing reads it through this adapter any more), so the remaining match is comment-only' },
   'src/core/delivery/shadowPreviewEndpoint.js': { category: 'SHADOW_DIAGNOSTIC', reason: 'HTTP adapter for the hidden, PIN-gated /shadow-preview comparison panel' },
   'src/utils/driverTelemetry.js': { category: 'DEAD_CODE', reason: 'countActiveDeliveries\'s manualGiroId parameter/raw-filter branch is unreachable -- its one live caller (recordDeliveryAndMaybeReturn) always calls it with {} -- re-verified below' },
   'src/utils/supabaseResourcePolicy.js': { category: 'NOT_GIRO_SEMANTICS', reason: 'a resource-policy table registry entry (KIND.TABLE), not a Giro-fact read' },
@@ -129,8 +129,12 @@ assert('zero files carry an unrecognized/unsafe category', forbiddenForOperation
 
 section('DEAD_CODE entries — mechanically re-verified, not just asserted');
 {
-  const giroFactsPortRequirers = candidateFiles.filter((f) => f !== 'src/core/delivery/giroFactsPort.js' && /require\([^)]*giroFactsPort/.test(read(f)));
-  assert('giroFactsPort.js: zero requirers anywhere (still dead)', giroFactsPortRequirers.length === 0, giroFactsPortRequirers.join(', '));
+  // W6.5 — the DEAD_CODE verdict was ACTED ON: giroFactsPort.js is deleted, not
+  // merely unreferenced. The re-verification is now that it is gone and stays gone.
+  assert('giroFactsPort.js: DELETED by W6.5 (the DEAD_CODE verdict was acted on)',
+    !fs.existsSync(path.join(ROOT, 'src', 'core', 'delivery', 'giroFactsPort.js')));
+  const giroFactsPortRequirers = candidateFiles.filter((f) => /require\([^)]*giroFactsPort/.test(read(f)));
+  assert('giroFactsPort.js: zero requirers anywhere (nothing resurrects it)', giroFactsPortRequirers.length === 0, giroFactsPortRequirers.join(', '));
 
   const telemetrySrc = read('src/utils/driverTelemetry.js');
   const otherCallers = candidateFiles.filter((f) => f !== 'src/utils/driverTelemetry.js' && /countActiveDeliveries\s*\(/.test(read(f)));

@@ -102,12 +102,34 @@ const W6_3_PRODUCT_FILES = [
   'src/utils/supabaseResourcePolicy.js',
   'index.js',
 ];
+
+// ── W6.5 (Planner final backend canonicalization + legacy cleanup) ──────────
+// Stage M (the unreachable `manual_route` rider block) deleted and replaced by
+// the canonical ACTIVE TRIP from Trip Authority; the raw `manual_giros` read
+// removed from the planner snapshot path; the operational rider read moved off
+// DRIVER_STATO onto trip_projection_v1; giroFactsPort.js (superseded by
+// giroProjectionPort.js, zero requirers) deleted. Authorized here by the same
+// deferred-verification pattern this file already applies to W5/W6.3: its own
+// guard must be present on the branch to vouch for the change.
+const W6_5_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW65FinalBackendV1.static.test.js');
+const w65Applied = fs.existsSync(W6_5_STATIC_GUARD);
+const W6_5_PRODUCT_FILES = [
+  'src/core/delivery/tripProjectionReader.js',
+  'src/core/delivery/tripProjectionPort.js',
+  'src/core/delivery/planner.js',
+  'src/core/delivery/plannerSnapshot.js',
+  'src/core/delivery/readOnlyRestDb.js',
+  'src/core/delivery/giroFactsPort.js',
+  'src/agents/riderReads.js',
+  'src/utils/supabaseResourcePolicy.js',
+  'index.js',
+];
 for (const f of [
   'src/agents/riderReads.js',
   'src/agents/riderTrip.js',
   'src/agents/manualGiroReads.js',
   'src/core/delivery/planner.js',
-].filter((f) => !(w63Applied && W6_3_PRODUCT_FILES.includes(f)))) {
+].filter((f) => !(w63Applied && W6_3_PRODUCT_FILES.includes(f)) && !(w65Applied && W6_5_PRODUCT_FILES.includes(f)))) {
   assert(`${f} is byte-identical to BASE_HEAD`, byteIdentical(f));
 }
 
@@ -185,6 +207,13 @@ try {
     .split('\n').map((l) => l.trim()).filter(Boolean);
 } catch (e) { changedFiles = ['<git diff failed>']; }
 const ALLOWED_PRODUCT_PREFIXES = [
+  // W6.5 — Planner final backend canonicalization + legacy cleanup, a later,
+  // separately-authorized packet on the same deferred-verification pattern:
+  // Stage M deleted and replaced by the canonical active trip, the raw
+  // manual_giros read removed from the planner snapshot path, the operational
+  // rider read moved onto Trip Authority, giroFactsPort.js deleted. Certified by
+  // tests/plannerW65FinalBackendV1.static.test.js. It touches NO writer file.
+  ...(w65Applied ? W6_5_PRODUCT_FILES : []),
   'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.sql',
   'migrations/2026-09-15_planner_w5_packet01_single_writer_v1_migration_131.ROLLBACK.sql',
   // W5 Intent Activation (132) — a later, separately-authorized packet, same

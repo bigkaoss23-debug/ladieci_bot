@@ -167,7 +167,11 @@ const live = [...srcFiles, path.join(ROOT, 'index.js')]
 const mentions = live.filter((f) => /giro_authority|giro_projection_v1/.test(read(f)));
 assert('no live src/** or index.js file outside the allowlisted W4 chain references the Authority or the projection',
   mentions.length === 0, mentions.join(', '));
-const requirers = live.filter((f) => /giroProjectionPort|giroProjectionReader/.test(read(f)));
+// W6.5 — matched on the require() form, not on any prose mention: the new
+// canonical Trip Authority sibling (tripProjectionReader.js) names its Giro
+// counterpart in its header comment, which is documentation, not a dependency.
+// The invariant this guards is "nothing outside the chain DEPENDS on it".
+const requirers = live.filter((f) => /require\([^)]*giroProjectionPort|require\([^)]*giroProjectionReader/.test(jsCode(read(f))));
 assert('nothing outside the allowlisted W4 chain requires giroProjectionPort/giroProjectionReader',
   requirers.length === 0, requirers.join(', '));
 const portRequirers = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => f !== ADAPTER && /require\([^)]*giroProjectionPort/.test(read(f)));
@@ -187,9 +191,13 @@ assert('riderReads.js does not require manualGiros.js (no dependency on the writ
 assert('riderReads.js no longer treats raw manual_giro_id / manual_giros as giro-fact truth (only the id+entrega_ref legacy-metadata enrichment select remains)',
   !/g\.dissolved\s*!==\s*true|g\.completed\s*!==\s*true|manual_giro_id=eq\.|manual_giro_id=in\./.test(jsCode(read(RIDER_READS))) &&
   (jsCode(read(RIDER_READS)).match(/sbSelect\(\s*"manual_giros"/g) || []).length === 1);
-assert('giroFactsPort.js is required by nothing live (not introduced into the live path)',
-  fs.existsSync(GIRO_FACTS_PORT) &&
-  ![...srcFiles, path.join(ROOT, 'index.js')].some((f) => f !== GIRO_FACTS_PORT && /require\([^)]*giroFactsPort/.test(read(f))));
+// W6.5 — giroFactsPort.js (the W2 temporary shim) is DELETED. It was superseded
+// by giroProjectionPort.js in Packet 01 and had zero requirers anywhere. The
+// invariant is no longer "it exists and nobody uses it" but the stronger
+// "it is gone, and nothing anywhere resurrects it".
+assert('giroFactsPort.js is DELETED and nothing requires it (superseded by giroProjectionPort.js)',
+  !fs.existsSync(GIRO_FACTS_PORT) &&
+  ![...srcFiles, path.join(ROOT, 'index.js')].some((f) => /require\([^)]*giroFactsPort/.test(read(f))));
 assert('giroProjectionReader.js is pure I/O in executable code: no raw manual_giro_id / manual_giros / salida_ref / dissolved_at / pending_giro_intent outside comments',
   fs.existsSync(READER) && !/manual_giro_id|manual_giros|salida_ref|dissolved_at|pending_giro_intent/.test(jsCode(read(READER))));
 assert('timingAssessmentV3 still consumes GiroFacts only (no projection import — W2 core untouched by this packet)',

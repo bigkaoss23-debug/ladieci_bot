@@ -162,36 +162,38 @@ console.log("\n── AB4. Usar giro valido ──");
 // ===============================================================
 // FIXTURE 5 — Manual route multi-zona 15 min (Q1/Q2/Q5)
 // ===============================================================
-console.log("\n── AB5. Manual route multi-zona (rider block) ──");
+console.log("\n── AB5. Trip canonica attiva (rider block) ──");
 {
   const plan = buildPlan({
     now: "19:00",
-    manual_giros: [{ id: "mg1", type: "manual_route", order_ids: ["A", "B", "C"], route_order: ["A", "B", "C"], block_start: "20:00", manual_duration_min: 15, force: true }],
+    active_trip: {
+      trip_id: "T5", giro_id: "G5", departed_at_hhmm: "20:00",
+      member_order_ids: ["A", "B", "C"],
+      outstanding_order_ids: ["A", "B", "C"], completed_order_ids: [],
+    },
     orders: [
-      ord({ id: "A", zona: "Q1", hora: "20:10", andata_min: 4 }),
-      ord({ id: "B", zona: "Q2", hora: "20:10", andata_min: 8 }),
-      ord({ id: "C", zona: "Q5", hora: "20:10", andata_min: 12 }),
+      ord({ id: "A", zona: "Q1", hora: "20:10", andata_min: 4, estado: "EN_ENTREGA" }),
+      ord({ id: "B", zona: "Q2", hora: "20:10", andata_min: 8, estado: "EN_ENTREGA" }),
+      ord({ id: "C", zona: "Q5", hora: "20:10", andata_min: 12, estado: "EN_ENTREGA" }),
     ],
   });
   const blk = plan.blocks[0];
 
-  console.log(`    OLD: manual_giros = solo grouping (order_ids/hora_ref), NON tocca forno_out, niente multi-zona/durata/block → N/A`);
+  console.log(`    OLD: manual_giros = solo grouping (order_ids/hora_ref); lo Stage M che avrebbe letto durata/block leggeva colonne inesistenti → irraggiungibile`);
   console.log(`    NEW: block ${blk.id} ${blk.block_start}–${blk.block_end} zones=${j(blk.zones)} count=${blk.count}`);
 
   check("NEW: un solo rider block", plan.blocks.length === 1 && plan.trips.length === 1);
-  check("NEW: nessun trip separato per zona", plan.trips.every(t => t.type === "manual_route"));
+  check("NEW: nessun trip separato per zona", plan.trips.every(t => t.type === "active_trip"));
   check("NEW: rider timeline occupata (no overlap)", plan.rider_overlaps.length === 0);
+  check("NEW: partenza = fatto reale (departed_at), non dichiarata", blk.block_start === "20:00");
 
-  row("5 · Manual route multi-zona",
-    `non rappresentabile (manual_giros = grouping, no durata/block, no multi-zona)`,
+  row("5 · Trip attiva multi-zona",
+    `non rappresentabile (manual_giros = grouping; Stage M su colonne inesistenti)`,
     `rider block unico ${blk.block_start}–${blk.block_end}, 3 zone, timeline occupata`,
-    "capability nuova",
+    "capability nuova, su un fatto persistito reale",
     "NUOVA CAPACITÀ");
 }
 
-// ===============================================================
-// FIXTURE 6 — Ritiro occupa forno, delivery nello stesso slot
-// ===============================================================
 console.log("\n── AB6. Ritiro occupa forno ──");
 {
   const orders = [
@@ -224,30 +226,40 @@ console.log("\n── AB6. Ritiro occupa forno ──");
 // ===============================================================
 // FIXTURE 7 — Modifica ordine dentro manual route (+30 min)
 // ===============================================================
-console.log("\n── AB7. Modifica ordine dentro block (+30) ──");
+console.log("\n── AB7. New order against an already-departed trip ──");
 {
-  const plan = buildPlan({
+  const snap = {
     now: "19:00",
-    manual_giros: [{ id: "mg5", type: "manual_route", order_ids: ["P", "Q"], block_start: "20:00", manual_duration_min: 15 }],
+    active_trip: {
+      trip_id: "T7", giro_id: "G7", departed_at_hhmm: "20:00",
+      member_order_ids: ["P", "Q"],
+      outstanding_order_ids: ["P", "Q"], completed_order_ids: [],
+    },
     orders: [
-      ord({ id: "P", zona: "Q1", hora: "20:10", andata_min: 4 }),
-      ord({ id: "Q", zona: "Q2", hora: "20:40", andata_min: 8 }), // hora spostata +30
+      ord({ id: "P", zona: "Q1", hora: "20:10", andata_min: 4, estado: "EN_ENTREGA" }),
+      ord({ id: "Q", zona: "Q2", hora: "20:40", andata_min: 8, estado: "EN_ENTREGA" }),
     ],
-  });
+  };
+  const plan = buildPlan(snap);
   const blk = plan.blocks[0];
-  const acts = blk.options.map(o => o.action);
+  const v = evaluateNewOrder(snap, ord({ id: "NEW", zona: "Q1", hora: "20:05", andata_min: 5 }));
+  const jb = v.options.find(o => o.type === "join_block");
 
   console.log(`    OLD: nessun concetto di block → N/A`);
-  console.log(`    NEW: coherent=${blk.coherent} status=${blk.status} issues=${j(blk.issues.map(i => i.type))} options=${j(acts)}`);
+  console.log(`    NEW: membership congelata ${j(blk.members)}, join_block status=${jb && jb.status} override=${jb && jb.requires_override}`);
 
-  check("NEW: block incoerente", blk.coherent === false);
-  check("NEW: issue orden_desfasada", blk.issues.some(i => i.type === "orden_desfasada"));
-  check("NEW: options remove/move/force/ask", ["quitar_orden", "mover_bloque", "mantener_forzado", "preguntar_operador"].every(a => acts.includes(a)), j(acts));
+  // Il vecchio AB7 certificava le "opzioni di riparazione" di un block manuale
+  // (quitar/mover/forzar/preguntar). Quel concetto non esiste piu` e non viene
+  // reinventato: dopo la partenza la membership e` IMMUTABILE, quindi non c'e`
+  // nulla da riparare — l'unico esito onesto e` un rifiuto senza scappatoie.
+  check("NEW: membership congelata invariata", j(blk.members) === j(["P", "Q"]));
+  check("NEW: join su trip partita rifiutato", jb && jb.status === "blocked");
+  check("NEW: nessuna opzione di override operatore", jb && jb.requires_override === false && jb.immutable_membership === true);
 
-  row("7 · Modifica dentro block",
+  row("7 · New order against a departed trip",
     `non rappresentabile (no block)`,
-    `incoerente + options quitar/mover/forzar/preguntar`,
-    "capability nuova (gestione coerenza modifiche)",
+    `rifiuto esplicito: membership immutabile dopo la partenza`,
+    "l'invariante sostituisce le vecchie opzioni di riparazione di un block mai raggiungibile",
     "NUOVA CAPACITÀ");
 }
 

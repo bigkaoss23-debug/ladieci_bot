@@ -170,112 +170,133 @@ console.log("\n── 10. after-midnight (edge documentato) ──");
 }
 
 // ===============================================================
-// MANUAL MULTI-ZONE ROUTE / RIDER BLOCK (spec §Manual route)
+// CANONICAL ACTIVE TRIP / RIDER BLOCK (Planner W6.5)
 // ===============================================================
+// Replaces the pre-W6.5 M1..M7 "manual_route" scenarios outright. Those drove
+// planner.js Stage M through `snapshot.manual_giros[].{type,order_ids,
+// route_order,block_start,manual_duration_min,created_by_operator,force}` —
+// seven columns that do not exist in public.manual_giros, `type` among them,
+// so the stage's own first filter could never match on real data. They
+// certified a machine that could not run. These T-series scenarios certify the
+// machine that does: the canonical ACTIVE TRIP from Trip Authority.
 
-// ── M1 — manual route multi-zona base: un solo rider block ────────────────────
-console.log("\n── M1. manual route multi-zona (Q1/Q2/Q5, durata 15) ──");
+// ── T1 — la trip attiva forma UN solo rider block canonico ────────────────────
+console.log("\n── T1. active trip -> un solo rider block canonico ──");
 {
   const plan = buildPlan({
     now: "19:00",
-    manual_giros: [{
-      id: "mg1", type: "manual_route",
-      order_ids: ["A", "B", "C"], route_order: ["A", "B", "C"],
-      block_start: "20:00", manual_duration_min: 15,
-      created_by_operator: true, force: true,
-    }],
+    active_trip: {
+      trip_id: "T1", giro_id: "G1", departed_at_hhmm: "20:00",
+      member_order_ids: ["A", "B", "C"],
+      outstanding_order_ids: ["A", "B", "C"], completed_order_ids: [],
+    },
     orders: [
-      ord({ id: "A", zona: "Q1", hora: "20:10", andata_min: 4 }),
-      ord({ id: "B", zona: "Q2", hora: "20:10", andata_min: 8 }),
-      ord({ id: "C", zona: "Q5", hora: "20:10", andata_min: 12 }),
+      ord({ id: "A", zona: "Q1", hora: "20:10", andata_min: 4, estado: "EN_ENTREGA" }),
+      ord({ id: "B", zona: "Q2", hora: "20:10", andata_min: 6, estado: "EN_ENTREGA" }),
+      ord({ id: "C", zona: "Q5", hora: "20:10", andata_min: 5, estado: "EN_ENTREGA" }),
     ],
   });
   check("un solo rider block", plan.blocks.length === 1, String(plan.blocks.length));
   const blk = plan.blocks[0];
   check("nessun trip separato per zona (solo il block)", plan.trips.length === 1, String(plan.trips.length));
-  check("type = manual_route", blk.type === "manual_route", blk.type);
-  check("block_start coerente = 20:00", blk.block_start === "20:00", blk.block_start);
-  check("block_end = start + 15 = 20:15", blk.block_end === "20:15", blk.block_end);
-  check("durata da manuale (duration_source=manual)", blk.duration_source === "manual" && blk.duration_min === 15);
+  check("type = active_trip", blk.type === "active_trip", blk.type);
+  check("id = TRIP:<trip_id>", blk.id === "TRIP:T1", blk.id);
+  check("giro linkato = G1", blk.manual_giro_id === "G1", blk.manual_giro_id);
+  check("departure = departed_at REALE (20:00)", blk.departure === "20:00" && blk.block_start === "20:00", blk.departure);
+  // occupancy = 2*tg + buffer = 2*6 + 3 = 15 -> 20:15
+  check("block_end = modello round-trip nativo (20:15)", blk.block_end === "20:15", blk.block_end);
+  check("duration_source = estimated (mai spacciata per un fatto)", blk.duration_source === "estimated", blk.duration_source);
   check("3 zone diverse nello stesso block", JSON.stringify(blk.zones) === JSON.stringify(["Q1", "Q2", "Q5"]), JSON.stringify(blk.zones));
-  check("count 3 / members A,B,C", blk.count === 3 && JSON.stringify(blk.members) === JSON.stringify(["A", "B", "C"]));
-  check("tutte le pizze escono a block_start (I8)",
-    plan.orders.A.forno_out === "20:00" && plan.orders.B.forno_out === "20:00" && plan.orders.C.forno_out === "20:00");
-  check("rider timeline occupata = nessun overlap interno", plan.rider_overlaps.length === 0);
+  check("count 3 / members A,B,C (membership congelata)",
+    blk.count === 3 && JSON.stringify(blk.members) === JSON.stringify(["A", "B", "C"]));
+  check("membership immutabile dichiarata", blk.immutable_membership === true);
+  check("salida di ogni membro = partenza reale", ["A", "B", "C"].every(id => plan.orders[id].salida === "20:00"));
 }
 
-// ── M2 — il rider block impedisce nuovi delivery dentro la finestra ───────────
-console.log("\n── M2. block 20:00–20:15 blocca nuovo delivery a 20:05 ──");
+// ── T2 — il rider block occupa il rider e non e` aggregabile ──────────────────
+console.log("\n── T2. rider occupato dalla trip in corso ──");
 {
   const snap = {
     now: "19:00",
-    manual_giros: [{ id: "mgB", type: "manual_route", order_ids: ["M"], block_start: "20:00", manual_duration_min: 15, force: true }],
-    orders: [ord({ id: "M", zona: "Q3", hora: "20:00", andata_min: 5 })],
+    active_trip: {
+      trip_id: "T2", giro_id: "G2", departed_at_hhmm: "20:00",
+      member_order_ids: ["M"], outstanding_order_ids: ["M"], completed_order_ids: [],
+    },
+    orders: [ord({ id: "M", zona: "Q3", hora: "20:00", andata_min: 5, estado: "EN_ENTREGA" })],
   };
   const v = evaluateNewOrder(snap, ord({ id: "NEW", zona: "Q1", hora: "20:05", andata_min: 5 }));
   const sep = v.options.find(o => o.type === "separate");
   const jb = v.options.find(o => o.type === "join_block");
-  check("separata NON dentro il block → marcata blocked_by_rider_block", sep && sep.blocked_by_rider_block === true, JSON.stringify(sep));
-  check("separata spinta a salida ≥ block_end (20:15)", sep && sep.salida === "20:15", sep && sep.salida);
-  check("join nel block solo con override esplicito", jb && jb.requires_override === true && jb.status === "blocked", JSON.stringify(jb));
+  check("separata dentro la finestra -> blocked_by_rider_block", sep && sep.blocked_by_rider_block === true, JSON.stringify(sep));
+  check("join_block offerto ma BLOCCATO", jb && jb.status === "blocked", JSON.stringify(jb));
+  check("nessun override possibile: membership post-partenza immutabile",
+    jb && jb.requires_override === false && jb.immutable_membership === true, JSON.stringify(jb));
+  check("join_block porta il trip_id canonico", jb && jb.trip_id === "T2", jb && jb.trip_id);
 }
 
-// ── M3 — ordine non pronto dentro il block ────────────────────────────────────
-console.log("\n── M3. ordine con forno_out dopo block_start ──");
+// ── T3 — no fabricated ETA for an already-departed stop ──────────────────────
+console.log("\n── T3. departed stop: no invented arrival ──");
 {
   const plan = buildPlan({
     now: "19:00",
-    manual_giros: [{ id: "mg3", type: "manual_route", order_ids: ["X", "Y"], block_start: "20:00", manual_duration_min: 15 }],
-    orders: [
-      ord({ id: "X", zona: "Q1", hora: "20:10", andata_min: 4 }),
-      ord({ id: "Y", zona: "Q2", hora: "20:10", andata_min: 6, estado: "EN_COCINA", forno_out: "20:05" }),
-    ],
+    active_trip: {
+      trip_id: "T3", giro_id: null, departed_at_hhmm: "20:00",
+      member_order_ids: ["X"], outstanding_order_ids: ["X"], completed_order_ids: [],
+    },
+    orders: [ord({ id: "X", zona: "Q1", hora: "20:10", andata_min: 4, estado: "EN_ENTREGA", forno_out: "19:55" })],
   });
-  const blk = plan.blocks[0];
-  check("block NON coerente", blk.coherent === false, String(blk.coherent));
-  check("status ≠ coherent (force_required / needs_decision)", blk.status === "needs_decision", blk.status);
-  check("issue pizza_not_ready su Y", blk.issues.some(i => i.order === "Y" && i.type === "pizza_not_ready"), JSON.stringify(blk.issues));
-  check("warning pizza_not_ready sull'ordine (non silenzioso)", plan.orders.Y.reasons.includes("pizza_not_ready"), JSON.stringify(plan.orders.Y.reasons));
+  const x = plan.orders["X"];
+  check("entrega = null (nessuna stima di arrivo inventata)", x.entrega === null, JSON.stringify(x.entrega));
+  check("eta_status = UNKNOWN", x.eta_status === "UNKNOWN", x.eta_status);
+  check("retraso = null, nessun conflitto dedotto dal nulla", x.retraso === null && x.conflicto === false);
+  check("forno_out = the order's own committed fact, not re-planned", x.forno_out === "19:55", x.forno_out);
+  check("freeze = DEPARTED", x.freeze === "DEPARTED", x.freeze);
 }
 
-// ── M4 — cliente fuori slot dentro il block (retraso sulla promessa, I9) ──────
-console.log("\n── M4. consegna interna oltre la granularità promessa ──");
+// ── T4 — la membership congelata NON si restringe quando uno stop si chiude ───
+console.log("\n── T4. completed stop: frozen membership intact ──");
 {
   const plan = buildPlan({
     now: "19:00",
-    manual_giros: [{ id: "mg4", type: "manual_route", order_ids: ["Z"], block_start: "20:00", manual_duration_min: 30 }],
-    orders: [ord({ id: "Z", zona: "Q1", hora: "20:00", andata_min: 10 })],
+    active_trip: {
+      trip_id: "T4", giro_id: "G4", departed_at_hhmm: "20:00",
+      member_order_ids: ["A", "B"],            // congelata alla partenza
+      outstanding_order_ids: ["B"], completed_order_ids: ["A"],
+    },
+    // A e` RETIRADO: terminale, quindi gia` escluso dallo snapshot planner.
+    orders: [ord({ id: "B", zona: "Q2", hora: "20:10", andata_min: 6, estado: "EN_ENTREGA" })],
   });
   const blk = plan.blocks[0];
-  // buffer ops driver = 3 (default): est.total = 10+3 = 13, scale = 30/13 → arrivo +23.
-  check("entrega 20:23 (block lungo, buffer 3)", plan.orders.Z.entrega === "20:23", plan.orders.Z.entrega);
-  check("retraso = 13 su promessa+slot (NON sulla window)", plan.orders.Z.retraso === 13, String(plan.orders.Z.retraso));
-  check("issue cliente_fuera_slot (non nascosto dalla window)", blk.issues.some(i => i.type === "cliente_fuera_slot"), JSON.stringify(blk.issues));
-  check("block segnalato incoerente", blk.coherent === false);
+  check("il block esiste ancora", !!blk);
+  check("members = [A,B]: the closed stop does NOT disappear",
+    JSON.stringify(blk.members) === JSON.stringify(["A", "B"]), JSON.stringify(blk.members));
+  check("stops_total 2 / completed 1 / remaining 1",
+    blk.stops_total === 2 && blk.stops_completed === 1 && blk.stops_remaining === 1,
+    `${blk.stops_total}/${blk.stops_completed}/${blk.stops_remaining}`);
 }
 
-// ── M5 — modifica ordine dentro il block: hora +30 → block incoerente ─────────
-console.log("\n── M5. ordine nel block cambia hora +30 ──");
+// ── T5 — tutti gli stop completati: membership ancora intatta ─────────────────
+console.log("\n── T5. tutti gli stop completati ──");
 {
   const plan = buildPlan({
     now: "19:00",
-    manual_giros: [{ id: "mg5", type: "manual_route", order_ids: ["P", "Q"], block_start: "20:00", manual_duration_min: 15 }],
-    orders: [
-      ord({ id: "P", zona: "Q1", hora: "20:10", andata_min: 4 }),
-      ord({ id: "Q", zona: "Q2", hora: "20:40", andata_min: 8 }), // promessa spostata +30
-    ],
+    active_trip: {
+      trip_id: "T5", giro_id: "G5", departed_at_hhmm: "20:00",
+      member_order_ids: ["A", "B"],
+      outstanding_order_ids: [], completed_order_ids: ["A", "B"],
+    },
+    orders: [],                                 // entrambi terminali -> fuori snapshot
   });
   const blk = plan.blocks[0];
-  check("block incoerente", blk.coherent === false, String(blk.coherent));
-  check("issue orden_desfasada su Q", blk.issues.some(i => i.order === "Q" && i.type === "orden_desfasada"), JSON.stringify(blk.issues));
-  const acts = blk.options.map(o => o.action);
-  check("propone quitar/mover/forzar/preguntar",
-    ["quitar_orden", "mover_bloque", "mantener_forzado", "preguntar_operador"].every(a => acts.includes(a)), JSON.stringify(acts));
-  check("timeline non sporca (nessun overlap)", plan.rider_overlaps.length === 0);
+  check("il block esiste anche senza membri nello snapshot", !!blk);
+  check("members congelati = [A,B]", blk && JSON.stringify(blk.members) === JSON.stringify(["A", "B"]));
+  check("stops_remaining = 0 senza perdere la membership",
+    blk && blk.stops_remaining === 0 && blk.stops_total === 2);
+  check("il rider resta occupato finche` la trip non chiude", blk && blk.block_end >= blk.block_start);
 }
 
-// ── M6 — automatic giro NON rotto dal nuovo codice (regressione) ──────────────
-console.log("\n── M6. automatic giro intatto (no manual_giros) ──");
+// ── T6 — automatic giro NON rotto dal nuovo codice (regressione) ──────────────
+console.log("\n── T6. automatic giro intatto (nessuna trip attiva) ──");
 {
   const plan = buildPlan({
     now: "17:00",
@@ -289,22 +310,60 @@ console.log("\n── M6. automatic giro intatto (no manual_giros) ──");
   check("forno_out condiviso 19:56 (I8 invariato)", plan.orders["#001"].forno_out === "19:56" && plan.orders["#002"].forno_out === "19:56");
 }
 
-// ── M7 — invariante rider: block + auto trip non si sovrappongono ─────────────
-console.log("\n── M7. invariante rider: nessun block/trip sovrapposto ──");
+// ── T7 — invariante rider: block + auto trip non si sovrappongono ─────────────
+console.log("\n── T7. invariante rider: nessun block/trip sovrapposto ──");
 {
   const plan = buildPlan({
     now: "19:00",
-    manual_giros: [{ id: "mg7", type: "manual_route", order_ids: ["R"], block_start: "20:00", manual_duration_min: 20 }],
+    active_trip: {
+      trip_id: "T7", giro_id: "G7", departed_at_hhmm: "20:00",
+      member_order_ids: ["R"], outstanding_order_ids: ["R"], completed_order_ids: [],
+    },
     orders: [
-      ord({ id: "R", zona: "Q1", hora: "20:00", andata_min: 5 }),
-      ord({ id: "S", zona: "Q5", hora: "20:05", andata_min: 10 }), // automatico → deve cadere DOPO il block
+      ord({ id: "R", zona: "Q1", hora: "20:00", andata_min: 5, estado: "EN_ENTREGA" }),
+      ord({ id: "S", zona: "Q5", hora: "20:05", andata_min: 10 }), // automatico → DOPO il block
     ],
   });
   check("nessun overlap rider (block ∩ trip)", plan.rider_overlaps.length === 0, JSON.stringify(plan.rider_overlaps));
   const auto = plan.trips.find(t => t.type === "automatic");
-  check("trip automatico parte ≥ block_end (20:20)", auto && auto.departure >= "20:20", auto && auto.departure);
+  // occupancy = 2*5 + 3 = 13 -> block_end 20:13
+  check("trip automatico parte ≥ block_end (20:13)", auto && auto.departure >= "20:13", auto && auto.departure);
 }
 
+// ── T8 — fatti trip non affidabili: DEGRADED esplicito, mai rider libero ──────
+console.log("\n── T8. trip facts unavailable -> DEGRADED esplicito ──");
+{
+  const plan = buildPlan({
+    now: "19:00",
+    active_trip_unavailable: true,
+    active_trip_unavailable_reason: "SCOPE_UNAVAILABLE",
+    orders: [ord({ id: "Z", zona: "Q1", hora: "20:00", andata_min: 5 })],
+  });
+  check("nessun block inventato", plan.blocks.length === 0);
+  check("warning esplicito sulla timeline rider non fiabile",
+    plan.warnings.some(w => /trip facts no disponibles/.test(w) && /SCOPE_UNAVAILABLE/.test(w)),
+    JSON.stringify(plan.warnings));
+}
+
+// ── T9 — l'input legacy manual_giros non puo` piu` creare alcun block ─────────
+console.log("\n── T9. manual_giros legacy: input morto, nessun effetto ──");
+{
+  const plan = buildPlan({
+    now: "19:00",
+    // Esattamente la forma che lo Stage M pre-W6.5 consumava. Sette di queste
+    // colonne non esistono in public.manual_giros: qui non deve produrre nulla.
+    manual_giros: [{
+      id: "mg1", type: "manual_route", order_ids: ["A"], route_order: ["A"],
+      block_start: "20:00", manual_duration_min: 15, created_by_operator: true, force: true,
+    }],
+    orders: [ord({ id: "A", zona: "Q1", hora: "20:10", andata_min: 4 })],
+  });
+  check("nessun block da manual_giros", plan.blocks.length === 0, String(plan.blocks.length));
+  check("the order stays in normal automatic bucketing",
+    plan.trips.length === 1 && plan.trips[0].type === "automatic", JSON.stringify(plan.trips.map(t => t.type)));
+  check("nessun trip di tipo manual_route esiste piu`",
+    !plan.trips.some(t => t.type === "manual_route"));
+}
 // ── Risultato ─────────────────────────────────────────────────────────────────
 console.log(`\n──────────────\n  ${pass} PASS · ${fail} FAIL\n`);
 process.exit(fail ? 1 : 0);

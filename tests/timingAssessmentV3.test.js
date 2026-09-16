@@ -23,7 +23,43 @@ const {
   computeTimingAssessmentV3,
   buildStandaloneScheduleFacts,
 } = require("../src/core/delivery/timingAssessmentV3");
-const { resolveIntendedGiroFacts, findCompatibleGiro } = require("../src/core/delivery/giroFactsPort");
+// W6.5 — giroFactsPort.js (the W2 temporary shim) is DELETED. Its canonical
+// successor, giroProjectionPort.js, has been the live read boundary since W4.
+// These fixture builders adapt the test's legacy giro shape onto a real
+// giro_projection_v1 body, so the W2 core below is exercised against the SAME
+// facts it will actually receive when it is activated.
+const {
+  resolveIntendedGiroFromProjection,
+  findCompatibleGiroFromProjection,
+} = require("../src/core/delivery/giroProjectionPort");
+
+// giros: [{ id, hora_ref, dissolved_at, order_ids, giro_state? }] -> projection body.
+// `giro_state` is now EXPLICIT: the pre-W6.5 shim inferred DEPARTED from "hora_ref is
+// already in the past", a heuristic the canonical Authority replaced with a real
+// lifecycle state (TB-2). Fixtures state the fact instead of implying it.
+function projectionFrom(giros, ordersById = {}) {
+  return {
+    contract: "giro_projection_v1", scope_valid: true, degraded: false,
+    giros: (giros || []).map((g) => ({
+      giro_id: g.id,
+      giro_state: g.giro_state || (g.dissolved_at ? "DISSOLVED" : "PLANNED"),
+      salida: g.hora_ref || null,
+      hora_ref: g.hora_ref || null,
+      effective_members: (g.order_ids || []).map((oid) => ({ order_uid: `u-${oid}`, order_id: oid })),
+      dissolved_at: g.dissolved_at || null,
+    })),
+    orders: (giros || []).flatMap((g) => (g.order_ids || []).map((oid) => ({
+      order_uid: `u-${oid}`, order_id: oid, effective_giro_id: g.id,
+    }))),
+    intents: [],
+  };
+}
+const resolveIntendedGiroFacts = ({ giroId, newOrderZona, giros, ordersById }) =>
+  resolveIntendedGiroFromProjection({ giroId, newOrderZona, projection: projectionFrom(giros, ordersById), ordersById });
+const findCompatibleGiro = ({ newOrderZona, giros, ordersById }) => {
+  const hit = findCompatibleGiroFromProjection(projectionFrom(giros, ordersById), newOrderZona, ordersById);
+  return hit ? hit.giro_id : null;
+};
 const { resolveDriverFacts } = require("../src/core/delivery/driverFactsPort");
 const { resolveOperationalScope } = require("../src/core/delivery/operationalScopePort");
 const { toServiceDayMin, computeDriverFields } = require("../src/utils/zones");
@@ -254,10 +290,17 @@ section("W2-N14 — intended giro target departed");
   check("intended_giro.can_apply = false", a.intended_giro.can_apply === false);
   check("no field that could block Confirmar", !JSON.stringify(a).toLowerCase().includes("confirm"));
 
-  // Port level: hora_ref already in the past -> DEPARTED.
-  const giros = [{ id: "mg3", hora_ref: "19:00", dissolved_at: null, order_ids: [] }];
-  const gf = resolveIntendedGiroFacts({ giroId: "mg3", newOrderZona: "Q2", giros, ordersById: {}, nowServiceDayMin: T("19:30") });
-  check("port: past hora_ref -> DEPARTED", gf.status === "DEPARTED");
+  // Port level: the canonical lifecycle state IS the departure fact (W6.5 — the
+  // retired shim guessed it from "hora_ref already in the past", which is why a
+  // giro whose planned time had merely elapsed looked departed when it had not).
+  const giros = [{ id: "mg3", hora_ref: "19:00", dissolved_at: null, order_ids: [], giro_state: "IN_TRIP" }];
+  const gf = resolveIntendedGiroFacts({ giroId: "mg3", newOrderZona: "Q2", giros, ordersById: {} });
+  check("port: IN_TRIP giro -> DEPARTED", gf.status === "DEPARTED");
+  const notDeparted = resolveIntendedGiroFacts({
+    giroId: "mg3b", newOrderZona: "Q2",
+    giros: [{ id: "mg3b", hora_ref: "19:00", dissolved_at: null, order_ids: [] }], ordersById: {},
+  });
+  check("port: a PLANNED giro whose hora_ref merely elapsed is NOT departed", notDeparted.status === "VALID");
 }
 
 // ─────────────────────────────────────────────────────────────────────────

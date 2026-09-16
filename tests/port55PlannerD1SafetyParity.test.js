@@ -120,12 +120,32 @@ console.log(`\n-- 4. buildPlan unregressed vs ${PRE_PORT_REF} (pre-port) --`);
                                ord({ id: "#b", zona: "Q3", hora: "21:10", andata_min: 9 }),
                                ord({ id: "#c", zona: "Q2", hora: "21:05", andata_min: 8 })] },
     ];
+    // W6.5 — Stage M is gone, and with it three `cfg` knobs that ONLY its
+    // deleted buildRiderBlock() ever read (riderBlockDurMismatchMin/Ratio,
+    // riderBlockEarlyToleranceMin). They are echoed back in `plan.config`, so
+    // dropping them changes that one key while leaving every SCHEDULING output
+    // byte-identical. This guard exists to catch scheduling regressions, so it
+    // normalises away exactly those three retired keys — and nothing else.
+    const RETIRED_CFG_KEYS = ["riderBlockDurMismatchMin", "riderBlockDurMismatchRatio", "riderBlockEarlyToleranceMin"];
+    const normalize = (plan) => {
+      const out = { ...plan, config: { ...plan.config } };
+      for (const k of RETIRED_CFG_KEYS) delete out.config[k];
+      return JSON.stringify(out);
+    };
     let same = true, firstBad = "";
     snapshots.forEach((snap, i) => {
-      const a = JSON.stringify(buildPlan(JSON.parse(JSON.stringify(snap))));
-      const b = JSON.stringify(headMod.buildPlan(JSON.parse(JSON.stringify(snap))));
+      const a = normalize(buildPlan(JSON.parse(JSON.stringify(snap))));
+      const b = normalize(headMod.buildPlan(JSON.parse(JSON.stringify(snap))));
       if (a !== b) { same = false; if (!firstBad) firstBad = `snapshot #${i}`; }
     });
+    // Anti-vacuity: the normalisation must remove ONLY retired keys, never mask
+    // a live divergence — prove the raw outputs differ in `config` alone.
+    const rawA = buildPlan(JSON.parse(JSON.stringify(snapshots[0])));
+    const rawB = headMod.buildPlan(JSON.parse(JSON.stringify(snapshots[0])));
+    const divergentKeys = [...new Set([...Object.keys(rawA), ...Object.keys(rawB)])]
+      .filter((k) => JSON.stringify(rawA[k]) !== JSON.stringify(rawB[k]));
+    check("the ONLY pre/post divergence is plan.config's retired rider-block knobs",
+      divergentKeys.length === 1 && divergentKeys[0] === "config", JSON.stringify(divergentKeys));
     check(`buildPlan output identical to ${PRE_PORT_REF} on 4 snapshots`, same, firstBad);
     // And prove the comparison is not vacuous: evaluateNewOrder MUST differ.
     const impossible = ord({ id: "#new", zona: "Q1", hora: "20:02", andata_min: 5 });

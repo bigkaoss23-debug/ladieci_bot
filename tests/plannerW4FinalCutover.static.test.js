@@ -46,9 +46,63 @@ function byteIdentical(relPath) {
 const S4_STATIC_GUARD = path.join(ROOT, 'tests', 's4DormantInsertGateGuard.static.test.js');
 const s4Applied = fs.existsSync(S4_STATIC_GUARD);
 
-section('FINAL-W4-N12 (HARD GATE): planner.js -- Stage M AND Stage 1 -- whole-file byte-identical to BASE_HEAD');
-assert('src/core/delivery/planner.js is byte-identical to BASE_HEAD (not touched at all -- stronger than a Stage-M-only proof)',
-  byteIdentical('src/core/delivery/planner.js'));
+// ── W6.5 (Planner final backend canonicalization + legacy cleanup) ──────────
+// Stage M (the unreachable `manual_route` rider block) deleted and replaced by
+// the canonical ACTIVE TRIP from Trip Authority; the raw `manual_giros` read
+// removed from the planner snapshot path; the operational rider read moved off
+// DRIVER_STATO onto trip_projection_v1; giroFactsPort.js (superseded by
+// giroProjectionPort.js, zero requirers) deleted. Authorized here by the same
+// deferred-verification pattern this file already applies to W5/W6.3: its own
+// guard must be present on the branch to vouch for the change.
+const W6_5_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW65FinalBackendV1.static.test.js');
+const w65Applied = fs.existsSync(W6_5_STATIC_GUARD);
+const W6_5_PRODUCT_FILES = [
+  'src/core/delivery/tripProjectionReader.js',
+  'src/core/delivery/tripProjectionPort.js',
+  'src/core/delivery/planner.js',
+  'src/core/delivery/plannerSnapshot.js',
+  'src/core/delivery/readOnlyRestDb.js',
+  'src/core/delivery/giroFactsPort.js',
+  'src/agents/riderReads.js',
+  'src/utils/supabaseResourcePolicy.js',
+  'index.js',
+];
+
+section('FINAL-W4-N12 (HARD GATE): planner.js -- the read cutover changes NO scheduling code');
+// Pre-W6.5 this was whole-file byte identity: the W4 read cutover touched
+// plannerSnapshot.js alone, so planner.js could be pinned outright. W6.5 -- a
+// later, separately-certified packet -- deliberately replaces Stage M (which
+// read seven columns that do not exist in public.manual_giros and was therefore
+// unreachable) with the canonical active trip. The invariant N12 exists to
+// protect is that NO read cutover alters how the planner SCHEDULES or how it
+// keys giro membership; with W6.5 present that is proven directly, on the code
+// itself, instead of by whole-file identity.
+if (!w65Applied) {
+  assert('src/core/delivery/planner.js is byte-identical to BASE_HEAD (not touched at all -- stronger than a Stage-M-only proof)',
+    byteIdentical('src/core/delivery/planner.js'));
+} else {
+  const curPlanner = fs.readFileSync(path.join(ROOT, 'src', 'core', 'delivery', 'planner.js'), 'utf8');
+  let basePlanner = '';
+  try {
+    basePlanner = execSync(`git show ${BASE_HEAD}:src/core/delivery/planner.js`, { cwd: ROOT, encoding: 'utf8' });
+  } catch (_) { basePlanner = ''; }
+  const between = (src, a, b) => {
+    const i = src.indexOf(a), j = src.indexOf(b);
+    return i < 0 || j < 0 || j <= i ? null : src.slice(i, j);
+  };
+  const S1_START = '  // ── Stage 1 — costruisci i trip';
+  const S1_END = '  // ── Invariante rider';
+  const curS1 = between(curPlanner, S1_START, S1_END);
+  const baseS1 = between(basePlanner, S1_START, S1_END);
+  assert('N12: Stage 1 (giro bucketing/keying) is byte-identical to BASE_HEAD',
+    curS1 !== null && baseS1 !== null && curS1 === baseS1);
+  const curTail = between(curPlanner, S1_END, 'function evaluateNewOrder');
+  const baseTail = between(basePlanner, S1_END, 'function evaluateNewOrder');
+  assert('N12: the rest of buildPlan (rider invariant + plan assembly) is byte-identical to BASE_HEAD',
+    curTail !== null && baseTail !== null && curTail === baseTail);
+  assert('N12: planner.js is still PURE -- it performs no DB/projection read of its own',
+    !/require\(/.test(curPlanner.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')));
+}
 
 section('previewStrategicOpportunities.js -- byte-identical to BASE_HEAD (architectural preference achieved)');
 // S4's own second commit is the first later packet authorized to touch this file
@@ -89,12 +143,13 @@ const W6_3_PRODUCT_FILES = [
   // reason, as the pre-existing H-1 rollback entry). The forward migration is NOT exempt.
   'scripts/check-domain-language.js',
 ];
+
 for (const f of [
   'src/agents/manualGiroReads.js',
   'src/agents/riderReads.js',
   'src/agents/riderTrip.js',
   'src/utils/driverTelemetry.js',
-].filter((f) => !(w63Applied && W6_3_PRODUCT_FILES.includes(f)))) {
+].filter((f) => !(w63Applied && W6_3_PRODUCT_FILES.includes(f)) && !(w65Applied && W6_5_PRODUCT_FILES.includes(f)))) {
   assert(`${f} is byte-identical to BASE_HEAD`, byteIdentical(f));
 }
 // manualGiros.js: a later, separately-authorized packet (W5 Packet 01 — single-writer
@@ -254,6 +309,11 @@ const allowedProductFiles = new Set([
   // W6.3/W6.4 Canonical Rider Lifecycle + Giro Projection Cutover (135): the first W6
   // packet with product JS — it ACTIVATES the canonical departure.
   ...(w63Applied ? W6_3_PRODUCT_FILES : []),
+  // W6.5 Planner Final Backend Canonicalization: replaces Stage M with the
+  // canonical active trip, drops the raw manual_giros read from this very read
+  // path, moves the rider read onto Trip Authority and deletes giroFactsPort.js.
+  // Certified by tests/plannerW65FinalBackendV1.static.test.js.
+  ...(w65Applied ? W6_5_PRODUCT_FILES : []),
 ]);
 const nonTestNonAllowed = changedFiles.filter((f) => !f.startsWith('tests/') && !allowedProductFiles.has(f));
 assert('every non-test changed file is plannerSnapshot.js (the architecturally-preferred minimal diff)',

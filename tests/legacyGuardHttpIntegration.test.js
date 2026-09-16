@@ -90,10 +90,19 @@ function reqHttp(server, { method = "POST", path = "/api", key = "testkey", auth
   const r5 = await reqHttp(server, { method: "GET", action: "getClientes", auth: RIDER });
   check("5 rider forbidden getClientes -> 403", r5.status === 403);
   check("12 denied request did NOT invoke handler (no sbSelect)", !sbCalls.includes("clientes"));
-  // 6. rider allowed read -> handler reached (rider-scoped path calls sbSelect)
+  // 6. rider allowed read -> handler reached (rider-scoped path runs).
+  // W6.5: the rider-scoped handler's FIRST act is now the canonical Trip
+  // Authority read (rpc/trip_projection_v1), not a DRIVER_STATO config select.
+  // Offline that projection is unreachable, so the handler fail-closes with
+  // 503 rider_read_unavailable BEFORE it ever queries `ordenes` — which is
+  // itself proof the guard let the rider through into the rider-scoped path.
+  // This assertion is about guard traversal, so it accepts either outcome and
+  // still rejects a 401/403 (guard refusal) or a broadened list.
   sbCalls = [];
   const r6 = await reqHttp(server, { method: "GET", action: "getOrdenes", auth: RIDER });
-  check("6 rider getOrdenes -> 200 handler reached", r6.status === 200 && sbCalls.includes("ordenes"));
+  const r6Reached = (r6.status === 200 && sbCalls.includes("ordenes")) ||
+    (r6.status === 503 && /rider_read_unavailable/.test(String(r6.body || "")));
+  check("6 rider getOrdenes -> rider-scoped handler reached", r6Reached, `status=${r6.status}`);
   // 7. operator normal action -> handler reached
   sbCalls = [];
   const r7 = await reqHttp(server, { method: "GET", action: "getOrdenes", auth: OP });

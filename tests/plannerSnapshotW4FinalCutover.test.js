@@ -62,6 +62,24 @@ require.cache[readerPath] = {
   },
 };
 
+// W6.5 — plannerSnapshot.js now also reads the canonical Trip Authority
+// projection. Same require.cache discipline; default `{ok:true, active:false}`
+// so every pre-existing W4 scenario keeps behaving exactly as it did.
+let STUB_TRIP_PROJECTION = { ok: true, active: false };
+let tripProjectionCallCount = 0;
+const tripReaderPath = require.resolve('../src/core/delivery/tripProjectionReader');
+require.cache[tripReaderPath] = {
+  id: tripReaderPath,
+  filename: tripReaderPath,
+  loaded: true,
+  exports: {
+    async readTripProjection() {
+      tripProjectionCallCount++;
+      return STUB_TRIP_PROJECTION;
+    },
+  },
+};
+
 const { loadPlannerSnapshot, _internal } = require('../src/core/delivery/plannerSnapshot');
 const { buildAnchorsFromSnapshot } = require('../src/agents/previewStrategicOpportunities');
 const { buildPlan } = require('../src/core/delivery/planner');
@@ -111,6 +129,8 @@ function resetStubs() {
   STUB_PROJECTION = null;
   STUB_PROJECTION_THROWS = false;
   projectionCallCount = 0;
+  STUB_TRIP_PROJECTION = { ok: true, active: false };
+  tripProjectionCallCount = 0;
 }
 
 // ── FINAL-W4-N01: current snapshot uses Projection ─────────────────────────
@@ -163,18 +183,65 @@ section('FINAL-W4-N01: current snapshot uses Projection');
   const byId4 = Object.fromEntries(snap4.orders.map((o) => [o.id, o.manual_giro_id]));
   check('N04: A and B share the effective giro, C has none', byId4['#A'] === 'mg_1' && byId4['#B'] === 'mg_1' && byId4['#C'] === null, JSON.stringify(byId4));
 
-  // ── FINAL-W4-N08: Stage M metadata retained but cannot override canonical facts ──
-  section('FINAL-W4-N08: Stage M raw manual_giros metadata cannot override canonical alias');
+  // ── W6.5-N08 (was FINAL-W4-N08): the Stage M raw manual_giros read is GONE ──
+  // Pre-W6.5 this asserted that the raw manual_giros row SURVIVED in the
+  // snapshot for Stage M to consume. Stage M is deleted (its seven declared
+  // columns do not exist in public.manual_giros), so the invariant this guards
+  // is now the stronger one: plannerSnapshot never reads the table at all, and
+  // no raw row can reach — let alone override — the canonical alias.
+  section('W6.5-N08: plannerSnapshot no longer reads raw manual_giros at all');
   resetStubs();
   STUB_PROJECTION = makeAvailableProjection({ ordersToGiro: { '#A': 'mg_CANON' } });
   const giroRows8 = [{ id: 'mg_RAW_ROUTE', type: 'manual_route', order_ids: ['#A'], route_order: ['#A'], block_start: '20:00', manual_duration_min: 15, created_by_operator: true, force: true, hora_ref: '20:10' }];
   const rows8 = [mkOrder('#A', { manual_giro_id: 'mg_RAW_ROUTE' })];
-  const snap8 = await loadPlannerSnapshot({ db: stubDb(rows8, giroRows8), date: STUB_CURRENT_BUSINESS_DATE });
-  check('N08: manual_giros raw row (Stage M metadata) is still present, untouched', snap8.manual_giros.length === 1 && snap8.manual_giros[0].id === 'mg_RAW_ROUTE');
-  check('N08: order-level alias is still the CANONICAL value, not the Stage-M raw manual_giros.id', snap8.orders[0].manual_giro_id === 'mg_CANON', snap8.orders[0].manual_giro_id);
-  check('N08: Stage M fields (route_order/block_start/etc) survive unmodified in the snapshot',
-    snap8.manual_giros[0].route_order.length === 1 && snap8.manual_giros[0].block_start === '20:00' &&
-    snap8.manual_giros[0].manual_duration_min === 15 && snap8.manual_giros[0].created_by_operator === true && snap8.manual_giros[0].force === true);
+  const tablesRead8 = [];
+  const trackingDb8 = {
+    async select(table, query) {
+      tablesRead8.push(table);
+      return stubDb(rows8, giroRows8).select(table, query);
+    },
+  };
+  const snap8 = await loadPlannerSnapshot({ db: trackingDb8, date: STUB_CURRENT_BUSINESS_DATE });
+  check('W6.5-N08: manual_giros is never selected', !tablesRead8.includes('manual_giros'), JSON.stringify(tablesRead8));
+  check('W6.5-N08: the snapshot exposes no manual_giros field at all', snap8.manual_giros === undefined);
+  check('W6.5-N08: order-level alias is still the CANONICAL value, not the raw manual_giros.id', snap8.orders[0].manual_giro_id === 'mg_CANON', snap8.orders[0].manual_giro_id);
+  check('W6.5-N08: no rider block can be built from that dead input', buildPlan(snap8).blocks.length === 0);
+
+  // ── W6.5-N08b: the canonical rider block comes from Trip Authority ──
+  section('W6.5-N08b: canonical active trip reaches the planner as the rider block');
+  resetStubs();
+  STUB_PROJECTION = makeAvailableProjection({ ordersToGiro: { '#A': 'mg_CANON' } });
+  STUB_TRIP_PROJECTION = {
+    ok: true, active: true, trip_id: 'trip-1', giro_id: 'mg_CANON', anchor_order_uid: 'uid-A',
+    departed_at: '2026-09-15T18:00:00Z',
+    members: [{ order_uid: 'uid-A', stop_seq: 1 }, { order_uid: 'uid-GONE', stop_seq: 2 }],
+  };
+  const rows8b = [mkOrder('#A', { order_uid: 'uid-A', estado: 'EN_ENTREGA' }), mkOrder('#Z', { order_uid: 'uid-GONE', estado: 'RETIRADO' })];
+  const snap8b = await loadPlannerSnapshot({ db: stubDb(rows8b, []), date: STUB_CURRENT_BUSINESS_DATE });
+  check('W6.5-N08b: active_trip is present on the snapshot', !!snap8b.active_trip, JSON.stringify(snap8b.active_trip));
+  check('W6.5-N08b: frozen membership keeps the TERMINAL member #Z, which the order list drops',
+    snap8b.active_trip && JSON.stringify(snap8b.active_trip.member_order_ids) === JSON.stringify(['#A', '#Z']) &&
+    !snap8b.orders.some((o) => o.id === '#Z'),
+    JSON.stringify(snap8b.active_trip && snap8b.active_trip.member_order_ids));
+  check('W6.5-N08b: #Z is classified completed, #A outstanding',
+    snap8b.active_trip && JSON.stringify(snap8b.active_trip.completed_order_ids) === JSON.stringify(['#Z']) &&
+    JSON.stringify(snap8b.active_trip.outstanding_order_ids) === JSON.stringify(['#A']));
+
+  // ── W6.5-N08c: unavailable trip facts are DEGRADED, never an idle rider ──
+  section('W6.5-N08c: trip projection unavailable -> explicit degraded flag');
+  resetStubs();
+  STUB_PROJECTION = makeAvailableProjection({ ordersToGiro: { '#A': 'mg_CANON' } });
+  STUB_TRIP_PROJECTION = null;
+  const snap8c = await loadPlannerSnapshot({ db: stubDb([mkOrder('#A')], []), date: STUB_CURRENT_BUSINESS_DATE });
+  check('W6.5-N08c: active_trip is null AND the degraded flag is set', snap8c.active_trip === null && snap8c.active_trip_unavailable === true);
+  check('W6.5-N08c: the reason is machine-readable', snap8c.active_trip_unavailable_reason === 'TRIP_PROJECTION_MISSING', snap8c.active_trip_unavailable_reason);
+  check('W6.5-N08c: orders remain fully readable (degraded trip facts never block the snapshot)', snap8c.orders.length === 1);
+
+  resetStubs();
+  STUB_PROJECTION = makeAvailableProjection({ ordersToGiro: { '#A': 'mg_CANON' } });
+  STUB_TRIP_PROJECTION = { ok: false, code: 'SCOPE_UNAVAILABLE' };
+  const snap8d = await loadPlannerSnapshot({ db: stubDb([mkOrder('#A')], []), date: STUB_CURRENT_BUSINESS_DATE });
+  check('W6.5-N08c: SCOPE_UNAVAILABLE is reported distinctly', snap8d.active_trip_unavailable === true && snap8d.active_trip_unavailable_reason === 'SCOPE_UNAVAILABLE', snap8d.active_trip_unavailable_reason);
 
   // ── FINAL-W4-N09 (HARD GATE): Projection unavailable → no raw current-day fallback ──
   section('FINAL-W4-N09 (HARD GATE): Projection unavailable → explicit failure, never a raw fallback');
@@ -306,8 +373,11 @@ section('FINAL-W4-N01: current snapshot uses Projection');
   STUB_PROJECTION = makeAvailableProjection({ ordersToGiro: {} });
   const rows16 = [mkOrder('#A', { items: [], forzado: false })];
   const snap16 = await loadPlannerSnapshot({ db: stubDb(rows16, []), date: STUB_CURRENT_BUSINESS_DATE });
-  check('N16: top-level snapshot keys unchanged',
-    JSON.stringify(Object.keys(snap16).sort()) === JSON.stringify(['driver', 'driver_events', 'driver_status', 'manual_giros', 'now', 'orders'].sort()));
+  // W6.5: `manual_giros` left the snapshot (dead Stage M input), `active_trip`
+  // replaced it as the canonical rider-block source. Everything else is untouched.
+  check('N16: top-level snapshot keys = pre-cutover set, minus manual_giros, plus active_trip',
+    JSON.stringify(Object.keys(snap16).sort()) === JSON.stringify(['active_trip', 'driver', 'driver_events', 'driver_status', 'now', 'orders'].sort()),
+    JSON.stringify(Object.keys(snap16).sort()));
   const orderKeys16 = Object.keys(snap16.orders[0]).sort();
   // language-guard: allow-legacy tipo_consegna/n_pizze are the existing normalizeOrder() output field names this assertion checks are still present, not new vocabulary
   const expectedOrderKeys16 = ['estado', 'forzado', 'id', 'items', 'manual_giro_id', 'n_pizze', 'tipo_consegna', 'zona', 'hora'].sort();

@@ -182,14 +182,18 @@ console.log("\n══ Scenario H — Semi-congelati / congelati ══");
 }
 
 // ===============================================================
-console.log("\n══ Scenario I — Manual route multi-zona (rider block) ══");
+console.log("\n══ Scenario I — Trip canonica attiva multi-zona (rider block) ══");
 {
-  const m1 = mkDelivery({ id: "TEST_SYN_MR_Q1", zona: "Q1", hora: "21:00", andata_min: 4, manual_giro_id: "MR1" });
-  const m2 = mkDelivery({ id: "TEST_SYN_MR_Q2", zona: "Q2", hora: "21:00", andata_min: 7, manual_giro_id: "MR1" });
-  const m3 = mkDelivery({ id: "TEST_SYN_MR_Q5", zona: "Q5", hora: "21:00", andata_min: 13, manual_giro_id: "MR1" });
+  const m1 = mkDelivery({ id: "TEST_SYN_MR_Q1", zona: "Q1", hora: "21:00", andata_min: 4, estado: "EN_ENTREGA" });
+  const m2 = mkDelivery({ id: "TEST_SYN_MR_Q2", zona: "Q2", hora: "21:00", andata_min: 7, estado: "EN_ENTREGA" });
+  const m3 = mkDelivery({ id: "TEST_SYN_MR_Q5", zona: "Q5", hora: "21:00", andata_min: 13, estado: "EN_ENTREGA" });
+  const MEMBERS = ["TEST_SYN_MR_Q1", "TEST_SYN_MR_Q2", "TEST_SYN_MR_Q5"];
   const snapshot = {
     now: "20:00",
-    manual_giros: [{ id: "MR1", type: "manual_route", order_ids: ["TEST_SYN_MR_Q1", "TEST_SYN_MR_Q2", "TEST_SYN_MR_Q5"], block_start: "21:00", manual_duration_min: 25 }],
+    active_trip: {
+      trip_id: "TEST_SYN_TRIP", giro_id: "MR1", departed_at_hhmm: "21:00",
+      member_order_ids: MEMBERS, outstanding_order_ids: MEMBERS, completed_order_ids: [],
+    },
     orders: [m1, m2, m3],
   };
   const plan = buildPlan(snapshot);
@@ -197,14 +201,18 @@ console.log("\n══ Scenario I — Manual route multi-zona (rider block) ═�
   check("I · 1 rider block creato (blocco unico)", (plan.blocks || []).length === 1);
   const blk = plan.blocks[0];
   check("I · block ha start/end (occupa il rider come blocco)", !!blk && !!blk.block_start && !!blk.block_end);
-  check("I · i 3 ordini multi-zona stanno nel block", ["TEST_SYN_MR_Q1", "TEST_SYN_MR_Q2", "TEST_SYN_MR_Q5"].every((id) => plan.orders[id] && plan.orders[id].rider_block === "MR1" && plan.orders[id].giro_id === "BLK:MR1"));
-  // nuovo delivery la cui partenza desiderata cade dentro il block → conflitto/override.
+  check("I · the 3 multi-zone stops belong to the block",
+    MEMBERS.every((id) => plan.orders[id] && plan.orders[id].trip_id === "TEST_SYN_TRIP" && plan.orders[id].giro_id === "TRIP:TEST_SYN_TRIP"));
+  // nuovo delivery la cui partenza desiderata cade dentro il block → il rider e`
+  // occupato; la trip in corso NON e` aggregabile (membership immutabile).
   const ev = evaluateNewOrder(snapshot, mkDelivery({ id: "TEST_SYN_MR_NEW", zona: "Q1", hora: "21:10", andata_min: 4 }));
   const sep = ev.options.find((o) => o.type === "separate");
   const joinBlock = ev.options.find((o) => o.type === "join_block");
-  check("I · nuovo ordine dentro il block → separata spinta dopo il block o join_block override",
-    (sep && sep.blocked_by_rider_block === true) || (joinBlock && joinBlock.requires_override === true), JSON.stringify({ sep: sep?.blocked_by_rider_block, jb: joinBlock?.requires_override }));
-  results.push(["I", "Manual route multi-zona", okInv ? "PASS" : "FAIL", "block unico, conflitto gestito"]);
+  check("I · new delivery inside the block -> standalone pushed past the return, join refused with no override",
+    (sep && sep.blocked_by_rider_block === true) &&
+    (joinBlock && joinBlock.status === "blocked" && joinBlock.requires_override === false && joinBlock.immutable_membership === true),
+    JSON.stringify({ sep: sep && sep.blocked_by_rider_block, jb: joinBlock }));
+  results.push(["I", "Trip attiva multi-zona", okInv ? "PASS" : "FAIL", "block unico, membership immutabile"]);
 }
 
 // ===============================================================

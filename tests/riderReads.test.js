@@ -1,4 +1,9 @@
 // tests/riderReads.test.js — S2-1C rider-scoped read boundary. Offline (sbSelect injected).
+// W6.5 (2026-09-16): TRIP MODE is no longer driven by the DRIVER_STATO blob. It comes
+// from TRIP AUTHORITY (public.trip_projection_v1), stubbed here with the same
+// require.cache technique already used below for the Giro projection. Every W4-02A giro
+// assertion is untouched — only the trip-mode fixtures and the fail-closed cases moved
+// from "malformed DRIVER_STATO json" to "untrustworthy trip projection".
 // W4 Packet 02A (2026-09-14): giro facts (manual_giro_id / giro membership / state /
 // salida / hora_ref / dissolved) now come exclusively from the canonical Giro Authority
 // projection, stubbed here via require.cache (same technique as
@@ -23,6 +28,15 @@ require.cache[readerPath].exports.readGiroProjection = async () => {
   return STUB_PROJECTION;
 };
 
+let STUB_TRIP = { ok: true, active: false };
+let tripCallCount = 0;
+const tripReaderPath = require.resolve("../src/core/delivery/tripProjectionReader");
+require(tripReaderPath);
+require.cache[tripReaderPath].exports.readTripProjection = async () => {
+  tripCallCount++;
+  return STUB_TRIP;
+};
+
 const riderReads = require("../src/agents/riderReads");
 const { RIDER_GIRO_FIELDS } = riderReads;
 
@@ -33,15 +47,17 @@ const ORDERS = [
   // A/B carry a deliberately WRONG/STALE raw manual_giro_id: the Projection disagrees
   // (A/B -> G1) and must win (W4-02A-N02).
   // language-guard: allow-legacy tipo_consegna is the existing ordenes field name, reproduced verbatim in this fixture
-  { id: "A", num: 1, estado: "LISTO", tipo_consegna: "DOMICILIO", zona: "Q1", nombre: "X", tel: "1", direccion: "d", items: [], totale: 10, ts: 1, wa_id: "secret", conversacion: "secret", ya_pagado: true, manual_giro_id: "STALE_WRONG_ID", salida_ref: "order-level-raw-untouched" },
+  { id: "A", order_uid: "u-a", num: 1, estado: "LISTO", tipo_consegna: "DOMICILIO", zona: "Q1", nombre: "X", tel: "1", direccion: "d", items: [], totale: 10, ts: 1, wa_id: "secret", conversacion: "secret", ya_pagado: true, manual_giro_id: "STALE_WRONG_ID", salida_ref: "order-level-raw-untouched" },
   // language-guard: allow-legacy tipo_consegna is the existing ordenes field name, reproduced verbatim in this fixture
-  { id: "B", num: 2, estado: "EN_ENTREGA", tipo_consegna: "DOMICILIO", zona: "Q2", ts: 2, manual_giro_id: "STALE_WRONG_ID" },
-  { id: "C", num: 3, estado: "LISTO", tipo_consegna: "RITIRO", ts: 3 },           // pickup -> excluded pre-trip
-  { id: "D", num: 4, estado: "RETIRADO", tipo_consegna: "DOMICILIO", ts: 4 },      // terminal -> excluded
+  { id: "B", order_uid: "u-b", num: 2, estado: "EN_ENTREGA", tipo_consegna: "DOMICILIO", zona: "Q2", ts: 2, manual_giro_id: "STALE_WRONG_ID" },
+  // language-guard: allow-legacy tipo_consegna/RITIRO are the existing ordenes field name and enum value, reproduced verbatim in this fixture
+  { id: "C", order_uid: "u-c", num: 3, estado: "LISTO", tipo_consegna: "RITIRO", ts: 3 },           // pickup -> excluded pre-trip
   // language-guard: allow-legacy tipo_consegna is the existing ordenes field name, reproduced verbatim in this fixture
-  { id: "E", num: 5, estado: "LISTO", tipo_consegna: "DOMICILIO", ts: 5 },         // next-trip candidate, Projection -> G9
+  { id: "D", order_uid: "u-d", num: 4, estado: "RETIRADO", tipo_consegna: "DOMICILIO", ts: 4 },      // terminal -> excluded
   // language-guard: allow-legacy tipo_consegna is the existing ordenes field name, reproduced verbatim in this fixture
-  { id: "F", num: 6, estado: "LISTO", tipo_consegna: "DOMICILIO", ts: 6 },         // no giro at all (not in projection.orders)
+  { id: "E", order_uid: "u-e", num: 5, estado: "LISTO", tipo_consegna: "DOMICILIO", ts: 5 },         // next-trip candidate, Projection -> G9
+  // language-guard: allow-legacy tipo_consegna is the existing ordenes field name, reproduced verbatim in this fixture
+  { id: "F", order_uid: "u-f", num: 6, estado: "LISTO", tipo_consegna: "DOMICILIO", ts: 6 },         // no giro at all (not in projection.orders)
 ];
 
 // The canonical projection: G1 (A,B effective members, PLANNED), G9 (E, PLANNED),
@@ -74,9 +90,8 @@ const GIRO_METADATA_ROWS = [
 // returns the full ORDERS fixture / GIRO_METADATA_ROWS by table name, so a
 // single non-empty stub session id is enough to reach that branch's sbSelect
 // call (matching the real deps shape index.js now injects for the rider path).
-const depsWith = (driverStato) => ({
+const depsWith = () => ({
   sbSelect: async (table, q) => {
-    if (table === "config") return [{ chiave: "DRIVER_STATO", valore: JSON.stringify(driverStato) }];
     if (table === "ordenes") return ORDERS;
     if (table === "manual_giros") return GIRO_METADATA_ROWS; // entrega_ref enrichment only
     return [];
@@ -89,7 +104,8 @@ const depsWith = (driverStato) => ({
   STUB_PROJECTION = PROJECTION;
 
   // ── Pre-trip (no active trip) — ORDER/TRIP-MODE logic, unchanged by W4 ──
-  const noTrip = depsWith({ stato: "LIBERO", active_trip: null });
+  const noTrip = depsWith();
+  STUB_TRIP = { ok: true, active: false };
   const pre = await riderReads.getRiderOrdenes(noTrip);
   const preIds = pre.map((o) => o.id).sort();
   check("pre-trip: delivery LISTO/EN_ENTREGA only", JSON.stringify(preIds) === JSON.stringify(["A", "B", "E", "F"]));
@@ -118,7 +134,14 @@ const depsWith = (driverStato) => ({
   check("order absent from Projection -> manual_giro_id null", fDto.manual_giro_id === null);
 
   // ── In-trip (snapshot membership) — ORDER/TRIP-MODE logic, unchanged by W4 ──
-  const trip = depsWith({ stato: "IN_GIRO", active_trip: { status: "ACTIVE", order_ids: ["A", "B"], manual_giro_ids: ["G1"] } });
+  // Canonical ACTIVE trip: frozen membership (u-a,u-b) + its one linked giro.
+  const ACTIVE_TRIP = {
+    ok: true, active: true, trip_id: "T1", giro_id: "G1", anchor_order_uid: "u-a",
+    departed_at: "2026-09-16T18:05:00Z",
+    members: [{ order_uid: "u-a", stop_seq: 1 }, { order_uid: "u-b", stop_seq: 2 }],
+  };
+  const trip = depsWith();
+  STUB_TRIP = ACTIVE_TRIP;
   const inTrip = await riderReads.getRiderOrdenes(trip);
   const inIds = inTrip.map((o) => o.id).sort();
   check("in-trip: only snapshot order_ids", JSON.stringify(inIds) === JSON.stringify(["A", "B"]));
@@ -126,6 +149,7 @@ const depsWith = (driverStato) => ({
   check("in-trip: manual_giro_id still canonical", inTrip.every((o) => o.manual_giro_id === "G1"));
 
   // ── W4-02A-N03: rider giro members = effective_members ──
+  STUB_TRIP = { ok: true, active: false };
   const preGiros = await riderReads.getRiderManualGiros(noTrip);
   const g1 = preGiros.find((g) => g.id === "G1");
   check("W4-02A-N03: G1 present with canonical shape", !!g1);
@@ -148,9 +172,11 @@ const depsWith = (driverStato) => ({
   check("W4-02A-N07: G9.entrega_ref = null (no enrichment row / null value), giro_state still canonical", g9.entrega_ref === null && g9.hora_ref === null);
   check("W4-02A-N07: public giro DTO keys are exactly RIDER_GIRO_FIELDS", JSON.stringify(Object.keys(g1).sort()) === JSON.stringify([...RIDER_GIRO_FIELDS].sort()));
 
-  // In-trip giros: only the snapshot's manual_giro_ids, from the Projection.
+  // In-trip giros: exactly the active trip's ONE linked giro (W6.2: one trip per Giro).
+  STUB_TRIP = ACTIVE_TRIP;
   const inGiros = (await riderReads.getRiderManualGiros(trip)).map((g) => g.id);
-  check("in-trip giros: only snapshot manual_giro_ids", JSON.stringify(inGiros) === JSON.stringify(["G1"]));
+  check("in-trip giros: only the active trip's linked giro_id", JSON.stringify(inGiros) === JSON.stringify(["G1"]));
+  STUB_TRIP = { ok: true, active: false };
 
   // ── W4-02A-N08 (PROMOTION-BLOCKING): Projection unavailable -> no raw Giro fallback ──
   STUB_PROJECTION = null;
@@ -182,34 +208,66 @@ const depsWith = (driverStato) => ({
   await riderReads.getRiderManualGiros(noTrip);
   check("W4-02A-N10: getRiderManualGiros makes exactly 1 Projection read per call", projectionCallCount === 1, projectionCallCount);
 
-  // ── S2-1D fail-closed cases (ORDER/TRIP-MODE — unchanged by W4) ──
-  const broken = { sbSelect: async (t) => t === "config" ? [{ chiave: "DRIVER_STATO", valore: "{bad json" }] : ORDERS };
-  const bres = await riderReads.getRiderOrdenes(broken);
-  check("malformed snapshot -> fail closed (not a list)", !Array.isArray(bres) && bres.error === "rider_read_unavailable");
+  // ── S2-1D fail-closed posture, W6.5 sources (TRIP AUTHORITY, not DRIVER_STATO) ──
+  // The rule is identical to the pre-cutover one: an untrustworthy trip fact MUST NOT
+  // broaden to the pre-trip candidate list, and MUST NOT present as "no active trip".
+  STUB_TRIP = null;                                   // reader returned null (RPC/transport/scope resolution failed)
+  const bres = await riderReads.getRiderOrdenes(depsWith());
+  check("W6.5: trip projection unreadable -> fail closed (not a list)",
+    !Array.isArray(bres) && bres.error === "rider_read_unavailable" && bres.reason === "trip_projection_unavailable", bres);
 
-  const inconsistent = depsWith({ stato: "IN_GIRO", active_trip: null });
-  const ires = await riderReads.getRiderOrdenes(inconsistent);
-  check("IN_GIRO without active snapshot -> fail closed", !Array.isArray(ires) && ires.reason === "in_giro_without_active_snapshot");
+  STUB_TRIP = { ok: false, code: "SCOPE_UNAVAILABLE" };
+  const sres = await riderReads.getRiderOrdenes(depsWith());
+  check("W6.5: SCOPE_UNAVAILABLE -> fail closed, distinct reason",
+    !Array.isArray(sres) && sres.reason === "trip_scope_unavailable", sres);
 
-  const badSnap = depsWith({ stato: "IN_GIRO", active_trip: { status: "ACTIVE" } });
-  const sres = await riderReads.getRiderOrdenes(badSnap);
-  check("ACTIVE snapshot missing order_ids -> fail closed", !Array.isArray(sres) && sres.reason === "snapshot_missing_order_ids");
+  STUB_TRIP = { ok: false, code: "SOMETHING_ELSE" };
+  const ures = await riderReads.getRiderManualGiros(depsWith());
+  check("W6.5: unrecognized refusal -> still fail closed, never a giro list",
+    !Array.isArray(ures) && ures.error === "rider_read_unavailable", ures);
 
-  const readErr = { sbSelect: async (t) => { if (t === "config") throw new Error("db down"); return ORDERS; } };
-  const eres = await riderReads.getRiderOrdenes(readErr);
-  check("config read error -> fail closed", !Array.isArray(eres) && eres.reason === "config_read_error");
+  // PROMOTION-BLOCKING: a degraded projection can never be rendered as an idle rider.
+  STUB_TRIP = null;
+  const nres = await riderReads.getRiderOrdenes(depsWith());
+  check("W6.5: degraded trip facts are NEVER served as the pre-trip candidate list",
+    !Array.isArray(nres), nres);
 
+  // Session-scope read error on the PRE-TRIP branch: still an empty list, never the
+  // unscoped fallback scan (P0-C3, unchanged).
+  STUB_TRIP = { ok: true, active: false };
   const sessionScopeErr = {
-    sbSelect: async (t) => (t === "config" ? [{ chiave: "DRIVER_STATO", valore: JSON.stringify({ stato: "LIBERO", active_trip: null }) }] : ORDERS),
+    sbSelect: async () => ORDERS,
     getOperationalSessionIds: async () => { throw new Error("db down"); },
     serviceSessionsQuery: () => "unused",
   };
   const sres2 = await riderReads.getRiderOrdenes(sessionScopeErr);
   check("session-scope read error -> fail closed to empty list, not the unscoped fallback", Array.isArray(sres2) && sres2.length === 0);
 
-  const missingMember = depsWith({ stato: "IN_GIRO", active_trip: { status: "ACTIVE", order_ids: ["A", "ZZZ"], manual_giro_ids: [] } });
-  const mm = (await riderReads.getRiderOrdenes(missingMember)).map((o) => o.id).sort();
-  check("active snapshot missing order -> only valid rows, no broadening", JSON.stringify(mm) === JSON.stringify(["A"]));
+  // A frozen member whose order row is gone: the surviving rows are returned, the
+  // read is never broadened to cover the gap.
+  STUB_TRIP = {
+    ok: true, active: true, trip_id: "T2", giro_id: null, anchor_order_uid: "u-a",
+    departed_at: "2026-09-16T18:05:00Z",
+    members: [{ order_uid: "u-a", stop_seq: 1 }, { order_uid: "u-zzz", stop_seq: 2 }],
+  };
+  const mm = (await riderReads.getRiderOrdenes(depsWith())).map((o) => o.id).sort();
+  check("frozen member with no order row -> only valid rows, no broadening", JSON.stringify(mm) === JSON.stringify(["A"]), mm);
+
+  // In-trip read asks for its members BY order_uid — never an unscoped table scan.
+  let inTripQuery = null;
+  await riderReads.getRiderOrdenes({
+    sbSelect: async (t, q) => { if (t === "ordenes") { inTripQuery = q; return ORDERS; } return []; },
+    getOperationalSessionIds: async () => ["stub-session"],
+    serviceSessionsQuery: (ids, q) => `service_session_id=in.(${ids.join(",")})${q ? "&" + q : ""}`,
+  });
+  check("W6.5: in-trip order read is bounded by order_uid=in.(...), not a full scan",
+    typeof inTripQuery === "string" && inTripQuery.includes("order_uid=in.(") && inTripQuery.includes("u-a"), inTripQuery);
+
+  // A trip that departed without a giro shows NO giros — never the operational list.
+  const noGiroInTrip = await riderReads.getRiderManualGiros(depsWith());
+  check("W6.5: active trip with giro_id null -> no giros visible", Array.isArray(noGiroInTrip) && noGiroInTrip.length === 0, noGiroInTrip);
+
+  STUB_TRIP = { ok: true, active: false };
 
   // ── W4-02A-N11: public DTO shape unchanged ──
   check("W4-02A-N11: order DTO key set unchanged (RIDER_ORDER_FIELDS superset, only values present)",
@@ -226,6 +284,11 @@ const depsWith = (driverStato) => ({
     /select=id,entrega_ref/.test(codeOnly));
   check("W4-02A-N13: source reads manual_giro_id only as a DTO output key, never a filter/select criterion on ordenes reads",
     !/manual_giro_id=eq\.|manual_giro_id=in\.|dissolved!==true|completed!==true/.test(codeOnly));
+  // ── W6.5-N01 (PROMOTION-BLOCKING): DRIVER_STATO is no longer read here at all ──
+  check("W6.5-N01: riderReads.js contains no DRIVER_STATO read in executable code",
+    !/DRIVER_STATO/.test(codeOnly));
+  check("W6.5-N01: riderReads.js reads the canonical Trip Authority projection",
+    /readTripProjection/.test(codeOnly) && /tripProjectionReader/.test(codeOnly));
 
   console.log(`\nriderReads: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

@@ -190,7 +190,22 @@ assert('rpc/start_rider_trip_v2 allows POST', policy.isMethodAllowed('rpc/start_
 assert('rpc/start_rider_trip_v2 denies GET', !policy.isMethodAllowed('rpc/start_rider_trip_v2', 'GET'));
 assert('rpc/start_rider_trip (v1) stays registered as the documented post-PONR rollback target',
   policy.getResourcePolicy('rpc/start_rider_trip') !== null);
-for (const speculative of ['rpc/trip_projection_v1', 'rpc/trip_authority_active_trip_v1',
+// W6.5 — Planner final backend canonicalization gave trip_projection_v1 its first
+// REAL Node callers (plannerSnapshot.js's canonical rider block and riderReads.js's
+// operational rider read), so it is registered there and certified by
+// tests/plannerW65FinalBackendV1.static.test.js. The invariant this section guards
+// is unchanged and still enforced below: a resource is registered only once
+// something actually calls it, never speculatively.
+const W6_5_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW65FinalBackendV1.static.test.js');
+const w65Applied = fs.existsSync(W6_5_STATIC_GUARD);
+if (w65Applied) {
+  assert('rpc/trip_projection_v1 is registered by W6.5, which supplies its real Node callers',
+    policy.getResourcePolicy('rpc/trip_projection_v1') !== null);
+} else {
+  assert('rpc/trip_projection_v1 stays UNREGISTERED (no real Node caller)',
+    policy.getResourcePolicy('rpc/trip_projection_v1') === null);
+}
+for (const speculative of ['rpc/trip_authority_active_trip_v1',
   'rpc/trip_authority_close_active_trip_v1']) {
   assert(`${speculative} stays UNREGISTERED (no real Node caller)`, policy.getResourcePolicy(speculative) === null);
 }
@@ -209,6 +224,18 @@ const DECLARED = new Set([
   'index.js',
   // Narrow, file-level domain-language exemption for the ROLLBACK only (see above).
   'scripts/check-domain-language.js',
+  // W6.5 Planner Final Backend Canonicalization — the packet that ACTIVATES the
+  // Trip Authority projection in Node (and deletes the legacy it supersedes).
+  // Certified by tests/plannerW65FinalBackendV1.static.test.js.
+  ...(w65Applied ? [
+    'src/core/delivery/tripProjectionReader.js',
+    'src/core/delivery/tripProjectionPort.js',
+    'src/core/delivery/planner.js',
+    'src/core/delivery/plannerSnapshot.js',
+    'src/core/delivery/readOnlyRestDb.js',
+    'src/core/delivery/giroFactsPort.js',
+    'src/agents/riderReads.js',
+  ] : []),
 ]);
 let changed = [];
 try {
