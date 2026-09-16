@@ -61,7 +61,7 @@ assert("AFTER_ORDER_CUTOFF accepts no new orders", S.resolveSchedule(summer(1, 0
 // retired: 04:00-08:00 now follows the same Business Day rollover (04:00)
 // already governing AFTER_ORDER_CUTOFF's own boundary above, kept in SQL
 // parity by migrations/2026-09-16_o5_order_intake_first_service_boundary_
-// single_authority.sql and tests/rDay3ScheduleParity.test.js.
+// single_authority_migration_136.sql and tests/rDay3ScheduleParity.test.js.
 // isEscalationBoundary (section D below) is untouched — a dinner still open
 // here is still notable, unrelated to whether a NEW order may create one.
 assert("OUTSIDE_WINDOWS now accepts new orders (O-5 -- 04:00 is the sole boundary, not 08:00)", S.resolveSchedule(summer(6)).canCreateNewOrder === true);

@@ -1,7 +1,8 @@
 "use strict";
 // O-5 (consolidated) — PRE_UAT_LIFECYCLE_HYGIENE Part C/E/G/H. Static
 // (source-text) proof for migrations/2026-09-16_o5_order_intake_first_
-// service_boundary_single_authority.sql, same convention as
+// service_boundary_single_authority_migration_136.sql (+ its paired
+// .ROLLBACK.sql), same convention as
 // tests/rDay3BusinessDayIntakeAuthority.static.test.js and its O-series
 // siblings. This migration is NOT applied to any database by this session
 // (hard safety gate) -- the executable proof that it actually installs and
@@ -16,7 +17,8 @@ let pass = 0, fail = 0;
 const assert = (n, c, d = "") => { if (c) { pass++; } else { fail++; console.log("  FAIL  " + n + (d ? "  -> " + d : "")); } };
 const read = (p) => fs.readFileSync(path.join(__dirname, "..", p), "utf8");
 
-const SQL = read("migrations/2026-09-16_o5_order_intake_first_service_boundary_single_authority.sql");
+const SQL = read("migrations/2026-09-16_o5_order_intake_first_service_boundary_single_authority_migration_136.sql");
+const ROLLBACK_SQL = read("migrations/2026-09-16_o5_order_intake_first_service_boundary_single_authority_migration_136.ROLLBACK.sql");
 const INTAKE_JS = read("src/serviceSessions/orderIntakePolicy.js");
 const SCHEDULE_JS = read("src/schedule/serviceSchedule.js");
 const LIFECYCLE_JS = read("src/serviceSessions/serviceSessionLifecycle.js");
@@ -36,8 +38,12 @@ assert("1f: refuses if a new internal SQL caller of open_business_day_v1 appeare
   /a new internal caller of open_business_day_v1 appeared/.test(SQL));
 
 console.log("\n== B. Single canonical policy, correctly scoped (Part C/5) ==");
-assert("2a: order_intake_policy_v1 is IMMUTABLE and pure (SQL language, no PL/pgSQL, no table read)",
-  /CREATE OR REPLACE FUNCTION public\.order_intake_policy_v1\(p_minutes_of_day integer\)[\s\S]{0,200}LANGUAGE sql[\s\S]{0,50}IMMUTABLE/.test(SQL));
+assert("2a: order_intake_policy_v1 is STABLE (never IMMUTABLE: it calls jsonb_build_object, which PostgreSQL catalogues STABLE) and pure (SQL language, no PL/pgSQL, no table read)",
+  /CREATE OR REPLACE FUNCTION public\.order_intake_policy_v1\(p_minutes_of_day integer\)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\n/.test(SQL)
+  && !/\bIMMUTABLE\b/.test(SQL.slice(SQL.indexOf("CREATE OR REPLACE FUNCTION public.order_intake_policy_v1"), SQL.indexOf("$function$;", SQL.indexOf("CREATE OR REPLACE FUNCTION public.order_intake_policy_v1")))));
+assert("2a-post: the post-condition asserts the catalogued volatility is STABLE and SECURITY INVOKER",
+  /provolatile FROM pg_proc p WHERE p\.oid = 'public\.order_intake_policy_v1\(integer\)'::regprocedure\) IS DISTINCT FROM 's'/.test(SQL)
+  && /must be STABLE and SECURITY INVOKER/.test(SQL));
 assert("2b: takes minutes-of-day as a plain integer input (testable by value, no clock_timestamp() inside it)",
   (() => {
     const start = SQL.indexOf("CREATE OR REPLACE FUNCTION public.order_intake_policy_v1");
@@ -151,6 +157,52 @@ assert("9c: isEscalationBoundary stays true for OUTSIDE_WINDOWS -- unrelated fac
     const chunk = SCHEDULE_JS.slice(idx, idx + 400);
     return /isEscalationBoundary: true/.test(chunk);
   })());
+
+console.log("\n== J. Exact-body pins: the forward only replaces the EXACT ledger-135 bodies ==");
+const PRE_MD5 = { resolve: "143998dde151b23cc546354c09e36153", get: "4965a2edebf0a08a403f3d154dcc00a9", openBusinessDay: "32dd2f23598555783d62ddf629443d9c", openServiceSession: "2570bc97f5675975a4aa4353b120a8f5" };
+const O5_MD5 = { resolve: "6a9b99bb2c5df5b208ba9a8b90c76cbe", get: "7bd0ba310ad850cd59afb083d6cc060b" };
+assert("10a: forward predecessor guard pins resolve/get/open_business_day_v1 to their ledger-135 prosrc md5",
+  SQL.includes(`md5(v_resolve) IS DISTINCT FROM '${PRE_MD5.resolve}'`)
+  && SQL.includes(`md5(v_get) IS DISTINCT FROM '${PRE_MD5.get}'`)
+  && SQL.includes(`IS DISTINCT FROM '${PRE_MD5.openBusinessDay}'`));
+assert("10b: the md5 of the resolve/get bodies this file INSTALLS equals the md5 the rollback's predecessor guard pins",
+  (() => {
+    const crypto = require("crypto");
+    const md5 = (t) => crypto.createHash("md5").update(t).digest("hex");
+    const bodyOf = (sql, name) => { const m = sql.match(new RegExp(`CREATE OR REPLACE FUNCTION public\\.${name}\\([^\\n]*\\)\\n[\\s\\S]*?\\nAS \\$function\\$([\\s\\S]*?)\\$function\\$`)); return m && m[1]; };
+    return md5(bodyOf(SQL, "resolve_order_intake_context_v1") || "") === O5_MD5.resolve
+      && md5(bodyOf(SQL, "get_order_intake_context_v1") || "") === O5_MD5.get
+      && ROLLBACK_SQL.includes(`IS DISTINCT FROM '${O5_MD5.resolve}'`)
+      && ROLLBACK_SQL.includes(`IS DISTINCT FROM '${O5_MD5.get}'`);
+  })());
+
+console.log("\n== K. Paired ROLLBACK restores the exact ledger-135 surface ==");
+assert("11a: rollback re-installs resolve/get/open_business_day_v1 bodies whose md5 equals the ledger-135 pins",
+  (() => {
+    const crypto = require("crypto");
+    const md5 = (t) => crypto.createHash("md5").update(t).digest("hex");
+    const bodyOf = (name) => { const m = ROLLBACK_SQL.match(new RegExp(`FUNCTION public\\.${name}\\([^\\n]*\\)\\n[\\s\\S]*?\\nAS \\$function\\$([\\s\\S]*?)\\$function\\$`)); return m && m[1]; };
+    return md5(bodyOf("resolve_order_intake_context_v1") || "") === PRE_MD5.resolve
+      && md5(bodyOf("get_order_intake_context_v1") || "") === PRE_MD5.get
+      && md5(bodyOf("open_business_day_v1") || "") === PRE_MD5.openBusinessDay;
+  })());
+assert("11b: rollback drops order_intake_policy_v1 and re-creates open_business_day_v1(text,text) service_role-only",
+  /DROP FUNCTION public\.order_intake_policy_v1\(integer\);/.test(ROLLBACK_SQL)
+  && /CREATE FUNCTION public\.open_business_day_v1\(p_opened_by text, p_source text DEFAULT 'backend'::text\)/.test(ROLLBACK_SQL)
+  && /REVOKE ALL ON FUNCTION public\.open_business_day_v1\(text, text\) FROM PUBLIC, anon, authenticated;/.test(ROLLBACK_SQL)
+  && /GRANT EXECUTE ON FUNCTION public\.open_business_day_v1\(text, text\) TO service_role;/.test(ROLLBACK_SQL));
+assert("11c: rollback restores the pre-O-5 480 floor in BOTH bodies and no longer references the policy in them",
+  (ROLLBACK_SQL.match(/v_can_create_order := \(v_minutes_of_day >= 480\);/g) || []).length === 2
+  && !/v_policy := public\.order_intake_policy_v1/.test(ROLLBACK_SQL));
+assert("11d: rollback never touches open_service_session (no CREATE/DROP/REVOKE/GRANT on it), only asserts it is unchanged",
+  !/(CREATE|DROP|REVOKE|GRANT)[^\n;]*open_service_session/.test(ROLLBACK_SQL)
+  && ROLLBACK_SQL.includes(`IS DISTINCT FROM '${PRE_MD5.openServiceSession}'`));
+assert("11e: rollback is transactional, guarded, and writes no business data",
+  /^BEGIN;/m.test(ROLLBACK_SQL) && /^COMMIT;/m.test(ROLLBACK_SQL) && /DO \$guard\$/.test(ROLLBACK_SQL) && /DO \$post\$/.test(ROLLBACK_SQL)
+  && !/\b(INSERT\s+INTO|UPDATE\s+public\.|DELETE\s+FROM|TRUNCATE)\b/i.test(ROLLBACK_SQL.replace(/\$function\$[\s\S]*?\$function\$/g, "")));
+assert("11f: the forward names its paired rollback and both carry the migration number in the file name",
+  SQL.includes("Paired rollback: 2026-09-16_o5_order_intake_first_service_boundary_single_authority_migration_136.ROLLBACK.sql")
+  && require("fs").existsSync(require("path").join(__dirname, "..", "migrations", "2026-09-16_o5_order_intake_first_service_boundary_single_authority_migration_136.ROLLBACK.sql")));
 
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
 if (fail > 0) process.exit(1);

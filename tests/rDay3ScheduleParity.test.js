@@ -13,7 +13,7 @@
 //
 // resolve_order_intake_context_v1() and get_order_intake_context_v1()
 // (migrations/2026-09-16_o5_order_intake_first_service_boundary_single_
-// authority.sql, superseding 2026-08-23_o1_order_intake_buffer_removal.sql's
+// authority_migration_136.sql, superseding 2026-08-23_o1_order_intake_buffer_removal.sql's
 // canCreateNewOrder formula) restate src/schedule/serviceSchedule.js's
 // DEFAULT_SCHEDULE constants in raw SQL (via the new public.order_intake_
 // policy_v1 helper), because a PL/pgSQL trigger cannot call into Node. This
@@ -122,7 +122,7 @@ function madridWallClockToDate(dateStr, hh, mm) {
 
 console.log("\n== B. Static constant parity: SQL literal minutes vs. DEFAULT_SCHEDULE ==");
 const SQL_RAW = fs.readFileSync(
-  path.join(__dirname, "..", "migrations", "2026-09-16_o5_order_intake_first_service_boundary_single_authority.sql"),
+  path.join(__dirname, "..", "migrations", "2026-09-16_o5_order_intake_first_service_boundary_single_authority_migration_136.sql"),
   "utf8",
 );
 // Scoped to the ACTUAL function bodies only (between $function$

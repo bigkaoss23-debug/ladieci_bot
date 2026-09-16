@@ -1,12 +1,13 @@
--- migrations/2026-09-16_o5_order_intake_first_service_boundary_single_authority.sql
+-- migrations/2026-09-16_o5_order_intake_first_service_boundary_single_authority_migration_136.sql
+-- Paired rollback: 2026-09-16_o5_order_intake_first_service_boundary_single_authority_migration_136.ROLLBACK.sql
 -- O-5 (consolidated) — PRE_UAT_LIFECYCLE_HYGIENE Part C: unify the
 -- first-service-open boundary as a single canonical authority, WITHOUT
 -- eliminating the distinction between "a Business Day identity exists" and
 -- "a brand-new Operational Service may be lazily created".
 --
--- THE FINDING, reconfirmed on the TRUE remote tip (99172f9b, branch
--- feature/staging-messa-tables-2026-08-01) via pg_get_functiondef against
--- live staging (tdikhfeinufaahagmpjz) — not from a stale local checkout.
+-- THE FINDING, reconfirmed on the true remote staging tip (99172f9b) via
+-- pg_get_functiondef against live staging (tdikhfeinufaahagmpjz) — not from
+-- a stale local checkout.
 -- resolve_order_intake_context_v1 (the sole DB-canonical writer, called from
 -- service_session_assign_order()'s BEFORE INSERT trigger on public.ordenes)
 -- and get_order_intake_context_v1 (its STABLE read-only mirror, read by
@@ -38,7 +39,7 @@
 -- Business Day; there is no remaining reason to also wait until 08:00), NOT
 -- 00:00-04:00 (which the schedule owner explicitly wants to keep BLOCK).
 --
--- THE FIX: one new pure, IMMUTABLE helper, public.order_intake_policy_v1
+-- THE FIX: one new pure, STABLE helper, public.order_intake_policy_v1
 -- (p_minutes_of_day integer), naming the fact explicitly as
 -- 'mayCreateFirstService' rather than reusing the vaguer 'canCreateOrder' —
 -- this is specifically about FIRST-SERVICE lazy-open eligibility, never
@@ -138,11 +139,26 @@ BEGIN
     RAISE EXCEPTION 'O-5 refused: Stale Service Protection V1 hasValidCurrentService fact missing -- resolve drift first';
   END IF;
 
+  -- Exact-body pins (ledger 135 live bodies, md5 of pg_proc.prosrc). The
+  -- paired ROLLBACK restores these exact bytes, so the forward must refuse to
+  -- replace anything else -- otherwise a rollback would silently install a
+  -- body that was never the one this migration replaced.
+  IF md5(v_resolve) IS DISTINCT FROM '143998dde151b23cc546354c09e36153' THEN
+    RAISE EXCEPTION 'O-5 refused: resolve_order_intake_context_v1 body is not the exact ledger-135 body (md5 mismatch) -- resolve drift first';
+  END IF;
+  IF md5(v_get) IS DISTINCT FROM '4965a2edebf0a08a403f3d154dcc00a9' THEN
+    RAISE EXCEPTION 'O-5 refused: get_order_intake_context_v1 body is not the exact ledger-135 body (md5 mismatch) -- resolve drift first';
+  END IF;
+
   IF to_regprocedure('public.open_business_day_v1(text,text)') IS NULL THEN
     RAISE EXCEPTION 'O-5 refused: public.open_business_day_v1(text,text) already absent -- census is stale, resolve drift first';
   END IF;
   IF to_regprocedure('public.open_service_session(text,text)') IS NULL THEN
     RAISE EXCEPTION 'O-5 refused: public.open_service_session(text,text) is absent -- this migration depends on it staying present (REQUIRED_COMPAT), resolve drift first';
+  END IF;
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.open_business_day_v1(text,text)'))
+     IS DISTINCT FROM '32dd2f23598555783d62ddf629443d9c' THEN
+    RAISE EXCEPTION 'O-5 refused: open_business_day_v1 body is not the exact ledger-135 body (md5 mismatch) -- resolve drift first';
   END IF;
   IF EXISTS (
     SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -159,10 +175,16 @@ BEGIN;
 -- Pure function of minutes-of-day. No table reads, no clock reads --
 -- unit-testable by value (see tests/o5OrderIntakeFirstServiceBoundary.
 -- static.test.js and the direct SQL probes in the session report).
+-- VOLATILITY: STABLE, not IMMUTABLE. The body is deterministic in its
+-- integer argument, but it calls jsonb_build_object, which PostgreSQL
+-- itself catalogues as STABLE (provolatile 's', verified on staging 17.6
+-- and on the certification PostgreSQL 17.7). A function must not claim a
+-- stronger volatility than what it calls; STABLE is the correct label and
+-- changes no result (both call sites are themselves STABLE/VOLATILE).
 CREATE OR REPLACE FUNCTION public.order_intake_policy_v1(p_minutes_of_day integer)
  RETURNS jsonb
  LANGUAGE sql
- IMMUTABLE
+ STABLE
  SET search_path TO 'public', 'pg_temp'
 AS $function$
   SELECT jsonb_build_object(
@@ -433,6 +455,10 @@ BEGIN
   END IF;
   IF v_policy_src NOT LIKE '%''mayCreateFirstService'', p_minutes_of_day >= 240%' THEN
     RAISE EXCEPTION 'O-5 post-condition failed: order_intake_policy_v1 does not gate first-service creation at the 04:00 boundary';
+  END IF;
+  IF (SELECT p.provolatile FROM pg_proc p WHERE p.oid = 'public.order_intake_policy_v1(integer)'::regprocedure) IS DISTINCT FROM 's'
+     OR (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = 'public.order_intake_policy_v1(integer)'::regprocedure) IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'O-5 post-condition failed: order_intake_policy_v1 must be STABLE and SECURITY INVOKER';
   END IF;
 
   SELECT p.prosrc INTO v_resolve_src FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

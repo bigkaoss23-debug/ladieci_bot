@@ -159,7 +159,7 @@ function resolveSchedule(now = new Date(), schedule = DEFAULT_SCHEDULE) {
     // no service currently open may lazily open the day's first
     // Operational Service, matching public.order_intake_policy_v1's
     // mayCreateFirstService (migrations/2026-09-16_o5_order_intake_first_
-    // service_boundary_single_authority.sql), kept in parity by
+    // service_boundary_single_authority_migration_136.sql), kept in parity by
     // tests/rDay3ScheduleParity.test.js. canEnsureSession stays false
     // (unaffected -- zero live consumers of that specific fact today).
     return frozen({

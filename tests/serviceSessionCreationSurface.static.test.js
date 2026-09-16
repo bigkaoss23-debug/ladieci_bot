@@ -140,7 +140,7 @@ const M120 = "2026-09-06_stale_service_protection_v1_migration_120.sql";
 // service_sessions, still calls open_operational_service_v1 for its only
 // lazy-open path. ensure_service_session is NOT touched by O-5 and stays
 // pinned to M120.
-const O5 = "2026-09-16_o5_order_intake_first_service_boundary_single_authority.sql";
+const O5 = "2026-09-16_o5_order_intake_first_service_boundary_single_authority_migration_136.sql";
 for (const [n, fn, expectedFile] of [["1b", "open_operational_service_v1", G1],
                        ["1c", "ensure_service_session", M120],
                        ["1d", "resolve_order_intake_context_v1", O5]]) {
