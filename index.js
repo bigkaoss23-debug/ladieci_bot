@@ -420,8 +420,9 @@ app.get("/api", async (req, res) => {
     let result;
 
     // S2-1C — rider-scoped reads. When the guard authenticated a rider, the backend (not
-    // the client) decides visibility from the active-trip snapshot. Operator/admin fall
-    // through to the unchanged handlers below.
+    // the client) decides visibility from the CANONICAL active trip (Trip Authority,
+    // W6.5), no longer from the DRIVER_STATO snapshot. Operator/admin fall through to
+    // the unchanged handlers below.
     // NB: uses .includes() (not the router equality form) so it does not add duplicate
     // router-action literals that the authorization-contract coverage test counts.
     if (req.authCtx && req.authCtx.role === "rider" &&
@@ -430,8 +431,8 @@ app.get("/api", async (req, res) => {
       const riderResult = action.endsWith("Ordenes")
         ? await riderReads.getRiderOrdenes(deps)
         : await riderReads.getRiderManualGiros(deps);
-      // Fail-closed: DRIVER_STATO read error / malformed active snapshot -> 503, never a
-      // broadened list.
+      // Fail-closed: trip projection missing / scope unavailable -> 503, never a
+      // broadened list and never a silent "no active trip".
       if (riderResult && !Array.isArray(riderResult) && riderResult.error) {
         return res.status(503).json({ error: riderResult.error });
       }

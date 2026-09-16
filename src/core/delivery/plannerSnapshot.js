@@ -12,12 +12,15 @@
 // the raw column — a raw/canonical disagreement is decided by the Projection,
 // never merged. planner.js (Stage 1 bucketing) and previewStrategicOpportunities.js
 // (giro-anchor merge) are UNCHANGED: they already key purely off this field's
-// VALUE, so the canonical fact flows through them transparently. Stage M
-// (manual_route rider-block: route_order/block_start/manual_duration_min/
-// created_by_operator/force) has no equivalent in the Authority schema at all
-// — deliberately left on the raw `manual_giros` read, W6-deferred, and
-// structurally unable to override the canonical alias (Stage M keys off
-// manual_giros.order_ids, never off ordenes.manual_giro_id).
+// VALUE, so the canonical fact flows through them transparently.
+//
+// W6.5 — the raw `manual_giros` read is GONE. It selected nine columns of
+// which seven (type/order_ids/route_order/block_start/manual_duration_min/
+// created_by_operator/force) do not exist in public.manual_giros, and its only
+// consumer was planner.js's unreachable Stage M. The rider block the planner
+// now receives is the CANONICAL ACTIVE TRIP (Trip Authority,
+// public.trip_projection_v1) in `active_trip` — a real departure, a frozen
+// membership, one trip at a time.
 //
 // HISTORICAL day (an explicit date different from the current operational
 // business date): byte-for-byte the pre-cutover raw reader — a distinct
@@ -36,11 +39,19 @@
 const { getCurrentOperationalBusinessDate } = require("../../serviceSessions/currentOperationalSession");
 const { readGiroProjection } = require("./giroProjectionReader");
 const { projectionAvailability, effectiveGiroIdByOrderId } = require("./giroProjectionPort");
+const { readTripProjection } = require("./tripProjectionReader");
+const { activeTripFacts } = require("./tripProjectionPort");
+const { madridParts } = require("../../schedule/serviceSchedule");
 
 const DEFAULT_LIMIT = 1000;
 
+// `order_uid` is SELECTED (Trip Authority's join key) but deliberately NOT
+// carried onto the normalized planner order: the uid->display-id map is built
+// from the RAW rows, so the planner-visible order shape stays byte-identical
+// to the pre-W6.5 one and no uid can leak into a preview DTO.
 const ORDER_SELECT_FIELDS = [
   "id",
+  "order_uid",
   "tipo_consegna",
   "estado",
   "zona",
@@ -57,18 +68,6 @@ const ORDER_SELECT_FIELDS = [
   "entrega_estimada",
   "retraso_estimado_min",
   "conflicto_driver",
-];
-
-const MANUAL_GIRO_SELECT_FIELDS = [
-  "id",
-  "type",
-  "order_ids",
-  "route_order",
-  "block_start",
-  "manual_duration_min",
-  "created_by_operator",
-  "force",
-  "hora_ref",
 ];
 
 const TERMINAL_STATES = new Set([
@@ -133,15 +132,6 @@ function buildOrdersQuery({ date, limit } = {}) {
   return parts.join("&");
 }
 
-function buildManualGirosQuery({ limit } = {}) {
-  return [
-    `select=${MANUAL_GIRO_SELECT_FIELDS.join(",")}`,
-    "dissolved_at=is.null",
-    "order=created_at.asc",
-    `limit=${cleanLimit(limit)}`,
-  ].join("&");
-}
-
 function requireDb(db) {
   if (!db) throw safeError("db_client_missing", "db_client_missing");
   if (typeof db.select !== "function") throw safeError("db_client_invalid", "db_client_invalid");
@@ -193,20 +183,6 @@ function normalizeOrder(row = {}, effectiveGiroIdMap = null) {
   return out;
 }
 
-function normalizeManualGiro(row = {}) {
-  return {
-    id: row.id,
-    type: row.type || null,
-    order_ids: Array.isArray(row.order_ids) ? row.order_ids : [],
-    route_order: Array.isArray(row.route_order) ? row.route_order : [],
-    block_start: row.block_start || null,
-    manual_duration_min: row.manual_duration_min != null ? Number(row.manual_duration_min) : null,
-    created_by_operator: row.created_by_operator === true,
-    force: row.force === true,
-    hora_ref: row.hora_ref || null,
-  };
-}
-
 function defaultNow() {
   return "19:00";
 }
@@ -228,6 +204,35 @@ async function resolveIsHistorical(date) {
   return currentBusinessDate == null || date !== currentBusinessDate;
 }
 
+// Canonical order facts keyed by order_uid -- the join key Trip Authority
+// speaks. Built from raw rows (terminal states included) so a completed stop
+// is still resolvable.
+function ordersByUid(rows) {
+  const map = new Map();
+  for (const r of rows || []) {
+    if (r && r.order_uid) {
+      map.set(String(r.order_uid), {
+        id: r.id,
+        estado: r.estado,
+        zona: r.zona ?? null,
+        andata_min: r.durata_andata_min != null ? Number(r.durata_andata_min) : null,
+      });
+    }
+  }
+  return map;
+}
+
+// `departed_at` is a real timestamptz; the planner speaks Madrid wall clock.
+// Same conversion authority every other planner module uses.
+function isoToMadridHHMM(iso) {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  const p = madridParts(new Date(ms));
+  if (!p || p.hour == null || p.minute == null) return null;
+  return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+}
+
 async function loadPlannerSnapshot({
   db,
   date,
@@ -239,12 +244,11 @@ async function loadPlannerSnapshot({
   const safeDb = requireDb(db);
   const isHistorical = await resolveIsHistorical(date);
 
-  const [orderRows, giroRows] = await Promise.all([
-    safeDb.select("ordenes", buildOrdersQuery({ date, limit })),
-    safeDb.select("manual_giros", buildManualGirosQuery({ limit })),
-  ]);
+  const orderRows = await safeDb.select("ordenes", buildOrdersQuery({ date, limit }));
+  const rawRows = Array.isArray(orderRows) ? orderRows : [];
 
   let effectiveGiroIdMap = null;
+  let trip = { active: false, trip: null, available: true, reason: null };
   if (!isHistorical) {
     let projection = null;
     try {
@@ -260,30 +264,57 @@ async function loadPlannerSnapshot({
       throw safeError("giro_projection_snapshot_unavailable", "giro_projection_snapshot_unavailable");
     }
     effectiveGiroIdMap = effectiveGiroIdByOrderId(projection);
+
+    // Canonical rider block. Built from the RAW rows on purpose: a completed
+    // stop is terminal, so normalizeOrder drops it from the planner snapshot --
+    // but it must still resolve here, or the FROZEN membership would silently
+    // shrink as the trip progressed.
+    let tripProjection = null;
+    try {
+      tripProjection = await readTripProjection();
+    } catch (_) {
+      tripProjection = null;
+    }
+    trip = activeTripFacts({ projection: tripProjection, ordersByUid: ordersByUid(rawRows) });
   }
 
-  return {
+  const out = {
     now: now || defaultNow(),
-    orders: (Array.isArray(orderRows) ? orderRows : [])
-      .map((row) => normalizeOrder(row, effectiveGiroIdMap))
-      .filter(Boolean),
-    manual_giros: (Array.isArray(giroRows) ? giroRows : []).map(normalizeManualGiro).filter((g) => g.id),
+    orders: rawRows.map((row) => normalizeOrder(row, effectiveGiroIdMap)).filter(Boolean),
+    active_trip: null,
     driver: null,
     driver_events: [],
     driver_status: null,
   };
+
+  if (!trip.available) {
+    // DEGRADED, explicitly. Trip facts exist but cannot be trusted: the planner
+    // is told so, rather than being handed an "idle rider" it would believe.
+    out.active_trip_unavailable = true;
+    out.active_trip_unavailable_reason = trip.reason;
+  } else if (trip.active && trip.trip) {
+    out.active_trip = {
+      trip_id: trip.trip.trip_id,
+      giro_id: trip.trip.giro_id,
+      departed_at_hhmm: isoToMadridHHMM(trip.trip.departed_at),
+      member_order_ids: trip.trip.frozen_member_order_ids,
+      outstanding_order_ids: trip.trip.outstanding_member_order_ids,
+      completed_order_ids: trip.trip.completed_member_order_ids,
+    };
+  }
+
+  return out;
 }
 
 module.exports = {
   loadPlannerSnapshot,
   _internal: {
     ORDER_SELECT_FIELDS,
-    MANUAL_GIRO_SELECT_FIELDS,
     TERMINAL_STATES,
     NON_PLANNER_STATES,
     buildOrdersQuery,
-    buildManualGirosQuery,
     normalizeOrder,
-    normalizeManualGiro,
+    ordersByUid,
+    isoToMadridHHMM,
   },
 };

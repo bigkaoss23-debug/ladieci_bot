@@ -8,7 +8,7 @@
 // object-query + Supabase builder, qui assente), questo adapter:
 //   - accetta la queryString REST così com'è e la inoltra invariata a sbSelect;
 //   - espone SOLO `select` (nessun write method);
-//   - allowlista le tabelle (ordenes, manual_giros);
+//   - allowlista le tabelle (ordenes);
 //   - valida la clausola `select=` per BLOCCARE campi PII e wildcard.
 //
 // NB: sbSelect antepone sempre `select=*&` alla query. Per questo pretendiamo
@@ -20,9 +20,16 @@
 "use strict";
 
 // Allineato a readOnlyDbAdapter.ALLOWED_FIELDS (stesso contratto no-PII).
+//
+// W6.5 — `manual_giros` is no longer allowlisted: plannerSnapshot stopped
+// reading it (it was the unreachable Stage M's input, and seven of the nine
+// declared columns do not exist in the table). No other caller uses this
+// adapter, so the table is `table_not_allowed` again: any future attempt to
+// read it from here fails closed instead of quietly reopening the path.
 const ALLOWED_FIELDS = {
   ordenes: new Set([
     "id",
+    "order_uid",
     "tipo_consegna",
     "estado",
     "zona",
@@ -39,17 +46,6 @@ const ALLOWED_FIELDS = {
     "entrega_estimada",
     "retraso_estimado_min",
     "conflicto_driver",
-  ]),
-  manual_giros: new Set([
-    "id",
-    "type",
-    "order_ids",
-    "route_order",
-    "block_start",
-    "manual_duration_min",
-    "created_by_operator",
-    "force",
-    "hora_ref",
   ]),
 };
 

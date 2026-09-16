@@ -1,15 +1,24 @@
 // riderReads.js — S2-1C rider-scoped read boundary.
 //
 // When the authenticated principal is `rider`, the backend (not the client) decides which
-// orders/giros are visible, using the DRIVER_STATO active-trip snapshot as source of truth:
+// orders/giros are visible. W6.5 — the authority for "is there a trip, and what is in it"
+// is now TRIP AUTHORITY (public.trip_projection_v1), not the DRIVER_STATO blob:
 //   • before a trip  -> delivery candidates only (tipo_consegna=domicilio, LISTO/EN_ENTREGA)
-//   • during a trip  -> ONLY orders whose id is in active_trip.order_ids (no next-trip orders)
+//   • during a trip  -> ONLY the trip's FROZEN members (trip_members), by order_uid
 // Responses are projected to the delivery-necessary fields only (no WhatsApp/conversation/
 // financial-ledger internals). Admin/operator reads are untouched (this module is only
 // invoked on the rider branch).
 //
-// All ORDER/TRIP DB access is injected (deps.sbSelect) so the logic is unit-testable
-// offline. W4 Packet 02A: giro facts (membership/state/salida/hora_ref/dissolved) come
+// W6.5 rationale: DRIVER_STATO is a COMPATIBILITY signal the canonical trip RPCs
+// happen to maintain — it is not the lifecycle authority, and reading it here made a
+// read boundary depend on a projection rather than on the record. Trip membership is
+// frozen at departure in trip_members; that is what this module now reads. The public
+// DTO is unchanged (same fields, same fail-closed 503 contract at index.js), so no
+// caller and no frontend changes with it.
+//
+// ORDER DB access is injected (deps.sbSelect) so the logic is unit-testable
+// offline; the two Authority projections are required directly (same pattern as
+// previewTiming.js's W4 Packet 01 cutover). W4 Packet 02A: giro facts (membership/state/salida/hora_ref/dissolved) come
 // exclusively from the canonical Giro Authority projection (public.giro_projection_v1,
 // Planner W3) via giroProjectionReader/giroProjectionPort — required directly here (same
 // pattern as previewTiming.js's W4 Packet 01 cutover), not injected via deps, so no
@@ -25,6 +34,8 @@ const {
   effectiveGiroIdByOrderId,
   projectionAvailability,
 } = require("../core/delivery/giroProjectionPort");
+const { readTripProjection } = require("../core/delivery/tripProjectionReader");
+const { activeTripFacts, UNAVAILABLE } = require("../core/delivery/tripProjectionPort");
 
 // PostgREST in.(…) literal builder for giro ids. Giro ids are always mg_<yymmdd>_<seq>
 // (see manualGiros.generateManualGiroId) — alphanumeric/underscore only, never a
@@ -33,6 +44,11 @@ const {
 // manualGiros.js (writer-adjacent, out of Packet 02A scope) for a two-line helper.
 function encodeGiroIdList(ids) {
   return (ids || []).map((id) => encodeURIComponent(String(id))).join(",");
+}
+
+// Same, for the canonical order_uid (uuid) keys Trip Authority speaks.
+function encodeUidList(uids) {
+  return (uids || []).map((u) => encodeURIComponent(String(u))).join(",");
 }
 
 const DELIVERY_TYPE = "DOMICILIO";
@@ -59,41 +75,34 @@ function project(row, fields) {
   return out;
 }
 
-// Resolve the DRIVER_STATO trip mode. FAIL-CLOSED (S2-1D): a read error, or an IN_GIRO
-// state with a malformed/missing active-trip snapshot, MUST NOT broaden to the pre-trip
-// candidate list. Returns one of:
-//   { mode: "pre-trip" }                     — no active trip (LIBERO / absent)
-//   { mode: "in-trip", trip }                — valid ACTIVE snapshot with order_ids[]
-//   { mode: "fail-closed", reason }          — read error or IN_GIRO-but-malformed snapshot
-async function resolveTripMode(deps) {
-  let rows;
+// Resolve the canonical trip mode from TRIP AUTHORITY. FAIL-CLOSED (S2-1D
+// discipline, unchanged): an unreadable or scope-invalid projection MUST NOT
+// broaden to the pre-trip candidate list, and must never be rendered as "no
+// active trip". Returns one of:
+//   { mode: "pre-trip" }              — projection trustworthy, no ACTIVE trip
+//   { mode: "in-trip", trip }         — ACTIVE trip with its frozen membership
+//   { mode: "fail-closed", reason }   — projection missing / scope unavailable
+async function resolveTripMode() {
+  let projection = null;
   try {
-    rows = await deps.sbSelect("config", "chiave=eq.DRIVER_STATO");
+    projection = await readTripProjection();
   } catch (_) {
-    return { mode: "fail-closed", reason: "config_read_error" };
+    projection = null;
   }
-  const raw = Array.isArray(rows) && rows[0] ? rows[0].valore : null;
-  if (raw == null || raw === "") return { mode: "pre-trip" };
-  let obj;
-  try { obj = typeof raw === "string" ? JSON.parse(raw) : raw; }
-  catch (_) { return { mode: "fail-closed", reason: "driver_stato_unparseable" }; }
-  if (!obj || typeof obj !== "object") return { mode: "fail-closed", reason: "driver_stato_invalid" };
-
-  const at = obj.active_trip;
-  const inGiro = obj.stato === "IN_GIRO";
-  const hasActive = at && at.status === "ACTIVE";
-  if (hasActive) {
-    if (!Array.isArray(at.order_ids)) return { mode: "fail-closed", reason: "snapshot_missing_order_ids" };
-    return { mode: "in-trip", trip: at };
+  const facts = activeTripFacts({ projection });
+  if (!facts.available) {
+    return {
+      mode: "fail-closed",
+      reason: facts.reason === UNAVAILABLE.SCOPE ? "trip_scope_unavailable" : "trip_projection_unavailable",
+    };
   }
-  // IN_GIRO but no valid ACTIVE snapshot => inconsistent => fail closed (do NOT broaden).
-  if (inGiro) return { mode: "fail-closed", reason: "in_giro_without_active_snapshot" };
-  return { mode: "pre-trip" };
+  if (!facts.active || !facts.trip) return { mode: "pre-trip" };
+  return { mode: "in-trip", trip: facts.trip };
 }
 
 // Back-compat: null when no active trip, snapshot when ACTIVE, throws never.
-async function readActiveTrip(deps) {
-  const r = await resolveTripMode(deps);
+async function readActiveTrip() {
+  const r = await resolveTripMode();
   return r.mode === "in-trip" ? r.trip : null;
 }
 
@@ -109,11 +118,18 @@ async function readActiveTrip(deps) {
 // -- see the try/catch below). In-trip mode is untouched: it was already
 // precisely bounded by the trip's own order_ids, never a broad scan.
 async function getRiderOrdenes(deps) {
-  const m = await resolveTripMode(deps);
+  const m = await resolveTripMode();
   if (m.mode === "fail-closed") return { error: "rider_read_unavailable", reason: m.reason };
   let rows;
   if (m.mode === "in-trip") {
-    rows = (await deps.sbSelect("ordenes", "order=ts.asc")) || [];
+    // W6.5 — the frozen membership IS the query. The pre-cutover in-trip read
+    // scanned every row in `ordenes` (no scope at all, "order=ts.asc" only) and
+    // filtered client-side against the DRIVER_STATO snapshot's display ids. It
+    // now asks for exactly the trip's canonical members, by order_uid.
+    const uids = m.trip.frozen_member_order_uids || [];
+    rows = uids.length > 0
+      ? (await deps.sbSelect("ordenes", `order_uid=in.(${encodeUidList(uids)})&order=ts.asc`)) || []
+      : [];
   } else {
     let sessionIds = [];
     try {
@@ -127,9 +143,9 @@ async function getRiderOrdenes(deps) {
   }
   let filtered;
   if (m.mode === "in-trip") {
-    const ids = new Set(m.trip.order_ids.map(String));
-    // Only valid referenced rows; never add unrelated orders.
-    filtered = rows.filter((o) => ids.has(String(o.id)));
+    const uids = new Set((m.trip.frozen_member_order_uids || []).map(String));
+    // Defence in depth: the query above already bounds this exactly.
+    filtered = rows.filter((o) => o && o.order_uid && uids.has(String(o.order_uid)));
   } else {
     filtered = rows.filter((o) =>
       String(o.tipo_consegna || "").toUpperCase() === DELIVERY_TYPE &&
@@ -170,7 +186,7 @@ async function getRiderOrdenes(deps) {
 // the Projection already returned — it can never override a canonical fact because
 // it supplies a field the Projection doesn't claim at all.
 async function getRiderManualGiros(deps) {
-  const m = await resolveTripMode(deps);
+  const m = await resolveTripMode();
   if (m.mode === "fail-closed") return { error: "rider_read_unavailable", reason: m.reason };
 
   let projection = null;
@@ -185,7 +201,10 @@ async function getRiderManualGiros(deps) {
 
   let filtered;
   if (m.mode === "in-trip") {
-    const gids = new Set((m.trip.manual_giro_ids || []).map(String));
+    // ONE trip per Giro (W6.2): the active trip links to at most one giro_id,
+    // so that is the whole in-trip giro visibility. An anchor that departed
+    // without a giro shows none — never the full operational list.
+    const gids = new Set(m.trip.giro_id ? [String(m.trip.giro_id)] : []);
     filtered = projection.giros.filter((g) => gids.has(String(g.giro_id)));
   } else {
     filtered = projection.giros.filter((g) => g.giro_state !== "DISSOLVED");

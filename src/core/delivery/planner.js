@@ -33,10 +33,6 @@ const DEFAULTS = {
   defaultMaxOrdiniPerGiro: 3,
   giroRecommendationWindowMin: 20,          // entro quanto un giro è "raccomandato"
   giroAggregationMarginMin: 2,              // parità frontend: pizza nuova ≤ partenza+2
-  // Manual multi-zone route / rider block (§Manual route):
-  riderBlockDurMismatchMin: 5,              // |manuale−stimata| oltre cui scatta il warning
-  riderBlockDurMismatchRatio: 0.3,          // oppure scarto relativo > 30%
-  riderBlockEarlyToleranceMin: 15,          // consegna troppo PRIMA della promessa → block desfasado
 };
 
 // ── Helper temporali (service-day-aware) ──────────────────────────────────────
@@ -83,192 +79,130 @@ function toleranceMin(order, promiseSlotMin) {
 }
 
 // ===============================================================
-// Manual multi-zone route / RIDER BLOCK (spec §Manual route)
+// Canonical ACTIVE TRIP / RIDER BLOCK (Planner W6.5)
 // ===============================================================
-// Un manual_route è un VINCOLO FORTE deciso dall'operatore/rider: un solo giro
-// sequenziale (pizzeria → A → B → C) che PUÒ attraversare zone diverse e che il
-// planner NON deve spezzare. Occupa il rider da block_start a block_end e impedisce
-// l'inserimento di altri delivery in quell'intervallo (salvo override esplicito).
+// This replaces the pre-W6.5 "manual_route" Stage M outright. That stage read
+// `snapshot.manual_giros[].{type,order_ids,route_order,block_start,
+// manual_duration_min,created_by_operator,force}` — SEVEN columns that do not
+// exist in public.manual_giros. `type` was among them, so its very first
+// filter (`g.type === "manual_route"`) could never match and the whole stage
+// was unreachable. It is deleted, not repaired: there is no authoritative
+// persisted manual rider-block fact to repair it onto, and W6.5 does not
+// invent one.
 //
-//   manual_giro {
-//     id, type:"manual_route", order_ids, route_order?,
-//     block_start?, manual_duration_min?, created_by_operator?, force?
-//   }
+// The rider block the operation actually has is the CANONICAL ACTIVE TRIP
+// (Trip Authority, public.trip_projection_v1):
+//   • the rider is occupied from a REAL `departed_at`, not a declared one;
+//   • its membership is FROZEN at departure and immutable afterwards;
+//   • there is at most one active trip, and at most one trip per Giro.
 //
-// Durata operativa del block:
-//   • manual_duration_min presente → AUTORITATIVA (block_end = block_start + durata);
-//     se molto diversa dalla stima → warning `duracion_manual_vs_estimada`.
-//   • assente → stimata dalla sequenza con i dati di andata/fallback (NIENTE ritorno
-//     in pizzeria tra una consegna e l'altra: legs cliente→cliente).
-//
-// Tutto puro: nessun side-effect, niente I/O. Echeggia FATTI GREZZI (I1).
+// Honesty rule: `departure` here is a real recorded fact. `block_end` is NOT —
+// it is the engine's own pre-existing round-trip occupancy model (the same
+// `departure + tg + buffer + tg` Stage 3 already applies to automatic trips),
+// used solely as a scheduling wall and labelled `duration_source:"estimated"`.
+// No arrival time is published for any stop: a departed order's `entrega` is
+// null with `eta_status:"UNKNOWN"` (see tripProjectionPort's ETA contract).
 
-// Stima sequenziale della route (cliente→cliente, senza rientri intermedi).
-// Senza matrice punto-punto usiamo `andata_min` di ogni stop come proxy del salto
-// che lo raggiunge, più un buffer operativo per consegna. Ritorna i tempi cumulati
-// di arrivo a ogni stop (dal momento di partenza = 0) e la durata totale del block.
-function estimateRouteDuration(stops, bufferOpsMin) {
-  const arrivals = [];
-  let cum = 0;
-  for (let i = 0; i < stops.length; i++) {
-    const hop = Math.max(0, Number(stops[i].andata_min) || 0); // proxy salto → stop i
-    cum += hop;
-    arrivals.push(cum);          // arrivo (consegna) allo stop i
-    cum += bufferOpsMin;         // sosta/citofono/handoff prima di ripartire
-  }
-  // durata block = ultimo arrivo + un'ultima sosta operativa al cliente finale.
-  const total = (arrivals.length ? arrivals[arrivals.length - 1] : 0) + bufferOpsMin;
-  return { arrivals, total };
+// Engine-native rider occupancy for a departed trip: out and back past the
+// furthest stop, plus one operational stop buffer. Same shape as Stage 3's
+// `rientro = departure + tg + buffer + tg`.
+function estimateTripOccupancyMin(members, bufferOpsMin) {
+  const tg = members.reduce((mx, m) => Math.max(mx, Math.max(0, Number(m.andata_min) || 0)), 0);
+  return 2 * tg + Math.max(0, Number(bufferOpsMin) || 0);
 }
 
-// Costruisce un rider block da una def manual_route + i suoi membri (ordini reali).
-// ctx = { nowSvc, cfg, driverFloor, addOven }
-// Ritorna { trip, interval:[start,end], orders:{id->proj} } oppure null se vuoto.
-function buildRiderBlock(route, rawMembers, ctx) {
-  const { nowSvc, cfg, driverFloor } = ctx;
-  if (!rawMembers.length) return null;
+// Builds the canonical rider block from the Trip Authority active trip.
+// activeTrip = { trip_id, giro_id, departed_at_hhmm, member_order_ids[],
+//                outstanding_order_ids[], completed_order_ids[] }
+// rawMembers = the frozen members we actually hold order facts for (completed
+//              stops have normally already left the planner snapshot).
+// ctx = { nowSvc, cfg, driverFloor }
+// Returns { trip, interval:[start,end], orders:{id->proj} } or null.
+function buildActiveTripBlock(activeTrip, rawMembers, ctx) {
+  const { cfg } = ctx;
+  if (!activeTrip || !activeTrip.trip_id) return null;
 
-  // Ordina i membri secondo route_order (se presente), altrimenti order_ids/arrivo.
-  const orderIndex = new Map();
-  const seq = Array.isArray(route.route_order) && route.route_order.length
-    ? route.route_order
-    : (Array.isArray(route.order_ids) ? route.order_ids : rawMembers.map(m => m.id));
-  seq.forEach((id, i) => orderIndex.set(id, i));
-  const stops = [...rawMembers].sort(
-    (a, b) => (orderIndex.has(a.id) ? orderIndex.get(a.id) : 1e9) -
-              (orderIndex.has(b.id) ? orderIndex.get(b.id) : 1e9)
-  );
-
-  const est = estimateRouteDuration(stops, cfg.bufferOpsDriverMin);
-  const hasManual = route.manual_duration_min != null && Number.isFinite(Number(route.manual_duration_min));
-  const actualDur = hasManual ? Number(route.manual_duration_min) : est.total;
-
-  // ── block_start ────────────────────────────────────────────────────────────
-  // operatore ha indicato block_start → autoritativo (anche se il rider è occupato:
-  // in quel caso warning `rider_ocupado`, l'operatore comanda). Altrimenti stima:
-  // parti per consegnare il primo stop intorno alla sua promessa, mai prima che il
-  // rider sia libero.
-  let blockStart, startSource;
-  if (route.block_start != null) {
-    blockStart = toSvc(route.block_start);
-    startSource = "manual";
-  } else {
-    const promises = stops.map(s => toSvc(s.forzado_hora || s.hora)).filter(x => x != null);
-    const earliest = promises.length ? Math.min(...promises) : driverFloor;
-    const firstLeg = est.arrivals.length ? est.arrivals[0] : 0;
-    blockStart = Math.max(driverFloor, earliest - firstLeg);
-    startSource = "estimated";
-  }
-  const riderBusy = blockStart < driverFloor;          // rider non libero a block_start
-  const blockEnd = blockStart + actualDur;
-
-  // Scala i tempi di arrivo stimati sulla durata effettiva (manuale o stimata),
-  // così i per-stop entrega restano coerenti col block_end dichiarato.
-  const denom = est.total > 0 ? est.total : (actualDur || 1);
-  const scale = actualDur > 0 ? actualDur / denom : 1;
-
-  // ── warnings di blocco ───────────────────────────────────────────────────────
+  const frozenIds = Array.isArray(activeTrip.member_order_ids) ? activeTrip.member_order_ids.map(String) : [];
+  const blockId = `TRIP:${activeTrip.trip_id}`;
   const warnings = [];
-  if (hasManual) {
-    const diff = Math.abs(actualDur - est.total);
-    if (diff > cfg.riderBlockDurMismatchMin && diff > cfg.riderBlockDurMismatchRatio * Math.max(1, est.total)) {
-      warnings.push("duracion_manual_vs_estimada");
-    }
+
+  // Departure is authoritative. A trip with no readable departed_at is a
+  // degraded fact, never a silently "free" rider: we still occupy from `now`.
+  let blockStart = toSvc(activeTrip.departed_at_hhmm);
+  if (blockStart == null) {
+    blockStart = ctx.nowSvc != null ? ctx.nowSvc : 0;
+    warnings.push("trip_departure_unknown");
   }
-  if (riderBusy) warnings.push("rider_ocupado");
+
+  // Order the stops we have facts for by the frozen stop sequence.
+  const seqIndex = new Map(frozenIds.map((id, i) => [id, i]));
+  const stops = rawMembers
+    .slice()
+    .sort((a, b) => (seqIndex.get(String(a.id)) ?? 1e9) - (seqIndex.get(String(b.id)) ?? 1e9));
+
+  const occupancy = estimateTripOccupancyMin(stops, cfg.bufferOpsDriverMin);
+  const blockEnd = blockStart + occupancy;
 
   const zones = [...new Set(stops.map(s => s.zona).filter(Boolean))];
   if (zones.length > 1) warnings.push("multi_zona");
 
-  // ── per-stop: entrega, retraso (I9), prontezza pizza (I8) ─────────────────────
   const ordersOut = {};
-  const issues = [];
   let pizzeTot = 0;
-  const memberIds = [];
-  const entregas = [];
-  for (let i = 0; i < stops.length; i++) {
-    const m = stops[i];
-    memberIds.push(m.id);
-    const pizze = Number(m.n_pizze) || 0;
-    pizzeTot += pizze;
-    const freeze = classifyFreeze(m, nowSvc, cfg.margineCotturaMin);
-    const arrivalSvc = Math.round(blockStart + est.arrivals[i] * scale);
-    entregas.push(arrivalSvc);
-
-    // retraso sulla promessa + granularità, MAI sulla finestra del block (I9).
-    const tol = toleranceMin(m, cfg.promiseSlotMin);
-    const promessaSvc = toSvc(m.forzado_hora || m.hora);
-    const retraso = promessaSvc != null ? Math.max(0, arrivalSvc - (promessaSvc + tol)) : 0;
-
-    // prontezza pizza: tutte le pizze del block escono a block_start (I8). Se un membro
-    // ha un forno_out committato OLTRE block_start, o non è materialmente cuocibile in
-    // tempo, è un rischio reale → non "tutto ok" silenzioso.
-    const foCommitted = toSvc(m.forno_out);
-    const notReady = foCommitted != null && foCommitted > blockStart;
-
-    // desfase: la promessa dell'ordine si è mossa rispetto al block → consegna troppo
-    // PRESTO (pizza fatta in anticipo / ordine fuori sync). Segnala incoerenza così una
-    // modifica successiva (es. hora +30) non lascia la timeline "sporca" e silenziosa.
-    const early = promessaSvc != null ? (promessaSvc - tol) - arrivalSvc : 0;
-    const desfasado = early > cfg.riderBlockEarlyToleranceMin;
-
-    const reasons = [`rider_block ${route.id}`];
+  const completedSet = new Set((activeTrip.completed_order_ids || []).map(String));
+  for (const m of stops) {
+    // language-guard: allow-legacy n_pizze is the existing order field name being read, not new vocabulary
+    pizzeTot += Number(m.n_pizze) || 0;
+    const reasons = [`active_trip ${activeTrip.trip_id}`, "departed"];
     if (m.zona) reasons.push(`zona ${m.zona}`);
-    if (notReady) { reasons.push("pizza_not_ready"); issues.push({ order: m.id, type: "pizza_not_ready", forno_out: m.forno_out, block_start: fromSvc(blockStart) }); }
-    if (retraso > 0) { reasons.push("cliente_fuera_slot"); issues.push({ order: m.id, type: "cliente_fuera_slot", retraso }); }
-    if (desfasado) { reasons.push("orden_desfasada"); issues.push({ order: m.id, type: "orden_desfasada", early, promesa: m.forzado_hora || m.hora, entrega: fromSvc(arrivalSvc) }); }
-
-    ctx.addOven(blockStart, pizze);   // tutte le pizze escono a block_start
-
     ordersOut[m.id] = {
-      id: m.id, tipo: "DOMICILIO", giro_id: `BLK:${route.id}`, freeze,
-      rider_block: route.id,
-      forno_out: fromSvc(blockStart),          // I8
-      salida: fromSvc(blockStart),
-      entrega: fromSvc(arrivalSvc),
-      retraso, conflicto: retraso > 0,
-      forzado: !!route.force || !!m.forzado,
+      id: m.id,
+      tipo: "DOMICILIO",
+      giro_id: blockId,
+      freeze: "DEPARTED",
+      trip_id: activeTrip.trip_id,
+      trip_giro_id: activeTrip.giro_id || null,
+      stop_seq: seqIndex.has(String(m.id)) ? seqIndex.get(String(m.id)) : null,
+      // The order's OWN committed oven fact, echoed — the planner does not
+      // re-plan a pizza that already left with the rider.
+      forno_out: m.forno_out != null ? m.forno_out : null,
+      salida: fromSvc(blockStart),            // REAL departure
+      entrega: null,                          // no defensible arrival estimate
+      eta_status: "UNKNOWN",
+      retraso: null,
+      conflicto: false,
+      forzado: !!m.forzado,
+      completed: completedSet.has(String(m.id)),
       reasons,
     };
   }
 
-  // ── coerenza del block + opzioni di risoluzione ──────────────────────────────
-  const coherent = issues.length === 0;
-  let options = [];
-  if (!coherent) {
-    warnings.push("block_incoherente");
-    options = [
-      { action: "quitar_orden", reason: "togli dal block gli ordini in conflitto" },
-      { action: "mover_bloque", reason: "sposta block_start per recuperare prontezza/slot" },
-      { action: "mantener_forzado", reason: "mantieni forzato accettando warning" },
-      { action: "preguntar_operador", reason: "chiedi priorità all'operatore" },
-    ];
-  }
-  // force:true ⇒ vincolo forte: il block resta com'è, i warning si propagano (D3).
-  const status = coherent ? "coherent" : (route.force ? "forced" : "needs_decision");
-
   const trip = {
-    id: `BLK:${route.id}`,
-    type: "manual_route",
-    manual_giro_id: route.id,
+    id: blockId,
+    type: "active_trip",
+    trip_id: activeTrip.trip_id,
+    manual_giro_id: activeTrip.giro_id || null,
     zona: zones.length === 1 ? zones[0] : null,
     zones,
-    created_by_operator: route.created_by_operator !== false,
-    force: !!route.force,
+    // Post-departure membership is immutable — nothing may be added to or
+    // removed from this trip, so the planner never offers it as a target.
+    immutable_membership: true,
     block_start: fromSvc(blockStart),
     block_end: fromSvc(blockEnd),
-    duration_min: actualDur,
-    duration_source: hasManual ? "manual" : "estimated",
-    estimated_duration_min: est.total,
-    route_order: stops.map(m => m.id),
-    delivery_window: [fromSvc(Math.min(...entregas)), fromSvc(Math.max(...entregas))],
-    anchor: fromSvc(slotStart(blockStart, cfg.promiseSlotMin)),
     departure: fromSvc(blockStart),
     rientro: fromSvc(blockEnd),
+    duration_min: occupancy,
+    duration_source: "estimated",
+    anchor: fromSvc(slotStart(blockStart, cfg.promiseSlotMin)),
     pizze: pizzeTot,
-    count: stops.length,
-    members: memberIds,
-    coherent, status, issues, options, warnings,
+    count: frozenIds.length,
+    // FROZEN membership, straight from Trip Authority. It is NOT rebuilt from
+    // the orders still present in the snapshot, so a completed (and therefore
+    // terminal, therefore snapshot-excluded) stop never disappears from it.
+    members: frozenIds,
+    stops_total: frozenIds.length,
+    stops_completed: (activeTrip.completed_order_ids || []).length,
+    stops_remaining: (activeTrip.outstanding_order_ids || []).length,
+    warnings,
   };
 
   return { trip, interval: [blockStart, blockEnd], orders: ordersOut };
@@ -283,10 +217,16 @@ function buildRiderBlock(route, rawMembers, ctx) {
 //   margineCotturaMin?, promiseSlotMin?, bufferOpsDriverMin?,
 //   zones?: { Q1:{maxOrdiniPerGiro}, ... },
 //   driver?: { libero_desde: "HH:MM" } | null,   // rider reale: quando rientra
-//   manual_giros?: [{                            // §Manual route — rider block
-//     id, type:"manual_route", order_ids:[...], route_order?:[...],
-//     block_start?, manual_duration_min?, created_by_operator?, force?
-//   }],
+//   // §Canonical active trip (Trip Authority, public.trip_projection_v1).
+//   // REPLACES the pre-W6.5 `manual_giros` rider-block input entirely.
+//   active_trip?: {
+//     trip_id, giro_id, departed_at_hhmm:"HH:MM",
+//     member_order_ids:[...],        // FROZEN at departure, immutable
+//     outstanding_order_ids:[...], completed_order_ids:[...]
+//   } | null,
+//   // Trip facts could not be trusted (projection missing / scope invalid).
+//   // Explicit: the planner warns instead of assuming an idle rider.
+//   active_trip_unavailable?: boolean, active_trip_unavailable_reason?: string,
 //   // §Real rider events — eventi reali come TRIGGER (non dipendenza assoluta).
 //   // Se presenti, fissano il pavimento di disponibilità rider per il FUTURO;
 //   // se assenti, si usa la simulazione. Si conserva source/confidence.
@@ -344,20 +284,18 @@ function buildPlan(snapshot) {
     bufferOpsDriverMin: snapshot.bufferOpsDriverMin ?? DEFAULTS.bufferOpsDriverMin,
     zones: snapshot.zones || {},
   };
-  cfg.riderBlockDurMismatchMin = snapshot.riderBlockDurMismatchMin ?? DEFAULTS.riderBlockDurMismatchMin;
-  cfg.riderBlockDurMismatchRatio = snapshot.riderBlockDurMismatchRatio ?? DEFAULTS.riderBlockDurMismatchRatio;
-  cfg.riderBlockEarlyToleranceMin = snapshot.riderBlockEarlyToleranceMin ?? DEFAULTS.riderBlockEarlyToleranceMin;
   const nowSvc = toSvc(snapshot.now);
   const maxPerGiro = (zona) =>
     cfg.zones[zona]?.maxOrdiniPerGiro ?? DEFAULTS.defaultMaxOrdiniPerGiro;
 
-  // ── Manual multi-zone route / rider block: indicizza le def operatore ─────────
-  const manualRoutes = (snapshot.manual_giros || []).filter(g => g && g.type === "manual_route");
-  const routeById = new Map(manualRoutes.map(g => [g.id, g]));
-  const orderRouteId = new Map(); // order_id -> route_id
-  for (const g of manualRoutes) for (const oid of (g.order_ids || [])) orderRouteId.set(oid, g.id);
-  const routeMembers = new Map(); // route_id -> [order,...]  (raccolti dallo scheduling)
-  for (const g of manualRoutes) routeMembers.set(g.id, []);
+  // ── Canonical ACTIVE TRIP: indicizza la membership congelata (Trip Authority) ─
+  // Unica fonte: snapshot.active_trip. Nessuna lettura di manual_giros grezzi,
+  // nessun manual_giro_id crudo, nessun DRIVER_STATO.
+  const activeTrip = snapshot.active_trip || null;
+  const tripMemberIds = new Set(
+    (activeTrip && Array.isArray(activeTrip.member_order_ids) ? activeTrip.member_order_ids : []).map(String)
+  );
+  const tripMembers = []; // active-trip members present in the snapshot
 
   const orders = (snapshot.orders || []).filter(Boolean);
   const ordersOut = {}; // id -> projection
@@ -389,10 +327,11 @@ function buildPlan(snapshot) {
   const tripBuckets = new Map();
 
   for (const o of sched) {
-    // Membro di un manual_route → fuori dal bucketing normale: lo gestisce il rider
-    // block (catena sequenziale, anche multi-zona). NON spezzare (vincolo forte).
-    if (orderRouteId.has(o.id)) {
-      routeMembers.get(orderRouteId.get(o.id)).push(o);
+    // Membro della trip canonica attiva → è GIA` PARTITO: fuori dal bucketing
+    // normale. La sua membership e` congelata e immutabile (W6.2/W6.3): il
+    // planner non la ripianifica e non ci aggiunge nulla.
+    if (tripMemberIds.has(String(o.id))) {
+      tripMembers.push(o);
       continue;
     }
 
@@ -449,34 +388,27 @@ function buildPlan(snapshot) {
     b.members.push(o);
   }
 
-  // ── Stage M — costruisci i RIDER BLOCK (manual_route) ───────────────────────
-  // I block sono vincoli forti dell'operatore: hanno priorità sul movibile automatico.
-  // Si schedulano sul pavimento rider (driverFreeBase + walls dei congelati), poi le
-  // loro finestre [block_start, block_end] diventano walls per gli automatici (Stage 3),
-  // così NESSUN delivery automatico finisce dentro al block (salvo override esplicito).
+  // ── Stage T — RIDER BLOCK canonico dalla TRIP ATTIVA (Trip Authority) ───────
+  // Sostituisce integralmente lo Stage M pre-W6.5 (manual_route, irraggiungibile:
+  // vedi buildActiveTripBlock). Il rider e` occupato da un `departed_at` REALE
+  // fino al rientro stimato dal modello round-trip nativo del motore; quella
+  // finestra diventa un wall per gli automatici (Stage 3), esattamente come
+  // prima. Nothing is re-planned into the oven: a departed member just echoes
+  // its own committed facts.
   const blocks = [];
-  {
-    let blkFloor = driverFreeBase;
-    for (const [, end] of driverWalls) blkFloor = Math.max(blkFloor, end);
-    // Ordina i block per block_start dichiarato (manuali prima), gli stimati a seguire.
-    const routeIds = [...routeMembers.keys()].sort((a, b) => {
-      const sa = toSvc(routeById.get(a).block_start), sb = toSvc(routeById.get(b).block_start);
-      return (sa == null ? 1 : 0) - (sb == null ? 1 : 0) || (sa ?? 0) - (sb ?? 0);
-    });
-    for (const rid of routeIds) {
-      const route = routeById.get(rid);
-      const members = routeMembers.get(rid);
-      const built = buildRiderBlock(route, members, { nowSvc, cfg, driverFloor: blkFloor, addOven });
-      if (!built) continue;
+  if (activeTrip) {
+    const built = buildActiveTripBlock(activeTrip, tripMembers, { nowSvc, cfg });
+    if (built) {
       Object.assign(ordersOut, built.orders);
       driverWalls.push(built.interval);           // occupa la timeline rider
-      blkFloor = Math.max(blkFloor, built.interval[1]);
-      for (const w of built.trip.warnings) {
-        if (w === "block_incoherente" || w === "rider_ocupado" || w === "duracion_manual_vs_estimada")
-          warnings.push(`block ${rid}: ${w}`);
-      }
+      driverFreeBase = Math.max(driverFreeBase, built.interval[1]);
+      for (const w of built.trip.warnings) warnings.push(`trip ${activeTrip.trip_id}: ${w}`);
       blocks.push(built.trip);
     }
+  } else if (snapshot.active_trip_unavailable) {
+    // DEGRADED esplicito: i fatti trip non sono affidabili. Non si finge un
+    // rider libero — si dichiara che la timeline rider non e` attendibile.
+    warnings.push(`trip facts no disponibles (${snapshot.active_trip_unavailable_reason || "TRIP_FACTS_UNAVAILABLE"}): timeline rider no fiable`);
   }
 
   // ── Stage 1 — costruisci i trip ─────────────────────────────────────────────
@@ -706,20 +638,22 @@ function evaluateNewOrder(snapshot, newOrder) {
       reason: tooEarly
         ? `Hora pedida muy pronta · mínimo ${minHora} (cocina + andata)`
         : hitBlock
-          ? `dentro rider block ${hitBlock.id}: propuesta tras el block (${hitBlock.block_end})`
+          ? `rider ocupado en el giro en curso ${hitBlock.id}: propuesta tras el regreso (${hitBlock.block_end})`
           : (status === "valid" ? "prima separata libera" : "no llega a la hora pedida"),
     });
   }
 
   // ── Opzioni join sui giri esistenti stessa zona ─────────────────────────────
   for (const t of base.trips) {
-    // Rider block (manual_route): vincolo forte, il planner NON ci infila delivery da
-    // solo. Offerto solo come override esplicito dell'operatore.
-    if (t.type === "manual_route") {
+    // Canonical ACTIVE trip: it has ALREADY DEPARTED. Post-departure membership
+    // is immutable (W6.2/W6.3) — no operator override can add anything to it, so
+    // the option is refused outright, with no escape hatch.
+    if (t.type === "active_trip") {
       options.push({
-        type: "join_block", giro_id: t.id, block_start: t.block_start, block_end: t.block_end,
-        status: "blocked", requires_override: true,
-        reason: "rider block manuale: inserimento solo con override esplicito dell'operatore",
+        type: "join_block", giro_id: t.id, trip_id: t.trip_id,
+        block_start: t.block_start, block_end: t.block_end,
+        status: "blocked", requires_override: false, immutable_membership: true,
+        reason: "giro ya salió: la membresía del viaje es inmutable tras la salida",
       });
       continue;
     }
@@ -812,5 +746,5 @@ module.exports = {
   buildPlan,
   evaluateNewOrder,
   // esposti per i test:
-  _internal: { toSvc, fromSvc, slotStart, ceilTo, classifyFreeze, estimateRouteDuration, buildRiderBlock, resolveRiderAvailability, SOURCE_CONFIDENCE, DEFAULTS },
+  _internal: { toSvc, fromSvc, slotStart, ceilTo, classifyFreeze, estimateTripOccupancyMin, buildActiveTripBlock, resolveRiderAvailability, SOURCE_CONFIDENCE, DEFAULTS },
 };

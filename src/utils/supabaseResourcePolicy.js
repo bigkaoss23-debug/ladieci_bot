@@ -423,6 +423,19 @@ const REGISTRY = Object.freeze([
   // SQL volatility.
   entry('rpc/giro_projection_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'core/delivery/giroProjectionReader.js readGiroProjection()'),
+
+  // ── W6.5 — canonical Trip Projection read boundary (Planner W6.2/W6.3).
+  // core/delivery/tripProjectionReader.js's readTripProjection() calls this RPC
+  // through its injected `rpc` alias (default sbRpc), exactly like its Giro
+  // sibling above and invisible to the literal sbRpc(...) scanner for the same
+  // reason. The DB function (migration 135) has been live since W6.2; this
+  // entry is what makes it REACHABLE from Node. It is registered now — and not
+  // before — because W6.5 is the first packet with real runtime callers:
+  // plannerSnapshot.js (canonical rider block) and riderReads.js (operational
+  // rider read). POST-only: PostgREST invokes every RPC via POST regardless of
+  // the function's own STABLE volatility.
+  entry('rpc/trip_projection_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'core/delivery/tripProjectionReader.js readTripProjection()'),
 ]);
 
 const BY_RESOURCE = new Map(REGISTRY.map((e) => [e.resource, e]));
