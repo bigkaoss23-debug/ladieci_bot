@@ -269,6 +269,16 @@ const ALLOWED_PRODUCT_PREFIXES = [
     'src/agents/riderTrip.js',
     'scripts/check-domain-language.js',
   ] : []),
+  // Planner W6.6 — Trip Operational HTTP wire bridge: a later, separately-
+  // authorized packet exposing the Trip Authority projection over HTTP for
+  // the first time (getTripOperationalState). New action registration
+  // mandatorily touches the 4-file auth-registry pattern plus its own new
+  // pure module. No DB/economy/frontend change accompanies it.
+  'src/core/delivery/tripOperationalState.js',
+  'src/auth/legacyActionRoles.js',
+  'src/auth/authorizationContract.js',
+  'src/auth/actionPolicyRegistry.js',
+  'docs/access-control/B4_AUTHORIZATION_CONTRACT.md',
 ];
 const nonTest = changedFiles.filter((f) => !f.startsWith('tests/'));
 const unexpected = nonTest.filter((f) => !ALLOWED_PRODUCT_PREFIXES.some((p) => f === p || f.startsWith(p)));

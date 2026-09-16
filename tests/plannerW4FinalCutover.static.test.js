@@ -261,6 +261,16 @@ const allowedProductFiles = new Set([
   // operator call sites + creaOrdine()'s own hard-gated INSERT payload.
   // language-guard: allow-legacy agentOrdini.js is the existing file name being cited, not new vocabulary
   ...(s4Applied ? ['src/delivery/pendingGiroIntent.js', 'index.js', 'src/agents/agentOrdini.js', 'src/agents/previewStrategicOpportunities.js'] : []),
+  // Planner W6.6 — Trip Operational HTTP wire bridge: a later, separately-
+  // authorized packet exposing the Trip Authority projection over HTTP for
+  // the first time (getTripOperationalState). New action registration
+  // mandatorily touches the 4-file auth-registry pattern plus its own new
+  // pure module. No DB/economy/frontend change accompanies it.
+  'src/core/delivery/tripOperationalState.js',
+  'src/auth/legacyActionRoles.js',
+  'src/auth/authorizationContract.js',
+  'src/auth/actionPolicyRegistry.js',
+  'docs/access-control/B4_AUTHORIZATION_CONTRACT.md',
   // W5 Intent Activation (132): migration 132 + rollback + its own certification
   // candidate/harness/group additions, the shared harness files it needed to make
   // language-guard: allow-legacy agentOrdini is the existing identifier being cited, not new vocabulary

@@ -27,6 +27,10 @@ const RIDER_ALLOWED = Object.freeze([
   "registrarSalidaDriver",
   "marcarEntregado",
   "chiudiGiro",
+  // Planner W6.6 — canonical Trip Authority read (trip_state, frozen
+  // membership, progress, ETA). Same class as getDriverStatus/getManualGiros:
+  // the rider needs it for the same self-service delivery workflow.
+  "getTripOperationalState",
 ]);
 
 // Admin-only legacy actions (operator + rider denied). Configuration and dev/parse
@@ -62,6 +66,7 @@ const ALL_ACTIONS = Object.freeze([
   "scanServizio", "backupSerata", "rigeneraSuggerimenti", "approvaSuggerimento",
   "getConvThread", "generaRispostaIA", "getClientes", "debugInterpreta", "debugMenuShadow",
   "getManualGiros", "getDriverStatus", "getMenu", "getCurrentServiceCloseout", "getOrdenesRecent", "getOrdenesArchivadosSesion", "getWaMessages",
+  "getTripOperationalState",
   "getStorico", "getOrdenesArchivio", "getEconomiaLedger", "getServiceIncidents", "getDeliveryLogs", "getSuggerimenti",
   "getAuthActors",
   "getConversacionesActivas", "getClienteByTelefono", "getWaMessageById",

@@ -45,6 +45,11 @@ const ACTION_POLICY_REGISTRY = Object.freeze([
   { action: 'getMenu', acceptedCapabilities: ['menu.read'], legacyStatus: 'shared', v3Phase: 'V3-A' },
   { action: 'getManualGiros', acceptedCapabilities: ['delivery.read_operational', 'delivery.read_assigned'], legacyStatus: 'rider_allowed', v3Phase: 'V3-A' },
   { action: 'getDriverStatus', acceptedCapabilities: ['delivery.read_operational', 'delivery.read_assigned'], legacyStatus: 'rider_allowed', v3Phase: 'V3-A' },
+  // Planner W6.6 — canonical Trip Authority wire bridge (trip_state, frozen
+  // membership, progress, ETA). Same capability class as getDriverStatus/
+  // getManualGiros immediately above: it is the same self-service delivery
+  // read surface, just a richer canonical shape.
+  { action: 'getTripOperationalState', acceptedCapabilities: ['delivery.read_operational', 'delivery.read_assigned'], legacyStatus: 'rider_allowed', v3Phase: 'V3-A' },
 
   // ── orders / WA intake (cashier domain) ──────────────────────────────────
   { action: 'getWaMsgs', acceptedCapabilities: ['orders.general'], legacyStatus: 'operator_shared', v3Phase: 'V3-A' },

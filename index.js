@@ -21,6 +21,10 @@ const { previewStrategicOpportunities } = require("./src/agents/previewStrategic
 const { previewManualGiroRoute } = require("./src/agents/previewManualGiroRoute");
 const { createReadOnlyRestDb } = require("./src/core/delivery/readOnlyRestDb");
 const { loadPlannerSnapshot } = require("./src/core/delivery/plannerSnapshot");
+// Planner W6.6 — the narrow wire bridge exposing tripProjectionPort's already-
+// computed canonical Trip/ETA/progress facts (previously internal-only, see
+// plannerSnapshot.js / riderReads.js) to the frontend over HTTP.
+const { getTripOperationalState } = require("./src/core/delivery/tripOperationalState");
 // This line's 04:00 Business Day, NOT the donor's 06:00 service day — see the
 // header of plannerClock.js for why that difference is deliberate.
 const { nowMadridHHMM, plannerBusinessDate } = require("./src/core/delivery/plannerClock");
@@ -687,6 +691,15 @@ app.get("/api", async (req, res) => {
     } else if (action === "getConvChats") {
       // wa_ids come CSV in querystring → array validato in readActions.
       result = await readActions.getConvChats({ wa_ids: req.query.wa_ids });
+    } else if (action === "getTripOperationalState") {
+      // Planner W6.6 wire bridge — canonical Trip Authority facts (trip_state,
+      // frozen membership, progress, departed_at, ETA UNKNOWN/DEGRADED) over
+      // HTTP. No client input: scope comes from the same operational-session
+      // helper the read path already resolves internally. Never DEGRADED-to-
+      // "no trip": tripOperationalState.js's own contract keeps
+      // available/degraded explicit so no caller can read a failed canonical
+      // read as "rider free".
+      result = await getTripOperationalState();
     } else {
       result = { error: "unknown action: " + action };
     }

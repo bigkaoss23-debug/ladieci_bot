@@ -143,6 +143,12 @@ const MANUAL_GIROS = path.join(ROOT, 'src', 'agents', 'manualGiros.js');
 const AGENT_ORDINI = path.join(ROOT, 'src', 'agents', 'agentOrdini.js');
 const GIRO_INTENT_RECONCILER = path.join(ROOT, 'src', 'delivery', 'giroIntentReconciler.js');
 const RESOURCE_POLICY = path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.js');
+// Planner W6.6 — Trip Operational HTTP wire bridge: reads the Giro Authority
+// projection ONLY for the real salida/salida_source pair of the trip's linked
+// giro (migration 135's derive_giros_v1 sets salida_source='DEPARTED' once a
+// linked trip departs) -- the same read-only boundary previewTiming.js/
+// riderReads.js already use, no new write, no membership re-derivation.
+const TRIP_OPERATIONAL_STATE = path.join(ROOT, 'src', 'core', 'delivery', 'tripOperationalState.js');
 // Packet 01 (previewTiming.js) + Packet 02A (riderReads.js) + Packet 02B (manualGiroReads.js)
 // + Final W4 Read-Cutover Packet (plannerSnapshot.js) + W5 Packet 01 (manualGiros.js, the
 // single Authority WRITER -- it calls giro_authority_create_or_move_v1/attach_or_move_v1/
@@ -154,7 +160,7 @@ const RESOURCE_POLICY = path.join(ROOT, 'src', 'utils', 'supabaseResourcePolicy.
 const ALLOWED_PROJECTION_CONSUMERS = new Set([
   ADAPTER, READER, PREVIEW_TIMING, RIDER_READS, MANUAL_GIRO_READS, PLANNER_SNAPSHOT, MANUAL_GIROS,
   // language-guard: allow-legacy AGENT_ORDINI is the existing identifier being cited, not new vocabulary
-  AGENT_ORDINI, GIRO_INTENT_RECONCILER,
+  AGENT_ORDINI, GIRO_INTENT_RECONCILER, TRIP_OPERATIONAL_STATE,
 ]);
 // The H1B access-control registry is not a live caller of the Authority or the projection —
 // it only declares the {resource, method, sensitivity} the 6 approved giro_authority_* RPCs
@@ -175,10 +181,11 @@ const requirers = live.filter((f) => /require\([^)]*giroProjectionPort|require\(
 assert('nothing outside the allowlisted W4 chain requires giroProjectionPort/giroProjectionReader',
   requirers.length === 0, requirers.join(', '));
 const portRequirers = [...srcFiles, path.join(ROOT, 'index.js')].filter((f) => f !== ADAPTER && /require\([^)]*giroProjectionPort/.test(read(f)));
-assert('exactly previewTiming.js + riderReads.js + manualGiroReads.js + plannerSnapshot.js require giroProjectionPort (Packet 01 + 02A + 02B + Final W4 scope, nothing more)',
-  portRequirers.length === 4 &&
+assert('exactly previewTiming.js + riderReads.js + manualGiroReads.js + plannerSnapshot.js + tripOperationalState.js require giroProjectionPort (Packet 01 + 02A + 02B + Final W4 scope + W6.6 wire bridge, nothing more)',
+  portRequirers.length === 5 &&
   portRequirers.includes(PREVIEW_TIMING) && portRequirers.includes(RIDER_READS) &&
-  portRequirers.includes(MANUAL_GIRO_READS) && portRequirers.includes(PLANNER_SNAPSHOT),
+  portRequirers.includes(MANUAL_GIRO_READS) && portRequirers.includes(PLANNER_SNAPSHOT) &&
+  portRequirers.includes(TRIP_OPERATIONAL_STATE),
   portRequirers.join(', '));
 assert('previewTiming.js requires giroProjectionReader (the canonical I/O boundary)',
   /require\([^)]*giroProjectionReader/.test(read(PREVIEW_TIMING)));

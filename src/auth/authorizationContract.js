@@ -62,6 +62,14 @@ const CANONICAL_ACTIONS = Object.freeze([
   // R-DAY4 — explicit Service Period consolidation checkpoint. Same admin+
   // operator class as rollEconomicPeriod (not admin-only, not rider-enabled).
   'consolidateServicePeriod',
+  // Planner W6.6 — canonical Trip Authority wire bridge. Classified here as
+  // admin+operator only (NOT added to RIDER_ENABLED_ACTIONS below), exactly
+  // like this draft already classifies getOrdenes/getManualGiros: this B4
+  // matrix is a known, documented, unwired draft that already diverges from
+  // legacyActionRoles.js (the LIVE guard) on those two rider-reachable
+  // actions — see actionPolicyRegistry.js's own discrepancy notes. The LIVE
+  // guard does grant rider access (same class as getDriverStatus).
+  'getTripOperationalState',
 ]);
 const CANONICAL_SET = Object.freeze(new Set(CANONICAL_ACTIONS));
 

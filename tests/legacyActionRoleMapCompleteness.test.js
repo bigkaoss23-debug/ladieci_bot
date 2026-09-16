@@ -40,7 +40,8 @@ check("admin allowed for all known actions",
   map.ALL_ACTIONS.every((a) => map.isAllowed("admin", a)));
 
 // Rider allow-list is exactly the accepted set.
-const RIDER_EXPECTED = ["getOrdenes","getManualGiros","getDriverStatus","marcarEnEntrega","registrarSalidaDriver","marcarEntregado","chiudiGiro"].sort();
+// language-guard: allow-legacy chiudiGiro is the existing action name being cited, not new vocabulary
+const RIDER_EXPECTED = ["getOrdenes","getManualGiros","getDriverStatus","marcarEnEntrega","registrarSalidaDriver","marcarEntregado","chiudiGiro","getTripOperationalState"].sort();
 const riderActual = map.ALL_ACTIONS.filter((a) => map.isAllowed("rider", a)).sort();
 check("rider allow-list is exactly the accepted set", JSON.stringify(riderActual) === JSON.stringify(RIDER_EXPECTED));
 check("rider denied generic updateEstado", !map.isAllowed("rider", "updateEstado"));

@@ -256,6 +256,17 @@ const DECLARED = new Set([
   GIRO_FACTS_PORT,               // DELETED (git reports it as changed)
   'src/utils/supabaseResourcePolicy.js', // rpc/trip_projection_v1 registration
   'index.js',                    // comment-only: names the new authority
+  // Planner W6.6 — Trip Operational HTTP wire bridge: a later, separately-
+  // authorized packet exposing this exact projection over HTTP for the first
+  // time (getTripOperationalState). New action registration mandatorily
+  // touches the 4-file auth-registry pattern (legacyActionRoles.js,
+  // authorizationContract.js, actionPolicyRegistry.js, its doc mirror) plus
+  // its own new pure module. No DB/economy/frontend change accompanies it.
+  'src/core/delivery/tripOperationalState.js',
+  'src/auth/legacyActionRoles.js',
+  'src/auth/authorizationContract.js',
+  'src/auth/actionPolicyRegistry.js',
+  'docs/access-control/B4_AUTHORIZATION_CONTRACT.md',
 ]);
 const unexpected = changedAll.filter((f) => !DECLARED.has(f) && !f.startsWith('tests/'));
 assert('every non-test changed file is on this packet\'s declared allowlist',
