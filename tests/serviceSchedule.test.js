@@ -29,20 +29,15 @@ assert("00:00 → AFTER_ORDER_CUTOFF", state(summer(0, 0, 16)) === S.SCHEDULE_ST
 assert("03:59 → AFTER_ORDER_CUTOFF", state(summer(3, 59, 16)) === S.SCHEDULE_STATE.AFTER_ORDER_CUTOFF);
 assert("04:00 → OUTSIDE_WINDOWS (rollover)", state(summer(4, 0, 16)) === S.SCHEDULE_STATE.OUTSIDE_WINDOWS);
 
-console.log("\n══ B. ensure permission ══");
-assert("lunch may ensure", S.resolveSchedule(summer(12)).canEnsureSession === true);
-assert("dinner may ensure", S.resolveSchedule(summer(20)).canEnsureSession === true);
-// O-1 — the buffer may now ensure too (2026-08-22 incident: a genuine order
-// on an already-open service was blocked purely by the clock).
-assert("BUFFER may ensure (O-1)", S.resolveSchedule(summer(17, 45)).canEnsureSession === true);
-assert("after cutoff may NOT ensure", S.resolveSchedule(summer(1, 0, 16)).canEnsureSession === false);
-assert("outside windows may NOT ensure", S.resolveSchedule(summer(6)).canEnsureSession === false);
+console.log("\n══ B. window labels ══");
+// PRE_UAT_LIFECYCLE_HYGIENE — canEnsureSession / expectedServiceKind were
+// proven zero-caller and removed (ensure_service_session never consults the
+// clock); their reintroduction is guarded by
+// tests/deadScheduleSemanticResidueGuard.static.test.js.
 assert("lunch kind is PRANZO", kind(summer(12)) === "PRANZO");
 assert("dinner kind is SERA", kind(summer(20)) === "SERA");
 assert("BUFFER has NO kind (never guess)", kind(summer(17, 45)) === null);
-assert("expectedServiceKind null in buffer", S.expectedServiceKind(summer(17, 45)) === null);
-assert("canonical result carries expectedServiceKind inline too", S.resolveSchedule(summer(12)).expectedServiceKind === "PRANZO");
-assert("expectedServiceKind inline is null outside an ensure window", S.resolveSchedule(summer(17, 45)).expectedServiceKind === null);
+assert("OUTSIDE_WINDOWS has NO kind", kind(summer(6)) === null);
 
 console.log("\n══ C. order intake — canCreateNewOrder is the ONE decision every consumer reads ══");
 assert("23:50 accepts new orders", S.resolveSchedule(summer(23, 50)).canCreateNewOrder === true);
@@ -94,15 +89,6 @@ assert("winter 08:00 → PRANZO (not shifted by an assumed +02:00)", state(winte
 // The old code assumed CEST year-round. Prove the resolver reads the real zone.
 assert("winter 07:00 UTC is 08:00 Madrid", S.madridParts(new Date(Date.UTC(2026, 0, 15, 7, 0))).hour === 8);
 assert("summer 07:00 UTC is 09:00 Madrid", S.madridParts(new Date(Date.UTC(2026, 6, 15, 7, 0))).hour === 9);
-
-console.log("\n══ G. close eligibility (replaces the flat 22:00 rule) ══");
-assert("PRANZO cannot close at 12:00", S.closeEligibility("PRANZO", summer(12)).eligible === false);
-assert("PRANZO CAN close at 17:30 (was impossible before)", S.closeEligibility("PRANZO", summer(17, 30)).eligible === true);
-assert("PRANZO can still close at 20:00 (forgotten lunch)", S.closeEligibility("PRANZO", summer(20)).eligible === true);
-assert("SERA cannot close at 23:50", S.closeEligibility("SERA", summer(23, 50)).eligible === false);
-assert("SERA can close at 00:00", S.closeEligibility("SERA", summer(0, 0, 16)).eligible === true);
-assert("SERA can close at 04:30", S.closeEligibility("SERA", summer(4, 30, 16)).eligible === true);
-assert("legacy kind keeps the 22:00 rule", S.closeEligibility(null, summer(21)).eligible === false && S.closeEligibility(null, summer(22)).eligible === true);
 
 console.log("\n══ H. closed weekdays are NOT invented ══");
 assert("closedWeekdays is empty", S.DEFAULT_SCHEDULE.closedWeekdays.length === 0);
