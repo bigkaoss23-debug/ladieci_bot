@@ -107,7 +107,16 @@ const giroAuthoritySqlFiles = migFiles.filter((f) => f.endsWith('.sql') && read(
 // migration still fails this check.
 const W6_3_STATIC_GUARD = path.join(ROOT, 'tests', 'plannerW6RiderLifecycle.static.test.js');
 const w63Applied = fs.existsSync(W6_3_STATIC_GUARD);
-assert('exactly the migration-130, migration-131, migration-132, migration-133, migration-134 and (once its own guard is present) migration-135 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
+// B1 (POST_UAT_BLOCKER_FIX_2026-09-17) — migration 137 re-defines start_rider_trip_v2
+// (widening its identity check to admin/operator, see MIGRATION_MANIFEST.md row 137)
+// and therefore references giro_authority the same way migration 135 already does
+// (giro membership resolution is unchanged, byte-identical). Admitted here ONLY
+// because its own static guard exists on the branch to vouch for it, exactly like
+// every earlier successor above — an unauthorized new giro_authority migration still
+// fails this check.
+const B1_STATIC_GUARD = path.join(ROOT, 'tests', 'b1RiderDispatchOperatorParityMigration.test.js');
+const b1Applied = fs.existsSync(B1_STATIC_GUARD);
+assert('exactly the migration-130, migration-131, migration-132, migration-133, migration-134, (once its own guard is present) migration-135, and (once its own guard is present) migration-137 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
   JSON.stringify(giroAuthoritySqlFiles) === JSON.stringify([
     '2026-09-14_giro_authority_v1_migration_130.ROLLBACK.sql',
     '2026-09-14_giro_authority_v1_migration_130.sql',
@@ -123,6 +132,10 @@ assert('exactly the migration-130, migration-131, migration-132, migration-133, 
     '2026-09-15_planner_w6_trip_authority_v1_migration_134.sql',
     '2026-09-15_w5_intent_activation_v1_migration_132.ROLLBACK.sql',
     '2026-09-15_w5_intent_activation_v1_migration_132.sql',
+    ...(b1Applied ? [
+      '2026-09-17_b1_rider_dispatch_operator_parity_v1_migration_137.ROLLBACK.sql',
+      '2026-09-17_b1_rider_dispatch_operator_parity_v1_migration_137.sql',
+    ] : []),
   ]), giroAuthoritySqlFiles.join(', '));
 assert('MIGRATION_MANIFEST.md documents migration 130 (giro_authority row present)',
   read(path.join(ROOT, 'migrations', 'MIGRATION_MANIFEST.md')).includes('giro_authority'));
