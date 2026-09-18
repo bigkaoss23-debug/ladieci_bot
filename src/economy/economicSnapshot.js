@@ -67,6 +67,13 @@ const { resolveEconomicPeriodKind } = require("../closeout/economicPeriodReadRul
 const {
   PRESET, resolveEconomicWindow, windowForServiceSession, EconomicWindowError,
 } = require("./economicWindow");
+// ECON-R1 — the SAME "has the operational phase ended?" predicate
+// pendingExposures.js already owns and certifies. Reused verbatim, not
+// forked: `obligation.unpaid` (window-wide, unchanged) and
+// `obligation.currentServiceUnpaid` (below) must partition the same
+// obligations by the same rule Pendencias uses to decide what it excludes,
+// or the two readers could disagree about which orders are "still open".
+const { isOperationallyOver } = require("./pendingExposures");
 
 // PostgREST `in.(...)` lives in a URL; a window with many orders must not
 // build one unbounded query string.
@@ -185,6 +192,24 @@ async function selectSessions(select, ids) {
   return map;
 }
 
+// ECON-R1 — same shape as selectSessions above, for the ONE extra column
+// isOperationallyOver needs (a Mesa order's table_sessions.status). Not
+// workspace-scoped: this reader relies on the same DB-wide single-workspace
+// language-guard: allow-legacy storico is the existing archive table name, listed here only to name the tables this reader already relies on the singleton invariant for, not new vocabulary
+// invariant it already relies on for ordenes/storico/service_sessions/
+// order_financial_events (see this module's header) rather than accepting a
+// workspaceId it has never taken as a parameter.
+async function selectTableSessions(select, ids) {
+  const clean = [...new Set(ids.filter(Boolean).map(String))];
+  if (!clean.length) return new Map();
+  const map = new Map();
+  for (const batch of chunk(clean, ID_BATCH)) {
+    const rows = await select("table_sessions", `id=in.(${batch.map(enc).join(",")})`);
+    for (const row of Array.isArray(rows) ? rows : []) map.set(String(row.id), row);
+  }
+  return map;
+}
+
 const EMPTY_ERA = () => ({ PRANZO: 0, SERA: 0, unknown: 0 }); // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values, used here as object keys exactly as currentServiceCloseout.js already does, not new vocabulary
 
 function addEra(target, key, amount) {
@@ -242,6 +267,11 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
       select,
       `${windowFilter("created_at", win.from, win.to)}${scopeFilter}&order=created_at.asc`,
     );
+    // ECON-R1 — table_sessions for every Mesa obligation in the window, so
+    // isOperationallyOver can decide "still open" exactly like Pendencias
+    // does. A non-Mesa order (no table_session_id) never looks this map up.
+    const obligationTableSessionIds = [...new Set(obligationRows.map((r) => r.table_session_id).filter(Boolean))];
+    const obligationTableSessions = await selectTableSessions(select, obligationTableSessionIds);
     // The `in.(...)` filter can only speak the bare id; the composite match
     // happens in memory immediately below, so a foreign session's event that
     // shares an id is fetched and then discarded rather than counted.
@@ -307,16 +337,36 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
         sessionOf(row),
         obligationByOrderId.get(orderId(row)) || null,
       );
+      // ECON-R1 — the same predicate Pendencias uses to decide an order has
+      // left the normal operational UI. A Mesa order (table_session_id set)
+      // asks its table session's status; anything else asks its own estado.
+      const operationallyOver = isOperationallyOver({
+        order: row,
+        tableSession: row.table_session_id
+          ? (obligationTableSessions.get(String(row.table_session_id)) || null)
+          : null,
+      });
       return Object.freeze({
         ...ticket,
         orderKey: key,
         obligationAt: row.created_at || null,
         serviceSessionId: row.service_session_id ? String(row.service_session_id) : null,
+        operationallyOver,
       });
     });
 
     const gross = round(obligations.filter((t) => !t.cancelled).reduce((s, t) => s + t.amount, 0));
     const unpaid = round(obligations.reduce((s, t) => s + t.unpaidAmount, 0));
+    // ECON-R1 — "Por cobrar ahora" must be the STILL-OPEN subset of `unpaid`
+    // above, never the window-wide total: an order whose operational phase
+    // has already ended is exactly what Pendencias' `porCobrar` reports, and
+    // the two figures must partition `unpaid` rather than both claim the
+    // same euro. Same field (`unpaidAmount`), same predicate Pendencias
+    // owns, filtered rather than re-derived — see the ECON-R1 fix note in
+    // this module's header import.
+    const currentServiceUnpaid = round(
+      obligations.filter((t) => !t.operationallyOver).reduce((s, t) => s + t.unpaidAmount, 0),
+    );
     const voided = round(obligations.filter((t) => t.cancelled).reduce((s, t) => s + t.amount, 0));
     const obligationRefunded = round(obligations.reduce((s, t) => s + t.refundedAmount, 0));
     // OVER-COLLECTED SLICE A — summed from each order's own already-unclamped
@@ -480,6 +530,11 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
       obligation: Object.freeze({
         gross,
         unpaid,
+        // ECON-R1 — the subset of `unpaid` still operationally open (never a
+        // second calculation; see the ECON-R1 comment above `unpaid`'s own
+        // computation). `unpaid` itself is UNCHANGED: every existing caller
+        // keeps reading the exact window-wide figure it always has.
+        currentServiceUnpaid,
         voided,
         refunded: obligationRefunded,
       }),
