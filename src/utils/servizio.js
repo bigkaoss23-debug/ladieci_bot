@@ -114,6 +114,14 @@ async function scanServizio({ select, resolveCurrentService } = {}) {
       nombre: session.table_ref || "Mesa",
       hora: "",
       stato: "CUENTA_ABIERTA",
+      // PREVIOUS_SERVICE_OPEN_TABLE_RECOVERY — the canonical table_sessions
+      // identity this row is ALREADY read from (this same sbSelect above),
+      // now carried through instead of dropped. Without it the Finalizar
+      // pending-items list could say "a table is open" but never which one,
+      // so an operator could see the blocker but had no canonical way to
+      // reach it (see PREVIOUS_SERVICE_OPEN_TABLE_RECOVERY_FIX_2026-09-18.md).
+      tableSessionId: session.id,
+      tableId: session.table_id || null,
     };
   });
 
