@@ -3,7 +3,7 @@
 // PREVIOUS_SERVICE_OPEN_TABLE_RECOVERY — 2026-09-18
 //
 // ROOT CAUSE (see PREVIOUS_SERVICE_OPEN_TABLE_RECOVERY_FIX_2026-09-18.md):
-// scanServizio's pre-close scan already reads every open table_sessions row
+// the pre-close scan under test already reads every open table_sessions row
 // (canonical identity: id / table_id) to build the "table" blocker in
 // `attivi`, but used to drop that identity before returning it — the
 // frontend could see a table was blocking Finalizar but had no id to route
