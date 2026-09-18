@@ -62,9 +62,15 @@ const SPEC_ADMIN_ONLY = [
   'getAuthActors', 'setActorPin', 'verifyOwnPin',
 ];
 const SPEC_RIDER = [
-  'getDriverStatus', 'updateEstado', 'marcarEnEntrega', 'marcarEntregado',
+  'getDriverStatus', 'updateEstado', 'marcarEnEntrega',
   'registrarSalidaDriver', 'chiudiGiro', 'marcarLlegado',
 ];
+// marcarEntregado (2026-09-18, POST_OPUS_REVIEW_REMEDIATION Scope A): rider EXCLUSIVELY
+// — not even admin. It reaches rider_collect_and_complete_stop (money collection),
+// whose own SQL header is explicit: "this contract never serves admin/operator". See
+// src/auth/authorizationContract.js's note above RIDER_ENABLED_ACTIONS for the full
+// rationale (a genuine pre-existing contract/implementation drift, not a new decision).
+const SPEC_RIDER_ONLY = ['marcarEntregado'];
 const SPEC_FRESH = [
   'getConfig', 'rigeneraSuggerimenti', 'approvaSuggerimento', 'getClientes', 'getStorico',
   'getOrdenesArchivio', 'getEconomiaLedger', 'getServiceIncidents', 'getDeliveryLogs', 'getSuggerimenti', 'setConfig', 'eliminaOrdine', 'eliminaConversazione',
@@ -84,6 +90,7 @@ const SPEC_PREDICATES = {
 // Independent expected-allowed oracle from the spec rules (§7-§10).
 function expectedAllowed(action) {
   if (SPEC_SERVICE_ONLY.includes(action)) return ['service'];
+  if (SPEC_RIDER_ONLY.includes(action)) return ['rider'];
   const out = ['admin'];
   if (!SPEC_ADMIN_ONLY.includes(action)) out.push('operator');
   if (SPEC_RIDER.includes(action)) out.push('rider');
@@ -102,7 +109,9 @@ assert('B: module CANONICAL_ACTIONS length 73', A.CANONICAL_ACTIONS.length === 7
 assert('B: module canonical set == spec 58 (independent transcription)', setEq(A.CANONICAL_ACTIONS, SPEC_ALL_57));
 assert('B: no duplicate canonical action', new Set(A.CANONICAL_ACTIONS).size === A.CANONICAL_ACTIONS.length);
 assert('B: module ADMIN_ONLY == spec (19)', setEq(A.ADMIN_ONLY_ACTIONS, SPEC_ADMIN_ONLY) && A.ADMIN_ONLY_ACTIONS.length === 19);
-assert('B: module RIDER_ENABLED == spec (7)', setEq(A.RIDER_ENABLED_ACTIONS, SPEC_RIDER) && A.RIDER_ENABLED_ACTIONS.length === 7);
+assert('B: module RIDER_ENABLED == spec (6)', setEq(A.RIDER_ENABLED_ACTIONS, SPEC_RIDER) && A.RIDER_ENABLED_ACTIONS.length === 6);
+assert('B: module RIDER_ONLY == spec (1)', setEq(A.RIDER_ONLY_ACTIONS, SPEC_RIDER_ONLY) && A.RIDER_ONLY_ACTIONS.length === 1);
+assert('B: RIDER_ENABLED and RIDER_ONLY are disjoint', SPEC_RIDER.every((a) => !SPEC_RIDER_ONLY.includes(a)));
 assert('B: module SERVICE_ONLY == spec (1)', setEq(A.SERVICE_ONLY_ACTIONS, SPEC_SERVICE_ONLY) && A.SERVICE_ONLY_ACTIONS.length === 1);
 
 // ── C. Dynamic router equality + negative controls ──────────────────────────
@@ -145,8 +154,8 @@ assert('D: full 56x4 decision surface matches independent spec oracle', surfaceO
 // ── E. Totals (secondary sanity, not primary proof) ─────────────────────────
 const totals = { admin: 0, operator: 0, rider: 0, service: 0 };
 for (const action of SPEC_ALL_57) for (const p of ['admin', 'operator', 'rider', 'service']) if (A.isAllowed(p, action)) totals[p]++;
-assert('E: admin total 72', totals.admin === 72, `got ${totals.admin}`);
-assert('E: operator total 53', totals.operator === 53, `got ${totals.operator}`);
+assert('E: admin total 71', totals.admin === 71, `got ${totals.admin}`);
+assert('E: operator total 52', totals.operator === 52, `got ${totals.operator}`);
 assert('E: rider total 7', totals.rider === 7, `got ${totals.rider}`);
 assert('E: service total 1', totals.service === 1, `got ${totals.service}`);
 
@@ -162,15 +171,16 @@ assert('F: service DENIED all 55 human actions', serviceHumanDenied);
 let humansMachineDenied = true;
 for (const p of ['admin', 'operator', 'rider']) for (const action of SPEC_SERVICE_ONLY) if (A.isAllowed(p, action)) humansMachineDenied = false;
 assert('F: humans DENIED all machine-only actions', humansMachineDenied);
-// admin denied ONLY triggerCloseIfNeeded
-assert('F: admin denied set == {triggerCloseIfNeeded}',
-  setEq(SPEC_ALL_57.filter((a) => !A.isAllowed('admin', a)), ['triggerCloseIfNeeded']));
-// operator denied set == service-only + admin-only
-assert('F: operator denied set == triggerCloseIfNeeded + 13 admin-only',
-  setEq(SPEC_ALL_57.filter((a) => !A.isAllowed('operator', a)), ['triggerCloseIfNeeded', ...SPEC_ADMIN_ONLY]));
-// rider allowed set == exactly the 7
-assert('F: rider allowed set == the 7 rider actions',
-  setEq(SPEC_ALL_57.filter((a) => A.isAllowed('rider', a)), SPEC_RIDER));
+// admin denied triggerCloseIfNeeded AND the rider-only action (NOT an implicit "admin
+// allows everything" — see RIDER_ONLY_ACTIONS' note in the module).
+assert('F: admin denied set == {triggerCloseIfNeeded, marcarEntregado}',
+  setEq(SPEC_ALL_57.filter((a) => !A.isAllowed('admin', a)), ['triggerCloseIfNeeded', ...SPEC_RIDER_ONLY]));
+// operator denied set == service-only + admin-only + rider-only
+assert('F: operator denied set == triggerCloseIfNeeded + admin-only + rider-only',
+  setEq(SPEC_ALL_57.filter((a) => !A.isAllowed('operator', a)), ['triggerCloseIfNeeded', ...SPEC_ADMIN_ONLY, ...SPEC_RIDER_ONLY]));
+// rider allowed set == exactly the 7 (6 rider-enabled + 1 rider-only)
+assert('F: rider allowed set == the 7 rider actions (rider-enabled + rider-only)',
+  setEq(SPEC_ALL_57.filter((a) => A.isAllowed('rider', a)), [...SPEC_RIDER, ...SPEC_RIDER_ONLY]));
 
 // ── G. Fresh-auth exact set + not-inferred ──────────────────────────────────
 assert('G: requiresFreshAuth set == spec 11', setEq(SPEC_ALL_57.filter((a) => A.requiresFreshAuth(a)), SPEC_FRESH));
@@ -179,7 +189,7 @@ assert('G: FRESH is subset of canonical', SPEC_FRESH.every((a) => A.isCanonicalA
 for (const a of ['debugInterpreta', 'chiudiServizio']) {
   assert(`G: ${a} NOT fresh (not inferred from admin-only/name)`, A.requiresFreshAuth(a) === false);
 }
-for (const a of SPEC_RIDER) assert(`G: rider action ${a} NOT fresh`, A.requiresFreshAuth(a) === false);
+for (const a of [...SPEC_RIDER, ...SPEC_RIDER_ONLY]) assert(`G: rider action ${a} NOT fresh`, A.requiresFreshAuth(a) === false);
 assert('G: admin-only rigeneraSuggerimenti requires fresh auth',
   A.ADMIN_ONLY_ACTIONS.includes('rigeneraSuggerimenti') && A.requiresFreshAuth('rigeneraSuggerimenti'));
 assert('G: unknown action requiresFreshAuth = false', A.requiresFreshAuth('nope') === false);
@@ -193,14 +203,14 @@ for (const [act, id] of Object.entries(SPEC_PREDICATES)) {
   assert(`H: operator ${act} has NO rider predicate`, A.getRequiredPredicate('operator', act) === null);
   assert(`H: service ${act} has NO predicate (denied)`, A.getRequiredPredicate('service', act) === null);
 }
-// predicate-bearing action set == exactly the 7 rider actions
+// predicate-bearing action set == exactly the 7 rider actions (rider-enabled + rider-only)
 assert('H: predicate-bearing set == 7 rider actions',
-  setEq(SPEC_ALL_57.filter((a) => A.getRequiredPredicate('rider', a) !== null), SPEC_RIDER));
+  setEq(SPEC_ALL_57.filter((a) => A.getRequiredPredicate('rider', a) !== null), [...SPEC_RIDER, ...SPEC_RIDER_ONLY]));
 // non-rider-enabled actions carry no predicate for rider (and rider is denied them anyway)
 assert('H: rider getRequiredPredicate(getConfig) null (denied, no predicate)', A.getRequiredPredicate('rider', 'getConfig') === null);
 // B4 never evaluates predicates to a truthy pass — API returns only an id or null
 assert('H: getRequiredPredicate never returns boolean true',
-  SPEC_RIDER.every((a) => A.getRequiredPredicate('rider', a) !== true));
+  [...SPEC_RIDER, ...SPEC_RIDER_ONLY].every((a) => A.getRequiredPredicate('rider', a) !== true));
 
 // ── I. Alias map empty proof ─────────────────────────────────────────────────
 assert('I: ALIAS_MAP has zero keys', Object.keys(A.ALIAS_MAP).length === 0);

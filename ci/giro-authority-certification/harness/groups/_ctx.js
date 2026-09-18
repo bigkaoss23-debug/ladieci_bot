@@ -34,4 +34,15 @@ async function ensureCaptureTrigger(su) {
   return true;
 }
 
-module.exports = { open, ensureCaptureTrigger };
+// Migration 137 (B1) adds trip_authority.trips.dispatched_by, NOT NULL. This file's
+// groups are shared by runners that stop at migration 135 (column absent) and runners
+// that go through 137 (column present, NOT NULL) -- a raw fixture INSERT that bypasses
+// the RPC to prove a DB-level constraint must adapt to whichever fixture it is handed.
+async function hasDispatchedBy(su) {
+  const r = await su.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_schema = 'trip_authority' AND table_name = 'trips' AND column_name = 'dispatched_by'`
+  );
+  return r.rows.length === 1;
+}
+
+module.exports = { open, ensureCaptureTrigger, hasDispatchedBy };

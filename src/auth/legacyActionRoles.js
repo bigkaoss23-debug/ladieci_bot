@@ -25,6 +25,18 @@ const RIDER_ALLOWED = Object.freeze([
   "getDriverStatus",
   "marcarEnEntrega",
   "registrarSalidaDriver",
+  // marcarEntregado: this HTTP-level grant also nominally admits admin/operator (it is
+  // not in ADMIN_ONLY below). That is a DOCUMENTED, TESTED, INTENTIONALLY INERT grant,
+  // not a live authority — the canonical RPC it routes to (rider_collect_and_complete_
+  // stop, money collection) refuses admin/operator unconditionally and always has (see
+  // src/auth/authorizationContract.js's RIDER_ONLY_ACTIONS, reclassified 2026-09-18,
+  // POST_OPUS_REVIEW_REMEDIATION Scope A). Unlike marcarEnEntrega/start_rider_trip_v2
+  // (migration 137, which widened the CANONICAL layer to match this HTTP grant), the
+  // correct fix here was the opposite direction: keep the RPC rider-exclusive (only the
+  // physical rider can know a delivery actually happened) and stop the operator UI from
+  // ever attempting this call — TabEntregas.jsx's "Driver de vuelta" control now calls
+  // close_rider_trip instead. Proven end to end (real RPC calls, not just static text) by
+  // ci/giro-authority-certification/harness/groups/b1RiderDispatchOperatorParity.js.
   "marcarEntregado",
   "chiudiGiro",
   // Planner W6.6 — canonical Trip Authority read (trip_state, frozen

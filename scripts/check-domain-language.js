@@ -59,6 +59,13 @@ const ALLOWLIST_PATTERNS = [
   // versions, so it carries ordinary inline suppressions instead.
   /^migrations\/2026-09-15_planner_w6_rider_lifecycle_cutover_v1_migration_135\.ROLLBACK\.sql$/,
   /^ci\/giro-authority-certification\/candidate\/giro_authority_w6_rider_lifecycle_v1\.ROLLBACK\.sql$/,
+  // B1's rollback (migration 137) is the SAME case again: it restores public.
+  // start_rider_trip_v2 to its exact migration-135 body BYTE-IDENTICALLY (the
+  // certification harness proves it by comparing md5(prosrc) against the pinned
+  // migration-135 checksum), and that body legitimately contains the n_ordini
+  // DRIVER_STATO snapshot field name. Same reasoning, same file-level exemption.
+  /^migrations\/2026-09-17_b1_rider_dispatch_operator_parity_v1_migration_137\.ROLLBACK\.sql$/,
+  /^ci\/giro-authority-certification\/candidate\/giro_authority_b1_rider_dispatch_operator_parity_v1\.ROLLBACK\.sql$/,
   // L-1's privilege+RLS lockdown names nine pre-existing legacy tables
   // (clientes/ordenes/storico/conv/wa_msgs/archivio_conv/analisi_serata/
   // suggerimenti/geo_cache) by identifier throughout its grants, policies

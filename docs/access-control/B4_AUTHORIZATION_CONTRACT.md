@@ -29,19 +29,30 @@
   - `triggerCloseIfNeeded` (internal scheduler/cron; isolated from the human
     browser proxy in B8; must not be reachable through a human JWT).
 - **admin-only (11)** — `admin` allowed; `operator`/`rider`/`service` denied.
-- **rider-enabled (7)** — `admin` + `operator` + `rider`; `service` denied.
+- **rider-enabled (6)** — `admin` + `operator` + `rider`; `service` denied.
   Rider invocation additionally requires a **B7 predicate** (metadata only in B4).
   Admin/operator invocation of these actions carries **no** rider predicate.
+- **rider-only (1)** — `rider` EXCLUSIVELY; `admin`/`operator`/`service` all
+  denied, with **no** implicit admin-allows-everything shortcut. `marcarEntregado`
+  reaches `rider_collect_and_complete_stop` (money collection), whose own SQL
+  header is explicit: "this contract never serves admin/operator, and never lets
+  a rider borrow their authority." Reclassified here 2026-09-18
+  (POST_OPUS_REVIEW_REMEDIATION, Scope A) — it was previously grouped under
+  rider-enabled, which was a genuine contract/implementation drift: admin/operator
+  could never actually reach `OK` on this action at the canonical layer, only a
+  real rider could. It still carries its B7 predicate for the rider caller,
+  exactly like a rider-enabled action does.
 - **admin + operator (default class)** — every canonical action **not** in the
-  three groups above. Allowed for `admin` + `operator`; denied to `rider` +
+  four groups above. Allowed for `admin` + `operator`; denied to `rider` +
   `service`. There is **no** implicit "admin allows everything": `admin` is
-  denied `triggerCloseIfNeeded` explicitly, and every resolved decision is
-  asserted per-action in the tests.
+  denied `triggerCloseIfNeeded` explicitly (and, separately, `marcarEntregado`
+  above), and every resolved decision is asserted per-action in the tests.
 
 ### Fresh authentication (9)
 Explicit metadata — **never** inferred from admin-only status, action name,
 read/mutation class, or substrings. Deliberately **not** fresh: `rigeneraSuggerimenti`,
-`debugInterpreta`, `chiudiServizio`, all rider-enabled actions, routine ops.
+`debugInterpreta`, `chiudiServizio`, all rider-enabled actions, the rider-only
+action (`marcarEntregado`), routine ops.
 
 ### B7 rider predicates (7)
 Stable identifiers stored as metadata. B4 **never evaluates** them and adds **no**
@@ -77,9 +88,9 @@ targets, and be added here + to the module + to the tests explicitly.
 
 | Principal | Allowed actions |
 |---|---|
-| `admin` | 72 (every routed action except `triggerCloseIfNeeded`) |
-| `operator` | 53 (every action except `triggerCloseIfNeeded` + the admin-only set) |
-| `rider` | 7 (the rider-enabled actions) |
+| `admin` | 71 (every routed action except `triggerCloseIfNeeded` and the rider-only `marcarEntregado`) |
+| `operator` | 52 (every action except `triggerCloseIfNeeded` + the admin-only set + the rider-only `marcarEntregado`) |
+| `rider` | 7 (the 6 rider-enabled actions + the 1 rider-only action) |
 | `service` | 1 (`triggerCloseIfNeeded`) |
 
 Primary proof is the exhaustive action-by-action decision surface plus
@@ -114,7 +125,8 @@ PRINCIPALS: admin, operator, rider, service
 CANONICAL_COUNT: 73
 SERVICE_ONLY: triggerCloseIfNeeded
 ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, debugMenuShadow, getStorico, getOrdenesArchivio, getEconomiaLedger, getServiceIncidents, resolveServiceIncident, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione, getAuthActors, setActorPin, verifyOwnPin
-RIDER_ENABLED: getDriverStatus, updateEstado, marcarEnEntrega, marcarEntregado, registrarSalidaDriver, chiudiGiro, marcarLlegado
+RIDER_ENABLED: getDriverStatus, updateEstado, marcarEnEntrega, registrarSalidaDriver, chiudiGiro, marcarLlegado
+RIDER_ONLY: marcarEntregado
 FRESH_AUTH: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, getStorico, getOrdenesArchivio, getEconomiaLedger, getServiceIncidents, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione, getAuthActors, setActorPin, verifyOwnPin, getCurrentServiceCloseout, openServiceSession, rollEconomicPeriod, resolveServiceIncident, consolidateServicePeriod
 PREDICATE getDriverStatus: RIDER_OWN_DRIVER_STATUS
 PREDICATE updateEstado: RIDER_UPDATE_ESTADO_SCOPE
@@ -124,8 +136,8 @@ PREDICATE registrarSalidaDriver: RIDER_REGISTER_SALIDA_SCOPE
 PREDICATE chiudiGiro: RIDER_CLOSE_GIRO_SCOPE
 PREDICATE marcarLlegado: RIDER_MARK_LLEGADO_SCOPE
 ALIAS_MAP: EMPTY
-TOTAL admin: 72
-TOTAL operator: 53
+TOTAL admin: 71
+TOTAL operator: 52
 TOTAL rider: 7
 TOTAL service: 1
 ```

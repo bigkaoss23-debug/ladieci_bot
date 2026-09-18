@@ -96,13 +96,34 @@ const ADMIN_ONLY_ACTIONS = Object.freeze([
 ]);
 const ADMIN_ONLY_SET = Object.freeze(new Set(ADMIN_ONLY_ACTIONS));
 
-// rider-enabled (7): admin+operator+rider; service denied. Rider invocation
+// rider-enabled (6): admin+operator+rider; service denied. Rider invocation
 // additionally requires a B7 resource/state predicate (see RIDER_PREDICATES).
+//
+// marcarEntregado moved OUT of this group on 2026-09-18 (POST_OPUS_REVIEW_REMEDIATION,
+// Scope A) into RIDER_ONLY_ACTIONS below. It reaches rider_collect_and_complete_stop
+// (money collection), whose own SQL header is explicit and absolute: "this contract
+// never serves admin/operator, and never lets a rider borrow their authority" — migration
+// 137 (which widened marcarEnEntrega's canonical RPC to admin/operator/rider) deliberately
+// left this RPC untouched. Classifying marcarEntregado as admin+operator+rider here was a
+// genuine contract/implementation drift, independent of and pre-dating migration 137: this
+// draft's own "no rider predicate for admin/operator" rule never applied in practice
+// because admin/operator could never reach OK on this action at the canonical layer — only
+// a real rider ever could. The live HTTP guard (legacyActionRoles.js) still nominally
+// grants admin/operator this legacy action name; that is now a documented, tested,
+// intentionally-inert grant (see legacyActionRoles.js's own comment on RIDER_ALLOWED), not
+// a contradiction of this contract — B4 describes the canonical decision, and the
+// canonical decision has never been anything but rider-only for this specific action.
 const RIDER_ENABLED_ACTIONS = Object.freeze([
-  'getDriverStatus', 'updateEstado', 'marcarEnEntrega', 'marcarEntregado',
+  'getDriverStatus', 'updateEstado', 'marcarEnEntrega',
   'registrarSalidaDriver', 'chiudiGiro', 'marcarLlegado',
 ]);
 const RIDER_ENABLED_SET = Object.freeze(new Set(RIDER_ENABLED_ACTIONS));
+
+// rider-only (1): rider EXCLUSIVELY; admin/operator/service all denied, with NO implicit
+// admin-allows-everything shortcut. The one live money-collection action
+// (rider_collect_and_complete_stop) — see the note above RIDER_ENABLED_ACTIONS.
+const RIDER_ONLY_ACTIONS = Object.freeze(['marcarEntregado']);
+const RIDER_ONLY_SET = Object.freeze(new Set(RIDER_ONLY_ACTIONS));
 
 // fresh-auth: EXPLICIT metadata — never inferred from admin-only status,
 // action name, mutation/read class, or substrings.
@@ -149,11 +170,14 @@ const RIDER_PREDICATES = Object.freeze({
 // assert the resolved 56×4 decision surface.
 function buildContract(action) {
   const machineOnly = SERVICE_ONLY_SET.has(action);
+  const riderOnly = RIDER_ONLY_SET.has(action);
   const allowed = [];
   if (machineOnly) {
     allowed.push('service'); // service-only: humans explicitly excluded
+  } else if (riderOnly) {
+    allowed.push('rider'); // rider-only: NOT even admin — see RIDER_ONLY_ACTIONS note
   } else {
-    allowed.push('admin'); // admin: every non-service-only action
+    allowed.push('admin'); // admin: every non-service-only, non-rider-only action
     if (!ADMIN_ONLY_SET.has(action)) allowed.push('operator');
     if (RIDER_ENABLED_SET.has(action)) allowed.push('rider');
   }
@@ -228,10 +252,11 @@ function isMachineOnly(action) {
 }
 
 // Rider resource/state predicate required for THIS principal to (eventually)
-// execute THIS action. Only a rider caller on a rider-enabled action carries a
-// predicate. Returns null when the call is denied, when the principal is not a
-// rider, or when no predicate applies. Never returns a truthy "pass" — B4 does
-// not evaluate predicates. Enforcement without an evaluator must fail closed.
+// execute THIS action. Only a rider caller on an action the rider is actually
+// allowed (rider-enabled OR rider-only) carries a predicate. Returns null when
+// the call is denied, when the principal is not a rider, or when no predicate
+// applies. Never returns a truthy "pass" — B4 does not evaluate predicates.
+// Enforcement without an evaluator must fail closed.
 function getRequiredPredicate(principal, action) {
   if (!isAllowed(principal, action)) return null;
   if (principal !== 'rider') return null;
@@ -271,6 +296,7 @@ module.exports = {
   SERVICE_ONLY_ACTIONS,
   ADMIN_ONLY_ACTIONS,
   RIDER_ENABLED_ACTIONS,
+  RIDER_ONLY_ACTIONS,
   FRESH_AUTH_ACTIONS,
   RIDER_PREDICATES,
   ACTION_CONTRACTS,

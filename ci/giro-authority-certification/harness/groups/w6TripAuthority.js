@@ -9,7 +9,7 @@
 // touched) and re-verified by the existing static test suite as part of the full
 // backend-suite run, not by this PG harness.
 const { section, assert, call, fixture } = require('../lib');
-const { open, ensureCaptureTrigger } = require('./_ctx');
+const { open, ensureCaptureTrigger, hasDispatchedBy } = require('./_ctx');
 
 async function waitBlocked(su, app, ms = 5000) {
   const t0 = Date.now();
@@ -108,10 +108,16 @@ async function run(env) {
       // second row for the SAME anchor_order_uid is allowed at the trips level (no
       // uniqueness on anchor); the invariant under test is trip_members.order_uid --
       // status='CLOSED' requires closed_at NOT NULL (trips_status_closed_at_chk).
-      const other = (await c.su.query(`
-        INSERT INTO trip_authority.trips (trip_id, business_date, service_session_id, rider_actor, anchor_order_uid, departed_at, closed_at, status, seq)
-        VALUES (gen_random_uuid(), '2026-09-15', $1, 'rider-04', $2, now(), now(), 'CLOSED', nextval('trip_authority.trips_seq_v1'))
-        RETURNING trip_id`, [s, D.order_uid])).rows[0];
+      const dbHas04 = await hasDispatchedBy(c.su);
+      const other = (await c.su.query(
+        dbHas04
+          ? `INSERT INTO trip_authority.trips (trip_id, business_date, service_session_id, rider_actor, dispatched_by, anchor_order_uid, departed_at, closed_at, status, seq)
+             VALUES (gen_random_uuid(), '2026-09-15', $1, 'rider-04', 'rider-04', $2, now(), now(), 'CLOSED', nextval('trip_authority.trips_seq_v1'))
+             RETURNING trip_id`
+          : `INSERT INTO trip_authority.trips (trip_id, business_date, service_session_id, rider_actor, anchor_order_uid, departed_at, closed_at, status, seq)
+             VALUES (gen_random_uuid(), '2026-09-15', $1, 'rider-04', $2, now(), now(), 'CLOSED', nextval('trip_authority.trips_seq_v1'))
+             RETURNING trip_id`,
+        [s, D.order_uid])).rows[0];
       const dupErr = await c.su.query(
         'INSERT INTO trip_authority.trip_members (trip_id, order_uid, stop_seq, created_by) VALUES ($1, $2, 1, $3)',
         [other.trip_id, D.order_uid, 'rider-04']).catch((e) => e);
@@ -130,9 +136,13 @@ async function run(env) {
       await makeRider(c.su, 'rider-05');
       const D = await mk({ estado: 'LISTO' }); const E = await mk({ estado: 'LISTO' });
       await startV2(c.svc, D, 'rider-05');
-      const dbErr = await c.su.query(`
-        INSERT INTO trip_authority.trips (trip_id, business_date, service_session_id, rider_actor, anchor_order_uid, departed_at, status, seq)
-        VALUES (gen_random_uuid(), '2026-09-15', $1, 'rider-05', $2, now(), 'ACTIVE', nextval('trip_authority.trips_seq_v1'))`,
+      const dbHas05 = await hasDispatchedBy(c.su);
+      const dbErr = await c.su.query(
+        dbHas05
+          ? `INSERT INTO trip_authority.trips (trip_id, business_date, service_session_id, rider_actor, dispatched_by, anchor_order_uid, departed_at, status, seq)
+             VALUES (gen_random_uuid(), '2026-09-15', $1, 'rider-05', 'rider-05', $2, now(), 'ACTIVE', nextval('trip_authority.trips_seq_v1'))`
+          : `INSERT INTO trip_authority.trips (trip_id, business_date, service_session_id, rider_actor, anchor_order_uid, departed_at, status, seq)
+             VALUES (gen_random_uuid(), '2026-09-15', $1, 'rider-05', $2, now(), 'ACTIVE', nextval('trip_authority.trips_seq_v1'))`,
         [s, E.order_uid]).catch((e) => e);
       assert('5: a second ACTIVE trips row violates trips_one_active_v1 at the DB level',
         dbErr instanceof Error && dbErr.code === '23505', dbErr && dbErr.message);
@@ -195,10 +205,15 @@ async function run(env) {
       const D = await mk({ estado: 'LISTO' });
       const missing = await call(c.svc, 'start_rider_trip_v2', [D.order_uid, 'nobody-here', 1, scope]);
       assert('9a: unknown actor -> AUTH_ACTOR_NOT_FOUND', missing.ok === false && missing.code === 'AUTH_ACTOR_NOT_FOUND', missing);
+      // B1 (migration 137) deliberately widens this RPC's identity check to admit
+      // admin/operator alongside rider -- 'cashier' is a role that stays refused under
+      // BOTH the pre-137 (rider-only) and post-137 (rider/admin/operator) predicate,
+      // which is what this scenario actually intends to prove: an out-of-set role is
+      // refused, independent of which of those two predicates this fixture is running.
       await c.su.query(`INSERT INTO public.auth_actors (actor, role, session_version, active, workspace_id)
-        VALUES ('admin-09', 'admin', 1, true, gen_random_uuid()) ON CONFLICT (actor) DO NOTHING`);
-      const wrongRole = await call(c.svc, 'start_rider_trip_v2', [D.order_uid, 'admin-09', 1, scope]);
-      assert('9b: non-rider role -> AUTH_FORBIDDEN_ROLE', wrongRole.ok === false && wrongRole.code === 'AUTH_FORBIDDEN_ROLE', wrongRole);
+        VALUES ('cashier-09', 'cashier', 1, true, gen_random_uuid()) ON CONFLICT (actor) DO NOTHING`);
+      const wrongRole = await call(c.svc, 'start_rider_trip_v2', [D.order_uid, 'cashier-09', 1, scope]);
+      assert('9b: an out-of-set role is refused AUTH_FORBIDDEN_ROLE', wrongRole.ok === false && wrongRole.code === 'AUTH_FORBIDDEN_ROLE', wrongRole);
     } finally { await c.close(); }
   }
 

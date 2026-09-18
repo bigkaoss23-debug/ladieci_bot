@@ -6,7 +6,7 @@
 // post-departure Giro mutation guards (ACTIVE *and* CLOSED trips), the lock-order /
 // deadlock properties of the activated path, and the money/economy boundary.
 const { section, assert, call } = require('../lib');
-const { open, ensureCaptureTrigger } = require('./_ctx');
+const { open, ensureCaptureTrigger, hasDispatchedBy } = require('./_ctx');
 
 const META = JSON.stringify({});
 
@@ -114,6 +114,13 @@ async function run(env) {
       const { mk, createOrMove, startV2, counts } = ctx(c, s);
       await makeActor(c.su, 'rider-03');
       await makeActor(c.su, 'op-03', 'operator');
+      // B1 (migration 137) deliberately widens this RPC to admit admin/operator
+      // alongside rider, so 'op-03' can no longer stand in for "a non-rider actor" --
+      // 'cashier-03' stays refused under BOTH the pre-137 (rider-only) and post-137
+      // (rider/admin/operator) predicate, which is what test 8 below actually intends
+      // to prove: identity is refused on its own terms, never masked by the active-trip
+      // conflict set up in test 5.
+      await makeActor(c.su, 'cashier-03', 'cashier');
 
       // 3: single non-giro LISTO order
       const D = await mk({ estado: 'LISTO' });
@@ -137,8 +144,8 @@ async function run(env) {
 
       // 7/8 refusals are evaluated against the SAME active trip deliberately: identity and
       // scope must be refused on their own terms, never masked by the conflict above.
-      const r8a = await startV2(c.svc, E, 'op-03');
-      assert('8: a non-rider actor is refused AUTH_FORBIDDEN_ROLE', r8a.ok === false && r8a.code === 'AUTH_FORBIDDEN_ROLE', r8a);
+      const r8a = await startV2(c.svc, E, 'cashier-03');
+      assert('8: an out-of-set-role actor is refused AUTH_FORBIDDEN_ROLE', r8a.ok === false && r8a.code === 'AUTH_FORBIDDEN_ROLE', r8a);
       const r8b = await startV2(c.svc, E, 'rider-03', 99);
       assert('8: a stale session_version is refused AUTH_SESSION_STALE', r8b.ok === false && r8b.code === 'AUTH_SESSION_STALE', r8b);
       const r8c = await startV2(c.svc, E, 'ghost-rider');
@@ -159,9 +166,13 @@ async function run(env) {
       const G = await createOrMove([F, H]);
       const r6 = await startV2(c.svc, F, 'rider-03');
       assert('6: the giro departs once', r6.ok === true && r6.giro_id === G.giro_id, r6);
-      const dupErr = await c.su.query(`
-        INSERT INTO trip_authority.trips (trip_id, business_date, service_session_id, rider_actor, anchor_order_uid, giro_id, departed_at, closed_at, status, seq)
-        VALUES (gen_random_uuid(), '2026-09-15', $1, 'rider-03', $2, $3, now(), now(), 'CLOSED', nextval('trip_authority.trips_seq_v1'))`,
+      const dbHas6 = await hasDispatchedBy(c.su);
+      const dupErr = await c.su.query(
+        dbHas6
+          ? `INSERT INTO trip_authority.trips (trip_id, business_date, service_session_id, rider_actor, dispatched_by, anchor_order_uid, giro_id, departed_at, closed_at, status, seq)
+             VALUES (gen_random_uuid(), '2026-09-15', $1, 'rider-03', 'rider-03', $2, $3, now(), now(), 'CLOSED', nextval('trip_authority.trips_seq_v1'))`
+          : `INSERT INTO trip_authority.trips (trip_id, business_date, service_session_id, rider_actor, anchor_order_uid, giro_id, departed_at, closed_at, status, seq)
+             VALUES (gen_random_uuid(), '2026-09-15', $1, 'rider-03', $2, $3, now(), now(), 'CLOSED', nextval('trip_authority.trips_seq_v1'))`,
         [s, F.order_uid, G.giro_id]).catch((e) => e);
       assert('6: a SECOND trip referencing the same giro_id violates trips_one_trip_per_giro_v1',
         dupErr instanceof Error && dupErr.code === '23505', dupErr && dupErr.message);

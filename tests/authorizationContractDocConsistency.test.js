@@ -30,6 +30,7 @@ assert('CANONICAL_COUNT match', Number(kv.CANONICAL_COUNT) === A.CANONICAL_ACTIO
 assert('SERVICE_ONLY match', setEq(csv(kv.SERVICE_ONLY), A.SERVICE_ONLY_ACTIONS));
 assert('ADMIN_ONLY match', setEq(csv(kv.ADMIN_ONLY), A.ADMIN_ONLY_ACTIONS));
 assert('RIDER_ENABLED match', setEq(csv(kv.RIDER_ENABLED), A.RIDER_ENABLED_ACTIONS));
+assert('RIDER_ONLY match', setEq(csv(kv.RIDER_ONLY), A.RIDER_ONLY_ACTIONS));
 assert('FRESH_AUTH match', setEq(csv(kv.FRESH_AUTH), A.FRESH_AUTH_ACTIONS));
 assert('ALIAS_MAP documented EMPTY and module empty', kv.ALIAS_MAP === 'EMPTY' && Object.keys(A.ALIAS_MAP).length === 0);
 assert('PREDICATE ids match module (keys)', setEq(Object.keys(predicates), Object.keys(A.RIDER_PREDICATES)));
