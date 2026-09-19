@@ -204,6 +204,9 @@ function fakeEnv({ sessionRow = session(), allOrders = [], tableSessions = [], f
 
 function engineFrom(env) {
   return createServiceLifecycleEngine({
+    // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — these unit tests model a service with no
+    // rider trip; the guard's own behaviour is proven in tests/activeRiderTripServiceCloseGuard.test.js.
+    activeRiderTrip: env.activeRiderTrip || (async () => ({ ok: true, active: false })),
     select: env.select, attempts: env.attempts, snapshots: env.snapshots,
     closeoutCreation: env.closeoutCreation, closeouts: env.closeouts, transition: env.transition,
     // J-1 — the engine persists the close's economic context between Phase D

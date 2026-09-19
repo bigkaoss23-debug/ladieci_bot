@@ -45,6 +45,9 @@ function run({ orders = [], events = [], obligations = [], tableSessions = [] })
     throw new Error('unexpected table ' + table);
   };
   const engine = createServiceLifecycleEngine({
+    // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — these unit tests model a service with no
+    // rider trip; the guard's own behaviour is proven in tests/activeRiderTripServiceCloseGuard.test.js.
+    activeRiderTrip: async () => ({ ok: true, active: false }),
     select,
     attempts: {
       async acquire() { return { success: true, created: true, code: 'ACQUIRED', attempt: { closeoutCorrelationId: 'corr-1', serviceSessionId: SID, status: 'active' } }; },

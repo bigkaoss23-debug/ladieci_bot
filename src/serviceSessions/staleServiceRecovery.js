@@ -26,8 +26,11 @@
 //   PREVIOUS_SERVICE_PENDING  — the open service is stale but NOT safe to
 //                               auto-finalize (operational blockers, unpaid
 //                               exposure, over-collection, a reconciliation
-//                               it cannot even build, or a lifecycle
-//                               anomaly). Return the typed state + the
+//                               it cannot even build, a lifecycle
+//                               anomaly, or the close authority refusing
+//                               because a rider trip is still ACTIVE for
+//                               this service — see activeRiderTripBlocker.js
+//                               and blockers.activeTrip). Return the typed state + the
 //                               blocker facts. The operator resolves it and
 //                               uses the EXISTING manual Finalizar flow.
 //
@@ -262,7 +265,14 @@ function createStaleServiceRecovery({
       };
     }
 
-    return { ...pending(), blockers: { ...blockers, autoCloseError: (closed && closed.code) || "V3_CLOSE_FAILED" } };
+    // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — the close authority (the one
+    // canonical enforcement point, serviceLifecycleEngine.js) refused because a
+    // rider trip is still ACTIVE for this service. This module decides nothing
+    // about trips: it only carries the engine's typed refusal into the blocker
+    // facts, so PREVIOUS_SERVICE_PENDING says WHY (never AUTO_RECOVERY_PERFORMED).
+    const failureBlockers = { ...blockers, autoCloseError: (closed && closed.code) || "V3_CLOSE_FAILED" };
+    if (closed && closed.activeTrip) failureBlockers.activeTrip = closed.activeTrip;
+    return { ...pending(), blockers: failureBlockers };
   }
 
   return { recoverStaleService, evaluateAutoCloseSafe, RECOVERY_CODE };

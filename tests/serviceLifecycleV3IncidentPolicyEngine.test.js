@@ -240,6 +240,9 @@ function fakeEnv({
 
 function engineFrom(env, overrides = {}) {
   return createServiceLifecycleEngine({
+    // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — these unit tests model a service with no
+    // rider trip; the guard's own behaviour is proven in tests/activeRiderTripServiceCloseGuard.test.js.
+    activeRiderTrip: env.activeRiderTrip || (async () => ({ ok: true, active: false })),
     select: env.select,
     attempts: env.attempts,
     snapshots: env.snapshots,

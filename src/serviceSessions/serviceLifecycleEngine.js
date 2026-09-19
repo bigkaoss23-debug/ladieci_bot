@@ -27,6 +27,9 @@
 // integrity failure remains a hard blocker: a reconciliation mismatch
 // (unchanged from Slice 3.2), an invalid lineage (unchanged from Slice
 // 3.2.1), or a failure to durably persist a REQUIRED incident (Slice 3.3).
+// ACTIVE RIDER TRIP / SERVICE CLOSE GUARD adds one more hard, typed refusal
+// that is decided BEFORE anything durable is written: an ACTIVE rider trip
+// attributed to this service (activeRiderTripBlocker.js).
 //
 // F-5 — SLICE 3.4's "ensure/reuse the next current service B" step has been
 // RETIRED from this engine (not adapted, not made operational_service_v1-
@@ -62,6 +65,7 @@ const { serviceIncidents } = require("../incidents/serviceIncidents");
 const { classifyForV3Close } = require("./v3IncidentPolicy");
 const mesaDao = require("../tables/mesaDao");
 const { closeoutReconciliation } = require("../economy/closeoutReconciliation");
+const { findActiveRiderTripForService, closeRefusalFromCheck, summarizeActiveTrip } = require("./activeRiderTripBlocker");
 
 // language-guard: allow-legacy servizio.js is named here only as a cross-reference to where the same literal terminal-state set also lives, not new vocabulary
 // Identical set to guard_service_session_closed_v1 (SQL) / servizio.js /
@@ -95,8 +99,43 @@ function createServiceLifecycleEngine({
   // other collaborator so the engine stays unit-testable without a database,
   // and so a test can prove the close FAILS CLOSED when this cannot persist.
   reconciliation = closeoutReconciliation,
+  // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — the one predicate for "this
+  // service still has an ACTIVE rider trip" (see activeRiderTripBlocker.js).
+  // Injected like every other collaborator so the engine stays unit-testable
+  // without a database.
+  activeRiderTrip = findActiveRiderTripForService,
   now = () => new Date(),
 } = {}) {
+  // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — the PREFLIGHT half.
+  // Every canonical path that can close an Operational Service (manual
+  // Finalizar and stale auto-recovery both go serviceCloseAuthority ->
+  // this engine) passes through here. Returns null when the close may proceed,
+  // else the typed refusal. Runs only BEFORE anything durable is written for a
+  // not-yet-closed session (a fresh close, or the resume of one whose terminal
+  // transition is still pending): an already-closed session is an idempotent
+  // retry and is never re-judged. Fail closed — an unreadable trip projection
+  // refuses the close.
+  //
+  // NOT THE AUTHORITY (migration 138). This read cannot be atomic with the
+  // terminal write, so it is an early, cheap, typed rejection that leaves no
+  // Phase A-D artifacts behind. The authority is close_service_session_v3
+  // itself: it holds the same dispatch lock as start_rider_trip_v2 and refuses
+  // the SAME code (V3_CLOSE_ACTIVE_RIDER_TRIP) if a trip is ACTIVE at the moment
+  // of the write — see terminalRefusalFields() for how that refusal surfaces.
+  async function refuseWhileRiderTripActive(serviceSessionId) {
+    const check = await activeRiderTrip({ serviceSessionId });
+    return closeRefusalFromCheck(check);
+  }
+
+  // When the terminal transition itself is refused by the database because a rider trip is
+  // ACTIVE (the race the preflight cannot exclude), keep the same `activeTrip` shape the
+  // preflight refusal carries so stale recovery / Finalizar treat both identically.
+  function terminalRefusalFields(transitionResult) {
+    return transitionResult && transitionResult.trip
+      ? { activeTrip: summarizeActiveTrip(transitionResult.trip) }
+      : {};
+  }
+
   // SLICE 3.4 — the carryover summary: which tables are STILL open, with
   // their origin STILL this session (table_sessions.service_session_id is
   // never rewritten at close — see V3.1). Read fresh, AFTER close, so a
@@ -221,6 +260,21 @@ function createServiceLifecycleEngine({
         // yet; the RPC is idempotent, so CASE D (already past E) simply gets
         // the existing row back. Still before the transition, for the same
         // fail-closed reason as the main path.
+        //
+        // ACTIVE RIDER TRIP guard — CASE B only (the service is not yet
+        // closed). CASE D (already closed) is an idempotent finish of a close
+        // that already happened and is never re-judged here.
+        if (!alreadyClosed) {
+          const refusal = await refuseWhileRiderTripActive(session.id);
+          if (refusal) {
+            return {
+              ...refusal,
+              closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
+              closeout: existingCloseout,
+            };
+          }
+        }
+
         const resumeReconciliation = await reconciliation.persist({
           serviceSessionId,
           closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
@@ -242,6 +296,7 @@ function createServiceLifecycleEngine({
           return {
             success: false, code: transitionResult.code || "V3_CLOSE_TRANSITION_FAILED",
             closeoutCorrelationId: existingAttempt.closeoutCorrelationId, closeout: existingCloseout,
+            ...terminalRefusalFields(transitionResult),
           };
         }
 
@@ -293,6 +348,15 @@ function createServiceLifecycleEngine({
       // session is CASE F, not this: it falls through below like any other
       // happy-path close because no closeout exists YET for it.
       return { success: false, code: "V3_CLOSE_SESSION_ALREADY_CLOSED_NOT_RECOVERABLE" };
+    }
+
+    // ACTIVE RIDER TRIP guard — a fresh close. Before attempts.acquire(), so a
+    // refusal writes nothing (no attempt, no snapshot, no closeout, no
+    // incident): the service stays exactly as it was and the operator can
+    // resolve the trip and simply retry.
+    {
+      const refusal = await refuseWhileRiderTripActive(session.id);
+      if (refusal) return refusal;
     }
 
     // CASE A (and CASE F, which is CASE A with zero orders — no special
@@ -616,6 +680,7 @@ function createServiceLifecycleEngine({
         code: transitionResult.code || "V3_CLOSE_TRANSITION_FAILED",
         closeoutCorrelationId,
         closeout: createResult.closeout,
+        ...terminalRefusalFields(transitionResult),
       };
     }
 

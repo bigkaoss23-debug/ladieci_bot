@@ -33,6 +33,7 @@ const { sbSelect, sbInsert, sbUpsert } = require("./supabase");
 const { calcolaTotaleOrdine, deliveryFeeFor, isBevanda, isDesert } = require("./helpers");
 const { getCurrentOperationalSession, serviceSessionQuery } = require("../serviceSessions/currentOperationalSession");
 const { aggregate: aggregateCloseout } = require("../closeout/currentServiceCloseout");
+const { findActiveRiderTripForService } = require("../serviceSessions/activeRiderTripBlocker");
 
 // The pre-close scan reads through this indirection so a test can hand it an
 // in-memory `select`; with no injected dependency it IS `sbSelect`, and every
@@ -77,7 +78,7 @@ function fasciaOraDa(hora) {
 // behaviour is byte-identical to before: `sbSelect` and the lifecycle pointer
 // `getCurrentOperationalSession()`.
 // language-guard: allow-legacy scanServizio is the existing export name; only its optional test-seam args are new, not new vocabulary
-async function scanServizio({ select, resolveCurrentService } = {}) {
+async function scanServizio({ select, resolveCurrentService, activeRiderTrip = findActiveRiderTripForService } = {}) {
   const oggi = madridDateStr();
   const sbSelect = typeof select === "function" ? select : _defaultScanSelect;
   const currentService = resolveCurrentService
@@ -96,6 +97,15 @@ async function scanServizio({ select, resolveCurrentService } = {}) {
   const waMsgsAttivi     = await sbSelect("wa_msgs", `${conversationWindow}&stato=in.(NUEVO,IN_TRATTAMENTO)`) || [];
   const ordiniInCorso    = await sbSelect("ordenes", sessionFilter("estado=in.(POR_CONFIRMAR,NUEVO,EN_COCINA,LISTO,EN_ENTREGA)")) || [];
   const contiMesaAperti  = await sbSelect("table_sessions", sessionFilter("status=eq.open")) || [];
+  // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — this scan only REPORTS the fact so
+  // the Finalizar preflight can show it and offer the existing canonical action;
+  // it decides nothing. The predicate is the single definition in
+  // activeRiderTripBlocker.js and the close itself is refused by the close
+  // engine, not here. `trips` is 1 (an ACTIVE trip is attributed to this
+  // service), 0 (none) or null (the projection could not be read — never
+  // presented as "none").
+  const tripCheck = await activeRiderTrip({ serviceSessionId: currentService.id });
+  const tripsBlocking = tripCheck && tripCheck.ok === true ? (tripCheck.active ? 1 : 0) : null;
 
   const attiviMap = {};
   (Array.isArray(convAttive)    ? convAttive    : []).forEach(c => { attiviMap[c.wa_id] = { wa_id: c.wa_id, nombre: c.nombre || c.wa_id, hora: c.hora || "", stato: c.stato_ordine || "" }; });
@@ -124,6 +134,18 @@ async function scanServizio({ select, resolveCurrentService } = {}) {
       tableId: session.table_id || null,
     };
   });
+  if (tripCheck && tripCheck.ok === true && tripCheck.active === true) {
+    const trip = tripCheck.trip || {};
+    attiviMap[`trip:${trip.tripId || currentService.id}`] = {
+      kind: "trip",
+      wa_id: "",
+      nombre: "Reparto en curso",
+      hora: "",
+      stato: "REPARTO_ACTIVO",
+      tripId: trip.tripId || null,
+      memberCount: Number.isFinite(trip.memberCount) ? trip.memberCount : null,
+    };
+  }
 
   return {
     ok: true,
@@ -132,6 +154,7 @@ async function scanServizio({ select, resolveCurrentService } = {}) {
     blocking: {
       orders: Array.isArray(ordiniInCorso) ? ordiniInCorso.length : 0,
       tables: Array.isArray(contiMesaAperti) ? contiMesaAperti.length : 0,
+      trips: tripsBlocking,
     },
     completati: {
       ordini: Array.isArray(ordiniCompletati) ? ordiniCompletati.length : 0,

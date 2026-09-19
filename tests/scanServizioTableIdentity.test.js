@@ -18,6 +18,8 @@ const assert = require("node:assert/strict");
 const scanPreClose = require("../src/utils/servizio").scanServizio;
 
 const CURRENT = { id: "svc-current", opened_at: "2026-09-17T09:55:00.000Z" };
+// ACTIVE RIDER TRIP guard — this file is about table identity; keep the scan hermetic (no live trip read).
+const NO_TRIP = async () => ({ ok: true, active: false });
 
 function scanSelect({ tableSessions = [] } = {}) {
   return async (table, query = "") => {
@@ -30,7 +32,7 @@ test("PREVIOUS_SERVICE_OPEN_TABLE_RECOVERY · an open table's attivi row carries
   const tableSessions = [
     { id: "ts-mesa-3", table_id: "table-3", table_ref: "Mesa 3" },
   ];
-  const out = await scanPreClose({ select: scanSelect({ tableSessions }), resolveCurrentService: async () => CURRENT });
+  const out = await scanPreClose({ select: scanSelect({ tableSessions }), resolveCurrentService: async () => CURRENT, activeRiderTrip: NO_TRIP });
   const tableRows = out.attivi.filter((a) => a.kind === "table");
   assert.equal(tableRows.length, 1);
   assert.equal(tableRows[0].tableSessionId, "ts-mesa-3");
@@ -41,7 +43,7 @@ test("PREVIOUS_SERVICE_OPEN_TABLE_RECOVERY · an open table's attivi row carries
 
 test("PREVIOUS_SERVICE_OPEN_TABLE_RECOVERY · a row with no table_id still carries its session id (tableId falls back to null, never guessed)", async () => {
   const tableSessions = [{ id: "ts-legacy", table_ref: "Mesa 7" }];
-  const out = await scanPreClose({ select: scanSelect({ tableSessions }), resolveCurrentService: async () => CURRENT });
+  const out = await scanPreClose({ select: scanSelect({ tableSessions }), resolveCurrentService: async () => CURRENT, activeRiderTrip: NO_TRIP });
   const [row] = out.attivi.filter((a) => a.kind === "table");
   assert.equal(row.tableSessionId, "ts-legacy");
   assert.equal(row.tableId, null);
@@ -52,7 +54,7 @@ test("PREVIOUS_SERVICE_OPEN_TABLE_RECOVERY · two distinct open tables stay two 
     { id: "ts-mesa-3", table_id: "table-3", table_ref: "Mesa 3" },
     { id: "ts-mesa-5", table_id: "table-5", table_ref: "Mesa 5" },
   ];
-  const out = await scanPreClose({ select: scanSelect({ tableSessions }), resolveCurrentService: async () => CURRENT });
+  const out = await scanPreClose({ select: scanSelect({ tableSessions }), resolveCurrentService: async () => CURRENT, activeRiderTrip: NO_TRIP });
   const tableRows = out.attivi.filter((a) => a.kind === "table");
   assert.equal(tableRows.length, 2);
   assert.equal(out.blocking.tables, 2);
@@ -64,7 +66,7 @@ test("PREVIOUS_SERVICE_OPEN_TABLE_RECOVERY · two distinct open tables stay two 
 });
 
 test("PREVIOUS_SERVICE_OPEN_TABLE_RECOVERY · no open tables -> no table rows, blocking.tables stays 0 (unchanged baseline)", async () => {
-  const out = await scanPreClose({ select: scanSelect({ tableSessions: [] }), resolveCurrentService: async () => CURRENT });
+  const out = await scanPreClose({ select: scanSelect({ tableSessions: [] }), resolveCurrentService: async () => CURRENT, activeRiderTrip: NO_TRIP });
   assert.equal(out.attivi.filter((a) => a.kind === "table").length, 0);
   assert.equal(out.blocking.tables, 0);
 });

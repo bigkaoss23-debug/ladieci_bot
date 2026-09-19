@@ -55,7 +55,12 @@ function createServiceLifecycleV3Transition({ rpc = sbRpc } = {}) {
         p_source: source,
       }));
       if (res.ok !== true) {
-        return { success: false, code: res.code || "SERVICE_LIFECYCLE_V3_CLOSE_FAILED", session: null };
+        const refusal = { success: false, code: res.code || "SERVICE_LIFECYCLE_V3_CLOSE_FAILED", session: null };
+        // Migration 138 — the RPC itself refuses (V3_CLOSE_ACTIVE_RIDER_TRIP) while a rider
+        // trip is ACTIVE for the service, and says WHICH trip in `trip`. Passed through
+        // untouched: this wrapper stays a transport; the engine normalizes the shape.
+        if (res.trip && typeof res.trip === "object") refusal.trip = res.trip;
+        return refusal;
       }
       return {
         success: true,

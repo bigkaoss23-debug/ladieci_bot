@@ -65,6 +65,12 @@ const CODE_TO_HTTP = Object.freeze({
   // signal could not be read. Both are explicit degraded states, never a silent start.
   SCOPE_UNAVAILABLE: 409,
   UNVERIFIABLE: 409,
+  // Migration 138 — start_rider_trip_v2 refuses to make a trip ACTIVE for a service that is
+  // not 'open' at the atomic moment of departure (the caller resolved its scope BEFORE the
+  // call, so a Finalizar that committed in between is only visible to the database). It is
+  // an ordinary state conflict, never a 500; the departure control's existing failure path
+  // (rollback of the optimistic state) already covers it.
+  SERVICE_NOT_OPEN: 409,
   // The verified rider identity did not reach this boundary — refuse rather than
   // depart unattributed (same discipline as marcarEntregado's payment context).
   TRIP_CONTEXT_UNAVAILABLE: 401,

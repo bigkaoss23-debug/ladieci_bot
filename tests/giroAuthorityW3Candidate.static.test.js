@@ -116,7 +116,17 @@ const w63Applied = fs.existsSync(W6_3_STATIC_GUARD);
 // fails this check.
 const B1_STATIC_GUARD = path.join(ROOT, 'tests', 'b1RiderDispatchOperatorParityMigration.test.js');
 const b1Applied = fs.existsSync(B1_STATIC_GUARD);
-assert('exactly the migration-130, migration-131, migration-132, migration-133, migration-134, (once its own guard is present) migration-135, and (once its own guard is present) migration-137 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
+// ACTIVE_TRIP_SERVICE_CLOSE_DB_HARDENING_2026-09-19 — migration 138 re-defines
+// close_service_session_v3 and start_rider_trip_v2 (the dispatch lock L0 shared between
+// closing a service and starting a trip, see MIGRATION_MANIFEST.md row 138). It carries
+// start_rider_trip_v2's giro_authority.* helper calls verbatim (byte-identical apart from
+// the marked blocks) and the close's own intent sweep, so it references giro_authority the
+// same way migrations 132 and 137 already do. Admitted here ONLY because its own static
+// guard exists on the branch to vouch for it, exactly like every earlier successor above —
+// an unauthorized new giro_authority migration still fails this check.
+const ATC138_STATIC_GUARD = path.join(ROOT, 'tests', 'activeTripServiceCloseExclusionMigration.test.js');
+const atc138Applied = fs.existsSync(ATC138_STATIC_GUARD);
+assert('exactly the migration-130, migration-131, migration-132, migration-133, migration-134, (once its own guard is present) migration-135, (once its own guard is present) migration-137, and (once its own guard is present) migration-138 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
   JSON.stringify(giroAuthoritySqlFiles) === JSON.stringify([
     '2026-09-14_giro_authority_v1_migration_130.ROLLBACK.sql',
     '2026-09-14_giro_authority_v1_migration_130.sql',
@@ -135,6 +145,10 @@ assert('exactly the migration-130, migration-131, migration-132, migration-133, 
     ...(b1Applied ? [
       '2026-09-17_b1_rider_dispatch_operator_parity_v1_migration_137.ROLLBACK.sql',
       '2026-09-17_b1_rider_dispatch_operator_parity_v1_migration_137.sql',
+    ] : []),
+    ...(atc138Applied ? [
+      '2026-09-19_active_trip_service_close_exclusion_v1_migration_138.ROLLBACK.sql',
+      '2026-09-19_active_trip_service_close_exclusion_v1_migration_138.sql',
     ] : []),
   ]), giroAuthoritySqlFiles.join(', '));
 assert('MIGRATION_MANIFEST.md documents migration 130 (giro_authority row present)',
