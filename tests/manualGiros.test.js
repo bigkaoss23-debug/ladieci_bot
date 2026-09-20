@@ -11,8 +11,14 @@ const db = {
   ordenes: [],
 };
 
+// [FDV1 ATOMIC] every giro mutation is ONE call to a database function (POST /rest/v1/rpc/giro_*). The fake routes those calls to the
+// shared JS reference model of the SQL (tests/helpers/giroRpcModel.js, kept honest by a differential test against real PostgreSQL 17).
+const { createGiroRpcModel } = require("./helpers/giroRpcModel");
+const observedRpc = [];
+const giroModel = createGiroRpcModel({ tables: (n) => db[n], now: () => new Date().toISOString(), madridToday: () => FAKE_TODAY });
+
 let FAKE_TODAY = "2026-05-25";
-let collideOnceOnInsert = false; // forces 1 UNIQUE-violation retry path
+let collideOnceOnInsert = false; // (legacy) forces 1 UNIQUE-violation retry path — obsolete with FDV1 atomic create, kept for the replacement test
 const observedSelectQueries = [];
 const observedUpdateQueries = [];
 
@@ -23,6 +29,7 @@ function resetDb() {
   collideOnceOnInsert = false;
   observedSelectQueries.length = 0;
   observedUpdateQueries.length = 0;
+  observedRpc.length = 0;
 }
 
 function simulateUrlSearch(query) {
@@ -111,6 +118,10 @@ require.cache[supabasePath] = {
       return rows;
     },
     sbInsert: async (table, data) => {
+      if (String(table).startsWith("rpc/")) {                       // [FDV1] atomic giro function (one call = one transaction)
+        observedRpc.push({ fn: String(table).slice(4), args: JSON.parse(JSON.stringify(data)) });
+        return JSON.parse(JSON.stringify(giroModel.apply(String(table).slice(4), data || {})));
+      }
       const row = { ...data };
       if (table === "manual_giros") {
         if (collideOnceOnInsert) {
@@ -201,6 +212,8 @@ function seedOrder(o) {
     tipo_consegna: o.tipo_consegna || "DOMICILIO",
     estado: o.estado || "EN_COCINA",
     manual_giro_id: o.manual_giro_id || null,
+    // [FDV1] optional promise instant: lets a test express the DERIVED anchor / entrega_ref. Default null = unchanged behaviour.
+    delivery_deadline_at: o.delivery_deadline_at || null,
   };
   db.ordenes.push(row);
   return row;
@@ -235,7 +248,9 @@ function seedGiro(g) {
     assert.strictEqual(mg.isOrderEligibleForGiro({ tipo_consegna: "DOMICILIO", estado: "EN_ENTREGA" }), true);
     assert.strictEqual(mg.isOrderEligibleForGiro({ tipo_consegna: "RITIRO", estado: "EN_COCINA" }), false);
     assert.strictEqual(mg.isOrderEligibleForGiro({ tipo_consegna: "DOMICILIO", estado: "ENTREGADO" }), false);
-    assert.strictEqual(mg.isOrderEligibleForGiro({ tipo_consegna: "DOMICILIO", estado: "POR_CONFIRMAR" }), false);
+    // [FDV1 contract change 1/5] POR_CONFIRMAR is now ELIGIBLE: an order is born POR_CONFIRMAR and AGGREGA/CREA GIRO
+    // from Nuevo Pedido must be able to persist immediately (LIVE excluded it, so an aggregation could never stick).
+    assert.strictEqual(mg.isOrderEligibleForGiro({ tipo_consegna: "DOMICILIO", estado: "POR_CONFIRMAR" }), true);
     assert.strictEqual(mg.isOrderEligibleForGiro(null), false);
   });
 
@@ -315,28 +330,35 @@ function seedGiro(g) {
     assert.strictEqual(db.ordenes.find(o => o.id === "#B").manual_giro_id, "mg_260525_1");
   });
 
-  await t("createManualGiro: attach UPDATE supports # ids with PostgREST empty body", async () => {
+  // [FDV1 atomic change 1/2] LIVE attached members with a client-side `UPDATE ordenes id=in.("%23001",…)` whose URL encoding of
+  // `#` ids mattered. Attach is now INSIDE the single database function call: ids travel as a JSON array argument (no URL, no encoding
+  // hazard) and the client issues no ordenes UPDATE at all during create.
+  await t("createManualGiro: # ids travel as JSON arguments of ONE atomic RPC call; the client issues no ordenes UPDATE", async () => {
     seedOrder({ id: "#001" });
     seedOrder({ id: "#002" });
     const res = await mg.createManualGiro(["#001", "#002"]);
     assert.strictEqual(res.ok, true);
     assert.deepStrictEqual(res.giro.order_ids, ["#001", "#002"]);
-    const q = observedUpdateQueries.find(x => x.table === "ordenes" && x.query.startsWith("id=in."))?.query || "";
-    assert.strictEqual(q, 'id=in.("%23001","%23002")');
-    assert.strictEqual(new URL(`https://example.test/rest/v1/ordenes?select=*&${q}`).hash, "");
+    const creates = observedRpc.filter(x => x.fn === "giro_create_v1");
+    assert.strictEqual(creates.length, 1, "exactly one create call");
+    assert.deepStrictEqual(creates[0].args.p_order_ids, ["#001", "#002"]);
+    assert.strictEqual(observedUpdateQueries.some(x => x.table === "ordenes"), false, "no client-side attach UPDATE any more");
     assert.strictEqual(db.ordenes.find(o => o.id === "#001").manual_giro_id, "mg_260525_1");
     assert.strictEqual(db.ordenes.find(o => o.id === "#002").manual_giro_id, "mg_260525_1");
   });
 
-  await t("createManualGiro: writes hora_ref + anchor_order_id (normalized)", async () => {
-    seedOrder({ id: "#A" });
-    seedOrder({ id: "#B" });
-    const res = await mg.createManualGiro(["#A", "#B"], "9:05", "#A");
+  // [FDV1 contract change 2/5] The operator-chosen hora_ref / anchor are RETIRED. hora_ref is never written (null) and
+  // anchor_order_id is DERIVED from the members (earliest delivery deadline), whatever the caller passes. The legacy
+  // arguments are still accepted and validated (see the invalid_* tests below) but ignored.
+  await t("createManualGiro: operator hora_ref/anchor are retired — hora_ref null, anchor derived (earliest deadline)", async () => {
+    seedOrder({ id: "#A", delivery_deadline_at: "2026-05-25T19:10:00.000Z" }); // 21:10 Madrid
+    seedOrder({ id: "#B", delivery_deadline_at: "2026-05-25T19:30:00.000Z" }); // 21:30 Madrid
+    const res = await mg.createManualGiro(["#A", "#B"], "9:05", "#B");         // operator "asks" for #B + 09:05
     assert.strictEqual(res.ok, true);
-    assert.strictEqual(res.giro.hora_ref, "09:05");
-    assert.strictEqual(res.giro.anchor_order_id, "#A");
+    assert.strictEqual(res.giro.hora_ref, null);
+    assert.strictEqual(res.giro.anchor_order_id, "#A");                        // derived, NOT the operator's #B
     const row = db.manual_giros.find(g => g.id === res.giro.id);
-    assert.strictEqual(row.hora_ref, "09:05");
+    assert.strictEqual(row.hora_ref, null);
     assert.strictEqual(row.anchor_order_id, "#A");
   });
 
@@ -354,29 +376,32 @@ function seedGiro(g) {
     assert.strictEqual(row.entrega_ref, null);
   });
 
-  await t("createManualGiro: writes entrega_ref (normalized) separate from hora_ref", async () => {
-    seedOrder({ id: "#A" });
-    seedOrder({ id: "#B" });
+  // [FDV1 contract change 3/5] entrega_ref is a DERIVED compat copy = min(member deadlines), not an operator-chosen time.
+  // An operator value (here "09:05") must not be persisted; hora_ref/anchor are retired as in change 2/5.
+  await t("createManualGiro: operator entrega_ref is retired — entrega_ref derived = earliest deadline, hora_ref null", async () => {
+    seedOrder({ id: "#A", delivery_deadline_at: "2026-05-25T19:10:00.000Z" }); // 21:10 Madrid
+    seedOrder({ id: "#B", delivery_deadline_at: "2026-05-25T19:30:00.000Z" }); // 21:30 Madrid
     const res = await mg.createManualGiro(["#A", "#B"], "17:49", "#B", "9:05");
     assert.strictEqual(res.ok, true);
-    assert.strictEqual(res.giro.hora_ref, "17:49");
-    assert.strictEqual(res.giro.anchor_order_id, "#B");
-    assert.strictEqual(res.giro.entrega_ref, "09:05");
+    assert.strictEqual(res.giro.hora_ref, null);
+    assert.strictEqual(res.giro.anchor_order_id, "#A");
+    assert.strictEqual(res.giro.entrega_ref, "21:10");                          // derived, NOT the operator's 09:05
     const row = db.manual_giros.find(g => g.id === res.giro.id);
-    assert.strictEqual(row.hora_ref, "17:49");
-    assert.strictEqual(row.entrega_ref, "09:05");
+    assert.strictEqual(row.hora_ref, null);
+    assert.strictEqual(row.entrega_ref, "21:10");
   });
 
-  await t("createManualGiro: entrega_ref independent of hora_ref (only entrega set)", async () => {
-    seedOrder({ id: "#A" });
-    seedOrder({ id: "#B" });
+  // [FDV1 contract change 4/5] Same rule when ONLY an entrega_ref is supplied: it is ignored, the derived value wins.
+  await t("createManualGiro: operator entrega_ref alone is ignored — derived value wins, hora_ref stays null", async () => {
+    seedOrder({ id: "#A", delivery_deadline_at: "2026-05-25T19:10:00.000Z" }); // 21:10 Madrid
+    seedOrder({ id: "#B", delivery_deadline_at: "2026-05-25T19:30:00.000Z" }); // 21:30 Madrid
     const res = await mg.createManualGiro(["#A", "#B"], null, null, "18:12");
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.giro.hora_ref, null);
-    assert.strictEqual(res.giro.entrega_ref, "18:12");
+    assert.strictEqual(res.giro.entrega_ref, "21:10");                          // derived, NOT the operator's 18:12
     const row = db.manual_giros.find(g => g.id === res.giro.id);
     assert.strictEqual(row.hora_ref, null);
-    assert.strictEqual(row.entrega_ref, "18:12");
+    assert.strictEqual(row.entrega_ref, "21:10");
   });
 
   await t("createManualGiro: invalid entrega_ref rejected, no giro created", async () => {
@@ -477,15 +502,17 @@ function seedGiro(g) {
     assert.strictEqual(db.ordenes.find(o => o.id === "#C").manual_giro_id, "mg_260525_1");
   });
 
-  await t("createManualGiro: retries on UNIQUE(giro_day,seq) violation", async () => {
+  // [FDV1 atomic change 2/2] LIVE computed MAX(seq)+1 on the client and retried on a UNIQUE(giro_day,seq) collision (race between
+  // two backend processes). The seq is now assigned INSIDE the database function under the giro lock: no collision, no client retry.
+  await t("createManualGiro: seq is assigned by the DB function under the giro lock (max+1), with NO client-side retry loop", async () => {
+    seedGiro({ id: "mg_260525_1", seq: 1 });
     seedOrder({ id: "#A" });
     seedOrder({ id: "#B" });
-    collideOnceOnInsert = true;
     const res = await mg.createManualGiro(["#A", "#B"]);
     assert.strictEqual(res.ok, true);
-    // Phantom inserted seq=1, retry computed seq=2.
     assert.strictEqual(res.giro.seq, 2);
     assert.strictEqual(res.giro.id, "mg_260525_2");
+    assert.strictEqual(observedRpc.filter(x => x.fn === "giro_create_v1").length, 1, "one call, no retry");
   });
 
   // ── addOrderToManualGiro ──────────────────────────────────────
@@ -654,10 +681,12 @@ function seedGiro(g) {
     seedOrder({ id: "#B", manual_giro_id: "mg_260525_1" });
     seedOrder({ id: "#C", manual_giro_id: "mg_260525_2" });
     const list = await mg.getManualGiros();
-    assert.strictEqual(list.length, 2);
+    // [FDV1 contract change 5/5] A giro with <2 active members ("giro monco": here mg_260525_2 with only #C) is NEVER
+    // shown as an active giro — LIVE listed it. Hidden at read time, whatever a partial failure left in the DB.
+    assert.strictEqual(list.length, 1);
     const byId = Object.fromEntries(list.map(g => [g.id, g]));
     assert.deepStrictEqual(byId["mg_260525_1"].order_ids.sort(), ["#A", "#B"]);
-    assert.deepStrictEqual(byId["mg_260525_2"].order_ids, ["#C"]);
+    assert.strictEqual(byId["mg_260525_2"], undefined, "single-member giro must not be listed");
   });
 
   await t("getManualGiros: returns hora_ref + anchor_order_id", async () => {
