@@ -30,7 +30,8 @@
 -- WHY ONE LOCK (not one per giro). create and move touch 2+ giros; a single key gives one fixed order,
 -- so no deadlock is possible, and the contention is irrelevant (a pizzeria issues tens of giro edits a night,
 -- each a few ms). Row locks (FOR UPDATE) on the touched orders additionally serialise against writers that do
--- NOT use these functions (e.g. an estado change): the advisory lock is held until COMMIT.
+-- NOT use these functions (e.g. an estado change): the advisory lock is held until COMMIT. The giro row itself is locked FOR NO KEY UPDATE
+-- (never FOR UPDATE): see giro_settle_v1.
 --
 -- WHAT IS NOT HERE (on purpose). The persisted compat copies manual_giros.anchor_order_id / entrega_ref /
 -- hora_ref are derived from delivery deadlines; the truth is derived-at-read (getManualGiros). They are
@@ -124,7 +125,11 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'missing_giro_id');
   END IF;
 
-  SELECT * INTO v_g FROM public.manual_giros WHERE id = p_giro_id FOR UPDATE;
+  -- FOR NO KEY UPDATE, not FOR UPDATE. The giro row is only ever changed in non-key columns (dissolved_at, anchor_order_id; the key is id / giro_day+seq),
+  -- and FOR UPDATE would conflict with the FOR KEY SHARE that the FK ordenes.manual_giro_id takes on this row whenever ANY writer attaches an order to it.
+  -- A pre-FDV1 writer (deploy overlap) locks the order row first and the giro row second; we lock the giro row first and order rows second, so with
+  -- FOR UPDATE that is a lock cycle (40P01). NO KEY UPDATE still queues behind / blocks every other UPDATE and DELETE of the giro row.
+  SELECT * INTO v_g FROM public.manual_giros WHERE id = p_giro_id FOR NO KEY UPDATE;
   IF NOT FOUND THEN
     RETURN jsonb_build_object('ok', false, 'status', 404, 'error', 'giro_not_found');
   END IF;
@@ -302,7 +307,8 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'status', 400, 'error', 'missing_args');
   END IF;
 
-  SELECT * INTO v_g FROM public.manual_giros WHERE id = p_giro_id FOR UPDATE;
+  -- FOR NO KEY UPDATE: same reason as in giro_settle_v1 (no lock cycle with a pre-FDV1 writer that attaches an order to this giro).
+  SELECT * INTO v_g FROM public.manual_giros WHERE id = p_giro_id FOR NO KEY UPDATE;
   IF NOT FOUND OR v_g.dissolved_at IS NOT NULL THEN
     RETURN jsonb_build_object('ok', false, 'status', 404, 'error', 'giro_not_found_or_dissolved');
   END IF;
