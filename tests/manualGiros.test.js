@@ -19,6 +19,7 @@ const giroModel = createGiroRpcModel({ tables: (n) => db[n], now: () => new Date
 
 let FAKE_TODAY = "2026-05-25";
 let collideOnceOnInsert = false; // (legacy) forces 1 UNIQUE-violation retry path — obsolete with FDV1 atomic create, kept for the replacement test
+let rpcTransportOverride = null; // [FDV1 F2] when set, replaces the transport answer of a giro RPC (HTML / empty / truncated JSON / thrown socket errors); may call giroModel.apply first to simulate "COMMIT happened, answer lost"
 const observedSelectQueries = [];
 const observedUpdateQueries = [];
 
@@ -27,6 +28,7 @@ function resetDb() {
   db.ordenes = [];
   FAKE_TODAY = "2026-05-25";
   collideOnceOnInsert = false;
+  rpcTransportOverride = null;
   observedSelectQueries.length = 0;
   observedUpdateQueries.length = 0;
   observedRpc.length = 0;
@@ -120,6 +122,7 @@ require.cache[supabasePath] = {
     sbInsert: async (table, data) => {
       if (String(table).startsWith("rpc/")) {                       // [FDV1] atomic giro function (one call = one transaction)
         observedRpc.push({ fn: String(table).slice(4), args: JSON.parse(JSON.stringify(data)) });
+        if (rpcTransportOverride) return rpcTransportOverride(String(table).slice(4), data || {});
         return JSON.parse(JSON.stringify(giroModel.apply(String(table).slice(4), data || {})));
       }
       const row = { ...data };
@@ -193,6 +196,9 @@ const mg = require("../src/agents/manualGiros");
 
 // ─── Tiny test harness ───────────────────────────────────────────
 const failures = [];
+// A test that awaits something that never settles (with no ref'd timer left) makes Node exit 0 in the middle of the run: fail loudly instead of "passing".
+let reachedFinalReport = false;
+process.on("exit", (code) => { if (!reachedFinalReport && code === 0) { console.error("manualGiros.test.js: the process exited before the final report (a test awaited something that never settled)"); process.exitCode = 1; } });
 async function t(name, fn) {
   try {
     resetDb();
@@ -744,7 +750,126 @@ function seedGiro(g) {
     assert.ok(db.manual_giros.find(g => g.id === "mg_260525_2").dissolved_at);
   });
 
+  // ── [FDV1 F2] giroRpc: honest classification when the outcome cannot be known ──────────────────
+  // sbFetch drops the HTTP status: a failure is "definite" only when the answer PROVES it (a well-formed PostgREST / PostgreSQL error body with a
+  // code raised before COMMIT, or a connection that was never established). Everything else is giro_rpc_outcome_unknown (504), never db_rpc_failed.
+
+  const isUnknown = (r) => r.ok === false && r.status === 504 && r.error === "giro_rpc_outcome_unknown" && r.outcome_unknown === true;
+  const sockErr = (code, msg = "fetch failed") => Object.assign(new TypeError(msg), { cause: Object.assign(new Error(`connect ${code}`), { code }) });
+
+  await t("F2 giroRpc: typed answers and PGRST202 are classified as before", async () => {
+    const typed = { ok: false, status: 409, error: "giro_full", max: 4 };
+    assert.deepStrictEqual(mg.classifyGiroRpcAnswer(typed), typed, "typed ok:false is returned untouched");
+    assert.deepStrictEqual(mg.classifyGiroRpcAnswer({ ok: true, giro: { id: "x" } }), { ok: true, giro: { id: "x" } });
+    const r = mg.classifyGiroRpcAnswer({ code: "PGRST202", message: "Could not find the function" });
+    assert.strictEqual(r.status, 503); assert.strictEqual(r.error, "giro_atomic_unavailable");
+  });
+
+  await t("F2 giroRpc: codes that can only be raised BEFORE the commit → 502 db_rpc_failed (definite, outcome_unknown:false)", async () => {
+    for (const code of ["42501", "42883", "P0001", "40P01", "40001", "55P03", "57014", "22P02", "23505", "PGRST102", "PGRST303", "PGRST301", "PGRST116"]) {
+      const r = mg.classifyGiroRpcAnswer({ code, message: "m", details: null, hint: null });
+      assert.ok(r.ok === false && r.status === 502 && r.error === "db_rpc_failed" && r.outcome_unknown === false && r.not_executed === undefined, `${code} → definite`);
+      assert.strictEqual(r.details.code, code);
+    }
+  });
+
+  await t("F2 giroRpc: codes that MAY follow the send (connection / shutdown / internal / pool) → outcome unknown", async () => {
+    for (const code of ["08006", "08003", "57P01", "57P02", "57P03", "XX000", "58030", "53300", "PGRST000", "PGRST001", "PGRST002", "PGRST003", "28P01"]) {
+      const r = mg.classifyGiroRpcAnswer({ code, message: "m" });
+      assert.ok(isUnknown(r), `${code} → unknown`); assert.strictEqual(r.reason, "ambiguous_error_code");
+    }
+  });
+
+  await t("F2 giroRpc: gateway / mangled / non-JSON bodies → outcome unknown (never a certain failure)", async () => {
+    const bodies = {
+      "HTML 502": "<html><body><h1>502 Bad Gateway</h1></body></html>", "HTML 504": "<html><body><h1>504 Gateway Timeout</h1></body></html>",
+      "empty string": "", "plain text": "upstream request timeout", "JSON cut in half (as text)": '{"ok":true,"giro":{"id":"mg_26092',
+      "gateway JSON without a code": { message: "The upstream server is timing out" }, "object with code but no message": { code: "42501" },
+      "code that is not a string": { code: 42501, message: "m" }, 'ok is a string, not a boolean': { ok: "true" }, "empty object": {}, "array": [], "array of rows": [{ id: 1 }],
+      "null": null, "undefined": undefined, "number": 42, "boolean": true,
+    };
+    for (const [name, body] of Object.entries(bodies)) { const r = mg.classifyGiroRpcAnswer(body); assert.ok(isUnknown(r), `${name} → unknown, got ${JSON.stringify(r)}`); }
+    assert.strictEqual(mg.classifyGiroRpcAnswer("<html>…</html>").reason, "non_json_body");
+    assert.strictEqual(mg.classifyGiroRpcAnswer({ message: "x" }).reason, "unrecognised_body");
+    assert.ok(mg.classifyGiroRpcAnswer("x".repeat(5000)).details.length <= 200, "the body sample kept for diagnostics is bounded");
+  });
+
+  await t("F2 giroRpc: thrown transport errors — connection never established → not executed; anything else → unknown", async () => {
+    for (const c of ["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT"]) {
+      const r = mg.classifyGiroRpcError(sockErr(c));
+      assert.ok(r.ok === false && r.status === 502 && r.error === "db_rpc_failed" && r.not_executed === true && r.outcome_unknown === false && r.reason === "connect_failed" && r.code === c, `${c} → provably not executed`);
+    }
+    const agg = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new AggregateError([Object.assign(new Error("::1"), { code: "ECONNREFUSED" }), Object.assign(new Error("127.0.0.1"), { code: "ECONNREFUSED" })], "x"), { code: "ECONNREFUSED" }) });
+    assert.strictEqual(mg.classifyGiroRpcError(agg).not_executed, true, "AggregateError of refused attempts (dual-stack localhost) → not executed");
+    const mixed = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new AggregateError([Object.assign(new Error("a"), { code: "ECONNREFUSED" }), Object.assign(new Error("b"), { code: "ECONNRESET" })], "x"), { code: "ECONNREFUSED" }) });
+    assert.ok(isUnknown(mg.classifyGiroRpcError(mixed)), "one attempt that is NOT provably pre-connect → unknown");
+    for (const c of ["ECONNRESET", "UND_ERR_SOCKET", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "ETIMEDOUT", "EPIPE", "ERR_SSL_WRONG_VERSION_NUMBER", "UND_ERR_ABORTED"]) assert.ok(isUnknown(mg.classifyGiroRpcError(sockErr(c))), `${c} → unknown (the request may have reached the database)`);
+    assert.strictEqual(mg.classifyGiroRpcError(Object.assign(new Error("giro_timeout:insert"), { code: "GIRO_TIMEOUT" })).reason, "timeout");
+    assert.ok(isUnknown(mg.classifyGiroRpcError(new TypeError("fetch failed"))), "no error code at all → unknown");
+    assert.ok(isUnknown(mg.classifyGiroRpcError(new TypeError("fetch failed", { cause: new Error("bad port") }))), "fetch's own 'bad port' rejection is not claimed as not-executed");
+    for (const weird of [undefined, null, "boom", 42, {}]) assert.ok(isUnknown(mg.classifyGiroRpcError(weird)), `non-Error throw (${JSON.stringify(weird)}) → unknown, no crash`);
+    const cyc = new Error("cyc"); cyc.cause = cyc; assert.ok(isUnknown(mg.classifyGiroRpcError(cyc)), "cyclic cause chain terminates");
+  });
+
+  await t("F2 giroRpc: the local watchdog timeout → unknown / reason timeout (the request may still complete server-side)", async () => {
+    const saved = mg.__lock.fetchTimeoutMs; mg.__lock.fetchTimeoutMs = 40;
+    const keepAlive = setInterval(() => {}, 1000);      // the watchdog timer inside giroRpc is unref'd (in production the HTTP server keeps the loop alive); here nothing else would
+    try { rpcTransportOverride = () => new Promise(() => {}); const r = await mg.createManualGiro(["#A", "#B"]); assert.ok(isUnknown(r)); assert.strictEqual(r.reason, "timeout"); }
+    finally { clearInterval(keepAlive); mg.__lock.fetchTimeoutMs = saved; }
+  });
+
+  await t("F2 createManualGiro: COMMIT happened, gateway answers 504 HTML → outcome UNKNOWN (not a certain failure); the giro exists; the retry is idempotent", async () => {
+    seedOrder({ id: "#A" }); seedOrder({ id: "#B" });
+    rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); return "<html><body><h1>504 Gateway Timeout</h1></body></html>"; };   // the DB committed, the answer is a gateway page
+    const r1 = await mg.createManualGiro(["#A", "#B"]);
+    assert.ok(isUnknown(r1), `first answer: ${JSON.stringify(r1)}`);
+    assert.notStrictEqual(r1.error, "db_rpc_failed", "a committed write must never be reported as a certain failure");
+    assert.strictEqual(db.manual_giros.length, 1, "the write DID happen"); assert.strictEqual(db.ordenes.filter(o => o.manual_giro_id).length, 2);
+    rpcTransportOverride = null;
+    const r2 = await mg.createManualGiro(["#A", "#B"]);
+    assert.ok(r2.ok === true && r2.idempotent === true, `retry: ${JSON.stringify(r2)}`); assert.strictEqual(db.manual_giros.length, 1, "no duplicate giro");
+  });
+
+  await t("F2 createManualGiro: EMPTY body after COMMIT / truncated JSON after COMMIT → unknown, retry idempotent", async () => {
+    for (const body of ["", '{"ok":true,"giro":{"id":"mg_2605']) {
+      resetDb(); seedOrder({ id: "#A" }); seedOrder({ id: "#B" });
+      rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); return body; };
+      const r1 = await mg.createManualGiro(["#A", "#B"]); assert.ok(isUnknown(r1), JSON.stringify(body)); assert.strictEqual(db.manual_giros.length, 1);
+      rpcTransportOverride = null; const r2 = await mg.createManualGiro(["#A", "#B"]); assert.ok(r2.ok && r2.idempotent === true && db.manual_giros.length === 1);
+    }
+  });
+
+  await t("F2 add / remove / dissolve: answer lost after COMMIT → unknown; a plain retry converges (no_op / ok)", async () => {
+    seedOrder({ id: "#A" }); seedOrder({ id: "#B" }); seedOrder({ id: "#C" });
+    const g = await mg.createManualGiro(["#A", "#B"]); assert.ok(g.ok); const gid = g.giro.id;
+    rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); return "<html>502</html>"; };
+    const a1 = await mg.addOrderToManualGiro(gid, "#C"); assert.ok(isUnknown(a1)); assert.strictEqual(db.ordenes.find(o => o.id === "#C").manual_giro_id, gid, "the add DID commit");
+    rpcTransportOverride = null; const a2 = await mg.addOrderToManualGiro(gid, "#C"); assert.ok(a2.ok && a2.no_op === true, JSON.stringify(a2));
+    rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); return ""; };
+    const r1 = await mg.removeOrderFromManualGiro("#C"); assert.ok(isUnknown(r1)); assert.strictEqual(db.ordenes.find(o => o.id === "#C").manual_giro_id, null, "the remove DID commit");
+    rpcTransportOverride = null; const r2 = await mg.removeOrderFromManualGiro("#C"); assert.ok(r2.ok && r2.no_op === true, JSON.stringify(r2));
+    rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); return null; };
+    const d1 = await mg.dissolveManualGiro(gid); assert.ok(isUnknown(d1)); assert.ok(db.manual_giros.find(x => x.id === gid).dissolved_at, "the dissolve DID commit");
+    rpcTransportOverride = null; const d2 = await mg.dissolveManualGiro(gid); assert.ok(d2.ok === true, JSON.stringify(d2));
+  });
+
+  await t("F2 createManualGiro: connection refused → provably NOT executed (definite), nothing written; retry creates exactly one giro", async () => {
+    seedOrder({ id: "#A" }); seedOrder({ id: "#B" });
+    rpcTransportOverride = () => { throw sockErr("ECONNREFUSED"); };
+    const r1 = await mg.createManualGiro(["#A", "#B"]);
+    assert.ok(r1.ok === false && r1.error === "db_rpc_failed" && r1.not_executed === true && r1.outcome_unknown === false, JSON.stringify(r1)); assert.strictEqual(db.manual_giros.length, 0);
+    rpcTransportOverride = null; const r2 = await mg.createManualGiro(["#A", "#B"]); assert.ok(r2.ok === true && !r2.idempotent); assert.strictEqual(db.manual_giros.length, 1);
+  });
+
+  await t("F2 createManualGiro: socket reset after send (request may have arrived) → unknown, not 'not executed'", async () => {
+    seedOrder({ id: "#A" }); seedOrder({ id: "#B" });
+    rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); throw sockErr("ECONNRESET"); };
+    const r1 = await mg.createManualGiro(["#A", "#B"]); assert.ok(isUnknown(r1) && r1.not_executed === undefined); assert.strictEqual(db.manual_giros.length, 1);
+    rpcTransportOverride = null; const r2 = await mg.createManualGiro(["#A", "#B"]); assert.ok(r2.ok && r2.idempotent === true && db.manual_giros.length === 1);
+  });
+
   // ── final report ──────────────────────────────────────────────
+  reachedFinalReport = true;
   if (failures.length) {
     console.error(`\n${failures.length} test(s) failed.`);
     process.exit(1);
