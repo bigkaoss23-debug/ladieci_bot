@@ -868,6 +868,79 @@ function seedGiro(g) {
     rpcTransportOverride = null; const r2 = await mg.createManualGiro(["#A", "#B"]); assert.ok(r2.ok && r2.idempotent === true && db.manual_giros.length === 1);
   });
 
+  // ── [FDV1 F2 / F-R1] PostgREST's own error codes: a POSITIVE list; codes it raises AFTER the COMMIT are "unknown" ───────────────
+  // The real PostgREST 16.3 answers PGRST111 / PGRST112 (invalid response.headers / response.status GUC) and PGRST103 (416 out of range with Prefer: count=exact) AFTER the transaction has
+  // committed: the write is durable while the HTTP answer is an error. The bodies below were captured from that server (an RPC that writes, then leaves the GUC / the offset in that state).
+  const PGRST_AFTER_COMMIT = {
+    PGRST111: { code: "PGRST111", details: null, hint: null, message: "response.headers guc must be a JSON array composed of objects with a single key and a string value" },
+    PGRST112: { code: "PGRST112", details: null, hint: null, message: "response.status guc must be a valid status code" },
+    PGRST103: { code: "PGRST103", details: "An offset of 100 was requested, but there are only 2 rows.", hint: null, message: "Requested range not satisfiable" },
+  };
+  // measured on the real server to be raised BEFORE the COMMIT (rejected before execution, or rolled back) and never after it; PGRST202 is answered separately (503)
+  const PGRST_BEFORE_COMMIT = ["PGRST100", "PGRST101", "PGRST102", "PGRST106", "PGRST107", "PGRST108", "PGRST116", "PGRST118", "PGRST121", "PGRST122", "PGRST123", "PGRST124", "PGRST127", "PGRST128",
+    "PGRST200", "PGRST201", "PGRST203", "PGRST300", "PGRST301", "PGRST302", "PGRST303"];
+
+  await t("F-R1 classifier: PGRST111 / PGRST112 / PGRST103 (real bodies) → giro_rpc_outcome_unknown, never db_rpc_failed", async () => {
+    for (const [code, body] of Object.entries(PGRST_AFTER_COMMIT)) {
+      const r = mg.classifyGiroRpcAnswer(body);
+      assert.ok(isUnknown(r), `${code} → unknown, got ${JSON.stringify(r)}`); assert.strictEqual(r.reason, "ambiguous_error_code"); assert.notStrictEqual(r.error, "db_rpc_failed");
+      assert.strictEqual(r.not_executed, undefined, `${code}: never claimed as not executed`);
+    }
+  });
+
+  await t("F-R1 classifier: PostgREST codes are a POSITIVE list — exactly the measured pre-COMMIT codes are definite; every other PGRSTnnn (unlisted, future, connection-level, response stage) is unknown", async () => {
+    const definite = [];
+    for (let n = 0; n <= 999; n++) {
+      const code = "PGRST" + String(n).padStart(3, "0");
+      const r = mg.classifyGiroRpcAnswer({ code, message: "m", details: null, hint: null });
+      if (code === "PGRST202") { assert.strictEqual(r.status, 503); assert.strictEqual(r.error, "giro_atomic_unavailable"); continue; }
+      if (r.error === "db_rpc_failed") { assert.strictEqual(r.outcome_unknown, false, code); definite.push(code); } else assert.ok(isUnknown(r), `${code} → ${JSON.stringify(r)}`);
+    }
+    assert.deepStrictEqual(definite, PGRST_BEFORE_COMMIT, "the definite PGRST set is EXACTLY the measured list: a wildcard, an added code or a dropped code fails here");
+    for (const code of ["PGRST", "PGRST1", "PGRST10", "PGRST1020", "PGRST1O2", "pgrst102", " PGRST102", "PGRST102 ", "PGRSTxxx", "PGRST-102"]) assert.ok(isUnknown(mg.classifyGiroRpcAnswer({ code, message: "m" })), `${JSON.stringify(code)} → unknown (exact match only)`);
+    for (const code of ["PGRST102", "PGRST301"]) assert.ok(isUnknown(mg.classifyGiroRpcAnswer({ code })), `${code} without a message → unknown, as for every other code`);
+  });
+
+  await t("F-R1 control: a code that IS proven pre-COMMIT (JWT / body / SQLSTATE) still reports a DEFINITE failure, nothing was written, and the retry creates exactly one giro", async () => {
+    for (const body of [{ code: "PGRST301", message: "No suitable key or wrong key type", details: null, hint: null }, { code: "PGRST102", message: "Empty or invalid json", details: null, hint: null }, { code: "42501", message: "permission denied for function giro_create_v1", details: null, hint: null }]) {
+      resetDb(); seedOrder({ id: "#A" }); seedOrder({ id: "#B" });
+      rpcTransportOverride = () => body;                                                     // rejected / rolled back: nothing reached the tables
+      const r1 = await mg.createManualGiro(["#A", "#B"]);
+      assert.ok(r1.ok === false && r1.error === "db_rpc_failed" && r1.outcome_unknown === false && r1.not_executed === undefined, `${body.code}: ${JSON.stringify(r1)}`); assert.strictEqual(db.manual_giros.length, 0, "nothing written");
+      rpcTransportOverride = null; const r2 = await mg.createManualGiro(["#A", "#B"]); assert.ok(r2.ok === true && !r2.idempotent); assert.strictEqual(db.manual_giros.length, 1);
+    }
+  });
+
+  await t("F-R1 createManualGiro: COMMIT happened, PostgREST answers PGRST111 / PGRST112 / PGRST103 → outcome UNKNOWN (not a certain failure); the giro exists; the retry is idempotent", async () => {
+    for (const [code, body] of Object.entries(PGRST_AFTER_COMMIT)) {
+      resetDb(); seedOrder({ id: "#A" }); seedOrder({ id: "#B" });
+      rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); return body; };      // the DB committed; the answer is PostgREST's post-commit error
+      const r1 = await mg.createManualGiro(["#A", "#B"]);
+      assert.ok(isUnknown(r1), `${code}: ${JSON.stringify(r1)}`); assert.notStrictEqual(r1.error, "db_rpc_failed", `${code}: a committed write must never be reported as a certain failure`);
+      assert.strictEqual(db.manual_giros.length, 1, `${code}: the write DID happen`); assert.strictEqual(db.ordenes.filter(o => o.manual_giro_id).length, 2);
+      rpcTransportOverride = null;
+      const r2 = await mg.createManualGiro(["#A", "#B"]); assert.ok(r2.ok === true && r2.idempotent === true, `${code} retry: ${JSON.stringify(r2)}`); assert.strictEqual(db.manual_giros.length, 1, "no duplicate giro");
+    }
+  });
+
+  await t("F-R1 add / remove / dissolve / reconcile: COMMIT happened, PostgREST answers PGRST111 / PGRST112 / PGRST103 → unknown; a plain retry converges", async () => {
+    seedOrder({ id: "#A" }); seedOrder({ id: "#B" }); seedOrder({ id: "#C" });
+    const g = await mg.createManualGiro(["#A", "#B"]); assert.ok(g.ok); const gid = g.giro.id;
+    rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); return PGRST_AFTER_COMMIT.PGRST111; };
+    const a1 = await mg.addOrderToManualGiro(gid, "#C"); assert.ok(isUnknown(a1), JSON.stringify(a1)); assert.strictEqual(db.ordenes.find(o => o.id === "#C").manual_giro_id, gid, "the add DID commit");
+    rpcTransportOverride = null; const a2 = await mg.addOrderToManualGiro(gid, "#C"); assert.ok(a2.ok && a2.no_op === true, JSON.stringify(a2));
+    rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); return PGRST_AFTER_COMMIT.PGRST112; };
+    const r1 = await mg.removeOrderFromManualGiro("#C"); assert.ok(isUnknown(r1), JSON.stringify(r1)); assert.strictEqual(db.ordenes.find(o => o.id === "#C").manual_giro_id, null, "the remove DID commit");
+    rpcTransportOverride = null; const r2 = await mg.removeOrderFromManualGiro("#C"); assert.ok(r2.ok && r2.no_op === true, JSON.stringify(r2));
+    seedOrder({ id: "#X", manual_giro_id: "mg_ghost" });                                    // a link to a giro that does not exist: reconcile detaches it
+    rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); return PGRST_AFTER_COMMIT.PGRST103; };
+    const c1 = await mg.reconcileManualGiros({ alignOffsets: false }); assert.ok(isUnknown(c1), JSON.stringify(c1)); assert.strictEqual(db.ordenes.find(o => o.id === "#X").manual_giro_id, null, "the reconcile DID commit");
+    rpcTransportOverride = null; const c2 = await mg.reconcileManualGiros({ alignOffsets: false }); assert.ok(c2.ok === true, JSON.stringify(c2));
+    rpcTransportOverride = (fn, data) => { giroModel.apply(fn, data); return PGRST_AFTER_COMMIT.PGRST112; };
+    const d1 = await mg.dissolveManualGiro(gid); assert.ok(isUnknown(d1), JSON.stringify(d1)); assert.ok(db.manual_giros.find(x => x.id === gid).dissolved_at, "the dissolve DID commit");
+    rpcTransportOverride = null; const d2 = await mg.dissolveManualGiro(gid); assert.ok(d2.ok === true, JSON.stringify(d2));
+  });
+
   // ── final report ──────────────────────────────────────────────
   reachedFinalReport = true;
   if (failures.length) {

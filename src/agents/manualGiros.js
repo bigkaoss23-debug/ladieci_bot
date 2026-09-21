@@ -123,15 +123,27 @@ const giroDb = { sbSelect, sbInsert, sbUpdate, sbDelete };   // same timeout for
 // transport (POST /rest/v1/rpc/<fn>, body = named arguments). Never throws:
 //   • typed answer            → returned as-is ({ok:true,…} | {ok:false,status,error,…})
 //   • function not installed  → 503 giro_atomic_unavailable   (FAIL CLOSED: there is deliberately NO non-atomic fallback)
-//   • database refused        → 502 db_rpc_failed              (a well-formed PostgREST / PostgreSQL error body whose code can only be raised BEFORE the
-//                                                               commit: nothing was written)
+//   • database refused        → 502 db_rpc_failed              (a well-formed PostgREST / PostgreSQL error body whose code is on one of the two POSITIVE lists
+//                                                               below, i.e. is proven to be raised BEFORE the commit: nothing was written)
 //   • provably not executed   → 502 db_rpc_failed + not_executed:true   (the connection was never established: refused / DNS; no byte was sent)
-//   • anything else           → 504 giro_rpc_outcome_unknown   (timeout, socket reset, gateway HTML 502/504, empty / truncated / non-JSON body, …:
-//                                                               the write may or may not have happened; retry is idempotent)
+//   • anything else           → 504 giro_rpc_outcome_unknown   (timeout, socket reset, gateway HTML 502/504, empty / truncated / non-JSON body, a PostgREST code that
+//                                                               is unlisted or raised AFTER the commit, …: the write may or may not have happened; retry is idempotent)
 // [F2] sbFetch (shared with the WhatsApp bot, NOT modified) drops the HTTP status and hands back the parsed JSON or the raw text. So a failure is called
 // "definite" only when the answer PROVES it. A gateway that answers 502/504 HTML AFTER the COMMIT looks exactly like one that answers before forwarding:
 // when we cannot tell, we say "unknown" (fail safe). A plain retry always converges — it can neither duplicate nor lose a giro.
-const GIRO_DEFINITE_DB_CODE = /^(PGRST[123]\d\d|22[0-9A-Z]{3}|23[0-9A-Z]{3}|42[0-9A-Z]{3}|P000[1-4]|40001|40P01|55P03|57014)$/;   // raised before COMMIT (rolled back) or rejected before execution; NOT 08xxx / 57P0x / XX000 / PGRST0xx: those may follow the send
+// PostgreSQL SQLSTATEs relayed by PostgREST: the engine aborts the transaction on ANY error, so nothing was committed (measured on the real PostgREST 16.3: 125 SQLSTATEs of class 22 / 23 / 42 plus
+// P0001-4 / 40001 / 40P01 / 55P03 / 57014, each raised right AFTER a write, came back verbatim and rolled back). NOT 08xxx / 57P0x / XX000 / 53xxx: those may follow the send.
+const GIRO_DEFINITE_SQLSTATE = /^(22[0-9A-Z]{3}|23[0-9A-Z]{3}|42[0-9A-Z]{3}|P000[1-4]|40001|40P01|55P03|57014)$/;
+// PostgREST's OWN codes: a POSITIVE list, never a range. The family also holds codes the real server emits AFTER the COMMIT — the write is already durable while the HTTP answer is an error:
+// PGRST111 / PGRST112 (invalid response.headers / response.status GUC) and PGRST103 (416 out of range with Prefer: count=exact; the same code is ALSO raised before the commit for an invalid limit,
+// so the code alone cannot tell). A code is listed only if the real PostgREST 16.3 was measured raising it BEFORE the COMMIT on a write-capable RPC (request parsing, JWT, planning, or a rollback) and
+// never after it. Everything else — unlisted, future, connection-level PGRST0xx, response stage — is "unknown": a plain retry is safe, a false "nothing was written" is not.
+const GIRO_DEFINITE_PGRST = new Set([
+  "PGRST100", "PGRST101", "PGRST102", "PGRST106", "PGRST107", "PGRST108", "PGRST116", "PGRST118", "PGRST121", "PGRST122", "PGRST123", "PGRST124", "PGRST127", "PGRST128",   // request parsing / preferences / rollbacks (singular, max-affected, RAISE 'PGRST')
+  "PGRST200", "PGRST201", "PGRST203",   // schema-cache planning (PGRST202 is answered separately, above)
+  "PGRST300", "PGRST301", "PGRST302", "PGRST303",   // JWT: rejected before any SQL
+]);
+const giroDefiniteCode = (code) => GIRO_DEFINITE_SQLSTATE.test(code) || GIRO_DEFINITE_PGRST.has(code);
 const GIRO_PRECONNECT_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT"]);   // can only happen while the connection is being established
 const giroSample = (v) => { try { return (typeof v === "string" ? v : JSON.stringify(v)).slice(0, 200); } catch (_) { return String(v).slice(0, 200); } };
 const giroUnknown = (reason, extra) => ({ ok: false, status: 504, error: "giro_rpc_outcome_unknown", outcome_unknown: true, reason, ...extra });
@@ -139,7 +151,7 @@ function classifyGiroRpcAnswer(res) {
   const obj = res && typeof res === "object" && !Array.isArray(res);
   if (obj && typeof res.ok === "boolean") return res;                                                       // the function's own typed answer
   if (obj && res.code === "PGRST202") return { ok: false, status: 503, error: "giro_atomic_unavailable", details: res };
-  if (obj && typeof res.code === "string" && typeof res.message === "string" && GIRO_DEFINITE_DB_CODE.test(res.code)) return { ok: false, status: 502, error: "db_rpc_failed", outcome_unknown: false, details: res };
+  if (obj && typeof res.code === "string" && typeof res.message === "string" && giroDefiniteCode(res.code)) return { ok: false, status: 502, error: "db_rpc_failed", outcome_unknown: false, details: res };
   return giroUnknown(typeof res === "string" ? "non_json_body" : (obj && typeof res.code === "string" ? "ambiguous_error_code" : "unrecognised_body"), { details: giroSample(res) });
 }
 // Node's fetch wraps the socket error: TypeError("fetch failed").cause = Error{code} (or AggregateError{errors:[…]} when several addresses were tried).
