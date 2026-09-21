@@ -306,8 +306,11 @@ app.post("/api", async (req, res) => {
       // Cliente arrivato (RITIRO) — segna flag llegado
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { llegado: req.body.llegado !== false });
       result = { success: true };
+    } else if (action === "priorityContract") {
+      // [FDV1 R3] contratto ± letto dal FE (capability): −50..+50, + solo dentro la finestra prima della HORA LÍMITE.
+      result = { ok: true, contract: fdv1.PRIORITY_CONTRACT };
     } else if (action === "setUiOffset") {
-      // [FDV1] ± priorità di produzione: scrive SOLO ui_offset_min (−30..+30). Ordine in un giro → tutto il blocco.
+      // [FDV1 R3] ± priorità di produzione: scrive SOLO ui_offset_min (−50..+50; + solo entro la finestra). Giro → tutto il blocco.
       // Mai deadline / hora / pagamento. Reset naturale a chiudiServizio (ui_offset_min escluso da buildStoricoPayload).
       result = await fdv1.setPriorityOffset(req.body.id, req.body.offset_min);
     } else if (action === "resolveAddress") {

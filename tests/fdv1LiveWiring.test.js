@@ -40,6 +40,10 @@ const sup = {
 const supPath = require.resolve("../src/utils/supabase");
 require.cache[supPath] = { id: supPath, filename: supPath, loaded: true, exports: sup };
 
+// [FDV1 R3] ± contract v2 depends on "now" (window before the HORA LÍMITE): fixed service clock for this file,
+// 2 h before the 19:00Z deadlines used below → every + up to 50 is inside the window unless a test says otherwise.
+const FIXED_NOW = Date.parse("2026-09-21T17:00:00.000Z");
+Date.now = () => FIXED_NOW;
 const mg = require("../src/agents/manualGiros");
 const dd = require("../src/agents/dashboardDelivery");
 
@@ -77,11 +81,11 @@ const ord = (id, extra = {}) => ({ id, tipo_consegna: "DOMICILIO", estado: "EN_C
   });
 
   // ── ± production priority ───────────────────────────────────────────────────────────────
-  await t("± standalone: writes ONLY ui_offset_min on that order, −5 allowed, clamp ±30", async () => {
+  await t("± standalone: writes ONLY ui_offset_min on that order, −5 allowed, clamp ±50", async () => {
     reset(); db.ordenes.push(ord("#A", { delivery_deadline_at: "2026-09-21T19:00:00.000Z" }));
     let r = await dd.setPriorityOffset("#A", -5);
     assert.ok(r.success && r.scope === "order" && db.ordenes[0].ui_offset_min === -5);
-    r = await dd.setPriorityOffset("#A", 99); assert.strictEqual(db.ordenes[0].ui_offset_min, 30);
+    r = await dd.setPriorityOffset("#A", 99); assert.strictEqual(db.ordenes[0].ui_offset_min, 50);
     assert.ok(writes.every((w) => w.t === "ordenes" && w.keys.length === 1 && w.keys[0] === "ui_offset_min"));
     assert.strictEqual(db.ordenes[0].delivery_deadline_at, "2026-09-21T19:00:00.000Z");
   });
@@ -129,13 +133,16 @@ const ord = (id, extra = {}) => ({ id, tipo_consegna: "DOMICILIO", estado: "EN_C
     assert.strictEqual(frozen(), before, "hora / delivery_deadline_at unchanged through create, ±, add, move, remove, dissolve");
   });
 
-  await t("± boundaries: -30 -25 -5 0 +5 +25 +30 exact; beyond the range CLAMPED to ±30; garbage → 0; RITIRO refused", async () => {
+  await t("± boundaries v2: -50 -40 -30 -5 0 +5 +30 +40 +50 exact; beyond ±50 CLAMPED; garbage → 0; RITIRO refused", async () => {
     reset(); db.ordenes.push(ord("#A", { hora: "21:00", delivery_deadline_at: "2026-09-21T19:05:00.000Z" }), ord("#R", { tipo_consegna: "RITIRO", hora: "21:00" }));
-    for (const v of [-30, -25, -5, 0, 5, 25, 30]) {
+    for (const v of [-50, -40, -30, -5, 0, 5, 30, 40, 50]) {
+      db.ordenes[0].ui_offset_min = 0;
       const r = await dd.setPriorityOffset("#A", v);
       assert.ok(r.success && r.ui_offset_min === v && db.ordenes[0].ui_offset_min === v, `${v} → ${JSON.stringify(r)}`);
+      assert.strictEqual(r.contract.max, 50); assert.strictEqual(r.contract.min, -50);
     }
-    for (const [v, exp] of [[31, 30], [60, 30], [-31, -30], [-999, -30], ["abc", 0], [null, 0], [4.6, 5]]) {
+    for (const [v, exp] of [[51, 50], [60, 50], [999, 50], [-51, -50], [-999, -50], ["abc", 0], [null, 0], [4.6, 5]]) {
+      db.ordenes[0].ui_offset_min = 0;
       const r = await dd.setPriorityOffset("#A", v);
       assert.strictEqual(r.ui_offset_min, exp, `${v} → ${JSON.stringify(r)}`);
     }
@@ -144,6 +151,59 @@ const ord = (id, extra = {}) => ({ id, tipo_consegna: "DOMICILIO", estado: "EN_C
     const nf = await dd.setPriorityOffset("#NOPE", 5);
     assert.ok(!nf.success && nf.error === "order_not_found");
     assert.strictEqual(db.ordenes[0].delivery_deadline_at, "2026-09-21T19:05:00.000Z"); assert.strictEqual(db.ordenes[0].hora, "21:00");
+  });
+
+  await t("± window: + allowed only up to (minutes left − 10); beyond → 409 offset_exceeds_window, nothing written", async () => {
+    reset(); db.ordenes.push(ord("#A", { hora: "21:00", delivery_deadline_at: "2026-09-21T19:05:00.000Z", ts: Date.parse("2026-09-21T18:10:00Z") }));
+    const now = Date.parse("2026-09-21T18:35:00.000Z");            // 30 min left → max +20
+    const ok20 = await dd.setPriorityOffset("#A", 20, { nowMs: now });
+    assert.ok(ok20.success && ok20.ui_offset_min === 20 && ok20.max_allowed === 20, JSON.stringify(ok20));
+    db.ordenes[0].ui_offset_min = 0; writes.length = 0;
+    for (const v of [30, 40, 50, 21]) {
+      const r = await dd.setPriorityOffset("#A", v, { nowMs: now });
+      assert.ok(!r.success && r.status === 409 && r.error === "offset_exceeds_window" && r.max_allowed === 20 && r.requested === v, JSON.stringify(r));
+    }
+    assert.strictEqual(writes.length, 0, "refused + writes nothing");
+    assert.strictEqual(db.ordenes[0].ui_offset_min, 0);
+    const minus = await dd.setPriorityOffset("#A", -50, { nowMs: now });
+    assert.ok(minus.success && minus.ui_offset_min === -50, "− always allowed");
+  });
+
+  await t("± window: margin insufficient (≤10 min left or TARDE) → no + at all; lowering an existing + always allowed", async () => {
+    reset(); db.ordenes.push(ord("#A", { delivery_deadline_at: "2026-09-21T19:05:00.000Z", ui_offset_min: 30 }));
+    const near = Date.parse("2026-09-21T18:57:00.000Z");            // 8 min left
+    const p5 = await dd.setPriorityOffset("#A", 35, { nowMs: near });
+    assert.ok(!p5.success && p5.error === "offset_exceeds_window" && p5.max_allowed === 0, JSON.stringify(p5));
+    const down = await dd.setPriorityOffset("#A", 10, { nowMs: near });
+    assert.ok(down.success && down.ui_offset_min === 10, "lowering an existing + is always allowed");
+    const late = Date.parse("2026-09-21T19:20:00.000Z");            // TARDE
+    const p = await dd.setPriorityOffset("#A", 15, { nowMs: late });
+    assert.ok(!p.success && p.max_allowed === 0);
+    const zero = await dd.setPriorityOffset("#A", 0, { nowMs: late });
+    assert.ok(zero.success && db.ordenes[0].ui_offset_min === 0);
+    const noDl = ord("#N", { hora: "", delivery_deadline_at: null, ts: NaN }); db.ordenes.push(noDl);
+    const nd = await dd.setPriorityOffset("#N", 5, { nowMs: near });
+    assert.ok(!nd.success && nd.max_allowed === 0, "no provable deadline → no +");
+  });
+
+  await t("± window in a giro: limited by the MOST URGENT member; block moves together; deadlines/hora immutable", async () => {
+    reset();
+    db.ordenes.push(ord("#A", { hora: "20:30", delivery_deadline_at: "2026-09-21T19:00:00.000Z" }), ord("#B", { hora: "21:30", delivery_deadline_at: "2026-09-21T19:40:00.000Z" }));
+    const g = (await mg.createManualGiro(["#A", "#B"])).giro.id;
+    const snap = JSON.stringify(db.ordenes.map((o) => [o.hora, o.delivery_deadline_at, o.ts]));
+    const now = Date.parse("2026-09-21T18:35:00.000Z");            // #A: 25 left → max +15 (#B alone would allow +50)
+    const viaB = await dd.setPriorityOffset("#B", 20, { nowMs: now });
+    assert.ok(!viaB.success && viaB.max_allowed === 15, JSON.stringify(viaB));
+    const ok = await dd.setPriorityOffset("#B", 15, { nowMs: now });
+    assert.ok(ok.success && ok.scope === "giro" && ok.giro_id === g && ok.max_allowed === 15);
+    assert.deepStrictEqual(db.ordenes.map((o) => o.ui_offset_min), [15, 15]);
+    assert.strictEqual(JSON.stringify(db.ordenes.map((o) => [o.hora, o.delivery_deadline_at, o.ts])), snap);
+  });
+
+  await t("priority contract is exported for the capability read (v2, −50..+50, margin 10)", async () => {
+    assert.deepStrictEqual({ ...dd.PRIORITY_CONTRACT }, { version: 2, min: -50, max: 50, margin_min: 10, rule: "plus_within_window_before_deadline" });
+    assert.strictEqual(dd.maxPlusAllowed([ord("#Z", { delivery_deadline_at: "2026-09-21T18:00:00.000Z" })], Date.parse("2026-09-21T17:00:00.000Z")), 50);
+    assert.strictEqual(dd.maxPlusAllowed([ord("#Z", { delivery_deadline_at: "2026-09-21T17:25:30.000Z" })], Date.parse("2026-09-21T17:00:00.000Z")), 15);
   });
 
   await t("RECONCILE realigns a drifted block to the frozen rule (min); DISSOLVE detaches without touching offsets / hora / deadline", async () => {
@@ -251,7 +311,7 @@ const ord = (id, extra = {}) => ({ id, tipo_consegna: "DOMICILIO", estado: "EN_C
   // ── index.js wiring (static) ────────────────────────────────────────────────────────────
   await t("index.js routes the FDV1 actions (createOrden, setUiOffset, eliminaOrdine, previewDeliveryV1, giroWarnings, reconcileManualGiros)", async () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8");
-    for (const re of [/fdv1\.createOrdenDeliveryV1\(/, /fdv1\.setPriorityOffset\(/, /fdv1\.deleteOrderWithGiroRecompute\(/, /fdv1\.previewDeliveryV1\(/, /fdv1\.giroWarningsFor\(/, /reconcileManualGiros\(\{/])
+    for (const re of [/fdv1\.createOrdenDeliveryV1\(/, /fdv1\.setPriorityOffset\(/, /action === "priorityContract"[\s\S]{0,200}fdv1\.PRIORITY_CONTRACT/, /fdv1\.deleteOrderWithGiroRecompute\(/, /fdv1\.previewDeliveryV1\(/, /fdv1\.giroWarningsFor\(/, /reconcileManualGiros\(\{/])
       assert.ok(re.test(src), "missing " + re);
     assert.ok(!/Math\.min\(20, parseInt\(req\.body\.offset_min\)/.test(src), "legacy 0..20 per-card offset still wired");
   });

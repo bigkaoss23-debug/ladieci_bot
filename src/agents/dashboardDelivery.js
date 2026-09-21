@@ -15,29 +15,58 @@ const { evaluateGiroWarnings } = require("../core/delivery/giroWarnings");
 const { maxPerGiro } = require("../core/delivery/giroCompat");
 
 const enc = mg.encodeEqValue;
-const OFFSET_MIN = -30, OFFSET_MAX = 30; // V1 values: -30..+30 (no +60)
+// [FDV1 R3] ± production priority contract v2: theoretical range −50..+50 (integer minutes).
+//   − (earlier in the production queue) is always allowed.
+//   + (later in the queue) is allowed only while it stays inside the operational window before the HORA LÍMITE:
+//       max_allowed = floor((earliest deadline − now) / 1 min) − PRIORITY_MARGIN_MIN, clamped to 0..OFFSET_MAX.
+//     For a giro the earliest deadline is the most urgent live member. Lowering an existing + is always allowed.
+//   A + beyond the window is REFUSED (409 offset_exceeds_window, with max_allowed): never clamped silently.
+//   Only ui_offset_min is written: hora, delivery_deadline_at, ts and the client promise never change.
+const OFFSET_MIN = -50, OFFSET_MAX = 50;
+const PRIORITY_MARGIN_MIN = 10;          // = the URGENTE window: a + must never push a card into it
+const PRIORITY_CONTRACT = Object.freeze({ version: 2, min: OFFSET_MIN, max: OFFSET_MAX, margin_min: PRIORITY_MARGIN_MIN, rule: "plus_within_window_before_deadline" });
+
+// Largest + (minutes) still inside the window before the most urgent deadline. null deadline → 0 (not provably safe).
+function maxPlusAllowed(orders, nowMs) {
+  const dls = (orders || []).map(getOrderDeadlineMs).filter(Number.isFinite);
+  if (!dls.length) return 0;
+  const left = Math.floor((Math.min(...dls) - nowMs) / 60000) - PRIORITY_MARGIN_MIN;
+  return Math.max(0, Math.min(OFFSET_MAX, left));
+}
 
 // ── ± production priority ────────────────────────────────────────
 // Writes ONLY ui_offset_min. Order in a giro → the WHOLE block (single PATCH = atomic).
-async function setPriorityOffset(orderId, offsetMin) {
+async function setPriorityOffset(orderId, offsetMin, opts = {}) {
   if (!orderId) return { success: false, error: "missing_order_id" };
+  const nowMs = Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
   const raw = Math.round(Number(offsetMin));
   const off = Number.isFinite(raw) ? Math.max(OFFSET_MIN, Math.min(OFFSET_MAX, raw)) : 0;
-  const rows = await sbSelect("ordenes", `id=eq.${enc(orderId)}&select=id,tipo_consegna,manual_giro_id`);
+  const cols = "id,tipo_consegna,estado,manual_giro_id,ui_offset_min,delivery_deadline_at,hora,ts,created_at";
+  const rows = await sbSelect("ordenes", `id=eq.${enc(orderId)}&select=${cols}`);
   if (!Array.isArray(rows)) return { success: false, status: 502, error: "order_read_failed" };   // unreadable ≠ not found
   const o = rows[0] || null;
   if (!o) return { success: false, status: 404, error: "order_not_found" };
   if (o.tipo_consegna !== "DOMICILIO") return { success: false, status: 400, error: "not_delivery" };
+  let scopeRows = [o];
   if (o.manual_giro_id) {
-    const memRows = await sbSelect("ordenes", `manual_giro_id=eq.${enc(o.manual_giro_id)}&select=id,estado,tipo_consegna`);
-    const ids = (Array.isArray(memRows) ? memRows : []).filter(mg.isOrderEligibleForGiro).map(x => x.id);
+    const memRows = await sbSelect("ordenes", `manual_giro_id=eq.${enc(o.manual_giro_id)}&select=${cols}`);
+    if (!Array.isArray(memRows)) return { success: false, status: 502, error: "order_read_failed", step: "giro_members" };
+    scopeRows = memRows.filter(mg.isOrderEligibleForGiro);
+    if (!scopeRows.length) scopeRows = [o];
+  }
+  const current = Number(o.ui_offset_min) || 0;
+  const max_allowed = maxPlusAllowed(scopeRows, nowMs);
+  if (off > 0 && off > current && off > max_allowed) {
+    return { success: false, status: 409, error: "offset_exceeds_window", requested: off, max_allowed, current, contract: PRIORITY_CONTRACT };
+  }
+  if (o.manual_giro_id) {
     const w = await sbUpdate("ordenes", `manual_giro_id=eq.${enc(o.manual_giro_id)}`, { ui_offset_min: off });
     if (!mg.wrote(w)) return { success: false, status: 502, error: "db_write_failed", step: "block_offset", details: w };
-    return { success: true, ui_offset_min: off, scope: "giro", giro_id: o.manual_giro_id, applied_to: ids };
+    return { success: true, ui_offset_min: off, scope: "giro", giro_id: o.manual_giro_id, applied_to: scopeRows.map(x => x.id), max_allowed, contract: PRIORITY_CONTRACT };
   }
   const w = await sbUpdate("ordenes", `id=eq.${enc(orderId)}`, { ui_offset_min: off });
   if (!mg.wrote(w)) return { success: false, status: 502, error: "db_write_failed", step: "order_offset", details: w };
-  return { success: true, ui_offset_min: off, scope: "order", applied_to: [orderId] };
+  return { success: true, ui_offset_min: off, scope: "order", applied_to: [orderId], max_allowed, contract: PRIORITY_CONTRACT };
 }
 
 // ── hard delete of an order: membership lives on the order row, the giro row stays →
@@ -168,4 +197,4 @@ async function giroWarningsFor(body = {}, { cfg = {}, nowMs = Date.now() } = {})
   return { ok: true, member_ids: members.map(m => m.id), warnings: evaluateGiroWarnings({ members, nowMs, cfg }) };
 }
 
-module.exports = { previewDeliveryV1, giroWarningsFor, setPriorityOffset: setPriorityOffsetLocked, deleteOrderWithGiroRecompute: deleteOrderWithGiroRecomputeLocked, applyGiroIntent: applyGiroIntentLocked, createOrdenDeliveryV1, previewDeliveryCore, OFFSET_MIN, OFFSET_MAX };
+module.exports = { previewDeliveryV1, giroWarningsFor, setPriorityOffset: setPriorityOffsetLocked, deleteOrderWithGiroRecompute: deleteOrderWithGiroRecomputeLocked, applyGiroIntent: applyGiroIntentLocked, createOrdenDeliveryV1, previewDeliveryCore, OFFSET_MIN, OFFSET_MAX, PRIORITY_MARGIN_MIN, PRIORITY_CONTRACT, maxPlusAllowed };
