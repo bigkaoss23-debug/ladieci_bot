@@ -17,16 +17,21 @@ const { maxPerGiro } = require("../core/delivery/giroCompat");
 const enc = mg.encodeEqValue;
 // [FDV1 R3] ± production priority contract v2: theoretical range −50..+50 (integer minutes).
 //   − (earlier in the production queue) is always allowed.
-//   + (later in the queue) is allowed only while it stays inside the operational window before the HORA LÍMITE:
-//       max_allowed = floor((earliest deadline − now) / 1 min) − PRIORITY_MARGIN_MIN, clamped to 0..OFFSET_MAX.
+//   + (later in the queue) is allowed while the resulting production target stays at or before the real
+//     HORA LÍMITE — NOT before some safety buffer inside it:
+//       max_allowed = floor((earliest deadline − now) / 1 min), clamped to 0..OFFSET_MAX.
+//     The last minutes before the deadline are URGENTE, which is a VISUAL state, not a forbidden zone:
+//     an order created with a +55 deadline may legitimately take +50 and be left with 5 minutes.
+//     TARDE (the deadline actually passed) is the only real overrun, and there max_allowed is already 0.
 //     For a giro the earliest deadline is the most urgent live member. Lowering an existing + is always allowed.
-//   A + beyond the window is REFUSED (409 offset_exceeds_window, with max_allowed): never clamped silently.
+//   A + beyond the window is REFUSED (409 offset_exceeds_window, with requested + max_allowed): never clamped silently.
 //   Only ui_offset_min is written: hora, delivery_deadline_at, ts and the client promise never change.
 const OFFSET_MIN = -50, OFFSET_MAX = 50;
-const PRIORITY_MARGIN_MIN = 10;          // = the URGENTE window: a + must never push a card into it
+const PRIORITY_MARGIN_MIN = 0;           // no artificial buffer: URGENTE is visual, only the real deadline binds
 const PRIORITY_CONTRACT = Object.freeze({ version: 2, min: OFFSET_MIN, max: OFFSET_MAX, margin_min: PRIORITY_MARGIN_MIN, rule: "plus_within_window_before_deadline" });
 
-// Largest + (minutes) still inside the window before the most urgent deadline. null deadline → 0 (not provably safe).
+// Largest + (minutes) that still leaves the production target at or before the most urgent real deadline.
+// null deadline → 0 (not provably safe).
 function maxPlusAllowed(orders, nowMs) {
   const dls = (orders || []).map(getOrderDeadlineMs).filter(Number.isFinite);
   if (!dls.length) return 0;

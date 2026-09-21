@@ -153,15 +153,15 @@ const ord = (id, extra = {}) => ({ id, tipo_consegna: "DOMICILIO", estado: "EN_C
     assert.strictEqual(db.ordenes[0].delivery_deadline_at, "2026-09-21T19:05:00.000Z"); assert.strictEqual(db.ordenes[0].hora, "21:00");
   });
 
-  await t("± window: + allowed only up to (minutes left − 10); beyond → 409 offset_exceeds_window, nothing written", async () => {
+  await t("± window: + allowed up to the REAL minutes left (no artificial buffer); beyond → 409 offset_exceeds_window, nothing written", async () => {
     reset(); db.ordenes.push(ord("#A", { hora: "21:00", delivery_deadline_at: "2026-09-21T19:05:00.000Z", ts: Date.parse("2026-09-21T18:10:00Z") }));
-    const now = Date.parse("2026-09-21T18:35:00.000Z");            // 30 min left → max +20
-    const ok20 = await dd.setPriorityOffset("#A", 20, { nowMs: now });
-    assert.ok(ok20.success && ok20.ui_offset_min === 20 && ok20.max_allowed === 20, JSON.stringify(ok20));
+    const now = Date.parse("2026-09-21T18:35:00.000Z");            // 30 min left → max +30, NOT +20
+    const ok30 = await dd.setPriorityOffset("#A", 30, { nowMs: now });
+    assert.ok(ok30.success && ok30.ui_offset_min === 30 && ok30.max_allowed === 30, JSON.stringify(ok30));
     db.ordenes[0].ui_offset_min = 0; writes.length = 0;
-    for (const v of [30, 40, 50, 21]) {
+    for (const v of [40, 50, 31]) {
       const r = await dd.setPriorityOffset("#A", v, { nowMs: now });
-      assert.ok(!r.success && r.status === 409 && r.error === "offset_exceeds_window" && r.max_allowed === 20 && r.requested === v, JSON.stringify(r));
+      assert.ok(!r.success && r.status === 409 && r.error === "offset_exceeds_window" && r.max_allowed === 30 && r.requested === v, JSON.stringify(r));
     }
     assert.strictEqual(writes.length, 0, "refused + writes nothing");
     assert.strictEqual(db.ordenes[0].ui_offset_min, 0);
@@ -169,14 +169,28 @@ const ord = (id, extra = {}) => ({ id, tipo_consegna: "DOMICILIO", estado: "EN_C
     assert.ok(minus.success && minus.ui_offset_min === -50, "− always allowed");
   });
 
-  await t("± window: margin insufficient (≤10 min left or TARDE) → no + at all; lowering an existing + always allowed", async () => {
+  await t("± window: a fresh +55 order may take +50 and be left URGENTE — URGENTE is visual, not forbidden", async () => {
+    reset();
+    const created = Date.parse("2026-09-21T18:10:00.000Z");
+    db.ordenes.push(ord("#A", { hora: "21:00", delivery_deadline_at: "2026-09-21T19:05:00.000Z", ts: created }));  // ts + 55'
+    const justAfter = created + 60000;                              // 54 min left
+    const p50 = await dd.setPriorityOffset("#A", 50, { nowMs: justAfter });
+    assert.ok(p50.success && p50.ui_offset_min === 50 && p50.max_allowed === 50, JSON.stringify(p50));
+    assert.strictEqual(db.ordenes[0].delivery_deadline_at, "2026-09-21T19:05:00.000Z");
+    assert.strictEqual(db.ordenes[0].hora, "21:00");
+  });
+
+  await t("± window: inside the URGENTE minutes a small + is still allowed; only a real overrun (TARDE) blocks it", async () => {
     reset(); db.ordenes.push(ord("#A", { delivery_deadline_at: "2026-09-21T19:05:00.000Z", ui_offset_min: 30 }));
-    const near = Date.parse("2026-09-21T18:57:00.000Z");            // 8 min left
-    const p5 = await dd.setPriorityOffset("#A", 35, { nowMs: near });
-    assert.ok(!p5.success && p5.error === "offset_exceeds_window" && p5.max_allowed === 0, JSON.stringify(p5));
+    const near = Date.parse("2026-09-21T18:57:00.000Z");            // 8 min left → URGENTE, max +8 (no −10 buffer)
+    const p8 = await dd.setPriorityOffset("#A", 5, { nowMs: near });
+    assert.ok(p8.success && p8.ui_offset_min === 5 && p8.max_allowed === 8, JSON.stringify(p8));
+    db.ordenes[0].ui_offset_min = 30;
+    const p35 = await dd.setPriorityOffset("#A", 35, { nowMs: near });
+    assert.ok(!p35.success && p35.error === "offset_exceeds_window" && p35.max_allowed === 8 && p35.requested === 35, JSON.stringify(p35));
     const down = await dd.setPriorityOffset("#A", 10, { nowMs: near });
     assert.ok(down.success && down.ui_offset_min === 10, "lowering an existing + is always allowed");
-    const late = Date.parse("2026-09-21T19:20:00.000Z");            // TARDE
+    const late = Date.parse("2026-09-21T19:20:00.000Z");            // TARDE = real overrun
     const p = await dd.setPriorityOffset("#A", 15, { nowMs: late });
     assert.ok(!p.success && p.max_allowed === 0);
     const zero = await dd.setPriorityOffset("#A", 0, { nowMs: late });
@@ -191,19 +205,21 @@ const ord = (id, extra = {}) => ({ id, tipo_consegna: "DOMICILIO", estado: "EN_C
     db.ordenes.push(ord("#A", { hora: "20:30", delivery_deadline_at: "2026-09-21T19:00:00.000Z" }), ord("#B", { hora: "21:30", delivery_deadline_at: "2026-09-21T19:40:00.000Z" }));
     const g = (await mg.createManualGiro(["#A", "#B"])).giro.id;
     const snap = JSON.stringify(db.ordenes.map((o) => [o.hora, o.delivery_deadline_at, o.ts]));
-    const now = Date.parse("2026-09-21T18:35:00.000Z");            // #A: 25 left → max +15 (#B alone would allow +50)
-    const viaB = await dd.setPriorityOffset("#B", 20, { nowMs: now });
-    assert.ok(!viaB.success && viaB.max_allowed === 15, JSON.stringify(viaB));
-    const ok = await dd.setPriorityOffset("#B", 15, { nowMs: now });
-    assert.ok(ok.success && ok.scope === "giro" && ok.giro_id === g && ok.max_allowed === 15);
-    assert.deepStrictEqual(db.ordenes.map((o) => o.ui_offset_min), [15, 15]);
+    const now = Date.parse("2026-09-21T18:35:00.000Z");            // #A: 25 left → max +25 (#B alone would allow +50)
+    const viaB = await dd.setPriorityOffset("#B", 30, { nowMs: now });
+    assert.ok(!viaB.success && viaB.max_allowed === 25 && viaB.requested === 30, JSON.stringify(viaB));
+    const ok = await dd.setPriorityOffset("#B", 25, { nowMs: now });
+    assert.ok(ok.success && ok.scope === "giro" && ok.giro_id === g && ok.max_allowed === 25);
+    assert.deepStrictEqual(db.ordenes.map((o) => o.ui_offset_min), [25, 25]);
     assert.strictEqual(JSON.stringify(db.ordenes.map((o) => [o.hora, o.delivery_deadline_at, o.ts])), snap);
   });
 
-  await t("priority contract is exported for the capability read (v2, −50..+50, margin 10)", async () => {
-    assert.deepStrictEqual({ ...dd.PRIORITY_CONTRACT }, { version: 2, min: -50, max: 50, margin_min: 10, rule: "plus_within_window_before_deadline" });
+  await t("priority contract is exported for the capability read (v2, −50..+50, NO artificial margin)", async () => {
+    assert.deepStrictEqual({ ...dd.PRIORITY_CONTRACT }, { version: 2, min: -50, max: 50, margin_min: 0, rule: "plus_within_window_before_deadline" });
+    assert.strictEqual(dd.PRIORITY_MARGIN_MIN, 0, "no artificial buffer before the deadline");
     assert.strictEqual(dd.maxPlusAllowed([ord("#Z", { delivery_deadline_at: "2026-09-21T18:00:00.000Z" })], Date.parse("2026-09-21T17:00:00.000Z")), 50);
-    assert.strictEqual(dd.maxPlusAllowed([ord("#Z", { delivery_deadline_at: "2026-09-21T17:25:30.000Z" })], Date.parse("2026-09-21T17:00:00.000Z")), 15);
+    assert.strictEqual(dd.maxPlusAllowed([ord("#Z", { delivery_deadline_at: "2026-09-21T17:25:30.000Z" })], Date.parse("2026-09-21T17:00:00.000Z")), 25);
+    assert.strictEqual(dd.maxPlusAllowed([ord("#Z", { delivery_deadline_at: "2026-09-21T17:08:00.000Z" })], Date.parse("2026-09-21T17:00:00.000Z")), 8, "URGENTE window is usable");
   });
 
   await t("RECONCILE realigns a drifted block to the frozen rule (min); DISSOLVE detaches without touching offsets / hora / deadline", async () => {
