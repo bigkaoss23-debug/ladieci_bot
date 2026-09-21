@@ -327,11 +327,9 @@ app.post("/api", async (req, res) => {
       const d = req.body.data || req.body;
       if (!d.waId && d.wa_id) d.waId = d.wa_id;
       // Dashboard operatore: niente blocco hard orario chiusura (vedi creaOrdine).
-      // [FDV1] DOMICILIO con delivery_contract:"v1" → delivery_deadline_at = ts + 55' (persistita, immutabile) + giro_intent
-      // opzionale. Senza il flag (FE vecchio) il percorso è identico al LIVE (creaOrdine invariato, operatorManual:true).
-      let cfg = {};
-      try { cfg = await getConfig(); } catch (_) { cfg = {}; }
-      result = await fdv1.createOrdenDeliveryV1({ ...d }, { creaOrdine, cfg });
+      // [FDV1] delivery_deadline_at (ts + 55') la scrive creaOrdine nella stessa INSERT per ogni nuovo DOMICILIO;
+      // `hora` (promessa cliente) passa invariata. Qui solo il giro_intent opzionale dell'operatore.
+      result = await fdv1.createOrdenDeliveryV1({ ...d }, { creaOrdine });
     } else if (action === "previewDeliveryV1") {
       // [FDV1] read-only: deadline (now + 55') + suggerimento giro compatibile (zona, deadline ±15', capienza, stato).
       let cfg = {};

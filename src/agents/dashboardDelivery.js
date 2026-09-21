@@ -96,29 +96,15 @@ async function applyGiroIntent(orderId, intent) {
   return { applied: false, reason: why || "create_failed" };
 }
 
-// ── create route composition (what index.js would do around the UNCHANGED creaOrdine) ──
-// v1 contract is OPT-IN (delivery_contract:"v1" from the new FE) → old FE / bot: identical to LIVE.
-async function createOrdenDeliveryV1(d, { creaOrdine, cfg = {}, nowMs = Date.now() }) {
-  const isV1Delivery = d && d.delivery_contract === "v1" && d.tipo_consegna === "DOMICILIO";
-  const min = resolveDeadlineMin(cfg);
+// ── create route composition (index.js createOrden around the unchanged-contract creaOrdine) ──
+// [FDV1] delivery_deadline_at (ts + 55') is written by creaOrdine itself in the SAME insert, for every new DOMICILIO
+// (dashboard AND WhatsApp). `hora` is the client promise and is passed through untouched: two separate data.
+// This wrapper only strips the FE-only fields and applies the optional operator giro_intent.
+async function createOrdenDeliveryV1(d, { creaOrdine }) {
   const payload = { ...d };
   delete payload.delivery_contract; delete payload.giro_intent;
-  if (isV1Delivery) payload.hora = computeAutoDeadline(nowMs, min).hora;  // legacy mirror for hora/forno_out consumers
   const res = await creaOrdine({ ...payload, operatorManual: true });
   if (!res || !res.success || !res.id) return res;
-
-  if (isV1Delivery) {
-    // deterministic from the STORED creation stamp → replay-safe (never extends the promise)
-    // (order-creation path, NOT the giro path → the raw supabase helpers, no giro timeout)
-    const r = await raw.sbSelect("ordenes", `id=eq.${enc(res.id)}&select=id,ts,hora,delivery_deadline_at`);
-    const row = Array.isArray(r) ? r[0] : null;
-    if (row && Number(row.ts)) {
-      const dl = computeAutoDeadline(Number(row.ts), min);
-      if (row.delivery_deadline_at !== dl.deadlineIso || row.hora !== dl.hora) {
-        await raw.sbUpdate("ordenes", `id=eq.${enc(res.id)}`, { delivery_deadline_at: dl.deadlineIso, hora: dl.hora });
-      }
-    }
-  }
   let giro = null;
   if (d && d.giro_intent) {
     try { giro = await applyGiroIntentLocked(res.id, d.giro_intent); }

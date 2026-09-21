@@ -58,31 +58,22 @@ const ord = (id, extra = {}) => ({ id, tipo_consegna: "DOMICILIO", estado: "EN_C
   // ── P1 deadline ──────────────────────────────────────────────────────────────────────────
   const fakeCrea = (tsMs) => async (p) => { const row = { ...ord("#N1"), ...p, ts: tsMs, estado: "POR_CONFIRMAR" }; delete row.operatorManual; db.ordenes.push(row); return { success: true, id: row.id }; };
 
-  await t("P1 v1 DOMICILIO: delivery_deadline_at = stored ts + 55' and hora mirrors it (Europe/Madrid)", async () => {
+  await t("createOrden wrapper: hora (client promise) passes UNTOUCHED, FE-only fields stripped, no post-insert patch", async () => {
     reset(); const ts = Date.parse("2026-09-21T18:05:30Z");
-    const r = await dd.createOrdenDeliveryV1({ tipo_consegna: "DOMICILIO", delivery_contract: "v1", hora: "20:00" }, { creaOrdine: fakeCrea(ts), nowMs: ts - 400 });
+    const r = await dd.createOrdenDeliveryV1({ tipo_consegna: "DOMICILIO", delivery_contract: "v1", hora: "20:00" }, { creaOrdine: fakeCrea(ts) });
     assert.ok(r.success);
     const row = db.ordenes[0];
-    assert.strictEqual(row.delivery_deadline_at, new Date(ts + 55 * 60000).toISOString());
-    assert.strictEqual(row.hora, "21:00");
+    assert.strictEqual(row.hora, "20:00");
     assert.ok(!("delivery_contract" in row) && !("giro_intent" in row));
+    assert.strictEqual(writes.length, 0, "the wrapper never patches hora / deadline after the insert");
   });
 
-  await t("P1 replay (same stored ts) never extends the deadline and writes nothing", async () => {
-    const before = db.ordenes[0].delivery_deadline_at; writes.length = 0;
-    const crea = async () => ({ success: true, id: "#N1", idempotent: true });
-    await dd.createOrdenDeliveryV1({ tipo_consegna: "DOMICILIO", delivery_contract: "v1" }, { creaOrdine: crea, nowMs: Date.now() + 3600e3 });
-    assert.strictEqual(db.ordenes[0].delivery_deadline_at, before);
-    assert.strictEqual(writes.length, 0);
-  });
-
-  await t("P1 without the v1 flag (old FE / bot) and for RITIRO: no deadline, hora untouched", async () => {
-    reset(); const ts = Date.now();
-    await dd.createOrdenDeliveryV1({ tipo_consegna: "DOMICILIO", hora: "22:10" }, { creaOrdine: fakeCrea(ts) });
-    assert.strictEqual(db.ordenes[0].delivery_deadline_at, null); assert.strictEqual(db.ordenes[0].hora, "22:10");
-    reset();
-    await dd.createOrdenDeliveryV1({ tipo_consegna: "RITIRO", delivery_contract: "v1", hora: "22:10" }, { creaOrdine: fakeCrea(ts) });
-    assert.strictEqual(db.ordenes[0].delivery_deadline_at, null); assert.strictEqual(db.ordenes[0].hora, "22:10");
+  await t("createOrden wrapper: giro_intent { with_order_id } creates the giro atomically after the insert", async () => {
+    reset(); db.ordenes.push(ord("#S", { delivery_deadline_at: "2026-09-21T19:00:00.000Z" }));
+    const crea = async (p) => { db.ordenes.push({ ...ord("#N2"), ...p, id: "#N2" }); return { success: true, id: "#N2" }; };
+    const r = await dd.createOrdenDeliveryV1({ tipo_consegna: "DOMICILIO", hora: "21:00", giro_intent: { with_order_id: "#S" } }, { creaOrdine: crea });
+    assert.ok(r.giro && r.giro.applied, JSON.stringify(r));
+    const g = db.ordenes.map((o) => o.manual_giro_id); assert.ok(g[0] && g[0] === g[1]);
   });
 
   // ── ± production priority ───────────────────────────────────────────────────────────────
@@ -105,8 +96,43 @@ const ord = (id, extra = {}) => ({ id, tipo_consegna: "DOMICILIO", estado: "EN_C
     assert.strictEqual(JSON.stringify(db.ordenes.map((o) => [o.delivery_deadline_at, o.hora, o.cobrado, o.ya_pagado, o.totale])), snap);
   });
 
+  // ── point 4: where the block offset lives and how it moves ──────────────────────────────
+  await t("block offset = ordenes.ui_offset_min on EVERY member; ± = ONE PATCH ordenes?manual_giro_id=eq.<giro>; hora/deadline never written", async () => {
+    reset();
+    db.ordenes.push(ord("#A", { hora: "21:00", delivery_deadline_at: "2026-09-21T19:05:00.000Z" }), ord("#B", { hora: "21:20", delivery_deadline_at: "2026-09-21T19:20:00.000Z" }),
+      ord("#C", { hora: "21:30", delivery_deadline_at: "2026-09-21T19:30:00.000Z" }), ord("#D", { hora: "21:40", delivery_deadline_at: "2026-09-21T19:40:00.000Z" }));
+    const frozen = () => JSON.stringify(db.ordenes.map((o) => [o.id, o.hora, o.delivery_deadline_at]));
+    const before = frozen();
+    const g1 = (await mg.createManualGiro(["#A", "#B"])).giro.id;
+    writes.length = 0;
+    await dd.setPriorityOffset("#A", 5);
+    assert.deepStrictEqual(writes.map((w) => [w.t, decodeURIComponent(w.q), w.keys]), [["ordenes", `manual_giro_id=eq.${g1}`, ["ui_offset_min"]]]);
+    const off = () => Object.fromEntries(db.ordenes.map((o) => [o.id, o.ui_offset_min]));
+    assert.deepStrictEqual(off(), { "#A": 5, "#B": 5, "#C": 0, "#D": 0 });
+    await dd.setPriorityOffset("#B", -5);
+    assert.deepStrictEqual(off(), { "#A": -5, "#B": -5, "#C": 0, "#D": 0 });
+    await dd.setPriorityOffset("#A", 5);
+    // ADD: the giro settles its block offset to the MOST URGENT (min) of its members — frozen FDV1 rule (offset merge = min)
+    await mg.addOrderToManualGiro(g1, "#C");
+    assert.deepStrictEqual(off(), { "#A": 0, "#B": 0, "#C": 0, "#D": 0 });
+    await dd.setPriorityOffset("#C", 10);
+    assert.deepStrictEqual(off(), { "#A": 10, "#B": 10, "#C": 10, "#D": 0 });
+    // MOVE #C from G1 (3→2) to a new giro with #D: G1 keeps a coherent +10 block; the new block settles to min(10, 0) = 0
+    const g2 = (await mg.createManualGiro(["#C", "#D"])).giro.id;
+    assert.ok(g2 !== g1);
+    assert.deepStrictEqual(off(), { "#A": 10, "#B": 10, "#C": 0, "#D": 0 });
+    assert.deepStrictEqual(db.ordenes.map((o) => o.manual_giro_id), [g1, g1, g2, g2]);
+    // REMOVE #B (2→1): G1 dissolves; #A and #B keep their last offset as standalone orders
+    await mg.removeOrderFromManualGiro("#B");
+    assert.ok(db.manual_giros.find((g) => g.id === g1).dissolved_at);
+    assert.deepStrictEqual(db.ordenes.map((o) => o.manual_giro_id), [null, null, g2, g2]);
+    assert.strictEqual(frozen(), before, "hora / delivery_deadline_at unchanged through create, ±, add, move, remove, dissolve");
+  });
+
   // ── delete + settle ─────────────────────────────────────────────────────────────────────
   await t("eliminaOrdine on a member of a 2-giro dissolves it (no giro monco, no stale anchor)", async () => {
+    reset(); db.ordenes.push(ord("#A", { delivery_deadline_at: "2026-09-21T19:00:00.000Z" }), ord("#B", { delivery_deadline_at: "2026-09-21T19:10:00.000Z" }));
+    await mg.createManualGiro(["#A", "#B"]);
     const gid = db.ordenes[0].manual_giro_id;
     const r = await dd.deleteOrderWithGiroRecompute("#A");
     assert.ok(r.success, JSON.stringify(r));

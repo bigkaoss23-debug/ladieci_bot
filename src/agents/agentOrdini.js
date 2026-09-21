@@ -11,6 +11,11 @@ const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualG
 // DRIVER_STATO = telemetria visiva OPZIONALE (best-effort, mai blocca la
 // transizione). Vedi src/utils/driverTelemetry.js per il contratto.
 const { recordRiderOut, recordDeliveryAndMaybeReturn, countActiveDeliveries } = require("../utils/driverTelemetry");
+// [FDV1] deadline DOMICILIO canonica (pura, nessun require): ts + 55'.
+const { computeAutoDeadline, DELIVERY_DEADLINE_DEFAULT_MIN } = require("../core/delivery/deadline");
+// [FDV1] Il rider NON è una variabile del percorso operativo: nessuna scrittura DRIVER_STATO / delivery_logs
+// dal cambio di stato. Riattivabile solo esplicitamente (rollback senza deploy di codice): FDV1_RIDER_TELEMETRY=on.
+const RIDER_TELEMETRY_ON = process.env.FDV1_RIDER_TELEMETRY === "on";
 const {
   buildStateTimestampPatch,
   logOrderStateTransition,
@@ -384,7 +389,10 @@ async function creaOrdine(params) {
     const newId = "#" + String(lastNum + 1).padStart(3, "0");
 
     const estadoInicial = params.estado || "POR_CONFIRMAR";
-    const nowIso = new Date().toISOString();
+    // [FDV1] UN solo timestamp canonico per ts, timbri di stato e delivery_deadline_at (stessa INSERT, replay-safe:
+    // un retry con lo stesso client_req_id ritorna l'ordine esistente sopra, senza nuova deadline).
+    const createdMs = Date.now();
+    const nowIso = new Date(createdMs).toISOString();
     const stateTimestamps = buildStateTimestampPatch({
       from: null,
       to: estadoInicial,
@@ -409,9 +417,12 @@ async function creaOrdine(params) {
       estado: estadoInicial,
       ...stateTimestamps,
       cucina_check: params.cucina_check || null,
-      ts: Date.now(),
+      ts: createdMs,
       llegado: false,
       tipo_consegna:  tipoConsegna,
+      // [FDV1] deadline delivered-by per OGNI nuovo DOMICILIO (dashboard e WhatsApp): ts + 55'. Immutabile;
+      // `hora` resta la promessa/orario cliente, dato separato.
+      delivery_deadline_at: tipoConsegna === "DOMICILIO" ? computeAutoDeadline(createdMs, DELIVERY_DEADLINE_DEFAULT_MIN).deadlineIso : null,
       delivery_fee:   deliveryFee,
       totale:         totale,
       direccion:      params.direccion      || null,
@@ -811,7 +822,7 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   // Nota idempotenza: recordRiderOut non sovrascrive un giro già aperto, e
   // recordDeliveryAndMaybeReturn chiude solo quando il conteggio server-side
   // dei DOMICILIO attivi (LISTO/EN_ENTREGA) arriva a 0.
-  if (!_isNoop && (nuovoStato === "EN_ENTREGA" || nuovoStato === "RETIRADO")) {
+  if (RIDER_TELEMETRY_ON && !_isNoop && (nuovoStato === "EN_ENTREGA" || nuovoStato === "RETIRADO")) {
     try {
       const dRows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,tipo_consegna,zona,manual_giro_id`);
       const dOrd = dRows?.[0];
