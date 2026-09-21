@@ -148,4 +148,38 @@ function previewDeliveryCore({ newOrder, orders, giros, cfg, nowMs }) {
   };
 }
 
-module.exports = { setPriorityOffset: setPriorityOffsetLocked, deleteOrderWithGiroRecompute: deleteOrderWithGiroRecomputeLocked, applyGiroIntent: applyGiroIntentLocked, createOrdenDeliveryV1, previewDeliveryCore, OFFSET_MIN, OFFSET_MAX };
+// ── [FDV1 LIVE wiring] read-only endpoints (P2 preview / P4a warnings). No rider code, no writes. ──
+const ACTIVE_ROWS = `estado=in.(POR_CONFIRMAR,EN_COCINA,LISTO,EN_ENTREGA)&tipo_consegna=eq.DOMICILIO&select=id,manual_giro_id,estado,tipo_consegna,zona,delivery_deadline_at,hora,ts,created_at`;
+
+// Nuevo Pedido (DOMICILIO): deadline preview (now + N) + "is there a compatible persisted giro / single order?".
+async function previewDeliveryV1(body = {}, { cfg = {}, nowMs = Date.now() } = {}) {
+  const newOrder = { tipo_consegna: "DOMICILIO", zona: body.zona || null, id: body.id || undefined };
+  const [orders, giros] = await Promise.all([
+    raw.sbSelect("ordenes", ACTIVE_ROWS),
+    raw.sbSelect("manual_giros", "dissolved_at=is.null&select=id,seq,dissolved_at"),
+  ]);
+  if (!Array.isArray(orders) || !Array.isArray(giros)) return { ok: false, status: 502, error: "preview_read_failed" };
+  const core = previewDeliveryCore({ newOrder, orders, giros, cfg, nowMs });
+  const s = core.giro_suggestion;
+  if (s && s.kind === "GIRO") { const g = giros.find(x => x.id === s.giro_id); s.label = g && g.seq != null ? `G${g.seq}` : null; }
+  return { ok: true, ...core };
+}
+
+// Entregas: factual warnings for a composition (create: order_ids; add/move: giro_id + order_ids). Never blocking.
+async function giroWarningsFor(body = {}, { cfg = {}, nowMs = Date.now() } = {}) {
+  const ids = Array.from(new Set((Array.isArray(body.order_ids) ? body.order_ids : []).map(String)));
+  if (!ids.length && !body.giro_id) return { ok: false, status: 400, error: "missing_order_ids" };
+  const COLS = "select=id,manual_giro_id,estado,tipo_consegna,zona,delivery_deadline_at,hora,ts,created_at";
+  const [sel, mem] = await Promise.all([
+    ids.length ? raw.sbSelect("ordenes", `id=in.(${mg.encodeIdList(ids)})&${COLS}`) : [],
+    body.giro_id ? raw.sbSelect("ordenes", `manual_giro_id=eq.${enc(body.giro_id)}&${COLS}`) : [],
+  ]);
+  if (!Array.isArray(sel) || !Array.isArray(mem)) return { ok: false, status: 502, error: "warnings_read_failed" };
+  const byId = new Map();
+  for (const r of mem) if (mg.isOrderEligibleForGiro(r)) byId.set(r.id, r);
+  for (const r of sel) byId.set(r.id, r);
+  const members = [...byId.values()];
+  return { ok: true, member_ids: members.map(m => m.id), warnings: evaluateGiroWarnings({ members, nowMs, cfg }) };
+}
+
+module.exports = { previewDeliveryV1, giroWarningsFor, setPriorityOffset: setPriorityOffsetLocked, deleteOrderWithGiroRecompute: deleteOrderWithGiroRecomputeLocked, applyGiroIntent: applyGiroIntentLocked, createOrdenDeliveryV1, previewDeliveryCore, OFFSET_MIN, OFFSET_MAX };

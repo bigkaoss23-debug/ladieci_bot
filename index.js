@@ -20,6 +20,9 @@ const {
   removeOrderFromManualGiro,
   dissolveManualGiro,
 } = require("./src/agents/manualGiros");
+// [FDV1] Frozen Delivery V1 — dashboard composition layer (deadline, ± block, delete+settle, preview, warnings).
+const fdv1 = require("./src/agents/dashboardDelivery");
+const { reconcileManualGiros } = require("./src/agents/manualGiros");
 const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
 
 const app = express();
@@ -304,11 +307,9 @@ app.post("/api", async (req, res) => {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { llegado: req.body.llegado !== false });
       result = { success: true };
     } else if (action === "setUiOffset") {
-      // Snooze visivo per-card DOMICILIO: sposta countdown +N min senza toccare hora/forno_out.
-      // Reset naturale a chiudiServizio (ordine va in storico, ui_offset_min escluso da buildStoricoPayload).
-      const off = Math.max(0, Math.min(20, parseInt(req.body.offset_min) || 0));
-      await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { ui_offset_min: off });
-      result = { success: true, ui_offset_min: off };
+      // [FDV1] ± priorità di produzione: scrive SOLO ui_offset_min (−30..+30). Ordine in un giro → tutto il blocco.
+      // Mai deadline / hora / pagamento. Reset naturale a chiudiServizio (ui_offset_min escluso da buildStoricoPayload).
+      result = await fdv1.setPriorityOffset(req.body.id, req.body.offset_min);
     } else if (action === "resolveAddress") {
       const { risolviIndirizzo } = require("./src/utils/geoResolver");
       const { direccion, tel, tipoConsegna, forceRefresh } = req.body;
@@ -326,13 +327,30 @@ app.post("/api", async (req, res) => {
       const d = req.body.data || req.body;
       if (!d.waId && d.wa_id) d.waId = d.wa_id;
       // Dashboard operatore: niente blocco hard orario chiusura (vedi creaOrdine).
-      result = await creaOrdine({ ...d, operatorManual: true });
+      // [FDV1] DOMICILIO con delivery_contract:"v1" → delivery_deadline_at = ts + 55' (persistita, immutabile) + giro_intent
+      // opzionale. Senza il flag (FE vecchio) il percorso è identico al LIVE (creaOrdine invariato, operatorManual:true).
+      let cfg = {};
+      try { cfg = await getConfig(); } catch (_) { cfg = {}; }
+      result = await fdv1.createOrdenDeliveryV1({ ...d }, { creaOrdine, cfg });
+    } else if (action === "previewDeliveryV1") {
+      // [FDV1] read-only: deadline (now + 55') + suggerimento giro compatibile (zona, deadline ±15', capienza, stato).
+      let cfg = {};
+      try { cfg = await getConfig(); } catch (_) { cfg = {}; }
+      result = await fdv1.previewDeliveryV1(req.body || {}, { cfg });
+    } else if (action === "giroWarnings") {
+      // [FDV1] read-only: warning fattuali per una composizione di giro (mai bloccanti: l'operatore conferma).
+      let cfg = {};
+      try { cfg = await getConfig(); } catch (_) { cfg = {}; }
+      result = await fdv1.giroWarningsFor(req.body || {}, { cfg });
+    } else if (action === "reconcileManualGiros") {
+      // [FDV1] self-heal strutturale del dominio giro (una transazione DB, idempotente).
+      result = await reconcileManualGiros({ alignOffsets: req.body && req.body.align_offsets !== false });
     } else if (action === "updateNotaCucina") {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { nota_cucina: req.body.nota_cucina });
       result = { success: true };
     } else if (action === "eliminaOrdine") {
-      await sbDelete("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`);
-      result = { success: true };
+      // [FDV1] delete + settle del giro di appartenenza (niente giro monco / anchor stale).
+      result = await fdv1.deleteOrderWithGiroRecompute(req.body.id);
     } else if (action === "eliminaConversazione") {
       const wid = req.body.wa_id;
       await sbDelete("conv",     `wa_id=eq.${wid}`);
