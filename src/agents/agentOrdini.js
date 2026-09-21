@@ -373,6 +373,12 @@ async function creaOrdine(params) {
   const resetTs  = resetCfg?.[0]?.valore ? parseInt(resetCfg[0].valore) : 0;
   const fromTs   = Math.max(startOfDay.getTime(), resetTs);
 
+  // [FDV1] UN solo timestamp canonico, generato UNA volta PRIMA dei tentativi di INSERT: ts, timbri di stato e
+  // delivery_deadline_at ne derivano. Un retry per collisione di id non lo rigenera; un replay con lo stesso
+  // client_req_id ritorna l'ordine esistente (idempotency sopra / collisione client_req_id sotto) senza nuova deadline.
+  const createdMs = Date.now();
+  const nowIso = new Date(createdMs).toISOString();
+
   for (let attempt = 0; attempt < 8; attempt++) {
     // Jitter crescente per ridurre la probabilità di collisione ripetuta
     if (attempt > 0) await new Promise(r => setTimeout(r, 40 + attempt * 30 + Math.random() * 80));
@@ -389,10 +395,6 @@ async function creaOrdine(params) {
     const newId = "#" + String(lastNum + 1).padStart(3, "0");
 
     const estadoInicial = params.estado || "POR_CONFIRMAR";
-    // [FDV1] UN solo timestamp canonico per ts, timbri di stato e delivery_deadline_at (stessa INSERT, replay-safe:
-    // un retry con lo stesso client_req_id ritorna l'ordine esistente sopra, senza nuova deadline).
-    const createdMs = Date.now();
-    const nowIso = new Date(createdMs).toISOString();
     const stateTimestamps = buildStateTimestampPatch({
       from: null,
       to: estadoInicial,
@@ -566,6 +568,18 @@ async function modificaOrdine(ordenId, updates) {
     if (ord) {
       const itemsFinali = upd.items || (ord.items || []).filter(i => i.n !== "Entrega a domicilio");
       const tipoConsegna = upd.tipo_consegna !== undefined ? upd.tipo_consegna : (ord.tipo_consegna || "RITIRO");
+      // [FDV1] la deadline delivery segue il TIPO, mai il momento della modifica né hora/zona/indirizzo:
+      //   → DOMICILIO senza deadline: ts ORIGINALE dell'ordine + 55' (deterministico, anche dopo DOMICILIO→RITIRO→DOMICILIO);
+      //   → RITIRO: NULL (nessuna deadline delivery stale su un ritiro).
+      if (upd.tipo_consegna !== undefined && upd.tipo_consegna !== (ord.tipo_consegna || "RITIRO")) {
+        if (tipoConsegna === "DOMICILIO") {
+          if (!ord.delivery_deadline_at && Number(ord.ts) > 0) {
+            upd.delivery_deadline_at = computeAutoDeadline(Number(ord.ts), DELIVERY_DEADLINE_DEFAULT_MIN).deadlineIso;
+          }
+        } else if (ord.delivery_deadline_at) {
+          upd.delivery_deadline_at = null;
+        }
+      }
       horaFinalGuard = upd.hora || ord.hora || null;
       closingGuardParams = {
         ...ord,
