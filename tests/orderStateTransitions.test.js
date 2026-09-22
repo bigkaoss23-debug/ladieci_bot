@@ -165,12 +165,14 @@ const reset = () => {
     assert("EN_ENTREGA actor/origin rider", enEntregaLog.actor_type === "rider" && enEntregaLog.origin === "entregas");
     assert("EN_ENTREGA event sent_delivery", enEntregaLog.event_type === "sent_delivery");
 
+    // [DELIVERY-REFACTOR 2026-09-22] "cash" non è un metodo del dominio: la regola
+    // canonica accetta solo efectivo|tarjeta|bizum. `cobrado` non si passa più —
+    // lo deriva il backend dal metodo reale.
     await cambiaStato("#102", "RETIRADO", {
       hora_entrega: 456,
-      cobrado: true,
-      metodo_pago: "cash",
+      metodo_pago: "efectivo",
       actor_type: "rider",
-      origin: "entregas",
+      origin: "driver_app",
     });
     const retiradoUpd = UPDATES.filter(x => x.table === "ordenes").at(-1).patch;
     const retiradoLog = logs().at(-1);
@@ -183,7 +185,8 @@ const reset = () => {
   {
     reset();
     STORE["#103"] = { id: "#103", estado: "LISTO", tipo_consegna: "RITIRO", manual_giro_id: null };
-    await cambiaStato("#103", "RETIRADO", { actor_type: "operator", origin: "cocina" });
+    // [DELIVERY-REFACTOR] il RITIRO non pagato richiede un metodo reale per finalizzare.
+    await cambiaStato("#103", "RETIRADO", { metodo_pago: "efectivo", actor_type: "operator", origin: "cocina" });
     const upd = lastOrderUpdate().patch;
     const log = logs()[0];
     assert("ritiro valorizza retirado_at", !!upd.retirado_at);

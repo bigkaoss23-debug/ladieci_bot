@@ -25,6 +25,19 @@ const fdv1 = require("./src/agents/dashboardDelivery");
 const { reconcileManualGiros } = require("./src/agents/manualGiros");
 const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
 
+// [DELIVERY-REFACTOR 2026-09-22] Attori ammessi nell'audit di stato.
+//   rider    = app del repartidor
+//   operator = dashboard (Entregas / Listos)
+// Un valore assente o fuori whitelist diventa "unknown": meglio un log non
+// attribuito che un log attribuito al soggetto sbagliato — prima di questa
+// release marcarEnEntrega/marcarEntregado scrivevano "rider" hardcodato anche
+// quando a premere era l'operatore.
+const ACTOR_TYPES = Object.freeze(["rider", "operator"]);
+function normalizeActorType(actorType) {
+  const a = String(actorType == null ? "" : actorType).trim().toLowerCase();
+  return ACTOR_TYPES.includes(a) ? a : "unknown";
+}
+
 const app = express();
 app.use(express.json());
 app.use((req, res, next) => {
@@ -261,21 +274,29 @@ app.post("/api", async (req, res) => {
       extras.origin = req.body.origin || "dashboard";
       result = await cambiaStato(req.body.id, req.body.estado, extras);
     } else if (action === "marcarEnEntrega") {
-      // LISTO → EN_ENTREGA — registra hora_salida atomicamente
+      // [DELIVERY-REFACTOR 2026-09-22] DEPRECATO: EN_ENTREGA non fa più parte del
+      // flusso operativo (POR_CONFIRMAR → EN_COCINA → LISTO → RETIRADO). L'azione
+      // resta esposta solo finché il FE di PRODUZIONE (d7816dc) la chiama; nessun
+      // nuovo client deve usarla. Rimozione prevista con la dismissione del legacy.
       result = await cambiaStato(req.body.id, "EN_ENTREGA", {
         hora_salida: Date.now(),
-        actor_type: "rider",
-        origin: "entregas",
+        actor_type: normalizeActorType(req.body.actor_type),
+        actor_id: req.body.actor_id || null,
+        origin: req.body.origin || "entregas",
       });
     } else if (action === "marcarEntregado") {
-      // EN_ENTREGA/LISTO → RETIRADO — registra hora_entrega + cobrado + metodo_pago atomicamente.
-      // Eventuale descuento applicato al momento del incasso.
+      // LISTO (o legacy EN_ENTREGA) → RETIRADO — finalizzazione della consegna.
+      // [DELIVERY-REFACTOR 2026-09-22] `cobrado` e `metodo_pago` NON si prendono più
+      // dal payload: li decide la regola canonica in cambiaStato (finalization.js),
+      // che rifiuta la transizione se manca un metodo reale e l'ordine non è pagato.
+      // `actor_type`/`origin` arrivano dal chiamante: driver e operatore usano la
+      // stessa azione business ma devono restare distinguibili nell'audit.
       const extras = {
         hora_entrega: Date.now(),
-        cobrado: req.body.cobrado !== false,
-        metodo_pago: req.body.metodo_pago || "",
-        actor_type: "rider",
-        origin: "entregas",
+        metodo_pago: req.body.metodo_pago,
+        actor_type: normalizeActorType(req.body.actor_type),
+        actor_id: req.body.actor_id || null,
+        origin: req.body.origin || "entregas",
       };
       if (req.body.descuento_tipo  !== undefined) extras.descuento_tipo  = req.body.descuento_tipo;
       if (req.body.descuento_valor !== undefined) extras.descuento_valor = req.body.descuento_valor;

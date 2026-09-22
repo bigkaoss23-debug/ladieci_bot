@@ -13,6 +13,9 @@ const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualG
 const { recordRiderOut, recordDeliveryAndMaybeReturn, countActiveDeliveries } = require("../utils/driverTelemetry");
 // [FDV1] deadline DOMICILIO canonica (pura, nessun require): ts + 55'.
 const { computeAutoDeadline, DELIVERY_DEADLINE_DEFAULT_MIN } = require("../core/delivery/deadline");
+// [DELIVERY-REFACTOR 2026-09-22] Regola canonica del pagamento su RETIRADO.
+// Il backend decide, il frontend raccoglie soltanto l'input. Vedi finalization.js.
+const { resolveRetiradoPayment, isValidPaymentMethod, normalizePaymentMethod } = require("../core/delivery/finalization");
 // [FDV1] Il rider NON è una variabile del percorso operativo: nessuna scrittura DRIVER_STATO / delivery_logs
 // dal cambio di stato. Riattivabile solo esplicitamente (rollback senza deploy di codice): FDV1_RIDER_TELEMETRY=on.
 const RIDER_TELEMETRY_ON = process.env.FDV1_RIDER_TELEMETRY === "on";
@@ -714,11 +717,16 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   let _prevManualGiroId = null;
   let estadoActual = null;
   let tipoConsegnaActual = null;
+  // [DELIVERY-REFACTOR] servono anche i campi pagamento: la regola RETIRADO li legge
+  // dal DB, non dal payload. prevRow resta null se il fetch fallisce → fail closed
+  // sotto (senza un metodo valido non si finalizza).
+  let prevRow = null;
   try {
-    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,estado,manual_giro_id,tipo_consegna`);
-    _prevManualGiroId = _prev?.[0]?.manual_giro_id || null;
-    estadoActual = _prev?.[0]?.estado || null;
-    tipoConsegnaActual = _prev?.[0]?.tipo_consegna || null;
+    const _prev = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,estado,manual_giro_id,tipo_consegna,ya_pagado,cobrado,metodo_pago`);
+    prevRow = _prev?.[0] || null;
+    _prevManualGiroId = prevRow?.manual_giro_id || null;
+    estadoActual = prevRow?.estado || null;
+    tipoConsegnaActual = prevRow?.tipo_consegna || null;
   } catch (e) {
     console.warn("[cambiaStato] prev fetch failed:", e?.message || e);
   }
@@ -748,6 +756,48 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   // Eventuali extras espliciti (pagamento/sconto, già in `upd`) restano applicati —
   // sono intento operatore, non corruzione di timeline.
   const _isNoop = _trans.reason === "noop";
+
+  // ── RETIRADO: regola di pagamento canonica (DELIVERY-REFACTOR 2026-09-22) ──
+  // Autorità unica, server-side. Copre driver, fallback operatore e RITIRO, perché
+  // ogni percorso passa di qui. I campi pagamento del payload vengono SCARTATI e
+  // ricalcolati: il FE raccoglie l'input, il BE decide (e può rifiutare).
+  if (nuovoStato === "RETIRADO") {
+    const methodProvided = extras.metodo_pago !== undefined;
+    if (_isNoop) {
+      // Correzione del metodo su un ordine GIÀ RETIRADO (badge pagamento in Listos):
+      // non è una finalizzazione, è una rettifica. Se arriva un metodo esplicito
+      // deve essere reale; allinea anche `cobrado`, che prima restava indietro.
+      if (methodProvided) {
+        if (!isValidPaymentMethod(extras.metodo_pago)) {
+          return {
+            success: false,
+            error: "payment_method_required",
+            reason: `metodo_pago no válido para corrección: "${normalizePaymentMethod(extras.metodo_pago)}"`,
+            estado_actual: estadoActual,
+          };
+        }
+        upd.metodo_pago = normalizePaymentMethod(extras.metodo_pago);
+        upd.cobrado = true;
+      }
+    } else {
+      const _pay = resolveRetiradoPayment({ order: prevRow, requestedMethod: extras.metodo_pago });
+      if (!_pay.ok) {
+        // FAIL CLOSED: nessuna scrittura su `ordenes`, nessun log, stato invariato.
+        return {
+          success: false,
+          error: _pay.error,
+          reason: _pay.reason,
+          metodo_pago_recibido: _pay.metodo_pago_recibido,
+          metodos_validos: _pay.metodos_validos,
+          estado_actual: estadoActual,
+          estado_solicitado: nuovoStato,
+        };
+      }
+      delete upd.metodo_pago;
+      delete upd.cobrado;
+      Object.assign(upd, _pay.patch);
+    }
+  }
 
   Object.assign(upd, buildStateTimestampPatch({
     from: estadoActual,

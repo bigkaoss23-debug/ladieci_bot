@@ -138,7 +138,9 @@ const seed = (id, estado, tipo = "RITIRO") => { STORE[id] = { id, estado, tipo_c
   section("6) valida LISTO → RETIRADO");
   {
     reset(); seed("#206", "LISTO", "RITIRO");
-    const res = await cambiaStato("#206", "RETIRADO", { actor_type: "operator", origin: "cocina" });
+    // [DELIVERY-REFACTOR 2026-09-22] la finalizzazione richiede un metodo reale
+    // (efectivo|tarjeta|bizum) quando l'ordine non risulta già pagato.
+    const res = await cambiaStato("#206", "RETIRADO", { metodo_pago: "efectivo", actor_type: "operator", origin: "cocina" });
     assert("success true", res.success === true);
     assert("retirado_at valorizzato", !!ordenesUpdates().at(-1).patch.retirado_at);
     assert("log picked_up", logInserts().at(-1).row.event_type === "picked_up");
@@ -148,8 +150,12 @@ const seed = (id, estado, tipo = "RITIRO") => { STORE[id] = { id, estado, tipo_c
   section("7) catena completa resta valida");
   {
     reset(); seed("#207", "POR_CONFIRMAR", "DOMICILIO");
+    // [DELIVERY-REFACTOR 2026-09-22] la catena legacy (con EN_ENTREGA) resta LEGALE
+    // per gli ordini in-flight; RETIRADO richiede però un metodo di pagamento reale.
     for (const to of ["EN_COCINA", "LISTO", "EN_ENTREGA", "RETIRADO", "COMPLETADO"]) {
-      const r = await cambiaStato("#207", to, { actor_type: "operator", origin: "dashboard" });
+      const extras = { actor_type: "operator", origin: "dashboard" };
+      if (to === "RETIRADO") extras.metodo_pago = "efectivo";
+      const r = await cambiaStato("#207", to, extras);
       assert(`→ ${to} ok`, r.success === true, JSON.stringify(r));
     }
     assert("stato finale COMPLETADO", STORE["#207"].estado === "COMPLETADO");
