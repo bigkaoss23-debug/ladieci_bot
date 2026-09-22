@@ -3,9 +3,8 @@ const express = require("express");
 const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert, sbInsert } = require("./src/utils/supabase");
 const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
-// DRIVER_STATO = telemetria visiva opzionale (best-effort). getDriverStatus per la
-// UI, closeGiroInternal condiviso col legacy chiudiGiro (idempotente).
-const { getDriverStatus, closeGiroInternal } = require("./src/utils/driverTelemetry");
+// [DELIVERY-REFACTOR 2026-09-22] driverTelemetry rimosso: la telemetria rider
+// (DRIVER_STATO, delivery_logs, ETA di rientro) non fa più parte del dominio.
 // Private authenticated READ contracts (P0 containment). Fixed per-action queries;
 // no generic table access. Reachable only behind the shared X-Api-Key (trusted proxy).
 const readActions = require("./src/utils/readActions");
@@ -23,7 +22,6 @@ const {
 // [FDV1] Frozen Delivery V1 — dashboard composition layer (deadline, ± block, delete+settle, preview, warnings).
 const fdv1 = require("./src/agents/dashboardDelivery");
 const { reconcileManualGiros } = require("./src/agents/manualGiros");
-const { handleShadowPreviewReadOnly } = require("./src/core/delivery/shadowPreviewEndpoint");
 
 // [DELIVERY-REFACTOR 2026-09-22] Attori ammessi nell'audit di stato.
 //   rider    = app del repartidor
@@ -78,22 +76,15 @@ app.post("/webhook", async (req, res) => {
 
 // --- API DASHBOARD ---
 
-async function readShadowPreviewOrders(table, query) {
-  const base = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_KEY;
-  if (!base || !key) throw new Error("supabase_env_missing");
-  const res = await fetch(`${base}/rest/v1/${table}?${query}`, {
-    method: "GET",
-    headers: { apikey: key, Authorization: "Bearer " + key },
-  });
-  if (!res.ok) throw new Error(`shadow_preview_read_failed_${res.status}`);
-  const text = await res.text();
-  try { return JSON.parse(text); } catch { return []; }
-}
+// [DELIVERY-REFACTOR 2026-09-22] readShadowPreviewOrders rimossa con la rotta shadow-preview.
 
-app.get("/api/delivery/shadow-preview", (req, res) => {
-  return handleShadowPreviewReadOnly(req, res, { dbClient: readShadowPreviewOrders });
-});
+
+// [DELIVERY-REFACTOR 2026-09-22 / D-4] Rotta shadow-preview CHIUSA.
+// Presentava la simulazione rider (salida_driver_estimada, entrega_estimada,
+// retraso, conflicto_driver): campi che da questa release non vengono più
+// aggiornati. Lasciarla aperta avrebbe mostrato dati fermi come se fossero vivi.
+// I moduli di calcolo restano in src/core/delivery/shadowPreview* con i loro test,
+// ma non sono più raggiungibili: vedi DELIVERY_IMPLEMENTATION_RESULT.md.
 
 app.get("/api", async (req, res) => {
   const action = req.query.action;
@@ -177,11 +168,10 @@ app.get("/api", async (req, res) => {
         day: req.query.day,
         onlyActive: req.query.onlyActive !== "false",
       });
-    } else if (action === "getDriverStatus") {
-      // Telemetria visiva opzionale del rider. Ritorna status normalizzato o
-      // null (assente/stale/malformato/LIBERO) — mai throw, mai blocca la UI.
-      result = await getDriverStatus();
     }
+    // [DELIVERY-REFACTOR 2026-09-22] action "getDriverStatus" RIMOSSA: nessun
+    // chiamante (verificato su FE dashboard e app driver) e nessuna sorgente —
+    // DRIVER_STATO non viene più scritta da nessun percorso.
     // ── Private authenticated READ contracts (P0). Fixed queries only. ──────
     // Params arrivano da querystring; ogni action valida i propri input e cappa
     // il limit server-side. ReadParamError → 400, ReadBackendError → 500.
@@ -304,25 +294,10 @@ app.post("/api", async (req, res) => {
     } else if (action === "asignarRepartidor") {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { repartidor: req.body.repartidor || null });
       result = { success: true };
-    } else if (action === "registrarSalidaDriver") {
-      // Driver fuori: setta DRIVER_STATO con zona + ora partenza
-      const nuovoStato = {
-        stato: "IN_GIRO",
-        zona: req.body.zona || null,
-        partito_alle: new Date().toISOString(),
-        n_ordini: req.body.n_ordini || 1,
-        rientro_stimato: null
-      };
-      await sbUpsert("config", { chiave: "DRIVER_STATO", valore: JSON.stringify(nuovoStato) }, "chiave");
-      result = { success: true, stato: nuovoStato };
-    } else if (action === "chiudiGiro") {
-      // Driver rientra: calcola rientro stimato + logga il giro.
-      // Logica centralizzata in driverTelemetry.closeGiroInternal (condivisa con
-      // l'hook interno su RETIRADO). IDEMPOTENTE: chiamate ripetute non duplicano
-      // il delivery_log (skip se rientro_stimato già settato). Back-compat: stessa
-      // forma di response del legacy ({success, rientroStimato, tempoAndata} oppure
-      // {success, skipped}). Best-effort: non fa mai throw.
-      result = await closeGiroInternal();
+    // [DELIVERY-REFACTOR 2026-09-22] action "registrarSalidaDriver" e "chiudiGiro"
+    // RIMOSSE. Scrivevano DRIVER_STATO e delivery_logs per modellare "driver uscito"
+    // e "driver rientrato", concetti che il contratto Delivery non prevede più.
+    // Dependency proof: zero chiamanti nel FE dashboard e nell'app driver.
     } else if (action === "marcarLlegado") {
       // Cliente arrivato (RITIRO) — segna flag llegado
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { llegado: req.body.llegado !== false });

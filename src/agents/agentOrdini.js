@@ -10,17 +10,13 @@ const { calcolaFornoOut } = require("../utils/zones");
 const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
-// DRIVER_STATO = telemetria visiva OPZIONALE (best-effort, mai blocca la
-// transizione). Vedi src/utils/driverTelemetry.js per il contratto.
-const { recordRiderOut, recordDeliveryAndMaybeReturn, countActiveDeliveries } = require("../utils/driverTelemetry");
 // [FDV1] deadline DOMICILIO canonica (pura, nessun require): ts + 55'.
 const { computeAutoDeadline, DELIVERY_DEADLINE_DEFAULT_MIN } = require("../core/delivery/deadline");
 // [DELIVERY-REFACTOR 2026-09-22] Regola canonica del pagamento su RETIRADO.
 // Il backend decide, il frontend raccoglie soltanto l'input. Vedi finalization.js.
 const { resolveRetiradoPayment, isValidPaymentMethod, normalizePaymentMethod } = require("../core/delivery/finalization");
-// [FDV1] Il rider NON è una variabile del percorso operativo: nessuna scrittura DRIVER_STATO / delivery_logs
-// dal cambio di stato. Riattivabile solo esplicitamente (rollback senza deploy di codice): FDV1_RIDER_TELEMETRY=on.
-const RIDER_TELEMETRY_ON = process.env.FDV1_RIDER_TELEMETRY === "on";
+// [DELIVERY-REFACTOR 2026-09-22] Il rider non è una variabile dell'ordine: nessuna
+// scrittura DRIVER_STATO / delivery_logs, e nessun flag per riattivarla.
 const {
   buildStateTimestampPatch,
   logOrderStateTransition,
@@ -784,30 +780,11 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     }
   }
 
-  // ── DRIVER_STATO: telemetria visiva OPZIONALE (best-effort) ─────────────
-  // Registra "driver fuori" su EN_ENTREGA e l'ETA rientro sull'ULTIMA consegna
-  // del giro. NON è sorgente di verità: qualunque errore viene inghiottito con
-  // un warn e NON tocca l'estado già scritto né la response. Le funzioni di
-  // driverTelemetry sono già no-throw; il try/catch qui protegge la sbSelect.
-  // Nota idempotenza: recordRiderOut non sovrascrive un giro già aperto, e
-  // recordDeliveryAndMaybeReturn chiude solo quando il conteggio server-side
-  // dei DOMICILIO attivi (LISTO/EN_ENTREGA) arriva a 0.
-  if (RIDER_TELEMETRY_ON && !_isNoop && (nuovoStato === "EN_ENTREGA" || nuovoStato === "RETIRADO")) {
-    try {
-      const dRows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,tipo_consegna,zona,manual_giro_id`);
-      const dOrd = dRows?.[0];
-      if (dOrd && dOrd.tipo_consegna === "DOMICILIO") {
-        if (nuovoStato === "EN_ENTREGA") {
-          const active = await countActiveDeliveries({});
-          await recordRiderOut({ zona: dOrd.zona || null, nOrdini: active && active > 0 ? active : 1 });
-        } else {
-          await recordDeliveryAndMaybeReturn(dOrd);
-        }
-      }
-    } catch (e) {
-      console.warn(`[driverTelemetry] cambiaStato hook (${nuovoStato}) for ${ordenId} failed:`, e?.message || e);
-    }
-  }
+  // [DELIVERY-REFACTOR 2026-09-22] Hook telemetria rider RIMOSSO.
+  // Su EN_ENTREGA/RETIRADO scriveva DRIVER_STATO e delivery_logs (uscita del rider,
+  // ETA di rientro, chiusura del giro fisico). Era già spento di default, dietro
+  // FDV1_RIDER_TELEMETRY=on: ma quel flag restava una via per riattivare scritture
+  // che il contratto Delivery ora vieta. Rimosso insieme al modulo driverTelemetry.
 
   return { success: true, id: ordenId, estado: nuovoStato, noop: _isNoop };
 }

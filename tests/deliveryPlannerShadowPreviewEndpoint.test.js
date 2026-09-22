@@ -368,10 +368,14 @@ console.log("\n══ Errors / import / static safety ══");
     !new RegExp(["front" + "end", "app" + "33"].join("|"), "i").test(endpointSrc + testSrc));
   check("19· non chiama writer o ordini live",
     !new RegExp(blockedNames.join("|"), "i").test(endpointSrc + testSrc));
-  check("1c· route registrata come GET",
-    indexSrc.includes('app.get("/api/delivery/shadow-preview"') &&
+  // [DELIVERY-REFACTOR 2026-09-22 / D-4] Assunto INVERTITO: la rotta è stata chiusa.
+  // Presentava la simulazione rider, che da questa release non viene più aggiornata:
+  // tenerla aperta avrebbe mostrato dati fermi come se fossero vivi. I moduli di
+  // calcolo restano, e questo file continua a verificarne le proprietà read-only.
+  check("1c· route shadow-preview NON più registrata (rotta chiusa)",
+    !indexSrc.includes('app.get("/api/delivery/shadow-preview"') &&
       !indexSrc.includes('app.post("/api/delivery/shadow-preview"'),
-    "route missing");
+    "la rotta risulta ancora registrata");
 }
 
 console.log(`\n──────────────\n  ${pass} PASS · ${fail} FAIL\n`);
