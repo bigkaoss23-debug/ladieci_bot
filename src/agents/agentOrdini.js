@@ -4,7 +4,9 @@
 
 const { sbSelect, sbUpsert, sbInsert, sbUpdate, sbDelete } = require("../utils/supabase");
 const { mergeItemsBevande, calcolaTotale, deliveryFeeFor, calcolaTotaleOrdine, aplicarDescuento, direccionToCacheKey } = require("../utils/helpers");
-const { calcolaFornoOut, simulateDriverSchedule, computeDriverFields, proposeForNewOrder } = require("../utils/zones");
+// [DELIVERY-REFACTOR 2026-09-22] resta solo calcolaFornoOut: simulateDriverSchedule /
+// computeDriverFields / proposeForNewOrder erano la simulazione rider, ora fuori dal percorso.
+const { calcolaFornoOut } = require("../utils/zones");
 const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
@@ -26,126 +28,43 @@ const {
 } = require("../utils/orderStateLogger");
 const { validateTransition } = require("../utils/orderStateMachine");
 
-// Ora attuale di Madrid in minuti dalla mezzanotte. proposeForNewOrder usa nowMin
-// per il pavimento "minPart" della slot-search: se non lo passiamo, ricade su
-// new Date() del server (TZ Railway = UTC) → buchi liberi calcolati con 2h di
-// sfasamento. Qui lo forziamo a Europe/Madrid. Null se l'ambiente non espone Intl.
-function nowMadridMinutes() {
-  try {
-    const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit", hour12: false,
-    }).formatToParts(new Date());
-    const h = Number(parts.find(p => p.type === "hour")?.value);
-    const m = Number(parts.find(p => p.type === "minute")?.value);
-    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
-    return h * 60 + m;
-  } catch (_) { return null; }
-}
+// [DELIVERY-REFACTOR 2026-09-22] nowMadridMinutes RIMOSSA: serviva solo al pavimento
+// "minPart" della slot-search di proposeForNewOrder, ora fuori dal percorso ordini.
 
-// Fallback per chi chiama creaOrdine/modificaOrdine senza passare forno_out
-// (es. operatore manuale via dashboard). Riusa lo stesso sistema cascade del bot.
-// Ritorna { forno_out, hora_finale, slittato } — vedi calcolaFornoOut in zones.js.
-async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin, zona, zonaLat, zonaLon }) {
+// forno_out per chi chiama creaOrdine/modificaOrdine senza passarlo (operatore
+// manuale via dashboard E bot WhatsApp).
+//
+// [DELIVERY-REFACTOR 2026-09-22] Separazione cucina / rider.
+// Qui resta SOLO la parte di cucina:
+//     forno_out = hora − durata_andata_min
+// cioè il tempo di percorrenza reale (snapshot Google, fallback Haversine): la
+// pizza deve uscire dal forno tanti minuti prima quanti ne servono ad arrivare.
+// Invariante DB DOMICILIO: hora = forno_out + durata_andata.
+//
+// RIMOSSA la parte rider: `driverLiberoMin` come pavimento, la slot-search di
+// proposeForNewOrder e l'aggregazione sulla partenza simulata del giro. Erano
+// assunzioni sulla disponibilità di UN rider che potevano spostare in avanti la
+// hora promessa al cliente. Il percorso dashboard le aveva già neutralizzate dal
+// 31/05/2026 (operatorManual → driverLiberoMin: 0); ora vale anche per il bot
+// WhatsApp, così i due percorsi calcolano la stessa cosa a parità di input.
+// La capacità di zona/slot resta dov'è sempre stata: agentCucina.getCaricoDelivery.
+async function calcolaFornoOutFallback({ tipoConsegna, hora, durataAndataMin }) {
   if (!hora) return { forno_out: null, hora_finale: null, slittato: false };
-  if (tipoConsegna !== "DOMICILIO" || !zona || !durataAndataMin) {
-    return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin });
-  }
-  const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
-  const sim = simulateDriverSchedule(rows);
-
-  // Aggregazione stesso giro: se il nuovo ordine cade nello stesso slot+zona di un
-  // giro già pianificato, il driver parte UNA SOLA VOLTA per tutti. forno_out =
-  // partenza del giro esistente, non driver_libero (che è DOPO quel giro e farebbe
-  // uscire la pizza dopo la consegna promessa — es. forno 17:46 per delivery 17:40).
-  const toMinL = (t) => { const [h,m] = String(t).split(":").map(Number); return h*60+(m||0); };
-  const wrapDayMinL = (m) => ((m % 1440) + 1440) % 1440;
-  const toHL   = (m) => {
-    const w = wrapDayMinL(m);
-    return `${String(Math.floor(w/60)).padStart(2,"0")}:${String(w%60).padStart(2,"0")}`;
-  };
-  const slot10L = (min) => { const r = Math.round(min/10)*10; return toHL(r); };
-  const newSlot = slot10L(toMinL(hora));
-  const giroEsistente = sim.giri.find(g => g.zona === zona && g.slot === newSlot);
-  if (giroEsistente) {
-    // Aggregazione: condividiamo forno_out del giro. hora resta quella richiesta
-    // perché il driver consegna comunque entro la finestra del giro esistente.
-    return { forno_out: toHL(giroEsistente.partenzaMin), hora_finale: hora, slittato: false };
-  }
-
-  // ── Slot-search invece di driverLiberoMin come pavimento rigido ────────────
-  // BUG (live 31/05/2026): usare sim.driverLiberoMin (rientro dall'ULTIMO giro)
-  // come floor accodava ogni nuovo delivery dietro l'intero schedule — un ordine
-  // Q1 vicino (8 min) creato alle 20:38 finiva a forno_out 23:13 perché un manual
-  // giro Q5 consegnava alle 22:44. proposeForNewOrder fa una vera ricerca del primo
-  // buco libero compatibile col roundtrip e propone ~20:55. Ritorna SEMPRE una
-  // consegna fattibile (ok:true se l'ora richiesta va bene così com'è; ok:false se
-  // l'ha spostata al primo slot libero — entrambe proposte valide da usare).
-  // forno_out lo deriviamo da durataAndataMin (snapshot dell'ordine) per garantire
-  // l'invariante DB DOMICILIO: hora = forno_out + durata_andata_min.
-  const nowMin = nowMadridMinutes();
-  const propose = proposeForNewOrder(rows, {
-    hora, zona,
-    zona_lat: zonaLat ?? null,
-    zona_lon: zonaLon ?? null,
-    durata_andata_min: durataAndataMin,
-  }, nowMin != null ? { nowMin } : {});
-
-  if (propose && Number.isFinite(propose.consegnaPropostaMin)) {
-    const consegnaMin = propose.consegnaPropostaMin;
-    const fornoMin = consegnaMin - durataAndataMin;
-    return {
-      forno_out:   toHL(fornoMin),
-      hora_finale: toHL(consegnaMin),
-      slittato:    consegnaMin > toMinL(hora),
-    };
-  }
-
-  // Fallback storico: nessuno slot proposto → driver libero dopo l'intero schedule.
-  return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin: sim.driverLiberoMin });
+  // driverLiberoMin: 0 → nessun pavimento driver, `hora` mai spostata.
+  return calcolaFornoOut({ tipoConsegna, hora, durataAndataMin, driverLiberoMin: 0 });
 }
 
-// Driver-schedule sync (DELIVERY-DRIVER-SCHEDULE-SEPARATION-01).
-// Ricalcola lo schedule driver corrente (service-day-aware) e produce le patch
-// dei SOLI campi driver advisory — NON tocca forno_out (cucina).
+// [DELIVERY-REFACTOR 2026-09-22] planDriverScheduleSync / risincronizzaGiro RIMOSSI.
 //
-// Risolve i drift dello schedule rider:
-//   1) sibling stesso giro con tg cambiata
-//   2) downstream giri spostati da un'aggregazione a monte (bug #4)
-//   3) Bug #2: la partenza driver post-mezzanotte NON sporca più forno_out;
-//      vive in salida_driver_estimada/entrega_estimada/retraso/conflicto.
-// Best-effort: errori loggati, non bloccano il flusso ordine.
-//
-// Ritorna [{ id, patch:{salida_driver_estimada, entrega_estimada,
-//   retraso_estimado_min, conflicto_driver} }] solo per gli ordini cambiati.
-function planDriverScheduleSync(rows) {
-  const fields = computeDriverFields(rows || []);
-  const updates = [];
-  for (const o of rows || []) {
-    if (!o || o.tipo_consegna !== "DOMICILIO") continue;
-    const f = fields.get(o.id);
-    if (!f) continue;
-    const unchanged =
-      o.salida_driver_estimada === f.salida_driver_estimada &&
-      o.entrega_estimada === f.entrega_estimada &&
-      (o.retraso_estimado_min ?? null) === f.retraso_estimado_min &&
-      (o.conflicto_driver === true) === f.conflicto_driver;
-    if (unchanged) continue;
-    updates.push({ id: o.id, patch: { ...f } });
-  }
-  return updates;
-}
+// Scrivevano su ogni ordine DOMICILIO i quattro campi della simulazione rider
+// (salida_driver_estimada, entrega_estimada, retraso_estimado_min,
+// conflicto_driver) a ogni creazione, modifica e passaggio in cucina.
+// Dependency proof al 2026-09-22: nessun lettore nel percorso operativo — il FE
+// li leggeva solo in NuevoPedidoModal.buildDisponibilidad, corpo irraggiungibile
+// (FDV1_NO_RIDER_SIM), e nella shadow-preview, rotta ora chiusa. Erano quindi
+// scritture senza lettori, su concetti che il contratto Delivery non modella più.
+// Le colonne restano in tabella: questa release smette di scriverle, non le droppa.
 
-async function risincronizzaGiro(zona, hora) {
-  if (!zona || !hora) return;
-  try {
-    const rows = await sbSelect("ordenes", "tipo_consegna=eq.DOMICILIO&estado=not.in.(RETIRADO,COMPLETATO)") || [];
-    for (const u of planDriverScheduleSync(rows)) {
-      await sbUpdate("ordenes", `id=eq.${encodeURIComponent(u.id)}`, u.patch);
-    }
-  } catch (e) {
-    console.warn("[risincronizzaGiro] fallita per", zona, hora, e?.message || e);
-  }
-}
 
 // Incrementa n_ordini_creati sulla riga di geo_cache associata all'indirizzo.
 // Best-effort: se la migration non è ancora applicata o la riga non esiste, fallisce silenziosamente.
@@ -469,7 +388,6 @@ async function creaOrdine(params) {
           operator_manual: params.operatorManual === true,
         },
       });
-      if (tipoConsegna === "DOMICILIO") await risincronizzaGiro(geoFields.zona, horaFinale || params.hora);
       return { success: true, id: newId };
     }
 
@@ -665,16 +583,8 @@ async function modificaOrdine(ordenId, updates) {
   }
 
   await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
-  if (upd.forno_out !== undefined) {
-    const zonaSync = upd.zona !== undefined ? upd.zona : undefined;
-    const horaSync = upd.hora !== undefined ? upd.hora : undefined;
-    if (zonaSync && horaSync) {
-      await risincronizzaGiro(zonaSync, horaSync);
-    } else {
-      const r = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=zona,hora`);
-      if (r?.[0]) await risincronizzaGiro(r[0].zona, r[0].hora);
-    }
-  }
+  // [DELIVERY-REFACTOR] niente più risincronizzaGiro: forno_out dipende solo da
+  // hora e durata_andata di QUESTO ordine, non dallo schedule simulato del rider.
   return { success: true };
 }
 
@@ -853,10 +763,6 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
       await sbUpdate("wa_msgs", `ordine_ref=eq.${encodeURIComponent(ordenId)}&stato=not.in.(COMPLETATO,COCINA)`, { stato: "COCINA" });
       await sbUpdate("conv", `wa_id=eq.${ord1[0].wa_id}&stato_ordine=not.in.(ritirata,chiusa)`, { stato_ordine: "aperta", items: [], hora: "", ts: Date.now() });
     }
-    // Ordine appena entrato in cucina → il giro può aver cambiato composizione
-    if (ord1?.[0]?.tipo_consegna === "DOMICILIO") {
-      await risincronizzaGiro(ord1[0].zona, ord1[0].hora);
-    }
   }
   if (!_isNoop && nuovoStato === "RETIRADO") {
     const ord2 = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
@@ -926,4 +832,4 @@ async function getById(id) {
   return (rows && rows.length > 0) ? rows[0] : null;
 }
 
-module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, planDriverScheduleSync, calcolaFornoOutFallback };
+module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, calcolaFornoOutFallback };
