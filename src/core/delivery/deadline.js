@@ -64,6 +64,32 @@ function legacyDeadlineFromHora(hora, refTs) {
   return best;
 }
 
+// ── [DEADLINE-HORA 2026-09-22] CANONICAL WRITER ───────────────────────────────
+// delivery_deadline_at = max(createdMs + N min, absolute instant of `hora`).
+//
+// Product decision, explicit: FDV1 modelled ONE kind of order, ASAP, so the
+// deadline ignored `hora` entirely. A scheduled order (created 18:00, promised
+// 21:30) therefore went TARDE almost three hours early, climbed to the top of
+// the kitchen ordering, zeroed its own priority `+` window and got grouped with
+// giri three hours away. `hora` is the operator's promise to the customer and it
+// now binds the deadline — bounded BELOW by createdMs + N, which stays the floor:
+// the kitchen never gets less than N minutes of runway, whatever `hora` says.
+//
+// `hora` is HH:MM with no date: legacyDeadlineFromHora resolves it against the
+// order's OWN creation instant (±1 Madrid day, DST-safe). It is the same reader
+// already used for pre-FDV1 rows — one resolution rule, not two.
+//
+// Callers must pass the `hora` that is actually persisted on the row (for bot
+// orders `horaFinale`, not the requested one: slot-search may shift it).
+// Returns the same shape as computeAutoDeadline. Deterministic: same input,
+// same output, no `Date.now()` inside.
+function effectiveDeadline(createdMs, hora, minutes = DELIVERY_DEADLINE_DEFAULT_MIN) {
+  const auto = computeAutoDeadline(createdMs, minutes);
+  const promised = legacyDeadlineFromHora(hora, createdMs);
+  if (!Number.isFinite(promised) || promised <= auto.deadlineMs) return auto;
+  return { deadlineMs: promised, deadlineIso: new Date(promised).toISOString(), hora: formatMadridHHMM(promised) };
+}
+
 // One reader for every consumer. RITIRO has no deadline (pickup time stays `hora`).
 function getOrderDeadlineMs(o) {
   if (!o || o.tipo_consegna !== "DOMICILIO") return null;
@@ -78,6 +104,6 @@ function getOrderDeadlineMs(o) {
 const minuteFloor = (ms) => Math.floor(ms / 60000);
 
 module.exports = {
-  DELIVERY_DEADLINE_DEFAULT_MIN, resolveDeadlineMin, computeAutoDeadline, formatMadridHHMM,
+  DELIVERY_DEADLINE_DEFAULT_MIN, resolveDeadlineMin, computeAutoDeadline, effectiveDeadline, formatMadridHHMM,
   legacyDeadlineFromHora, getOrderDeadlineMs, minuteFloor, madridWallToInstant, madridYMD,
 };

@@ -9,7 +9,7 @@ const raw = require("../utils/supabase");
 const mg = require("./manualGiros");
 // [FDV1] giro-path DB access carries a LOCAL timeout (manualGiros.giroDb). supabase.js itself is shared with the WhatsApp bot: untouched.
 const { sbSelect, sbUpdate, sbDelete } = mg.giroDb;
-const { computeAutoDeadline, resolveDeadlineMin, formatMadridHHMM, getOrderDeadlineMs } = require("../core/delivery/deadline");
+const { effectiveDeadline, resolveDeadlineMin, formatMadridHHMM, getOrderDeadlineMs } = require("../core/delivery/deadline");
 const { suggestGiro } = require("../core/delivery/giroCompat");
 const { evaluateGiroWarnings } = require("../core/delivery/giroWarnings");
 const { maxPerGiro } = require("../core/delivery/giroCompat");
@@ -156,9 +156,13 @@ const deleteOrderWithGiroRecomputeLocked = L(deleteOrderWithGiroRecompute);
 const applyGiroIntentLocked = L(applyGiroIntent);
 
 // ── preview core (new endpoint; no rider code imported) ──
-function previewDeliveryCore({ newOrder, orders, giros, cfg, nowMs }) {
+// [DEADLINE-HORA 2026-09-22] The preview runs the SAME canonical function the
+// INSERT will run, so what Nuevo Pedido shows as "Hora límite" is what gets
+// persisted. `hora` is the operator's current draft; the Madrid/midnight/DST
+// resolution lives here only, never duplicated in the frontend.
+function previewDeliveryCore({ newOrder, orders, giros, cfg, nowMs, hora = "" }) {
   const min = resolveDeadlineMin(cfg);
-  const dl = computeAutoDeadline(nowMs, min);
+  const dl = effectiveDeadline(nowMs, hora, min);
   const probe = { ...newOrder, delivery_deadline_at: dl.deadlineIso };
   return {
     deadline_min: min,
@@ -179,7 +183,8 @@ async function previewDeliveryV1(body = {}, { cfg = {}, nowMs = Date.now() } = {
     raw.sbSelect("manual_giros", "dissolved_at=is.null&select=id,seq,dissolved_at"),
   ]);
   if (!Array.isArray(orders) || !Array.isArray(giros)) return { ok: false, status: 502, error: "preview_read_failed" };
-  const core = previewDeliveryCore({ newOrder, orders, giros, cfg, nowMs });
+  // [DEADLINE-HORA] `hora` opzionale: assente o malformata → effectiveDeadline cade su now + N (comportamento precedente).
+  const core = previewDeliveryCore({ newOrder, orders, giros, cfg, nowMs, hora: body.hora || "" });
   const s = core.giro_suggestion;
   if (s && s.kind === "GIRO") { const g = giros.find(x => x.id === s.giro_id); s.label = g && g.seq != null ? `G${g.seq}` : null; }
   return { ok: true, ...core };

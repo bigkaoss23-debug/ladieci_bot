@@ -10,8 +10,9 @@ const { calcolaFornoOut } = require("../utils/zones");
 const { resolveDeliveryFields } = require("./previewTiming");
 const { horaToMinStrict, validateClosingTime } = require("../utils/closingTime");
 const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualGiros");
-// [FDV1] deadline DOMICILIO canonica (pura, nessun require): ts + 55'.
-const { computeAutoDeadline, DELIVERY_DEADLINE_DEFAULT_MIN } = require("../core/delivery/deadline");
+// [DEADLINE-HORA 2026-09-22] deadline DOMICILIO canonica (pura, nessun require):
+// max(ts + 55', istante assoluto di `hora`). Sorgente unica: effectiveDeadline.
+const { effectiveDeadline, DELIVERY_DEADLINE_DEFAULT_MIN } = require("../core/delivery/deadline");
 // [DELIVERY-REFACTOR 2026-09-22] Regola canonica del pagamento su RETIRADO.
 // Il backend decide, il frontend raccoglie soltanto l'input. Vedi finalization.js.
 const { resolveRetiradoPayment, isValidPaymentMethod, normalizePaymentMethod } = require("../core/delivery/finalization");
@@ -340,9 +341,13 @@ async function creaOrdine(params) {
       ts: createdMs,
       llegado: false,
       tipo_consegna:  tipoConsegna,
-      // [FDV1] deadline delivered-by per OGNI nuovo DOMICILIO (dashboard e WhatsApp): ts + 55'. Immutabile;
-      // `hora` resta la promessa/orario cliente, dato separato.
-      delivery_deadline_at: tipoConsegna === "DOMICILIO" ? computeAutoDeadline(createdMs, DELIVERY_DEADLINE_DEFAULT_MIN).deadlineIso : null,
+      // [DEADLINE-HORA 2026-09-22] deadline delivered-by per OGNI nuovo DOMICILIO (dashboard e WhatsApp):
+      // max(ts + 55', istante di `hora`). Passiamo la STESSA espressione scritta nella colonna `hora` qui
+      // sopra — per il bot è `horaFinale`, che lo slot-search può aver spostato rispetto a params.hora:
+      // deadline e promessa non devono mai divergere.
+      delivery_deadline_at: tipoConsegna === "DOMICILIO"
+        ? effectiveDeadline(createdMs, horaFinale || params.hora || "", DELIVERY_DEADLINE_DEFAULT_MIN).deadlineIso
+        : null,
       delivery_fee:   deliveryFee,
       totale:         totale,
       direccion:      params.direccion      || null,
@@ -485,17 +490,36 @@ async function modificaOrdine(ordenId, updates) {
     if (ord) {
       const itemsFinali = upd.items || (ord.items || []).filter(i => i.n !== "Entrega a domicilio");
       const tipoConsegna = upd.tipo_consegna !== undefined ? upd.tipo_consegna : (ord.tipo_consegna || "RITIRO");
-      // [FDV1] la deadline delivery segue il TIPO, mai il momento della modifica né hora/zona/indirizzo:
-      //   → DOMICILIO senza deadline: ts ORIGINALE dell'ordine + 55' (deterministico, anche dopo DOMICILIO→RITIRO→DOMICILIO);
-      //   → RITIRO: NULL (nessuna deadline delivery stale su un ritiro).
-      if (upd.tipo_consegna !== undefined && upd.tipo_consegna !== (ord.tipo_consegna || "RITIRO")) {
-        if (tipoConsegna === "DOMICILIO") {
-          if (!ord.delivery_deadline_at && Number(ord.ts) > 0) {
-            upd.delivery_deadline_at = computeAutoDeadline(Number(ord.ts), DELIVERY_DEADLINE_DEFAULT_MIN).deadlineIso;
-          }
-        } else if (ord.delivery_deadline_at) {
-          upd.delivery_deadline_at = null;
+      // ── [DEADLINE-HORA 2026-09-22] CONTRATTO REVOCATO ───────────────────────
+      // Il contratto FDV1 precedente diceva: "la deadline segue il TIPO, mai il
+      // momento della modifica NÉ hora". Modificare `hora` NON toccava la
+      // deadline, e un test dedicato (fdv1DeadlineAndRider "E") verificava pure
+      // che la colonna non comparisse nel PATCH.
+      //
+      // Quel contratto è REVOCATO per decisione di prodotto esplicita del
+      // 2026-09-22: rendeva impossibile correggere un ordine programmato, perché
+      // l'unico campo che esprime la promessa al cliente non aveva alcun effetto
+      // sul limite operativo. Nuovo contratto canonico:
+      //
+      //   DOMICILIO → delivery_deadline_at = max(ts ORIGINALE + 55', hora corrente)
+      //   RITIRO    → NULL
+      //
+      // Sempre dal `ts` ORIGINALE dell'ordine, mai dal momento della modifica:
+      // resta deterministico anche dopo DOMICILIO→RITIRO→DOMICILIO.
+      // La deadline SEGUE `hora` in entrambe le direzioni — spostare `hora`
+      // indietro la accorcia — con `ts + 55'` come PAVIMENTO invalicabile: la
+      // cucina non scende mai sotto i 55 minuti di margine.
+      const tsOriginale = Number(ord.ts) || 0;
+      const horaCorrente = upd.hora !== undefined ? upd.hora : ord.hora;
+      const tipoCambiato = upd.tipo_consegna !== undefined && upd.tipo_consegna !== (ord.tipo_consegna || "RITIRO");
+      if (tipoConsegna === "DOMICILIO") {
+        // Ricalcola quando cambia `hora`, quando si diventa DOMICILIO, o quando
+        // la riga è un legacy DOMICILIO senza deadline (5° call site).
+        if ((upd.hora !== undefined || tipoCambiato || !ord.delivery_deadline_at) && tsOriginale > 0) {
+          upd.delivery_deadline_at = effectiveDeadline(tsOriginale, horaCorrente || "", DELIVERY_DEADLINE_DEFAULT_MIN).deadlineIso;
         }
+      } else if (tipoCambiato && ord.delivery_deadline_at) {
+        upd.delivery_deadline_at = null;
       }
       horaFinalGuard = upd.hora || ord.hora || null;
       closingGuardParams = {
