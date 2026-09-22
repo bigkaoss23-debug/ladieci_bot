@@ -455,11 +455,19 @@ app.get("/version", (_, res) => {
 // Endpoint operativo: aggregate read-only su Supabase per fornire
 // all'operatore un colpo d'occhio sulla salute del servizio. Whitelist
 // esplicita dei campi — niente segreti, niente payload utenti, solo
-// timestamp/conteggi. Cache 5s in-memory + timeout 1s sulle query DB
+// timestamp/conteggi. Cache 5s in-memory + timeout sulle query DB
 // per non martellare e per non bloccare in caso di Supabase lento.
 let STATUS_CACHE = { ts: 0, payload: null };
 const STATUS_CACHE_MS = 5000;
-const STATUS_DB_TIMEOUT_MS = 1000;
+// [2026-09-22] 1000 → 2500 ms. Il budget copre TRE letture PostgREST in parallelo
+// da Railway a Supabase, TLS incluso: misura la RETE, non il database. Misurato in
+// produzione il 22/09: la query più pesante del check esegue in 0,185 ms
+// (EXPLAIN ANALYZE), mentre il round-trip Railway→Supabase è stabile fra 848 e
+// 1019 ms su ~2 ore di sonde. Col tetto a 1000 ms il check sbatteva sul proprio
+// timeout e segnalava `db_timeout` su un database sano — un falso rosso marginale.
+// 2500 ms lascia margine alla variabilità di rete restando sotto i 5 s, oltre i
+// quali un rallentamento sarebbe un incidente vero e `red` la risposta giusta.
+const STATUS_DB_TIMEOUT_MS = 2500;
 
 function _withTimeout(p, ms, label) {
   return new Promise((resolve, reject) => {
