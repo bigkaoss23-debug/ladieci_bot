@@ -145,7 +145,9 @@ const reset = () => {
     assert("event_type confirmed", log.event_type === "confirmed");
   }
 
-  section("EN_COCINA → LISTO → EN_ENTREGA → RETIRADO delivery");
+  // [DELIVERY-REFACTOR 2026-09-22] La catena delivery non passa più da EN_ENTREGA:
+  // POR_CONFIRMAR → EN_COCINA → LISTO → RETIRADO, identica per DOMICILIO e RITIRO.
+  section("EN_COCINA → LISTO → RETIRADO delivery (senza EN_ENTREGA)");
   {
     reset();
     STORE["#102"] = { id: "#102", estado: "EN_COCINA", tipo_consegna: "DOMICILIO", manual_giro_id: null };
@@ -153,17 +155,10 @@ const reset = () => {
     assert("LISTO valorizza listo_at", !!lastOrderUpdate().patch.listo_at);
     assert("LISTO event marked_ready", logs()[0].event_type === "marked_ready");
 
-    await cambiaStato("#102", "EN_ENTREGA", {
-      hora_salida: 123,
-      actor_type: "rider",
-      origin: "entregas",
-    });
-    const enEntregaUpd = UPDATES.filter(x => x.table === "ordenes").at(-1).patch;
-    const enEntregaLog = logs().at(-1);
-    assert("EN_ENTREGA valorizza en_entrega_at", !!enEntregaUpd.en_entrega_at);
-    assert("EN_ENTREGA preserva hora_salida passata", enEntregaUpd.hora_salida === 123);
-    assert("EN_ENTREGA actor/origin rider", enEntregaLog.actor_type === "rider" && enEntregaLog.origin === "entregas");
-    assert("EN_ENTREGA event sent_delivery", enEntregaLog.event_type === "sent_delivery");
+    const rifiutata = await cambiaStato("#102", "EN_ENTREGA", { actor_type: "rider", origin: "driver_app" });
+    assert("LISTO → EN_ENTREGA ora RIFIUTATA",
+      rifiutata.success === false && rifiutata.error === "invalid_state_transition", JSON.stringify(rifiutata));
+    assert("lo stato resta LISTO", STORE["#102"].estado === "LISTO");
 
     // [DELIVERY-REFACTOR 2026-09-22] "cash" non è un metodo del dominio: la regola
     // canonica accetta solo efectivo|tarjeta|bizum. `cobrado` non si passa più —

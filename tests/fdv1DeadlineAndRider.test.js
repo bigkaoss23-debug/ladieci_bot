@@ -149,7 +149,9 @@ const item = [{ n: "Margherita", p: 12, q: 1 }];
   ok("a client can never set delivery_deadline_at through creaOrdine", INSERTED[0].delivery_deadline_at === new Date(INSERTED[0].ts + 55 * 60000).toISOString());
 
   // ── 1: rider hook off ──────────────────────────────────────────────────
-  for (const [from, to] of [["LISTO", "EN_ENTREGA"], ["EN_ENTREGA", "RETIRADO"]]) {
+  // [DELIVERY-REFACTOR 2026-09-22] LISTO → EN_ENTREGA non è più una transizione
+  // legale: restano la finalizzazione moderna e quella dell'ordine legacy in-flight.
+  for (const [from, to] of [["LISTO", "RETIRADO"], ["EN_ENTREGA", "RETIRADO"]]) {
     reset();
     STORE["#900"] = { id: "#900", tipo_consegna: "DOMICILIO", estado: from, zona: "Q1", manual_giro_id: null, hora: "21:00", delivery_deadline_at: "2026-09-21T19:00:00.000Z", ts: 1 };
     // [DELIVERY-REFACTOR 2026-09-22] RETIRADO passa dalla regola di pagamento canonica:

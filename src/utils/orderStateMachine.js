@@ -25,9 +25,11 @@ const KNOWN_STATES = new Set([
 ]);
 
 // Stati terminali "duri": nessuna transizione in uscita.
-// NB: RETIRADO (consegnato/ritirato) NON è qui — può ancora avanzare a
-// COMPLETADO/COMPLETATO alla chiusura serata; ma le transizioni all'indietro
-// restano illegali via il grafo FORWARD (RETIRADO → solo completamento).
+// NB: RETIRADO NON è qui — può ancora avanzare a COMPLETADO/COMPLETATO alla
+// chiusura serata; ma le transizioni all'indietro restano illegali via il grafo
+// FORWARD (RETIRADO → solo completamento).
+// [DELIVERY-REFACTOR 2026-09-22] RETIRADO = il cliente ha ricevuto (DOMICILIO) o
+// ritirato (RITIRO) l'ordine. Mai più "driver rientrato".
 const TERMINAL_STATES = new Set(["COMPLETADO", "COMPLETATO", "CANCELADO"]);
 
 // Stati da cui si può sempre cancellare.
@@ -43,12 +45,18 @@ const OPERATIONAL_UNDO = {
 };
 
 // Grafo del flusso "felice" (CANCELADO aggiunto sotto a ogni non-terminale).
+// [DELIVERY-REFACTOR 2026-09-22] Percorso unico, DOMICILIO e RITIRO:
+//   POR_CONFIRMAR → EN_COCINA → LISTO → RETIRADO
+// LISTO → EN_ENTREGA è stato RIMOSSO: nessuna UI produce più quello stato, e il
+// viaggio del driver non è uno stato dell'ordine (durante la consegna resta
+// LISTO). EN_ENTREGA resta solo in USCITA, così gli ordini legacy già in quello
+// stato restano finalizzabili. Il FE ha ora lo stesso grafo.
 const FORWARD = {
   POR_CONFIRMAR: ["NUEVO", "EN_COCINA"],
   NUEVO: ["EN_COCINA"],
   EN_COCINA: ["LISTO"],
-  // LISTO → EN_ENTREGA (domicilio) oppure RETIRADO diretto (ritiro al banco)
-  LISTO: ["EN_ENTREGA", "RETIRADO"],
+  LISTO: ["RETIRADO"],
+  // legacy in-flight: si esce, non si entra
   EN_ENTREGA: ["RETIRADO"],
   // chiusura serata
   RETIRADO: ["COMPLETADO", "COMPLETATO"],

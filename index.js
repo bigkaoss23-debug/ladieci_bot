@@ -263,17 +263,11 @@ app.post("/api", async (req, res) => {
       extras.actor_id = req.body.actor_id || null;
       extras.origin = req.body.origin || "dashboard";
       result = await cambiaStato(req.body.id, req.body.estado, extras);
-    } else if (action === "marcarEnEntrega") {
-      // [DELIVERY-REFACTOR 2026-09-22] DEPRECATO: EN_ENTREGA non fa più parte del
-      // flusso operativo (POR_CONFIRMAR → EN_COCINA → LISTO → RETIRADO). L'azione
-      // resta esposta solo finché il FE di PRODUZIONE (d7816dc) la chiama; nessun
-      // nuovo client deve usarla. Rimozione prevista con la dismissione del legacy.
-      result = await cambiaStato(req.body.id, "EN_ENTREGA", {
-        hora_salida: Date.now(),
-        actor_type: normalizeActorType(req.body.actor_type),
-        actor_id: req.body.actor_id || null,
-        origin: req.body.origin || "entregas",
-      });
+    // [DELIVERY-REFACTOR 2026-09-22] action "marcarEnEntrega" RIMOSSA.
+    // Era l'unico modo di CREARE un EN_ENTREGA, e quella transizione non è più
+    // legale nel grafo (LISTO → RETIRADO diretto). Gli ordini legacy già in
+    // EN_ENTREGA restano finalizzabili con marcarEntregado: la compatibilità che
+    // serve è in uscita, non in entrata.
     } else if (action === "marcarEntregado") {
       // LISTO (o legacy EN_ENTREGA) → RETIRADO — finalizzazione della consegna.
       // [DELIVERY-REFACTOR 2026-09-22] `cobrado` e `metodo_pago` NON si prendono più

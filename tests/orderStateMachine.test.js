@@ -49,7 +49,10 @@ section("flusso felice");
 ok("POR_CONFIRMAR", "EN_COCINA");
 ok("NUEVO", "EN_COCINA");
 ok("EN_COCINA", "LISTO");
-ok("LISTO", "EN_ENTREGA");      // domicilio
+// [DELIVERY-REFACTOR 2026-09-22] LISTO → EN_ENTREGA rimossa dal grafo: nessuna UI
+// produce più quello stato e il viaggio del driver non è uno stato dell'ordine.
+// EN_ENTREGA resta solo in USCITA, per gli ordini legacy in-flight (riga sotto).
+no("LISTO", "EN_ENTREGA", "illegal_transition");
 ok("LISTO", "RETIRADO");        // ritiro al banco
 ok("EN_ENTREGA", "RETIRADO");
 ok("RETIRADO", "COMPLETADO");

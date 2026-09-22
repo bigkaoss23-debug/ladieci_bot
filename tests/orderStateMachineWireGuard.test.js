@@ -150,9 +150,9 @@ const seed = (id, estado, tipo = "RITIRO") => { STORE[id] = { id, estado, tipo_c
   section("7) catena completa resta valida");
   {
     reset(); seed("#207", "POR_CONFIRMAR", "DOMICILIO");
-    // [DELIVERY-REFACTOR 2026-09-22] la catena legacy (con EN_ENTREGA) resta LEGALE
-    // per gli ordini in-flight; RETIRADO richiede però un metodo di pagamento reale.
-    for (const to of ["EN_COCINA", "LISTO", "EN_ENTREGA", "RETIRADO", "COMPLETADO"]) {
+    // [DELIVERY-REFACTOR 2026-09-22] catena moderna: niente EN_ENTREGA.
+    // RETIRADO richiede un metodo di pagamento reale.
+    for (const to of ["EN_COCINA", "LISTO", "RETIRADO", "COMPLETADO"]) {
       const extras = { actor_type: "operator", origin: "dashboard" };
       if (to === "RETIRADO") extras.metodo_pago = "efectivo";
       const r = await cambiaStato("#207", to, extras);

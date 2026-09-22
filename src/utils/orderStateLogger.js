@@ -54,22 +54,23 @@ function sanitizeMetadata(metadata = {}) {
   return cleaned && typeof cleaned === "object" && !Array.isArray(cleaned) ? cleaned : {};
 }
 
-// SEMANTICA STATI DELIVERY (confermata live 05/06/2026):
-//   EN_ENTREGA = il rider ESCE dalla pizzeria (salida rider), NON è consegna.
-//   RETIRADO   = il rider TORNA in pizzeria (giro chiuso), NON è consegna cliente.
-// L'event_type storico "delivered" per RETIRADO+DOMICILIO è un NOME STORICO: il suo
-// significato operativo reale è "rider tornato / giro chiuso", non "consegnato al
-// cliente". Non rinominato qui perché radicato in consumer esistenti; le metriche
-// NUOVE usano la semantica corretta (vedi deliveryOperationalMetrics.js: la consegna
-// cliente è STIMATA = en_entrega_at + durata_andata_min, non retirado_at).
+// SEMANTICA STATI DELIVERY — [DELIVERY-REFACTOR 2026-09-22].
+//   RETIRADO = il cliente ha RICEVUTO (DOMICILIO) o RITIRATO (RITIRO) l'ordine.
+//              Fatto di business, non evento del rider.
+//   EN_ENTREGA = LEGACY, senza più writer. Il viaggio del driver non è uno stato
+//              dell'ordine: durante la consegna l'ordine resta LISTO.
+// L'event_type "delivered" per RETIRADO+DOMICILIO ora VUOLE DIRE consegnato al
+// cliente, e "picked_up" per RITIRO vuol dire ritirato al banco. Fino a questa
+// release "delivered" significava invece "rider tornato / giro chiuso": i dati
+// STORICI vanno letti con quella semantica, i nuovi con questa.
 function stateEventType(from, to, tipoConsegna) {
   if (!from) return "created";
   if (to === "EN_COCINA") {
     return from === "POR_CONFIRMAR" ? "confirmed" : "sent_to_kitchen";
   }
   if (to === "LISTO") return "marked_ready";
-  if (to === "EN_ENTREGA") return "sent_delivery"; // salida rider, non consegna
-  if (to === "RETIRADO") return tipoConsegna === "DOMICILIO" ? "delivered" : "picked_up"; // "delivered" = giro chiuso/rider tornato (nome storico)
+  if (to === "EN_ENTREGA") return "sent_delivery"; // legacy: nessun writer moderno
+  if (to === "RETIRADO") return tipoConsegna === "DOMICILIO" ? "delivered" : "picked_up"; // consegnato al cliente / ritirato al banco
   if (to === "COMPLETADO") return "completed";
   if (to === "CANCELADO") return "cancelled";
   return "state_changed";
