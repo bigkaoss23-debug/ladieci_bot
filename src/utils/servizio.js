@@ -11,7 +11,7 @@
 //   7. VERIFY: count(storico WHERE fecha=oggi) >= ordini archiviati.
 //      Se KO → ROLLBACK (cancella storico/serata_summary), NON tocca ordenes.
 //   8. Solo dopo verify OK: cancella ordenes/conv/wa_msgs completati.
-//   9. Reset config (DRIVER_STATO, ORDER_RESET_TS, LAST_CLOSE_DATE).
+//   9. Reset config (ORDER_RESET_TS, LAST_CLOSE_DATE).
 //
 // L'operatore vede success+summary atomico, o errore preciso, mai stato a metà.
 // ===============================================================
@@ -466,7 +466,10 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
 
   // ─── PASSO 11: reset config ───────────────────────────────────
   await sbUpsert("config", { chiave: "ORDER_RESET_TS",  valore: String(Date.now()) }, "chiave");
-  await sbUpsert("config", { chiave: "DRIVER_STATO",    valore: JSON.stringify({ stato: "LIBERO" }) }, "chiave");
+  // [DELIVERY-REFACTOR 2026-09-22] Il reset di DRIVER_STATO è stato rimosso: la
+  // chiave non ha più né writer né reader (l'ultimo era agentCucina.getCaricoDelivery).
+  // Resettare a ogni chiusura uno stato rider che non esiste più significherebbe
+  // continuare a modellarlo. L'eventuale riga stantia in `config` è inerte.
   await sbUpsert("config", { chiave: "LAST_CLOSE_DATE", valore: oggi }, "chiave");
 
   // ─── DONE ────────────────────────────────────────────────────
