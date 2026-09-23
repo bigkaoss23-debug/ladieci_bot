@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const { processWebhook } = require("./src/agents/orchestrator");
 const { getConfig, sbSelect, sbUpdate, sbDelete, sbUpsert, sbInsert } = require("./src/utils/supabase");
-const { cambiaStato, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
+const { cambiaStato, cambiaMetodoPago, creaOrdine, modificaOrdine } = require("./src/agents/agentOrdini");
 // [DELIVERY-REFACTOR 2026-09-22] driverTelemetry rimosso: la telemetria rider
 // (DRIVER_STATO, delivery_logs, ETA di rientro) non fa più parte del dominio.
 // Private authenticated READ contracts (P0 containment). Fixed per-action queries;
@@ -254,7 +254,10 @@ app.post("/api", async (req, res) => {
       // Dashboard operatore: geo/durata ri-risolti server-side, hora preservata.
       result = await modificaOrdine(req.body.id, { ...req.body, operatorManual: true });
     } else if (action === "updateEstado") {
-      // Accetta campi pagamento/timing/repartidor/descuento in unica scrittura atomica
+      // Accetta campi timing/repartidor/descuento in unica scrittura atomica.
+      // [PAYMENT-IDEMPOTENCY 2026-09-23] dei campi pagamento cambiaStato usa solo
+      // metodo_pago, e solo per la PRIMA finalizzazione a RETIRADO (cobrado e
+      // ya_pagado del payload vengono ignorati). Correzione metodo: cambiarMetodoPago.
       const extras = {};
       for (const k of ["metodo_pago","cobrado","ya_pagado","hora_entrega","hora_salida","repartidor","llegado","cucina_check","descuento_tipo","descuento_valor"]) {
         if (req.body[k] !== undefined) extras[k] = req.body[k];
@@ -285,6 +288,18 @@ app.post("/api", async (req, res) => {
       if (req.body.descuento_tipo  !== undefined) extras.descuento_tipo  = req.body.descuento_tipo;
       if (req.body.descuento_valor !== undefined) extras.descuento_valor = req.body.descuento_valor;
       result = await cambiaStato(req.body.id, "RETIRADO", extras);
+    } else if (action === "cambiarMetodoPago") {
+      // [PAYMENT-IDEMPOTENCY 2026-09-23] Correzione ESPLICITA del metodo su un ordine
+      // già RETIRADO (badge ✎ in Listos). Non è una finalizzazione e non passa più
+      // da updateEstado(RETIRADO): lì un RETIRADO ripetuto è sempre un no-op puro.
+      // Audit in orden_estado_logs (event_type payment_method_changed).
+      result = await cambiaMetodoPago(req.body.id, {
+        metodo_pago: req.body.metodo_pago,
+        metodo_pago_esperado: req.body.metodo_pago_esperado,
+        actor_type: normalizeActorType(req.body.actor_type || "operator"),
+        actor_id: req.body.actor_id || null,
+        origin: req.body.origin || "dashboard",
+      });
     } else if (action === "asignarRepartidor") {
       await sbUpdate("ordenes", `id=eq.${encodeURIComponent(req.body.id)}`, { repartidor: req.body.repartidor || null });
       result = { success: true };

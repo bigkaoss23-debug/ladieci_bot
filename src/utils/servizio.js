@@ -487,6 +487,8 @@ async function chiudiServizio(deleteAttivi = false, source = "manual") {
 
 
 module.exports = {
+  // [PAYMENT-IDEMPOTENCY 2026-09-23] esportata per i test di riconciliazione Caja.
+  computeSummary,
   scanServizio,
   backupSerata,
   chiudiServizio,

@@ -80,8 +80,23 @@ function resolveRetiradoPayment({ order = null, requestedMethod } = {}) {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// [PAYMENT-IDEMPOTENCY 2026-09-23] Due concetti separati, mai più lo stesso path:
+//
+//   A. FINALIZZAZIONE (→ RETIRADO) — idempotente. Un secondo RETIRADO su un
+//      ordine già RETIRADO (doppio click, retry, tab stale, secondo device) è un
+//      VERO no-op: nessuna scrittura, nessun log. Non può cambiare il pagamento.
+//   B. CORREZIONE DEL METODO — solo con l'azione esplicita `cambiarMetodoPago`,
+//      solo su ordini RETIRADO, sempre con una riga di audit in orden_estado_logs
+//      (event_type PAYMENT_METHOD_CHANGED_EVENT, metodo precedente → nuovo).
+//      Tocca SOLO metodo_pago (+ cobrado se un legacy era rimasto indietro):
+//      totale, items, tipo_consegna restano quelli che sono.
+// ─────────────────────────────────────────────────────────────────────────────
+const PAYMENT_METHOD_CHANGED_EVENT = "payment_method_changed";
+
 module.exports = {
   VALID_PAYMENT_METHODS,
+  PAYMENT_METHOD_CHANGED_EVENT,
   normalizePaymentMethod,
   isValidPaymentMethod,
   isAlreadyPaid,

@@ -39,8 +39,11 @@ async function sbUpsert(table, data, onConflict = null) {
   });
 }
 
-async function sbUpdate(table, query, data) {
-  return sbFetch(table, "PATCH", { query, body: data });
+// `prefer` opzionale: con "return=representation" PostgREST restituisce le righe
+// davvero aggiornate — serve agli UPDATE condizionali (compare-and-swap) per
+// sapere se la condizione ha colpito una riga o se un'altra richiesta è arrivata prima.
+async function sbUpdate(table, query, data, prefer) {
+  return sbFetch(table, "PATCH", { query, body: data, prefer });
 }
 
 async function sbDelete(table, query) {

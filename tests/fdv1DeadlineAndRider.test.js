@@ -30,7 +30,10 @@ supa.sbInsert = async (table, row) => {
   }
   OTHER_INSERTS.push({ table, row }); return [row];
 };
-supa.sbUpdate = async (table, filter, patch) => {
+const { applyPatch } = require("./helpers/postgrestPatch");
+supa.sbUpdate = async (table, filter, patch, prefer) => {
+  // [PAYMENT-IDEMPOTENCY] la finalizzazione è un UPDATE condizionato: filtri + return=representation.
+  if (table === "ordenes" && prefer) { UPDATED.push({ filter, patch }); return applyPatch(STORE, filter, patch, prefer); }
   if (table === "ordenes") { UPDATED.push({ filter, patch }); const m = filter.match(/id=eq\.([^&]+)/); if (m && STORE[decodeURIComponent(m[1])]) Object.assign(STORE[decodeURIComponent(m[1])], patch); }
   return "";
 };

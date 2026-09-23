@@ -30,8 +30,11 @@ supa.sbInsert = async (table, row) => {
   if (table === "ordenes") STORE[row.id] = { ...row };
   return [row];
 };
-supa.sbUpdate = async (table, filter, patch) => {
+const { applyPatch } = require("./helpers/postgrestPatch");
+supa.sbUpdate = async (table, filter, patch, prefer) => {
   UPDATES.push({ table, filter, patch });
+  // [PAYMENT-IDEMPOTENCY] la finalizzazione è un UPDATE condizionato: filtri + return=representation.
+  if (table === "ordenes" && prefer) return applyPatch(STORE, filter, patch, prefer);
   if (table === "ordenes") {
     const m = filter.match(/id=eq\.([^&]+)/);
     if (m) { const id = decodeURIComponent(m[1]); STORE[id] = { ...(STORE[id] || { id }), ...patch }; }

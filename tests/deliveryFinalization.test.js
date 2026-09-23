@@ -25,7 +25,10 @@ supa.sbInsert = async (table, row) => {
   else OTHER_INSERTS.push({ table, row });
   return [row];
 };
-supa.sbUpdate = async (table, filter, patch) => {
+const { applyPatch } = require("./helpers/postgrestPatch");
+supa.sbUpdate = async (table, filter, patch, prefer) => {
+  // [PAYMENT-IDEMPOTENCY] la finalizzazione è un UPDATE condizionato: filtri + return=representation.
+  if (table === "ordenes" && prefer) { UPDATED.push({ filter, patch }); return applyPatch(STORE, filter, patch, prefer); }
   if (table === "ordenes") {
     UPDATED.push({ filter, patch });
     const m = filter.match(/id=eq\.([^&]+)/);
@@ -253,22 +256,26 @@ const lastLog = () => LOGS.length ? LOGS[LOGS.length - 1] : null;
     assert.ok(!OTHER_INSERTS.some((i) => i.table === "delivery_logs"), "delivery_logs scritto");
   });
 
-  // ── CORREZIONE METODO su ordine già RETIRADO (self-loop) ────────────────────
-  await t("correzione metodo su RETIRADO: applica metodo e allinea cobrado, senza nuovo log", async () => {
+  // ── RETIRADO ripetuto su ordine già RETIRADO = NO-OP PURO ──────────────────
+  // [PAYMENT-IDEMPOTENCY 2026-09-23] contratto precedente REVOCATO: il self-loop
+  // non è più la "correzione metodo" (torture test: tab stale bizum→efectivo senza
+  // log). La correzione ha la sua azione, cambiaMetodoPago (paymentIdempotency.test.js).
+  await t("RETIRADO ripetuto con metodo diverso: noop, NESSUNA scrittura, nessun log", async () => {
     ord("#A", { estado: "RETIRADO", cobrado: false, metodo_pago: "manual" });
-    const before = LOGS.length;
     const r = await cambiaStato("#A", "RETIRADO", { metodo_pago: "tarjeta", actor_type: "operator", origin: "dashboard" });
     assert.ok(r.success && r.noop === true, JSON.stringify(r));
-    assert.strictEqual(STORE["#A"].metodo_pago, "tarjeta");
-    assert.strictEqual(STORE["#A"].cobrado, true);
-    assert.strictEqual(LOGS.length, before, "il self-loop non deve loggare");
+    assert.strictEqual(STORE["#A"].metodo_pago, "manual");
+    assert.strictEqual(STORE["#A"].cobrado, false);
+    assert.strictEqual(UPDATED.length, 0, "nessuna UPDATE su ordenes");
+    assert.strictEqual(LOGS.length, 0, "nessun log");
   });
 
-  await t("correzione con metodo non valido → reject", async () => {
+  await t("RETIRADO ripetuto con metodo non valido: noop, metodo invariato", async () => {
     ord("#A", { estado: "RETIRADO", cobrado: true, metodo_pago: "efectivo" });
     const r = await cambiaStato("#A", "RETIRADO", { metodo_pago: "manual", actor_type: "operator", origin: "dashboard" });
-    assert.strictEqual(r.success, false);
+    assert.ok(r.success && r.noop === true, JSON.stringify(r));
     assert.strictEqual(STORE["#A"].metodo_pago, "efectivo");
+    assert.strictEqual(UPDATED.length, 0);
   });
 
   // ── Transizioni non-RETIRADO invariate ──────────────────────────────────────

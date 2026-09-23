@@ -15,12 +15,19 @@ const { isStatusLeavingGiro, autoDissolveIfBelowThreshold } = require("./manualG
 const { effectiveDeadline, DELIVERY_DEADLINE_DEFAULT_MIN } = require("../core/delivery/deadline");
 // [DELIVERY-REFACTOR 2026-09-22] Regola canonica del pagamento su RETIRADO.
 // Il backend decide, il frontend raccoglie soltanto l'input. Vedi finalization.js.
-const { resolveRetiradoPayment, isValidPaymentMethod, normalizePaymentMethod } = require("../core/delivery/finalization");
+const {
+  resolveRetiradoPayment,
+  isValidPaymentMethod,
+  normalizePaymentMethod,
+  VALID_PAYMENT_METHODS,
+  PAYMENT_METHOD_CHANGED_EVENT,
+} = require("../core/delivery/finalization");
 // [DELIVERY-REFACTOR 2026-09-22] Il rider non è una variabile dell'ordine: nessuna
 // scrittura DRIVER_STATO / delivery_logs, e nessun flag per riattivarla.
 const {
   buildStateTimestampPatch,
   logOrderStateTransition,
+  logPaymentMethodChange,
   stateEventType,
 } = require("../utils/orderStateLogger");
 const { validateTransition } = require("../utils/orderStateMachine");
@@ -136,6 +143,19 @@ async function bumpClienteCounters(clienteId) {
 }
 
 async function creaOrdine(params) {
+  // [PAYMENT-IDEMPOTENCY 2026-09-23] "Ya pagado" alla creazione: il metodo deve
+  // essere reale (efectivo | tarjeta | bizum). Rifiutato PRIMA di qualunque
+  // scrittura (clientes, geo_cache, ordenes). Un ordine non pagato non porta
+  // metodo: si sceglie alla finalizzazione.
+  const yaPagado = params.ya_pagado === true;
+  if (yaPagado && !isValidPaymentMethod(params.metodo_pago)) {
+    return {
+      success: false,
+      error: "payment_method_required",
+      reason: `ya_pagado sin método válido: "${normalizePaymentMethod(params.metodo_pago)}"`,
+      metodos_validos: VALID_PAYMENT_METHODS.slice(),
+    };
+  }
   // ═══ Items SENZA fake "Entrega a domicilio" ═══
   // Il costo consegna vive nella colonna delivery_fee, NON dentro items.
   // Items contiene solo prodotti veri (pizze, bevande, dolci).
@@ -363,8 +383,8 @@ async function creaOrdine(params) {
       durata_haversine_min: geoFields.durata_haversine_min ?? null,
       geo_source:           geoFields.geo_source           || null,
       forzado:        params.forzado        || false,
-      ya_pagado:      params.ya_pagado      || false,
-      metodo_pago:    params.metodo_pago    || "",
+      ya_pagado:      yaPagado,
+      metodo_pago:    yaPagado ? normalizePaymentMethod(params.metodo_pago) : "",
       descuento_tipo:    (descTipo && descuentoImporte > 0) ? descTipo  : null,
       descuento_valor:   (descTipo && descuentoImporte > 0) ? descValor : null,
       descuento_importe: descuentoImporte > 0 ? descuentoImporte : null
@@ -612,9 +632,11 @@ async function modificaOrdine(ordenId, updates) {
 // Scrittura atomica singola — niente cerotti, niente race tra metodo_pago e estado.
 async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   const upd = { estado: nuovoStato };
-  if (extras.metodo_pago  !== undefined) upd.metodo_pago  = extras.metodo_pago || "";
-  if (extras.cobrado      !== undefined) upd.cobrado      = extras.cobrado === true;
-  if (extras.ya_pagado    !== undefined) upd.ya_pagado    = extras.ya_pagado === true;
+  // [PAYMENT-IDEMPOTENCY 2026-09-23] metodo_pago / cobrado / ya_pagado del payload
+  // NON entrano più in `upd`: su RETIRADO li decide resolveRetiradoPayment, su ogni
+  // altro stato non si scrivono affatto (prima updateEstado(LISTO, metodo_pago:"x")
+  // scriveva qualunque stringa, "manual" compreso, senza audit). La correzione del
+  // metodo ha la sua azione: cambiaMetodoPago.
   if (extras.hora_entrega !== undefined) upd.hora_entrega = extras.hora_entrega;
   if (extras.hora_salida  !== undefined) upd.hora_salida  = extras.hora_salida;
   if (extras.repartidor   !== undefined) upd.repartidor   = extras.repartidor || null;
@@ -683,50 +705,37 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   // rigenerare i timestamp lifecycle né scrivere un log di transizione ridondante
   // (che falserebbe l'analytics del giro reale). buildStateTimestampPatch già non
   // tocca i `*_at` su self-loop; qui completiamo: niente log, niente hook di stato.
-  // Eventuali extras espliciti (pagamento/sconto, già in `upd`) restano applicati —
-  // sono intento operatore, non corruzione di timeline.
   const _isNoop = _trans.reason === "noop";
+
+  // [PAYMENT-IDEMPOTENCY 2026-09-23] RETIRADO → RETIRADO è un VERO no-op: nessuna
+  // scrittura su `ordenes` (neanche updated_at), nessun log, nessun hook. Prima il
+  // self-loop era anche la "rettifica metodo" del badge in Listos: un secondo device
+  // stale che ripeteva RETIRADO con un altro metodo riceveva noop:true ma
+  // sovrascriveva metodo_pago senza traccia (torture test 2026-09-23, bizum→efectivo).
+  // `noop:true` e mutazione del DB non possono più coesistere.
+  if (_isNoop && nuovoStato === "RETIRADO") {
+    return { success: true, id: ordenId, estado: nuovoStato, noop: true };
+  }
 
   // ── RETIRADO: regola di pagamento canonica (DELIVERY-REFACTOR 2026-09-22) ──
   // Autorità unica, server-side. Copre driver, fallback operatore e RITIRO, perché
   // ogni percorso passa di qui. I campi pagamento del payload vengono SCARTATI e
   // ricalcolati: il FE raccoglie l'input, il BE decide (e può rifiutare).
   if (nuovoStato === "RETIRADO") {
-    const methodProvided = extras.metodo_pago !== undefined;
-    if (_isNoop) {
-      // Correzione del metodo su un ordine GIÀ RETIRADO (badge pagamento in Listos):
-      // non è una finalizzazione, è una rettifica. Se arriva un metodo esplicito
-      // deve essere reale; allinea anche `cobrado`, che prima restava indietro.
-      if (methodProvided) {
-        if (!isValidPaymentMethod(extras.metodo_pago)) {
-          return {
-            success: false,
-            error: "payment_method_required",
-            reason: `metodo_pago no válido para corrección: "${normalizePaymentMethod(extras.metodo_pago)}"`,
-            estado_actual: estadoActual,
-          };
-        }
-        upd.metodo_pago = normalizePaymentMethod(extras.metodo_pago);
-        upd.cobrado = true;
-      }
-    } else {
-      const _pay = resolveRetiradoPayment({ order: prevRow, requestedMethod: extras.metodo_pago });
-      if (!_pay.ok) {
-        // FAIL CLOSED: nessuna scrittura su `ordenes`, nessun log, stato invariato.
-        return {
-          success: false,
-          error: _pay.error,
-          reason: _pay.reason,
-          metodo_pago_recibido: _pay.metodo_pago_recibido,
-          metodos_validos: _pay.metodos_validos,
-          estado_actual: estadoActual,
-          estado_solicitado: nuovoStato,
-        };
-      }
-      delete upd.metodo_pago;
-      delete upd.cobrado;
-      Object.assign(upd, _pay.patch);
+    const _pay = resolveRetiradoPayment({ order: prevRow, requestedMethod: extras.metodo_pago });
+    if (!_pay.ok) {
+      // FAIL CLOSED: nessuna scrittura su `ordenes`, nessun log, stato invariato.
+      return {
+        success: false,
+        error: _pay.error,
+        reason: _pay.reason,
+        metodo_pago_recibido: _pay.metodo_pago_recibido,
+        metodos_validos: _pay.metodos_validos,
+        estado_actual: estadoActual,
+        estado_solicitado: nuovoStato,
+      };
     }
+    Object.assign(upd, _pay.patch);
   }
 
   Object.assign(upd, buildStateTimestampPatch({
@@ -737,7 +746,35 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     extras,
   }));
 
-  await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
+  if (nuovoStato === "RETIRADO") {
+    // [PAYMENT-IDEMPOTENCY 2026-09-23] Finalizzazione = compare-and-swap sullo stato
+    // letto. Due finalizzazioni quasi simultanee leggono entrambe LISTO: Postgres
+    // serializza gli UPDATE sulla riga e la seconda, rivalutando il WHERE dopo il
+    // COMMIT della prima, non trova più `estado=LISTO` → 0 righe. Chi perde NON
+    // scrive (metodo della prima intatto) e riceve lo stesso no-op di un retry.
+    const guard = estadoActual
+      ? `estado=eq.${encodeURIComponent(estadoActual)}`
+      : "estado=neq.RETIRADO";
+    const written = await sbUpdate(
+      "ordenes",
+      `id=eq.${encodeURIComponent(ordenId)}&${guard}`,
+      upd,
+      "return=representation"
+    );
+    if (!Array.isArray(written)) {
+      return { success: false, error: "db_error", reason: "finalización no confirmada por la base de datos", estado_actual: estadoActual };
+    }
+    if (written.length === 0) {
+      const now = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}&select=id,estado`);
+      const estadoAhora = Array.isArray(now) && now[0] ? now[0].estado : null;
+      if (estadoAhora === "RETIRADO") {
+        return { success: true, id: ordenId, estado: nuovoStato, noop: true };
+      }
+      return { success: false, error: "state_changed_concurrently", estado_actual: estadoAhora, estado_solicitado: nuovoStato };
+    }
+  } else {
+    await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
+  }
 
   // No-op (self-loop): nessun log di transizione — non c'è transizione. Evita
   // log terminali duplicati che corromperebbero le metriche giro/lifecycle.
@@ -813,6 +850,105 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   return { success: true, id: ordenId, estado: nuovoStato, noop: _isNoop };
 }
 
+// [PAYMENT-IDEMPOTENCY 2026-09-23] CORREZIONE ESPLICITA del metodo di pagamento.
+// Unica via per cambiare metodo_pago dopo la finalizzazione (badge ✎ in Listos).
+// params: { metodo_pago, metodo_pago_esperado?, actor_type, actor_id, origin }
+//   - metodo reale obbligatorio (efectivo | tarjeta | bizum), mai "manual";
+//   - solo ordini RETIRADO (prima della finalizzazione il metodo si sceglie lì);
+//   - metodo_pago_esperado = quello che l'operatore vedeva: se nel frattempo un
+//     altro device l'ha già cambiato → conflitto, niente sovrascrittura cieca;
+//   - stesso metodo già registrato → no-op puro (doppio click, retry);
+//   - UPDATE condizionato sul metodo letto (compare-and-swap): di due correzioni
+//     concorrenti ne vince una, l'altra riceve conflitto o no-op;
+//   - audit obbligatorio: se la riga in orden_estado_logs non si scrive, la
+//     correzione viene annullata con un secondo compare-and-swap.
+// Scrive SOLO metodo_pago (+ cobrado=true se un legacy era rimasto false) e
+// updated_at: totale, items, tipo_consegna, descuento non si toccano.
+async function cambiaMetodoPago(ordenId, params = {}) {
+  const nuevo = normalizePaymentMethod(params.metodo_pago);
+  if (!isValidPaymentMethod(nuevo)) {
+    return {
+      success: false,
+      error: "payment_method_required",
+      reason: `metodo_pago no válido: "${nuevo}"`,
+      metodos_validos: VALID_PAYMENT_METHODS.slice(),
+    };
+  }
+  if (!ordenId) return { success: false, error: "missing_id" };
+  const idQ = `id=eq.${encodeURIComponent(ordenId)}`;
+
+  const rows = await sbSelect("ordenes", `${idQ}&select=id,estado,tipo_consegna,cobrado,ya_pagado,metodo_pago`);
+  if (!Array.isArray(rows)) return { success: false, error: "db_error" };
+  const o = rows[0];
+  if (!o) return { success: false, error: "not_found" };
+  if (o.estado !== "RETIRADO") {
+    return { success: false, error: "payment_change_requires_retirado", estado_actual: o.estado || null };
+  }
+
+  const prevRaw = o.metodo_pago;
+  const prev = normalizePaymentMethod(prevRaw);
+  if (prev === nuevo && o.cobrado === true) {
+    return { success: true, id: ordenId, noop: true, metodo_pago: prev };
+  }
+  if (params.metodo_pago_esperado !== undefined) {
+    const esperado = normalizePaymentMethod(params.metodo_pago_esperado);
+    if (esperado !== prev) {
+      return { success: false, error: "payment_method_conflict", metodo_pago_actual: prev || null, metodo_pago_esperado: esperado || null };
+    }
+  }
+
+  const casMetodo = (v) => (v == null ? "metodo_pago=is.null" : `metodo_pago=eq.${encodeURIComponent(v)}`);
+  const patch = { metodo_pago: nuevo, updated_at: new Date().toISOString() };
+  if (o.cobrado !== true) patch.cobrado = true;
+
+  const written = await sbUpdate(
+    "ordenes",
+    `${idQ}&estado=eq.RETIRADO&${casMetodo(prevRaw)}`,
+    patch,
+    "return=representation"
+  );
+  if (!Array.isArray(written)) return { success: false, error: "db_error" };
+  if (written.length === 0) {
+    // Un'altra richiesta ha cambiato l'ordine tra lettura e scrittura.
+    const now = await sbSelect("ordenes", `${idQ}&select=id,estado,metodo_pago`);
+    const cur = Array.isArray(now) && now[0] ? now[0] : null;
+    const curMetodo = cur ? normalizePaymentMethod(cur.metodo_pago) : null;
+    if (cur && cur.estado === "RETIRADO" && curMetodo === nuevo) {
+      return { success: true, id: ordenId, noop: true, metodo_pago: nuevo };
+    }
+    return { success: false, error: "payment_method_conflict", metodo_pago_actual: curMetodo || null };
+  }
+
+  const audit = await logPaymentMethodChange({
+    orderId: ordenId,
+    from: prev || null,
+    to: nuevo,
+    tipoConsegna: o.tipo_consegna || null,
+    cobradoBefore: o.cobrado === true,
+    actorType: params.actor_type || "operator",
+    actorId: params.actor_id || null,
+    origin: params.origin || "dashboard",
+    eventType: PAYMENT_METHOD_CHANGED_EVENT,
+  });
+  if (!audit.ok) {
+    // Nessuna correzione senza traccia: si torna al metodo precedente, solo se
+    // nessuno l'ha toccato nel frattempo.
+    const undo = { metodo_pago: prevRaw == null ? null : prevRaw };
+    if (patch.cobrado !== undefined) undo.cobrado = o.cobrado;
+    const reverted = await sbUpdate(
+      "ordenes",
+      `${idQ}&estado=eq.RETIRADO&${casMetodo(nuevo)}`,
+      undo,
+      "return=representation"
+    );
+    const ok = Array.isArray(reverted) && reverted.length === 1;
+    if (!ok) console.error(`[cambiaMetodoPago ${ordenId}] audit fallito E revert fallito: ${prev} → ${nuevo} senza traccia`, audit.error);
+    return { success: false, error: "payment_audit_failed", reverted: ok, detail: audit.error };
+  }
+
+  return { success: true, id: ordenId, metodo_pago: nuevo, metodo_pago_anterior: prev || null, audit_id: audit.id };
+}
+
 async function aggiungiItems(ordenId, newItems) {
   const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
   if (!rows || rows.length === 0) return { error: "not found" };
@@ -833,4 +969,4 @@ async function getById(id) {
   return (rows && rows.length > 0) ? rows[0] : null;
 }
 
-module.exports = { creaOrdine, modificaOrdine, cambiaStato, aggiungiItems, getById, calcolaFornoOutFallback };
+module.exports = { creaOrdine, modificaOrdine, cambiaStato, cambiaMetodoPago, aggiungiItems, getById, calcolaFornoOutFallback };

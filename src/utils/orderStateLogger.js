@@ -142,8 +142,54 @@ async function logOrderStateTransition({
   }
 }
 
+// [PAYMENT-IDEMPOTENCY 2026-09-23] Audit della correzione esplicita del metodo di
+// pagamento. Stessa tabella append-only delle transizioni (nessun lettore la
+// filtra per estado_to: grep FE/BE vuoto), riga RETIRADO→RETIRADO distinta da
+// event_type. A differenza di logOrderStateTransition NON è best-effort: il
+// chiamante deve sapere se la riga esiste, perché senza audit la correzione
+// viene annullata. PostgREST risponde 2xx con l'array delle righe inserite,
+// altrimenti un oggetto errore {code,message} senza lanciare: lo controlliamo.
+async function logPaymentMethodChange({
+  orderId,
+  from,
+  to,
+  tipoConsegna = null,
+  cobradoBefore = null,
+  actorType = "operator",
+  actorId = null,
+  origin = "dashboard",
+  eventType,
+  insert = sbInsert,
+} = {}) {
+  const row = {
+    orden_id: orderId,
+    numero_ordine: orderId,
+    estado_from: "RETIRADO",
+    estado_to: "RETIRADO",
+    event_type: eventType,
+    actor_type: actorType || "unknown",
+    actor_id: actorId || null,
+    origin: origin || "unknown",
+    metadata: sanitizeMetadata({
+      reason: "payment_method_correction",
+      tipo_consegna: tipoConsegna,
+      metodo_pago_from: from || null,
+      metodo_pago_to: to,
+      cobrado_before: cobradoBefore,
+    }),
+  };
+  try {
+    const res = await insert("orden_estado_logs", row);
+    if (Array.isArray(res) && res.length === 1) return { ok: true, id: res[0].id || null };
+    return { ok: false, error: (res && (res.message || res.code)) || "insert_not_confirmed" };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
 module.exports = {
   PII_METADATA_KEYS,
+  logPaymentMethodChange,
   buildStateTimestampPatch,
   logOrderStateTransition,
   sanitizeMetadata,
