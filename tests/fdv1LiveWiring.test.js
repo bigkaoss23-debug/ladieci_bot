@@ -260,6 +260,57 @@ const ord = (id, extra = {}) => ({ id, tipo_consegna: "DOMICILIO", estado: "EN_C
     assert.strictEqual(writes.length, 0);
   });
 
+  // [GIRO-CANDIDATES 2026-09-23] full list for the Nuevo Pedido GIRO selector: same criteria, same order, read-only.
+  await t("previewDeliveryV1: giro_candidates = every compatible target, [0] ≡ giro_suggestion, labels on every GIRO", async () => {
+    reset(); const now = Date.parse("2026-09-21T18:00:00Z");
+    const dl = (m) => new Date(now + m * 60000).toISOString();
+    db.ordenes.push(ord("#A", { delivery_deadline_at: dl(52) }), ord("#B", { delivery_deadline_at: dl(58) }));
+    await mg.createManualGiro(["#A", "#B"]);
+    db.ordenes.push(ord("#S1", { delivery_deadline_at: dl(50) }), ord("#S2", { delivery_deadline_at: dl(65) }),
+      ord("#FAR", { delivery_deadline_at: dl(90) }), ord("#Q5", { zona: "Q5", delivery_deadline_at: dl(55) }),
+      ord("#OUT", { estado: "EN_ENTREGA", delivery_deadline_at: dl(55) }));
+    writes.length = 0;
+    const r = await dd.previewDeliveryV1({ zona: "Q1" }, { nowMs: now });
+    assert.ok(r.ok);
+    const keys = r.giro_candidates.map((c) => c.kind === "GIRO" ? "G" : c.order_id);
+    assert.deepStrictEqual(keys, ["G", "#S1", "#S2"]);                     // GIRO first, then Δ ascending; far/other zone/departed excluded
+    assert.ok(r.giro_candidates[0].label && /^G\d+$/.test(r.giro_candidates[0].label));
+    const { alternatives, ...top } = r.giro_suggestion;
+    assert.deepStrictEqual(top, r.giro_candidates[0]);
+    assert.strictEqual(alternatives, r.giro_candidates.length - 1);
+    assert.ok(r.giro_candidates.every((c) => c.zona === "Q1" && c.window_min === 15));
+    assert.strictEqual(writes.length, 0);
+  });
+
+  await t("previewDeliveryV1: no compatible target → giro_candidates = [] and giro_suggestion = null", async () => {
+    reset(); const now = Date.parse("2026-09-21T18:00:00Z");
+    db.ordenes.push(ord("#FAR", { delivery_deadline_at: new Date(now + 120 * 60000).toISOString() }));
+    const r = await dd.previewDeliveryV1({ zona: "Q1" }, { nowMs: now });
+    assert.ok(r.ok); assert.deepStrictEqual(r.giro_candidates, []); assert.strictEqual(r.giro_suggestion, null);
+    const noZona = await dd.previewDeliveryV1({}, { nowMs: now });
+    assert.deepStrictEqual(noZona.giro_candidates, []); assert.strictEqual(noZona.giro_suggestion, null);
+  });
+
+  await t("suggestGiro ≡ listGiroCandidates()[0] + alternatives on 300 random fixtures (algorithm unchanged)", async () => {
+    const { suggestGiro, listGiroCandidates } = require("../src/core/delivery/giroCompat");
+    let seed = 7; const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const base = Date.parse("2026-09-21T19:00:00Z");
+    for (let i = 0; i < 300; i++) {
+      const giros = [{ id: "g1" }, { id: "g2" }, { id: "g3", dissolved_at: rnd() < 0.5 ? "x" : null }];
+      const orders = Array.from({ length: 2 + Math.floor(rnd() * 8) }, (_, k) => ({
+        id: "#" + String(k + 1).padStart(3, "0"), tipo_consegna: rnd() < 0.9 ? "DOMICILIO" : "RITIRO",
+        zona: rnd() < 0.7 ? "Q1" : "Q2", estado: ["POR_CONFIRMAR", "EN_COCINA", "LISTO", "EN_ENTREGA", "RETIRADO"][Math.floor(rnd() * 5)],
+        manual_giro_id: rnd() < 0.4 ? giros[Math.floor(rnd() * 3)].id : null,
+        delivery_deadline_at: new Date(base + Math.floor(rnd() * 40 - 20) * 60000).toISOString(),
+      }));
+      const newOrder = { tipo_consegna: "DOMICILIO", zona: rnd() < 0.8 ? "Q1" : "Q2", delivery_deadline_at: new Date(base).toISOString() };
+      const list = listGiroCandidates({ newOrder, orders, giros, cfg: {} });
+      const s = suggestGiro({ newOrder, orders, giros, cfg: {} });
+      if (!list.length) { assert.strictEqual(s, null); continue; }
+      assert.deepStrictEqual(s, { ...list[0], alternatives: list.length - 1 });
+    }
+  });
+
   await t("giroWarningsFor: only the member really at risk is named (deadline_much_closer); read-only", async () => {
     reset(); const now = Date.parse("2026-09-21T18:00:00Z");
     db.ordenes.push(ord("#A", { delivery_deadline_at: new Date(now + 20 * 60000).toISOString() }),

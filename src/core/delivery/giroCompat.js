@@ -24,17 +24,16 @@ function maxPerGiro(zonaId) {
 const numId = (id) => parseInt(String(id).replace(/\D/g, ""), 10) || 0;
 
 /**
- * @param newOrder {id?, tipo_consegna, zona, delivery_deadline_at|hora+ts}
- * @param orders   active rows: {id, tipo_consegna, zona, estado, manual_giro_id, delivery_deadline_at|hora+ts}
- * @param giros    active giro rows: {id, dissolved_at}
- * @returns null | { kind:'GIRO'|'ORDINE', giro_id?, order_id?, member_ids, delta_min, used, max, zona, window_min, alternatives }
+ * [GIRO-CANDIDATES 2026-09-23] Tutti i candidati compatibili, nello stesso ordine con cui suggestGiro sceglie
+ * il primo. Stessi criteri, stessa finestra, stessa capienza: suggestGiro ne restituisce solo candidates[0].
+ * @returns Array<{ kind:'GIRO'|'ORDINE', giro_id?, order_id?, member_ids, delta_min, used, max, zona, window_min }>
  */
-function suggestGiro({ newOrder, orders, giros, cfg }) {
-  if (!newOrder || newOrder.tipo_consegna !== "DOMICILIO" || !newOrder.zona) return null;
+function listGiroCandidates({ newOrder, orders, giros, cfg }) {
+  if (!newOrder || newOrder.tipo_consegna !== "DOMICILIO" || !newOrder.zona) return [];
   const max = maxPerGiro(newOrder.zona);
-  if (!max) return null;
+  if (!max) return [];
   const nDl = getOrderDeadlineMs(newOrder);
-  if (nDl == null) return null;
+  if (nDl == null) return [];
   const windowMin = resolveWindowMin(cfg);
 
   const aliveGiros = new Set((giros || []).filter(g => g && !g.dissolved_at).map(g => g.id));
@@ -82,9 +81,19 @@ function suggestGiro({ newOrder, orders, giros, cfg }) {
     (a.delta_min - b.delta_min) || (b.used - a.used) || (a.head - b.head) ||
     String(a.giro_id || a.order_id).localeCompare(String(b.giro_id || b.order_id)));
 
-  if (!candidates.length) return null;
-  const { head, ...top } = candidates[0];
-  return { ...top, zona: newOrder.zona, window_min: windowMin, alternatives: candidates.length - 1 };
+  return candidates.map(({ head, ...c }) => ({ ...c, zona: newOrder.zona, window_min: windowMin }));
 }
 
-module.exports = { suggestGiro, resolveWindowMin, AGGREGABLE_STATES, DEFAULT_WINDOW_MIN, maxPerGiro };
+/**
+ * @param newOrder {id?, tipo_consegna, zona, delivery_deadline_at|hora+ts}
+ * @param orders   active rows: {id, tipo_consegna, zona, estado, manual_giro_id, delivery_deadline_at|hora+ts}
+ * @param giros    active giro rows: {id, dissolved_at}
+ * @returns null | { kind:'GIRO'|'ORDINE', giro_id?, order_id?, member_ids, delta_min, used, max, zona, window_min, alternatives }
+ */
+function suggestGiro(args) {
+  const candidates = listGiroCandidates(args);
+  if (!candidates.length) return null;
+  return { ...candidates[0], alternatives: candidates.length - 1 };
+}
+
+module.exports = { suggestGiro, listGiroCandidates, resolveWindowMin, AGGREGABLE_STATES, DEFAULT_WINDOW_MIN, maxPerGiro };

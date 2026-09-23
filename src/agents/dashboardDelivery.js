@@ -10,7 +10,7 @@ const mg = require("./manualGiros");
 // [FDV1] giro-path DB access carries a LOCAL timeout (manualGiros.giroDb). supabase.js itself is shared with the WhatsApp bot: untouched.
 const { sbSelect, sbUpdate, sbDelete } = mg.giroDb;
 const { effectiveDeadline, resolveDeadlineMin, formatMadridHHMM, getOrderDeadlineMs } = require("../core/delivery/deadline");
-const { suggestGiro } = require("../core/delivery/giroCompat");
+const { suggestGiro, listGiroCandidates } = require("../core/delivery/giroCompat");
 const { evaluateGiroWarnings } = require("../core/delivery/giroWarnings");
 const { maxPerGiro } = require("../core/delivery/giroCompat");
 
@@ -169,6 +169,8 @@ function previewDeliveryCore({ newOrder, orders, giros, cfg, nowMs, hora = "" })
     delivery_deadline_preview: dl.deadlineIso,
     hora_preview: dl.hora,
     giro_suggestion: suggestGiro({ newOrder: probe, orders, giros, cfg }),
+    // [GIRO-CANDIDATES 2026-09-23] lista completa, stesso ordine: giro_candidates[0] ≡ giro_suggestion.
+    giro_candidates: listGiroCandidates({ newOrder: probe, orders, giros, cfg }),
   };
 }
 
@@ -186,7 +188,9 @@ async function previewDeliveryV1(body = {}, { cfg = {}, nowMs = Date.now() } = {
   // [DEADLINE-HORA] `hora` opzionale: assente o malformata → effectiveDeadline cade su now + N (comportamento precedente).
   const core = previewDeliveryCore({ newOrder, orders, giros, cfg, nowMs, hora: body.hora || "" });
   const s = core.giro_suggestion;
-  if (s && s.kind === "GIRO") { const g = giros.find(x => x.id === s.giro_id); s.label = g && g.seq != null ? `G${g.seq}` : null; }
+  const labelOf = (c) => { if (c && c.kind === "GIRO") { const g = giros.find(x => x.id === c.giro_id); c.label = g && g.seq != null ? `G${g.seq}` : null; } };
+  labelOf(s);
+  core.giro_candidates.forEach(labelOf);
   return { ok: true, ...core };
 }
 
