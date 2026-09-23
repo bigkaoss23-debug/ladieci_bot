@@ -87,10 +87,9 @@ function resolveRetiradoPayment({ order = null, requestedMethod } = {}) {
 //      ordine già RETIRADO (doppio click, retry, tab stale, secondo device) è un
 //      VERO no-op: nessuna scrittura, nessun log. Non può cambiare il pagamento.
 //   B. CORREZIONE DEL METODO — solo con l'azione esplicita `cambiarMetodoPago`,
-//      solo su ordini RETIRADO, sempre con una riga di audit in orden_estado_logs
-//      (event_type PAYMENT_METHOD_CHANGED_EVENT, metodo precedente → nuovo).
-//      Tocca SOLO metodo_pago (+ cobrado se un legacy era rimasto indietro):
-//      totale, items, tipo_consegna restano quelli che sono.
+//      solo su ordini RETIRADO, ATOMICA: la funzione DB payment_method_change_v1
+//      aggiorna metodo_pago e scrive l'audit (event_type PAYMENT_METHOD_CHANGED_EVENT)
+//      nella stessa transazione. Totale, items, tipo_consegna non si toccano.
 // ─────────────────────────────────────────────────────────────────────────────
 const PAYMENT_METHOD_CHANGED_EVENT = "payment_method_changed";
 

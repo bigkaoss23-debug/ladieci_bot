@@ -34,7 +34,17 @@ async function selectRaw(table, query) {
   }
   return [];
 }
+// RPC payment_method_change_v1: il test fissa la risposta (rpcAnswer) e registra gli
+// argomenti. La SEMANTICA transazionale della funzione si verifica su Postgres reale
+// (pay/payment_real.mjs), non qui: uno stub JS non può dimostrare un rollback.
+let RPC_CALLS = [], rpcAnswer = null;
 supa.sbInsert = async (table, row) => {
+  if (table.startsWith("rpc/")) {
+    RPC_CALLS.push({ fn: table.slice(4), args: { ...row } });
+    if (typeof rpcAnswer === "function") return rpcAnswer(row);
+    if (rpcAnswer instanceof Error) throw rpcAnswer;
+    return rpcAnswer;
+  }
   if (table === "orden_estado_logs") {
     if (failLog) { if (onFailedLog) onFailedLog(row); return { code: "42501", message: "simulated audit insert failure" }; }
     const saved = { id: `log-${LOGS.length + 1}`, created_at: new Date().toISOString(), ...row };
@@ -66,7 +76,7 @@ const { computeSummary } = require("../src/utils/servizio");
 
 const METODOS = ["efectivo", "tarjeta", "bizum"];
 let passed = 0, failed = 0;
-const reset = () => { STORE = {}; UPDATED = []; LOGS = []; INSERTS = []; failLog = false; afterSelectHook = null; updateOverride = null; onFailedLog = null; };
+const reset = () => { STORE = {}; UPDATED = []; LOGS = []; INSERTS = []; failLog = false; afterSelectHook = null; updateOverride = null; onFailedLog = null; RPC_CALLS = []; rpcAnswer = null; };
 const ord = (id, o = {}) => (STORE[id] = {
   id, estado: "LISTO", tipo_consegna: "RITIRO", hora: "21:00", ts: 1,
   items: [{ n: "Margherita", q: 2, p: 8.25, cat: "Pizzas" }], totale: 16.5, delivery_fee: 0,
@@ -245,144 +255,82 @@ async function t(name, fn) {
     assert.ok(UPDATED.every((u) => !("metodo_pago" in u.patch) && !("cobrado" in u.patch) && !("ya_pagado" in u.patch)));
   });
 
-  // ── B. CORREZIONE ESPLICITA ─────────────────────────────────────────────────
+  // ── B. CORREZIONE ESPLICITA = UNA chiamata alla funzione DB atomica ─────────
   const retirado = (id, m, o = {}) => ord(id, { estado: "RETIRADO", cobrado: true, metodo_pago: m, retirado_at: "2026-09-23T19:00:00.000Z", ...o });
 
-  for (const [from, to] of [["efectivo", "tarjeta"], ["tarjeta", "bizum"], ["bizum", "efectivo"]]) {
-    await t(`correzione esplicita ${from} → ${to}: muta SOLO il metodo, audit presente`, async () => {
-      retirado("#A", from);
-      const inv = fpInv("#A");
-      const r = await cambiaMetodoPago("#A", { metodo_pago: to, metodo_pago_esperado: from, actor_type: "operator", origin: "dashboard" });
-      assert.ok(r.success && !r.noop, JSON.stringify(r));
-      assert.strictEqual(STORE["#A"].metodo_pago, to);
-      assert.strictEqual(STORE["#A"].cobrado, true);
-      assert.strictEqual(fpInv("#A"), inv, "campi finanziari/di stato cambiati");
-      assert.strictEqual(UPDATED.length, 1);
-      assert.deepStrictEqual(Object.keys(UPDATED[0].patch).sort(), ["metodo_pago", "updated_at"]);
-      assert.strictEqual(LOGS.length, 1);
-      const L = LOGS[0];
-      assert.strictEqual(L.orden_id, "#A");
-      assert.strictEqual(L.event_type, "payment_method_changed");
-      assert.strictEqual(L.estado_from, "RETIRADO");
-      assert.strictEqual(L.estado_to, "RETIRADO");
-      assert.strictEqual(L.actor_type, "operator");
-      assert.strictEqual(L.origin, "dashboard");
-      assert.strictEqual(L.metadata.metodo_pago_from, from);
-      assert.strictEqual(L.metadata.metodo_pago_to, to);
-      assert.strictEqual(L.metadata.reason, "payment_method_correction");
-      assert.strictEqual(L.metadata.tipo_consegna, "RITIRO");
-      assert.ok(!("created_at" in UPDATED[0].patch), "il timestamp dell'audit lo mette il server");
+  await t("correzione: una sola RPC payment_method_change_v1 con argomenti normalizzati, nessuna PATCH/INSERT diretta", async () => {
+    retirado("#A", "efectivo");
+    rpcAnswer = { ok: true, noop: false, metodo_pago: "tarjeta", metodo_pago_anterior: "efectivo", audit_id: "u1", audit_at: "2026-09-23T20:00:00Z" };
+    const r = await cambiaMetodoPago("#A", { metodo_pago: " Tarjeta ", metodo_pago_esperado: "EFECTIVO", actor_type: "operator", actor_id: "op1", origin: "dashboard" });
+    assert.deepStrictEqual(r, { success: true, id: "#A", metodo_pago: "tarjeta", metodo_pago_anterior: "efectivo", audit_id: "u1" });
+    assert.strictEqual(RPC_CALLS.length, 1);
+    assert.deepStrictEqual(RPC_CALLS[0], { fn: "payment_method_change_v1", args: {
+      p_order_id: "#A", p_new_method: "tarjeta", p_expected_method: "efectivo",
+      p_actor_type: "operator", p_actor_id: "op1", p_origin: "dashboard", p_reason: "payment_method_correction" } });
+    assert.strictEqual(UPDATED.length, 0, "nessuna PATCH ordenes dal JS");
+    assert.strictEqual(LOGS.length, 0, "nessun INSERT audit dal JS");
+    assert.strictEqual(STORE["#A"].metodo_pago, "efectivo", "il JS non tocca la riga");
+  });
+
+  await t("metodo atteso assente → passato come null (la funzione risponde expected_method_required)", async () => {
+    rpcAnswer = { ok: false, error: "expected_method_required" };
+    const r = await cambiaMetodoPago("#A", { metodo_pago: "bizum" });
+    assert.strictEqual(RPC_CALLS[0].args.p_expected_method, null);
+    assert.deepStrictEqual(r, { success: false, error: "expected_method_required" });
+  });
+
+  await t("atteso vuoto (legacy senza metodo) → stringa vuota, non null", async () => {
+    rpcAnswer = { ok: true, noop: false, metodo_pago: "bizum", metodo_pago_anterior: null, audit_id: "u2" };
+    await cambiaMetodoPago("#A", { metodo_pago: "bizum", metodo_pago_esperado: "" });
+    assert.strictEqual(RPC_CALLS[0].args.p_expected_method, "");
+  });
+
+  await t("noop della funzione → success+noop, nessun audit_id", async () => {
+    rpcAnswer = { ok: true, noop: true, metodo_pago: "tarjeta" };
+    const r = await cambiaMetodoPago("#A", { metodo_pago: "tarjeta", metodo_pago_esperado: "efectivo" });
+    assert.deepStrictEqual(r, { success: true, id: "#A", metodo_pago: "tarjeta", noop: true });
+  });
+
+  for (const [err, extra] of [["payment_method_conflict", { metodo_pago_actual: "bizum", metodo_pago_esperado: "efectivo" }],
+    ["payment_change_requires_retirado", { estado_actual: "LISTO" }], ["not_found", {}]]) {
+    await t(`esito tipato ${err} passato al FE senza trasformazioni`, async () => {
+      rpcAnswer = { ok: false, error: err, ...extra };
+      const r = await cambiaMetodoPago("#A", { metodo_pago: "tarjeta", metodo_pago_esperado: "efectivo" });
+      assert.deepStrictEqual(r, { success: false, error: err, ...extra });
     });
   }
-
-  await t("correzione su legacy 'manual'/cobrado=false: metodo reale + cobrado allineato", async () => {
-    retirado("#A", "manual", { cobrado: false });
-    const r = await cambiaMetodoPago("#A", { metodo_pago: "tarjeta", metodo_pago_esperado: "manual" });
-    assert.ok(r.success, JSON.stringify(r));
-    assert.strictEqual(STORE["#A"].metodo_pago, "tarjeta");
-    assert.strictEqual(STORE["#A"].cobrado, true);
-    assert.strictEqual(LOGS[0].metadata.metodo_pago_from, "manual");
-    assert.strictEqual(LOGS[0].metadata.cobrado_before, false);
-  });
 
   for (const bad of ["manual", "", null, undefined, "paypal", "EFECTIVO!"]) {
-    await t(`correzione con metodo non valido (${JSON.stringify(bad)}) → rifiutata`, async () => {
-      retirado("#A", "efectivo");
-      const before = fp("#A");
-      const r = await cambiaMetodoPago("#A", { metodo_pago: bad });
+    await t(`metodo non valido (${JSON.stringify(bad)}) → rifiutato senza chiamare il DB`, async () => {
+      const r = await cambiaMetodoPago("#A", { metodo_pago: bad, metodo_pago_esperado: "efectivo" });
       assert.strictEqual(r.success, false);
       assert.strictEqual(r.error, "payment_method_required");
-      assert.strictEqual(fp("#A"), before);
-      assert.strictEqual(LOGS.length, 0);
+      assert.strictEqual(RPC_CALLS.length, 0);
     });
   }
 
-  for (const estado of ["LISTO", "EN_COCINA", "POR_CONFIRMAR"]) {
-    await t(`correzione su ordine ${estado} → rifiutata (si sceglie alla finalizzazione)`, async () => {
-      ord("#A", { estado, ya_pagado: true, metodo_pago: "efectivo" });
-      const before = fp("#A");
-      const r = await cambiaMetodoPago("#A", { metodo_pago: "bizum" });
-      assert.strictEqual(r.error, "payment_change_requires_retirado");
-      assert.strictEqual(fp("#A"), before);
-      assert.strictEqual(LOGS.length, 0);
+  // Trasporto: stessi esiti di giroRpc (misurati sul PostgREST reale), nomi di dominio pagamento.
+  for (const [name, answer, expErr, unknown] of [
+    ["funzione assente (PGRST202)", { code: "PGRST202", message: "Could not find the function" }, "payment_atomic_unavailable", undefined],
+    ["errore definito pre-COMMIT (42501)", { code: "42501", message: "permission denied for table orden_estado_logs" }, "db_error", false],
+    ["corpo non JSON (gateway 502 HTML)", "<html>502</html>", "payment_outcome_unknown", true],
+    ["socket reset", Object.assign(new Error("fetch failed"), { cause: { code: "ECONNRESET" } }), "payment_outcome_unknown", true],
+    ["connessione mai stabilita", Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } }), "db_error", false],
+  ]) {
+    await t(`trasporto: ${name} → ${expErr}`, async () => {
+      rpcAnswer = answer;
+      const r = await cambiaMetodoPago("#A", { metodo_pago: "bizum", metodo_pago_esperado: "efectivo" });
+      assert.strictEqual(r.success, false, JSON.stringify(r));
+      assert.strictEqual(r.error, expErr, JSON.stringify(r));
+      if (unknown !== undefined) assert.strictEqual(r.outcome_unknown === true, unknown, JSON.stringify(r));
+      assert.strictEqual(UPDATED.length + LOGS.length, 0, "nessuna scrittura compensativa");
     });
   }
 
-  await t("correzione su ordine inesistente → not_found", async () => {
-    const r = await cambiaMetodoPago("#X", { metodo_pago: "bizum" });
-    assert.strictEqual(r.error, "not_found");
-  });
-
-  await t("doppio click sulla correzione: seconda = noop, 1 solo audit", async () => {
-    retirado("#A", "efectivo");
-    const r1 = await cambiaMetodoPago("#A", { metodo_pago: "tarjeta", metodo_pago_esperado: "efectivo" });
-    const before = fp("#A");
-    const r2 = await cambiaMetodoPago("#A", { metodo_pago: "tarjeta", metodo_pago_esperado: "efectivo" });
-    assert.ok(r1.success && !r1.noop);
-    assert.ok(r2.success && r2.noop === true, JSON.stringify(r2));
-    assert.strictEqual(fp("#A"), before);
-    assert.strictEqual(LOGS.length, 1);
-  });
-
-  await t("doppio click CONCORRENTE sulla correzione: 1 scrittura, 1 noop, 1 audit", async () => {
-    retirado("#A", "efectivo");
-    const [r1, r2] = await Promise.all([
-      cambiaMetodoPago("#A", { metodo_pago: "tarjeta", metodo_pago_esperado: "efectivo" }),
-      cambiaMetodoPago("#A", { metodo_pago: "tarjeta", metodo_pago_esperado: "efectivo" }),
-    ]);
-    assert.strictEqual([r1, r2].filter((r) => r.success && !r.noop).length, 1, JSON.stringify([r1, r2]));
-    assert.strictEqual([r1, r2].filter((r) => r.success && r.noop).length, 1);
-    assert.strictEqual(STORE["#A"].metodo_pago, "tarjeta");
-    assert.strictEqual(LOGS.length, 1);
-  });
-
-  await t("due correzioni concorrenti diverse: una vince, l'altra conflitto, 1 audit coerente", async () => {
-    retirado("#A", "efectivo");
-    const [r1, r2] = await Promise.all([
-      cambiaMetodoPago("#A", { metodo_pago: "tarjeta", metodo_pago_esperado: "efectivo" }),
-      cambiaMetodoPago("#A", { metodo_pago: "bizum", metodo_pago_esperado: "efectivo" }),
-    ]);
-    const win = [r1, r2].filter((r) => r.success && !r.noop);
-    const lose = [r1, r2].filter((r) => !r.success);
-    assert.strictEqual(win.length, 1, JSON.stringify([r1, r2]));
-    assert.strictEqual(lose.length, 1);
-    assert.strictEqual(lose[0].error, "payment_method_conflict");
-    assert.strictEqual(STORE["#A"].metodo_pago, win[0].metodo_pago);
-    assert.strictEqual(LOGS.length, 1);
-    assert.strictEqual(LOGS[0].metadata.metodo_pago_to, win[0].metodo_pago);
-  });
-
-  await t("correzione da tab stale (esperado superato) → conflitto, nessuna scrittura", async () => {
-    retirado("#A", "bizum"); // un altro device ha già corretto efectivo → bizum
-    const before = fp("#A");
-    const r = await cambiaMetodoPago("#A", { metodo_pago: "tarjeta", metodo_pago_esperado: "efectivo" });
-    assert.strictEqual(r.error, "payment_method_conflict");
-    assert.strictEqual(r.metodo_pago_actual, "bizum");
-    assert.strictEqual(fp("#A"), before);
-    assert.strictEqual(LOGS.length, 0);
-  });
-
-  await t("audit non scritto → correzione ANNULLATA (metodo precedente ripristinato)", async () => {
-    retirado("#A", "efectivo");
-    failLog = true;
-    const r = await cambiaMetodoPago("#A", { metodo_pago: "bizum", metodo_pago_esperado: "efectivo" });
-    assert.strictEqual(r.success, false);
-    assert.strictEqual(r.error, "payment_audit_failed");
-    assert.strictEqual(r.reverted, true);
-    assert.strictEqual(STORE["#A"].metodo_pago, "efectivo");
-    assert.strictEqual(LOGS.length, 0);
-  });
-
-  await t("audit non scritto E metodo cambiato nel frattempo → reverted:false (mai dichiarato annullato)", async () => {
-    retirado("#A", "efectivo");
-    failLog = true;
-    // un altro device corregge a tarjeta tra la nostra scrittura e il revert
-    onFailedLog = () => { STORE["#A"].metodo_pago = "tarjeta"; };
-    const r = await cambiaMetodoPago("#A", { metodo_pago: "bizum", metodo_pago_esperado: "efectivo" });
-    assert.strictEqual(r.success, false);
-    assert.strictEqual(r.error, "payment_audit_failed");
-    assert.strictEqual(r.reverted, false);
-    assert.strictEqual(STORE["#A"].metodo_pago, "tarjeta", "il revert non deve schiacciare la scrittura altrui");
+  await t("nessun revert applicativo esiste più nel codice della correzione", async () => {
+    const src = require("fs").readFileSync(require.resolve("../src/agents/agentOrdini.js"), "utf8");
+    const body = src.slice(src.indexOf("async function cambiaMetodoPago"), src.indexOf("async function aggiungiItems"));
+    assert.ok(!/sbUpdate|sbInsert\(|revert|logOrderStateTransition/.test(body), "la correzione deve essere solo la RPC");
   });
 
   // ── Creazione: Ya pagado ────────────────────────────────────────────────────
@@ -440,6 +388,13 @@ async function t(name, fn) {
     const collected = Object.values(STORE).filter((o) => o.cobrado).reduce((s, o) => s + o.totale, 0);
     assert.strictEqual(Math.round(collected * 100) / 100, 82.75);
 
+    // modello in memoria della funzione (UPDATE + audit insieme); la versione vera gira su PG reale
+    rpcAnswer = (a) => {
+      const o = STORE[a.p_order_id]; const from = o.metodo_pago;
+      o.metodo_pago = a.p_new_method; o.cobrado = true;
+      LOGS.push({ event_type: "payment_method_changed", orden_id: a.p_order_id, metadata: { metodo_pago_from: from, metodo_pago_to: a.p_new_method } });
+      return { ok: true, noop: false, metodo_pago: a.p_new_method, metodo_pago_anterior: from, audit_id: "u" };
+    };
     const r = await cambiaMetodoPago("#A", { metodo_pago: "bizum", metodo_pago_esperado: "efectivo" });
     assert.ok(r.success, JSON.stringify(r));
     const s1 = await S();
