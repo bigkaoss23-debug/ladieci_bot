@@ -1,0 +1,188 @@
+-- EPHEMERAL FIXTURE -- verbatim bodies of the live helper/trigger functions of the economic ledger.
+-- Read from the staging catalog on 2026-09-19 (project tdikhfeinufaahagmpjz), SELECT-only (pg_get_functiondef).
+-- Executed by realLedger.js with check_function_bodies = off BEFORE fixture/real_ledger_v1.sql (they reference tables
+-- that file creates). Each body is verified by md5(prosrc) against the live value; a single changed character fails the run.
+SET check_function_bodies = off;
+SET ROLE postgres;
+
+CREATE OR REPLACE FUNCTION public.mesa_append_only_v1()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'MESA_APPEND_ONLY' USING ERRCODE='55000';
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION public.order_canonical_obligation_v1(p_order_uid uuid)
+ RETURNS numeric
+ LANGUAGE sql
+ STABLE
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT COALESCE(
+    (SELECT ob.gross_amount FROM public.order_obligations ob
+      WHERE ob.order_uid = p_order_uid ORDER BY ob.revision DESC LIMIT 1),
+    (SELECT CASE WHEN upper(COALESCE(o.estado,'')) IN ('ANULADO','CANCELADO','CANCELLED') THEN 0::numeric
+                 ELSE COALESCE(o.totale, 0) END
+       FROM public.ordenes o WHERE o.order_uid = p_order_uid),
+    0::numeric);
+$function$;
+
+CREATE OR REPLACE FUNCTION public.order_financial_events_append_only()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  -- deterministic, no dynamic SQL, no row contents leaked
+  RAISE EXCEPTION 'order_financial_events is append-only' USING ERRCODE='0A000';
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.order_obligation_anchor_v1()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_workspace uuid;
+  v_kind      text;
+BEGIN
+  IF NEW.order_uid IS NULL THEN
+    RAISE EXCEPTION 'ORDER_OBLIGATION_WITHOUT_IDENTITY' USING ERRCODE='P0001';
+  END IF;
+  IF NEW.service_session_id IS NULL THEN
+    RAISE EXCEPTION 'ORDER_OBLIGATION_WITHOUT_SERVICE_SESSION' USING ERRCODE='P0001';
+  END IF;
+
+  SELECT oe.workspace_id INTO v_workspace
+    FROM public.order_entities oe WHERE oe.order_uid = NEW.order_uid;
+  IF v_workspace IS NULL THEN
+    RAISE EXCEPTION 'ORDER_OBLIGATION_WITHOUT_WORKSPACE' USING ERRCODE='P0001';
+  END IF;
+
+  SELECT ss.service_kind INTO v_kind
+    FROM public.service_sessions ss WHERE ss.id = NEW.service_session_id;
+
+  INSERT INTO public.order_obligations
+    (order_uid, order_id, service_session_id, workspace_id, revision,
+     gross_amount, channel, source, economic_period_kind, created_at)
+  VALUES
+    (NEW.order_uid, NEW.id, NEW.service_session_id, v_workspace, 1,
+     COALESCE(NEW.totale, 0), NEW.canal, 'order_create_v1',
+     CASE WHEN v_kind IN ('PRANZO','SERA') THEN v_kind ELSE NULL END,
+     COALESCE(NEW.created_at, now()));
+
+  RETURN NEW;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.order_obligation_revision_v1()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_prev   public.order_obligations%ROWTYPE;
+BEGIN
+  IF NEW.totale IS NOT DISTINCT FROM OLD.totale THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT * INTO v_prev FROM public.order_obligations
+   WHERE order_uid = NEW.order_uid
+   ORDER BY revision DESC LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN NEW;
+  END IF;
+
+  INSERT INTO public.order_obligations
+    (order_uid, order_id, service_session_id, workspace_id, revision,
+     gross_amount, channel, source, economic_period_kind, created_at)
+  VALUES
+    (NEW.order_uid, NEW.id, v_prev.service_session_id, v_prev.workspace_id,
+     v_prev.revision + 1, COALESCE(NEW.totale, 0), NEW.canal,
+     'order_total_revision_v1', v_prev.economic_period_kind, now());
+
+  RETURN NEW;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.order_obligations_append_only_v1()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    RAISE EXCEPTION 'order_obligations is append-only: UPDATE is forbidden (order_uid=%, revision=%)', OLD.order_uid, OLD.revision
+      USING ERRCODE = '0A000';
+  END IF;
+  RAISE EXCEPTION 'order_obligations is append-only: DELETE is forbidden (order_uid=%, revision=%)', OLD.order_uid, OLD.revision
+    USING ERRCODE = '0A000';
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.payment_transactions_stamp_economic_period_v1()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  NEW.economic_period_kind := public.classify_economic_period_v1(clock_timestamp());
+  RETURN NEW;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.service_session_assign_financial_event()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_session_id     uuid;
+  v_table_session  uuid;
+  v_candidates     uuid[];
+  v_order_created_at timestamptz;
+BEGIN
+  SELECT o.service_session_id, o.created_at INTO v_session_id, v_order_created_at
+    FROM public.ordenes o WHERE o.id = NEW.order_id;
+
+  IF v_session_id IS NULL AND NEW.payment_transaction_id IS NOT NULL THEN
+    SELECT pt.table_session_id INTO v_table_session
+      FROM public.payment_transactions pt WHERE pt.id = NEW.payment_transaction_id;
+
+    SELECT array_agg(DISTINCT l.service_session_id) INTO v_candidates
+      FROM public.payment_allocations pa
+      JOIN public.table_order_lines   l ON l.id = pa.table_order_line_id
+     WHERE pa.payment_transaction_id = NEW.payment_transaction_id
+       AND l.table_session_id        = v_table_session
+       AND l.order_id                = NEW.order_id;
+
+    IF v_candidates IS NOT NULL AND cardinality(v_candidates) > 1 THEN
+      RAISE EXCEPTION 'ORDER_OBLIGATION_AMBIGUOUS' USING ERRCODE='P0001',
+        DETAIL = format('order=%s table_session=%s candidates=%s',
+                        NEW.order_id, v_table_session, v_candidates);
+    END IF;
+    IF v_candidates IS NOT NULL AND cardinality(v_candidates) = 1 THEN
+      v_session_id := v_candidates[1];
+    END IF;
+  END IF;
+
+  IF v_session_id IS NULL THEN
+    RAISE EXCEPTION 'ORDER_WITHOUT_SERVICE_SESSION' USING ERRCODE='P0001';
+  END IF;
+
+  NEW.service_session_id := v_session_id;
+
+  NEW.obligation_economic_period_kind := CASE WHEN v_order_created_at IS NOT NULL
+    THEN public.classify_economic_period_v1(v_order_created_at) ELSE NULL END;
+  NEW.event_economic_period_kind := public.classify_economic_period_v1(clock_timestamp());
+
+  RETURN NEW;
+END $function$;
+
+
+RESET ROLE;

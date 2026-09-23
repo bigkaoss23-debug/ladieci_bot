@@ -94,6 +94,7 @@ const ACTION_POLICY_REGISTRY = Object.freeze([
   // ── delivery / dispatch ───────────────────────────────────────────────────
   { action: 'marcarEnEntrega', acceptedCapabilities: ['delivery.trip.operate'], legacyStatus: 'rider_allowed', v3Phase: 'V3-A' },
   { action: 'marcarEntregado', acceptedCapabilities: ['delivery.trip.operate'], legacyStatus: 'rider_allowed', v3Phase: 'V3-A' },
+  { action: 'confirmarEntregaOperador', acceptedCapabilities: ['delivery.dispatch'], legacyStatus: 'operator_shared', v3Phase: 'V3-A', note: 'DELIVERY x ECONOMY DECOUPLING (migration 139): the pizzeria confirms the delivery (EN_ENTREGA -> RETIRADO) as the OPERATOR, optionally with the payment through the canonical Cash V1 writer (order_post_payment_v1), in one transaction. Never rider-reachable; the rider keeps marcarEntregado.' },
   { action: 'registrarSalidaDriver', acceptedCapabilities: ['delivery.trip.operate'], legacyStatus: 'rider_allowed', v3Phase: 'V3-A' },
   { action: 'chiudiGiro', acceptedCapabilities: ['delivery.trip.operate'], legacyStatus: 'rider_allowed', v3Phase: 'V3-A' },
   { action: 'asignarRepartidor', acceptedCapabilities: ['delivery.dispatch'], legacyStatus: 'operator_shared', v3Phase: 'V3-A' },

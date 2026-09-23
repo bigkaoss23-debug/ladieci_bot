@@ -50,9 +50,11 @@ async function startCluster() {
     databaseDir: dir, port, user: 'supabase_admin', password: PASSWORD, persistent: false,
     initdbFlags: ['--encoding=UTF8', '--locale=C'],
     postgresFlags: ['-c', 'wal_level=logical', '-c', 'max_replication_slots=8', '-c', 'max_wal_senders=8',
-      '-c', 'fsync=off', '-c', 'max_connections=120'],
-    onLog: () => {},
-    onError: (e) => { if (process.env.W3_PG_VERBOSE) console.error(e); },
+      '-c', 'fsync=off', '-c', 'max_connections=120',
+      // W3_PG_LOG=1: print the server log (deadlock detail included). Off by default: the runs stay quiet.
+      ...(process.env.W3_PG_LOG ? ['-c', 'log_min_messages=error', '-c', 'log_error_verbosity=default', '-c', 'deadlock_timeout=200ms'] : [])],
+    onLog: (m) => { if (process.env.W3_PG_LOG) console.error('[pg]', String(m).trimEnd()); },
+    onError: (e) => { if (process.env.W3_PG_VERBOSE || process.env.W3_PG_LOG) console.error('[pg-err]', String(e && e.message || e).trimEnd()); },
   });
   await server.initialise();
   await server.start();

@@ -51,6 +51,10 @@ const CANONICAL_ACTIONS = Object.freeze([
   'getWaMessageById', 'getOrdenById', 'getConvByWaId', 'getConvChats', 'cambiaStato',
   'creaOrdine', 'modificaOrdine', 'aggiornaRispostaBot', 'setConfig', 'rispondiWA',
   'updateWaStato', 'updateOrden', 'updateEstado', 'marcarEnEntrega', 'marcarEntregado',
+  // DELIVERY x ECONOMY DECOUPLING (migration 139) — the pizzeria's own delivery (+ optional payment)
+  // confirmation. admin + operator (default class): NOT rider-enabled and NOT rider-only; the rider keeps
+  // its own rider-exclusive marcarEntregado.
+  'confirmarEntregaOperador',
   'asignarRepartidor', 'registrarSalidaDriver', 'chiudiGiro', 'marcarLlegado', 'setUiOffset',
   'resolveAddress', 'previewOrderTiming', 'createOrden', 'updateNotaCucina', 'eliminaOrdine',
   // PORT-55 — premium planner previews (read-only, operator_shared).

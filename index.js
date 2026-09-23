@@ -50,6 +50,7 @@ const { integrateMesaRoutes } = require("./src/tables/mesaHttpIntegration");
 // UNIFIED_CASH_UI_SURFACE_V1 — additive canonical-obligation projection for the
 // two operator order-list reads (getOrdenes / getOrdenesArchivadosSesion).
 const { attachOrderFinancial } = require("./src/tables/orderObligationProjection");
+const { readDepartedTripResidueOrders, mergeOrdersById } = require("./src/core/delivery/departedTripResidue");
 // W5 INTENT ACTIVATION V1 — bounded, fail-open Giro intent reconciliation, piggybacked
 // on this same getOrdenes poll (the Cocina/Entregas/Repartidor/Manual-Giro-dashboard
 // ≤10s cadence). Never awaited inline with the response; see giroIntentReconciler.js.
@@ -96,6 +97,7 @@ const isCollectionMethod = (m) => typeof m === "string" && PAYMENT_METHODS.has(m
 // S2-1B — backend-authoritative legacy authorization + transactional rider trip primitives.
 const { legacyAuthGuardMiddleware, authorizeLegacyRequest } = require("./src/auth/legacyAuthGuard");
 const riderTrip = require("./src/agents/riderTrip");
+const operatorDelivery = require("./src/agents/operatorDelivery");
 const riderReads = require("./src/agents/riderReads");
 const { getCurrentServiceCloseout } = require("./src/closeout/currentServiceCloseout");
 const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/serviceSessionLifecycle");
@@ -463,10 +465,22 @@ app.get("/api", async (req, res) => {
             ),
           )
         : [];
+      // DELIVERY x ECONOMY DECOUPLING (migration 139) — a trip that has ALREADY departed may outlive the close
+      // of its economic service. Its EN_ENTREGA members are operational residue: they stay on the board (so the
+      // operator can still confirm the delivery, collect the money or say "Driver volvió") even though their
+      // service is no longer in the operational scope. ONLY the departed trip's members are added — never the
+      // rest of the closed service. Best-effort: this read must never fail the operator's board.
+      let boardRows = ordenesRows;
+      try {
+        const residueRows = await readDepartedTripResidueOrders({ select: sbSelect, operationalSessionIds: sessionIds });
+        if (residueRows.length > 0) boardRows = mergeOrdersById(ordenesRows, residueRows);
+      } catch (e) {
+        console.warn("[getOrdenes] departed-trip residue unavailable (non-fatal):", (e && e.message) || e);
+      }
       // UNIFIED_CASH_UI_SURFACE_V1 — additive `financial` (canonical obligation)
       // per order, ONE batched order_obligations read. Nothing else changes;
       // ordenes.totale is never written. Empty list short-circuits inside.
-      result = await attachOrderFinancial(ordenesRows, { select: sbSelect });
+      result = await attachOrderFinancial(boardRows, { select: sbSelect });
       // W5 INTENT ACTIVATION V1 — bounded reconciliation backstop, fire-and-forget:
       // never awaited, never allowed to delay or fail this read. sessionIds is
       // already resolved above; reconcilePendingGiroIntents itself never throws.
@@ -1003,6 +1017,22 @@ app.post("/api", async (req, res) => {
         return res.status(status).json({ error: resolved.code || "SERVICE_INCIDENT_RESOLVE_FAILED", detail: resolved });
       }
       result = resolved;
+    } else if (action === "confirmarEntregaOperador") {
+      // DELIVERY x ECONOMY DECOUPLING (migration 139) — the pizzeria confirms "the customer received the
+      // order" (EN_ENTREGA -> RETIRADO), optionally with the payment through the canonical Cash V1 writer, in
+      // ONE transaction. Recorded as the OPERATOR (never as the rider). admin + operator only: legacyActionRoles
+      // grants no rider access. The identity is the VERIFIED req.authCtx only — fail closed when it is missing
+      // (a body-supplied identity is never read), exactly like marcarEntregado.
+      const ctx = req.authCtx;
+      if (!ctx || typeof ctx.actor !== "string" || !ctx.actor || !Number.isInteger(ctx.sv) || ctx.sv < 1) {
+        return res.status(401).json({ error: "OPERATOR_DELIVERY_CONTEXT_UNAVAILABLE" });
+      }
+      const mapped = await operatorDelivery.confirmDelivery(
+        req.body && req.body.id,
+        { byActor: ctx.actor, sessionVersion: ctx.sv, sid: ctx.sid },
+        req.body && req.body.payment,
+      );
+      return res.status(mapped.status).json(mapped.payload);
     } else if (req.authCtx && req.authCtx.rule && req.authCtx.rule.tripPrimitive) {
       // The verified identity travels under a reserved key the client cannot forge:
       // req.authCtx is built by legacyAuthGuard from the Bearer token and is spread LAST,

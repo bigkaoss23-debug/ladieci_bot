@@ -41,7 +41,14 @@
   rider-enabled, which was a genuine contract/implementation drift: admin/operator
   could never actually reach `OK` on this action at the canonical layer, only a
   real rider could. It still carries its B7 predicate for the rider caller,
-  exactly like a rider-enabled action does.
+  exactly like a rider-enabled action does. **DELIVERY x ECONOMY DECOUPLING
+  (migration 139):** the *pizzeria's* confirmation that the customer received a
+  delivery is the SEPARATE admin + operator action `confirmarEntregaOperador`
+  (`operator_confirm_delivery_v1`), recorded as the operator and never as the
+  rider; `marcarEntregado` and its RPC stay rider-exclusive and untouched. This
+  reverses the earlier product statement that "only the physical rider can
+  declare a delivery": the operator surface must be able to confirm it too, under
+  its own identity and audit.
 - **admin + operator (default class)** — every canonical action **not** in the
   four groups above. Allowed for `admin` + `operator`; denied to `rider` +
   `service`. There is **no** implicit "admin allows everything": `admin` is
@@ -88,8 +95,8 @@ targets, and be added here + to the module + to the tests explicitly.
 
 | Principal | Allowed actions |
 |---|---|
-| `admin` | 71 (every routed action except `triggerCloseIfNeeded` and the rider-only `marcarEntregado`) |
-| `operator` | 52 (every action except `triggerCloseIfNeeded` + the admin-only set + the rider-only `marcarEntregado`) |
+| `admin` | 72 (every routed action except `triggerCloseIfNeeded` and the rider-only `marcarEntregado`) |
+| `operator` | 53 (every action except `triggerCloseIfNeeded` + the admin-only set + the rider-only `marcarEntregado`) |
 | `rider` | 7 (the 6 rider-enabled actions + the 1 rider-only action) |
 | `service` | 1 (`triggerCloseIfNeeded`) |
 
@@ -122,7 +129,7 @@ change B3 JWT/login/PIN behavior.
 
 ```
 PRINCIPALS: admin, operator, rider, service
-CANONICAL_COUNT: 73
+CANONICAL_COUNT: 74
 SERVICE_ONLY: triggerCloseIfNeeded
 ADMIN_ONLY: getConfig, rigeneraSuggerimenti, approvaSuggerimento, getClientes, debugInterpreta, debugMenuShadow, getStorico, getOrdenesArchivio, getEconomiaLedger, getServiceIncidents, resolveServiceIncident, getDeliveryLogs, getSuggerimenti, setConfig, eliminaOrdine, eliminaConversazione, getAuthActors, setActorPin, verifyOwnPin
 RIDER_ENABLED: getDriverStatus, updateEstado, marcarEnEntrega, registrarSalidaDriver, chiudiGiro, marcarLlegado
@@ -136,8 +143,8 @@ PREDICATE registrarSalidaDriver: RIDER_REGISTER_SALIDA_SCOPE
 PREDICATE chiudiGiro: RIDER_CLOSE_GIRO_SCOPE
 PREDICATE marcarLlegado: RIDER_MARK_LLEGADO_SCOPE
 ALIAS_MAP: EMPTY
-TOTAL admin: 71
-TOTAL operator: 52
+TOTAL admin: 72
+TOTAL operator: 53
 TOTAL rider: 7
 TOTAL service: 1
 ```

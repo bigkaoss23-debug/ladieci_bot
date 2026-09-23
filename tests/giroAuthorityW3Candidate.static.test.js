@@ -126,7 +126,14 @@ const b1Applied = fs.existsSync(B1_STATIC_GUARD);
 // an unauthorized new giro_authority migration still fails this check.
 const ATC138_STATIC_GUARD = path.join(ROOT, 'tests', 'activeTripServiceCloseExclusionMigration.test.js');
 const atc138Applied = fs.existsSync(ATC138_STATIC_GUARD);
-assert('exactly the migration-130, migration-131, migration-132, migration-133, migration-134, (once its own guard is present) migration-135, (once its own guard is present) migration-137, and (once its own guard is present) migration-138 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
+// DELIVERY_ECONOMY_DECOUPLING_V1_2026-09-19 — migration 139 re-defines close_service_session_v3 once more (the
+// migration-138 body minus the active-trip refusal; the dispatch lock L0 is kept) and carries the close's own
+// giro intent sweep verbatim, so it references giro_authority exactly like migrations 132/137/138 already do.
+// Admitted here ONLY because its own static guard exists on the branch to vouch for it, exactly like every earlier
+// successor above — an unauthorized new giro_authority migration still fails this check.
+const DED139_STATIC_GUARD = path.join(ROOT, 'tests', 'deliveryEconomyDecouplingMigration.test.js');
+const ded139Applied = fs.existsSync(DED139_STATIC_GUARD);
+assert('exactly the migration-130, migration-131, migration-132, migration-133, migration-134, (once its own guard is present) migration-135, (once its own guard is present) migration-137, (once its own guard is present) migration-138, and (once its own guard is present) migration-139 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
   JSON.stringify(giroAuthoritySqlFiles) === JSON.stringify([
     '2026-09-14_giro_authority_v1_migration_130.ROLLBACK.sql',
     '2026-09-14_giro_authority_v1_migration_130.sql',
@@ -149,6 +156,10 @@ assert('exactly the migration-130, migration-131, migration-132, migration-133, 
     ...(atc138Applied ? [
       '2026-09-19_active_trip_service_close_exclusion_v1_migration_138.ROLLBACK.sql',
       '2026-09-19_active_trip_service_close_exclusion_v1_migration_138.sql',
+    ] : []),
+    ...(ded139Applied ? [
+      '2026-09-19_delivery_economy_decoupling_v1_migration_139.ROLLBACK.sql',
+      '2026-09-19_delivery_economy_decoupling_v1_migration_139.sql',
     ] : []),
   ]), giroAuthoritySqlFiles.join(', '));
 assert('MIGRATION_MANIFEST.md documents migration 130 (giro_authority row present)',

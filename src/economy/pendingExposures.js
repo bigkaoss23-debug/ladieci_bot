@@ -32,6 +32,9 @@
 // Raw balance alone produces false positives: an order still `LISTO` or
 // `EN_ENTREGA` has a real unpaid balance too, but it belongs in the normal
 // operational UI, not in a list meant for exposures that OUTLIVED that UI.
+// (One narrow exception, DELIVERY x ECONOMY DECOUPLING B1: an EN_ENTREGA
+// order whose service is already CLOSED has outlived that UI -- see
+// `isUnconfirmedDeliveryOfClosedService`.)
 // Proven against live staging during the audit: balance alone surfaced 8
 // exposures, only 2 of which were real once the eligibility rule below was
 // applied. See `isPendencyEligible` for the exact predicate.
@@ -160,18 +163,44 @@ function channelOf(order) {
   return "OTRO";
 }
 
+// DELIVERY x ECONOMY DECOUPLING (migration 139), correction B1 -- ONE narrow economic rule on top of the
+// estado allowlist above: a DELIVERY order that is still EN_ENTREGA (its delivery is not confirmed yet) whose
+// ECONOMIC SERVICE is already CLOSED is HISTORICAL money, not a live operational balance.
+//
+//   OPEN service   + EN_ENTREGA + unpaid -> still live/current (the normal operational UI's job).
+//   CLOSED service + EN_ENTREGA + unpaid -> historical pending. The service was finalized ("Finalizar con
+//                                            pendientes"): the sale stays on it, the delivery is still to be
+//                                            confirmed and the money is still owed. Economy depends on
+//                                            delivery-confirmed / money-confirmed / amount-owed -- never on the
+//                                            driver or on the trip -- so this credit must not vanish from
+//                                            Economía only because the delivery is not terminal yet.
+//   after Entregado but still unpaid     -> RETIRADO is terminal: historical pending, as before.
+//   after a payment                      -> unpaid is 0: no pendency (safeTicket, not this predicate).
+//
+// Deliberately NOT a change of the global meaning of "operationally over": it is scoped to EN_ENTREGA (the one
+// state a departed delivery can still be in after the close), to a service whose status is exactly 'closed'
+// ('rolled_over' is still an operational scope), and it FAILS CLOSED -- a service row that cannot be resolved
+// keeps the order live, exactly like the Mesa rule for an unresolved table session.
+function isUnconfirmedDeliveryOfClosedService({ order, serviceSession }) {
+  if (String(order.estado || "").toUpperCase() !== "EN_ENTREGA") return false;
+  if (order.table_session_id) return false;
+  return !!serviceSession && serviceSession.status === "closed";
+}
+
 // Is the operational phase over for this order? Mesa is governed by its
 // table session's status (a RETIRADO comanda on a still-OPEN table is a
 // normal, actively-settling Payment Hub balance — the audit's §D explicitly
-// keeps that OUT of Pendientes). Non-Mesa is governed by estado alone, since
-// there is no table session to ask.
-function isOperationallyOver({ order, tableSession }) {
+// keeps that OUT of Pendientes). Non-Mesa is governed by estado, plus the
+// closed-service delivery rule above (`serviceSession` is optional: a caller
+// that does not pass it gets exactly the estado-only answer it always had).
+function isOperationallyOver({ order, tableSession, serviceSession }) {
   if (order.table_session_id) {
     // Fail closed: a Mesa order whose table_sessions row could not be
     // resolved is never treated as over (see MISSING_TABLE_SESSION below).
     return !!tableSession && tableSession.status !== "open";
   }
-  return NON_MESA_TERMINAL_STATES.has(String(order.estado || "").toUpperCase());
+  if (NON_MESA_TERMINAL_STATES.has(String(order.estado || "").toUpperCase())) return true;
+  return isUnconfirmedDeliveryOfClosedService({ order, serviceSession });
 }
 
 // Mesa's synthetic customer fields (mesaService.js: `nombre: table_ref`,
@@ -214,11 +243,31 @@ function lastMovementOf(events) {
   return latest;
 }
 
+// DELIVERY x ECONOMY DECOUPLING (migration 139), post-close operator collection -- the estados in which the
+// hand-over is CONFIRMED (the order left the pizzeria for good), so the only thing still open is the money. This
+// is deliberately NOT the whole of NON_MESA_TERMINAL_STATES: a force-closed order (an operational cleanup, see
+// isCancelLike above) and a cancelled one are not "delivered and still owed", and EN_ENTREGA is not delivered at
+// all (its money is collected together with the delivery confirmation, in Entregas). Every literal is restated
+// from NON_MESA_TERMINAL_STATES for this fourth purpose -- not new vocabulary.
+const DELIVERED_STATES = Object.freeze(new Set(["RETIRADO", "COMPLETADO", "COMPLETATO", "ENTREGADO"])); // language-guard: allow-legacy RETIRADO/COMPLETADO/COMPLETATO/ENTREGADO are the existing estado literals of NON_MESA_TERMINAL_STATES restated for the "hand-over confirmed" subset, not new vocabulary
+
+function isDeliveredEstado(estado) {
+  return DELIVERED_STATES.has(String(estado || "").toUpperCase());
+}
+
 // §23/§24 — HONEST, CONSERVATIVE allowedActions. This reader must never
 // claim a write path exists that this slice did not verify end-to-end:
-//   POR_COBRAR  -> always [] . No writer anywhere can collect a balance
-//                  after the operational phase (audit §F, live-verified
-//                  against mesa_post_payment_v1 and _ledger_write_payment).
+//   POR_COBRAR on a non-MESA order whose delivery is CONFIRMED (RETIRADO family) and that has a permanent order
+//                  identity -> ['COLLECT']. The canonical writer is the EXISTING Cash V1 payment
+//                  (POST /api/cash/v1/checks/:orderUid/payments -> order_post_payment_v1): the server resolves
+//                  the residual amount, the actor and the role, dedupes by clientRequestId and refuses an over or
+//                  double payment; since migration 139 (B2) it records an OFF-SERVICE receipt when no service is
+//                  open. It touches nothing of the delivery, the trip or the closed service. The reader itself
+//                  stays read-only: COLLECT says "this pendency can be collected", it never writes.
+//   POR_COBRAR otherwise -> []. EN_ENTREGA ("Entrega sin confirmar") must NOT offer a plain collection that would
+//                  be mistaken for a delivery confirmation (its money is collected WITH the delivery
+//                  confirmation, in Entregas); a force-closed order and an order with no permanent identity are
+//                  reported, not actionable; a Mesa is settled from its own Payment Hub.
 //   POR_DEVOLVER on MESA -> ['REFUND']. mesa_post_refund_v1 is LIVE,
 //                  deliberately accepts a closed table session, and by
 //                  schema construction (payment_transactions.table_session_id
@@ -231,9 +280,23 @@ function lastMovementOf(events) {
 //                  CONTAINED against transaction-backed orders) — reported
 //                  as unavailable here rather than overstated. Refund V1
 //                  Slice A itself is out of scope for this reader (§24).
-function allowedActionsFor(direction, channel) {
+// `order` is optional: a caller that does not pass it gets exactly the answer this function always gave.
+function allowedActionsFor(direction, channel, order = null) {
   if (direction === "POR_DEVOLVER" && channel === "MESA") return Object.freeze(["REFUND"]);
+  if (direction === "POR_COBRAR" && channel !== "MESA" && order && order.order_uid && isDeliveredEstado(order.estado)) {
+    return Object.freeze(["COLLECT"]);
+  }
   return Object.freeze([]);
+}
+
+// DELIVERY x ECONOMY DECOUPLING: the DELIVERY fact of a pendency, next to (never mixed with) the money fact.
+//   EN_ENTREGA                    -> 'SIN_CONFIRMAR' (its service is closed; the delivery is not confirmed yet)
+//   DOMICILIO + hand-over done    -> 'ENTREGADO'     (delivered; only the money is open)
+//   everything else               -> null            (a pickup/counter order has no delivery fact to state)
+function deliveryStateOf(order, channel) {
+  if (String(order.estado || "").toUpperCase() === "EN_ENTREGA") return "SIN_CONFIRMAR";
+  if (channel === "DOMICILIO" && isDeliveredEstado(order.estado)) return "ENTREGADO";
+  return null;
 }
 
 function buildPendingItem({ order, ticket, channel, sessionRow }) {
@@ -263,7 +326,10 @@ function buildPendingItem({ order, ticket, channel, sessionRow }) {
     channel,
     display: buildDisplay(order),
     customer: normalizeCustomer(order),
-    allowedActions: allowedActionsFor(direction, channel),
+    allowedActions: allowedActionsFor(direction, channel, order),
+    // DELIVERY x ECONOMY DECOUPLING (B1): the DELIVERY fact next to the money fact, never mixed with it (see
+    // deliveryStateOf).
+    deliveryState: deliveryStateOf(order, channel),
     identityConfidence: "STABLE",
   });
 }
@@ -639,7 +705,8 @@ function createPendingExposures({ select = sbSelect } = {}) {
         continue;
       }
 
-      if (!isOperationallyOver({ order, tableSession })) continue; // normal operational UI's job
+      const serviceSession = order.service_session_id ? sessionsById.get(String(order.service_session_id)) || null : null;
+      if (!isOperationallyOver({ order, tableSession, serviceSession })) continue; // normal operational UI's job
 
       // Anti-artefact: a cancel-like/force-closed order that never collected // language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this proof specimen carries, not new vocabulary
       // a single euro is operational residue from the close process, not a
@@ -785,7 +852,7 @@ const getPendingExposures = createPendingExposures();
 module.exports = {
   createPendingExposures, getPendingExposures, PendingExposuresError,
   // Exported for direct unit testing — pure, no I/O.
-  NON_MESA_TERMINAL_STATES, isCancelLike, channelOf, isOperationallyOver,
-  normalizeCustomer, buildDisplay, allowedActionsFor, matchesQuery, withinRange,
+  NON_MESA_TERMINAL_STATES, isCancelLike, channelOf, isOperationallyOver, isUnconfirmedDeliveryOfClosedService,
+  normalizeCustomer, buildDisplay, allowedActionsFor, deliveryStateOf, isDeliveredEstado, matchesQuery, withinRange,
   PENDENCY_PRESETS, resolvePendencyScope,
 };

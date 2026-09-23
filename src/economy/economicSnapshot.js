@@ -340,11 +340,15 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
       // ECON-R1 — the same predicate Pendencias uses to decide an order has
       // left the normal operational UI. A Mesa order (table_session_id set)
       // asks its table session's status; anything else asks its own estado.
+      // DELIVERY x ECONOMY DECOUPLING (B1): the SAME predicate, now also told the order's economic service, so an
+      // EN_ENTREGA order of a CLOSED service is historical here exactly as it is in Pendencias -- each euro sits in
+      // exactly ONE of `currentServiceUnpaid` / `totals.porCobrar`, never both.
       const operationallyOver = isOperationallyOver({
         order: row,
         tableSession: row.table_session_id
           ? (obligationTableSessions.get(String(row.table_session_id)) || null)
           : null,
+        serviceSession: sessionOf(row),
       });
       return Object.freeze({
         ...ticket,

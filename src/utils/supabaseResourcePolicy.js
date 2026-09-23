@@ -436,6 +436,17 @@ const REGISTRY = Object.freeze([
   // the function's own STABLE volatility.
   entry('rpc/trip_projection_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'core/delivery/tripProjectionReader.js readTripProjection()'),
+  // DELIVERY x ECONOMY DECOUPLING (migration 139) -- the service ids that still own a departed (ACTIVE) trip, so
+  // the read scope can include a trip that outlived the close of its economic service (attribution only: no
+  // member, no rider, no service status). Called through readTripProjection()'s injected `rpc` alias, like its
+  // sibling above.
+  entry('rpc/trip_residual_scope_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'core/delivery/tripProjectionReader.js readResidualServiceScope()'),
+  // DELIVERY x ECONOMY DECOUPLING (migration 139) -- the pizzeria's own confirmation "the customer received the
+  // order" (EN_ENTREGA -> RETIRADO by an admin/operator), optionally with the payment through the canonical
+  // Cash V1 writer, in one transaction. The rider's rider_collect_and_complete_stop stays rider-exclusive.
+  entry('rpc/operator_confirm_delivery_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
+    'agents/operatorDelivery.js confirmDelivery()'),
 ]);
 
 const BY_RESOURCE = new Map(REGISTRY.map((e) => [e.resource, e]));

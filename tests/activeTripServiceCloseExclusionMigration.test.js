@@ -146,13 +146,23 @@ test("SCOPE OF THE READ: the trip is read through trip_projection_v1 scoped to e
   assert.match(startBlock, /v_svc\.status IS DISTINCT FROM 'open'/);
 });
 
-test("ONE VOCABULARY: the codes the SQL returns are the codes the JS engine, stale recovery and FE already speak; the departure code is mapped to 409", () => {
-  const { ACTIVE_RIDER_TRIP_CODE } = require("../src/serviceSessions/activeRiderTripBlocker");
-  assert.ok(NEW_CLOSE.includes(`'${ACTIVE_RIDER_TRIP_CODE.ACTIVE_RIDER_TRIP}'`));
-  assert.ok(NEW_CLOSE.includes(`'${ACTIVE_RIDER_TRIP_CODE.RIDER_TRIP_UNVERIFIABLE}'`));
+test("ONE VOCABULARY (superseded by migration 139): the 138 SQL codes are file facts of the immutable 138 migration; the departure code stays mapped to 409; the JS no longer speaks the close refusal", () => {
+  // Migration 138 is applied and immutable: the codes its close body returns are facts about THAT file.
+  assert.ok(NEW_CLOSE.includes("'V3_CLOSE_ACTIVE_RIDER_TRIP'"));
+  assert.ok(NEW_CLOSE.includes("'V3_CLOSE_RIDER_TRIP_UNVERIFIABLE'"));
+  // The other half of the invariant (a NEW trip cannot depart for a service that is not open) is still live and
+  // still surfaces as an ordinary state conflict, never a 500.
   const { CODE_TO_HTTP } = require("../src/agents/riderTrip");
   assert.equal(CODE_TO_HTTP.SERVICE_NOT_OPEN, 409);
   assert.ok(NEW_START.includes("'SERVICE_NOT_OPEN'"));
+  // DELIVERY_ECONOMY_DECOUPLING_V1 (migration 139) removed the JS half of the refusal: a rider trip is a delivery
+  // fact, never an economic blocker. The module that defined "an ACTIVE trip blocks the close" is gone, and no
+  // close path speaks its codes any more (tests/deliveryEconomyDecouplingBackend.test.js proves the behaviour).
+  assert.equal(fs.existsSync(path.join(ROOT, "src", "serviceSessions", "activeRiderTripBlocker.js")), false);
+  for (const f of ["serviceLifecycleEngine.js", "staleServiceRecovery.js", "serviceLifecycleV3Transition.js"]) {
+    assert.doesNotMatch(read(path.join(ROOT, "src", "serviceSessions", f)),
+      /V3_CLOSE_ACTIVE_RIDER_TRIP|V3_CLOSE_RIDER_TRIP_UNVERIFIABLE|activeRiderTripBlocker|refuseWhileRiderTripActive/, f);
+  }
 });
 
 test("OUT OF SCOPE STAYS UNTOUCHED: nothing 138 ADDS mentions trip-close / rider-payment / Entregado / refund / economy / planner objects", () => {

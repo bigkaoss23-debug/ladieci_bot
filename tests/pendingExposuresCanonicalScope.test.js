@@ -33,7 +33,12 @@ const PICKUP = { tipo_consegna: "RITIRO" }; // language-guard: allow-legacy tipo
 const SS_A = "SS-A"; // business_date 2026-09-05
 const SS_B = "SS-B"; // business_date 2026-09-04
 
+// DELIVERY x ECONOMY DECOUPLING (B1): the "still EN_ENTREGA" order lives on an OPEN service. (An EN_ENTREGA order of a
+// CLOSED service is historical money -- see pendingExposuresClosedServiceDelivery.test.js.)
+const SS_LIVE = "SS-LIVE";
 const sessions = [
+  { id: SS_LIVE, business_date: "2026-09-05", status: "open",
+    opened_at: "2026-09-05T08:00:00Z", closed_at: null },
   { id: SS_A, business_date: "2026-09-05", status: "closed",
     opened_at: "2026-09-05T08:00:00Z", closed_at: "2026-09-05T23:00:00Z" },
   { id: SS_B, business_date: "2026-09-04", status: "closed",
@@ -59,9 +64,9 @@ const orders = [
   { id: "#SC-DEV", order_uid: "uid-dev", service_session_id: SS_A, table_session_id: null,
     estado: "RETIRADO", totale: 20, ...PICKUP, nombre: "Cliente Devolver", tel: "600000004",
     created_at: "2026-09-05T11:00:00Z" },
-  // Unpaid 50 but EN_ENTREGA -> operational phase NOT over -> excluded in
-  // EVERY scope. HOY window, service A.
-  { id: "#SC-ACTIVE", order_uid: "uid-active", service_session_id: SS_A, table_session_id: null,
+  // Unpaid 50 but EN_ENTREGA on a LIVE service -> operational phase NOT over -> excluded in
+  // EVERY scope. HOY window, the open service.
+  { id: "#SC-ACTIVE", order_uid: "uid-active", service_session_id: SS_LIVE, table_session_id: null,
     estado: "EN_ENTREGA", totale: 50, ...PICKUP, nombre: "Cliente Activo", tel: "600000005",
     created_at: "2026-09-05T11:30:00Z" },
   // Terminal, unpaid 15, but NO order_uid -> REQUIERE_REVISION, never

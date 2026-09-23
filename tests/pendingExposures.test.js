@@ -115,7 +115,14 @@ test("withinRange / matchesQuery — half-open range, case-insensitive substring
 const SS1 = "ss-1";
 const WORKSPACE = "ws-authenticated"; // the workspace every request in this file is scoped to
 const OTHER_WORKSPACE = "ws-foreign"; // a DIFFERENT workspace, for the isolation tests only
-const sessions = [{ id: SS1, business_date: "2026-08-20", status: "closed" }];
+// DELIVERY x ECONOMY DECOUPLING (B1): the mid-workflow G/H/I orders below belong to a LIVE (open) service. An
+// EN_ENTREGA order of a CLOSED service is historical money and is covered by
+// pendingExposuresClosedServiceDelivery.test.js.
+const SS_LIVE = "ss-live";
+const sessions = [
+  { id: SS1, business_date: "2026-08-20", status: "closed" },
+  { id: SS_LIVE, business_date: "2026-08-23", status: "open" },
+];
 
 const tableSessions = [
   { id: "ts-a", workspace_id: WORKSPACE, status: "closed" },
@@ -156,13 +163,13 @@ const orders = [
     nombre: "Mesa 10", tel: "MESA-000000FA", created_at: "2026-08-23T12:00:00Z" },
   // G/H/I — non-Mesa, still mid-workflow, real unpaid balances, all
   // excluded: the operational phase has not ended yet.
-  { id: "#T-G", order_uid: "uid-g", service_session_id: SS1, table_session_id: null,
+  { id: "#T-G", order_uid: "uid-g", service_session_id: SS_LIVE, table_session_id: null,
     estado: "LISTO", totale: 20, ...DELIVERY, nombre: "", tel: "",
     created_at: "2026-08-23T13:00:00Z" },
-  { id: "#T-H", order_uid: "uid-h", service_session_id: SS1, table_session_id: null,
+  { id: "#T-H", order_uid: "uid-h", service_session_id: SS_LIVE, table_session_id: null,
     estado: "EN_ENTREGA", totale: 15, ...DELIVERY, nombre: "", tel: "",
     created_at: "2026-08-23T14:00:00Z" },
-  { id: "#T-I", order_uid: "uid-i", service_session_id: SS1, table_session_id: null,
+  { id: "#T-I", order_uid: "uid-i", service_session_id: SS_LIVE, table_session_id: null,
     estado: "POR_CONFIRMAR", totale: 12, ...PICKUP, nombre: "", tel: "",
     created_at: "2026-08-23T15:00:00Z" },
   // J — non-Mesa, terminal (RETIRADO), genuinely never collected -> a real

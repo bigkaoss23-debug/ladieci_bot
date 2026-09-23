@@ -33,7 +33,6 @@ const { sbSelect, sbInsert, sbUpsert } = require("./supabase");
 const { calcolaTotaleOrdine, deliveryFeeFor, isBevanda, isDesert } = require("./helpers");
 const { getCurrentOperationalSession, serviceSessionQuery } = require("../serviceSessions/currentOperationalSession");
 const { aggregate: aggregateCloseout } = require("../closeout/currentServiceCloseout");
-const { findActiveRiderTripForService } = require("../serviceSessions/activeRiderTripBlocker");
 
 // The pre-close scan reads through this indirection so a test can hand it an
 // in-memory `select`; with no injected dependency it IS `sbSelect`, and every
@@ -77,8 +76,32 @@ function fasciaOraDa(hora) {
 // `select` / `resolveCurrentService` are test seams only. With no argument the
 // behaviour is byte-identical to before: `sbSelect` and the lifecycle pointer
 // `getCurrentOperationalSession()`.
+// DELIVERY x ECONOMY DECOUPLING (migration 139) -- the money still owed on each in-progress order of the service,
+// from the canonical ledger aggregate (currentServiceCloseout.aggregate: events + canonical obligations, refunds
+// leave the collected total, a voided ticket collects nothing). Returns Map(orderId -> unpaid euros). Read-only,
+// scoped to this service, best effort: any read failure yields an empty map (the amount is simply not shown).
+async function readUnpaidByOrder({ select, service, orders }) {
+  const map = new Map();
+  const list = Array.isArray(orders) ? orders : [];
+  if (list.length === 0 || !service || !service.id) return map;
+  try {
+    const ids = list.map((o) => String(o.id || "")).filter(Boolean);
+    if (ids.length === 0) return map;
+    const filter = `service_session_id=eq.${encodeURIComponent(service.id)}&order_id=in.(${ids.map((id) => encodeURIComponent(id)).join(",")})`;
+    const events = await select("order_financial_events", `${filter}&order=created_at.asc`);
+    const obligations = await select("order_obligations", `${filter}&order=revision.asc`);
+    const { tickets } = aggregateCloseout(service, list, Array.isArray(events) ? events : [], Array.isArray(obligations) ? obligations : []);
+    for (const t of tickets || []) {
+      if (t && !t.cancelled && Number(t.unpaidAmount) > 0) map.set(String(t.id), Number(t.unpaidAmount));
+    }
+  } catch (_) {
+    return new Map();
+  }
+  return map;
+}
+
 // language-guard: allow-legacy scanServizio is the existing export name; only its optional test-seam args are new, not new vocabulary
-async function scanServizio({ select, resolveCurrentService, activeRiderTrip = findActiveRiderTripForService } = {}) {
+async function scanServizio({ select, resolveCurrentService } = {}) {
   const oggi = madridDateStr();
   const sbSelect = typeof select === "function" ? select : _defaultScanSelect;
   const currentService = resolveCurrentService
@@ -97,15 +120,14 @@ async function scanServizio({ select, resolveCurrentService, activeRiderTrip = f
   const waMsgsAttivi     = await sbSelect("wa_msgs", `${conversationWindow}&stato=in.(NUEVO,IN_TRATTAMENTO)`) || [];
   const ordiniInCorso    = await sbSelect("ordenes", sessionFilter("estado=in.(POR_CONFIRMAR,NUEVO,EN_COCINA,LISTO,EN_ENTREGA)")) || [];
   const contiMesaAperti  = await sbSelect("table_sessions", sessionFilter("status=eq.open")) || [];
-  // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — this scan only REPORTS the fact so
-  // the Finalizar preflight can show it and offer the existing canonical action;
-  // it decides nothing. The predicate is the single definition in
-  // activeRiderTripBlocker.js and the close itself is refused by the close
-  // engine, not here. `trips` is 1 (an ACTIVE trip is attributed to this
-  // service), 0 (none) or null (the projection could not be read — never
-  // presented as "none").
-  const tripCheck = await activeRiderTrip({ serviceSessionId: currentService.id });
-  const tripsBlocking = tripCheck && tripCheck.ok === true ? (tripCheck.active ? 1 : 0) : null;
+  // DELIVERY x ECONOMY DECOUPLING (migration 139) -- a rider trip is NOT part of this scan: whether a driver has
+  // left, is back, or which status a trip has never decides whether the service can be finalized, and it is not
+  // an economic fact. What the operator needs to see per in-progress order is TWO independent facts, both taken
+  // from canonical sources: the delivery state (a delivery order still EN_ENTREGA = "delivery not confirmed") and
+  // the money still owed (the ledger-derived ticket, the SAME aggregate() every closeout reader uses). Best
+  // effort: a failure to read the ledger only omits the amount; it never fails the scan and never invents one.
+  // language-guard: allow-legacy ordiniInCorso is the existing local variable of this scan (the in-progress orders), not new vocabulary
+  const unpaidByOrder = await readUnpaidByOrder({ select: sbSelect, service: currentService, orders: ordiniInCorso });
 
   const attiviMap = {};
   (Array.isArray(convAttive)    ? convAttive    : []).forEach(c => { attiviMap[c.wa_id] = { wa_id: c.wa_id, nombre: c.nombre || c.wa_id, hora: c.hora || "", stato: c.stato_ordine || "" }; });
@@ -114,7 +136,14 @@ async function scanServizio({ select, resolveCurrentService, activeRiderTrip = f
     // The order's OWN identity — never the customer's. `order_uid` is the
     // canonical N-2 key; a legacy row without one keeps its unique text id.
     const key = `ord:${o.order_uid || o.id}`;
-    if (!attiviMap[key]) attiviMap[key] = { kind: "order", wa_id: o.wa_id || o.tel || "", nombre: o.nombre || o.id || "", hora: o.hora || "", stato: o.estado || "" };
+    if (!attiviMap[key]) {
+      const row = { kind: "order", wa_id: o.wa_id || o.tel || "", nombre: o.nombre || o.id || "", hora: o.hora || "", stato: o.estado || "" };
+      // language-guard: allow-legacy tipo_consegna is the existing ordenes column name, not new vocabulary
+      if (String(o.tipo_consegna || "").toUpperCase() === "DOMICILIO" && o.estado === "EN_ENTREGA") row.entrega = "SIN_CONFIRMAR";
+      const unpaid = unpaidByOrder.get(String(o.id));
+      if (unpaid > 0) row.unpaidAmount = unpaid;
+      attiviMap[key] = row;
+    }
   });
   (Array.isArray(contiMesaAperti) ? contiMesaAperti : []).forEach(session => {
     const key = `mesa:${session.table_id || session.id}`;
@@ -134,19 +163,6 @@ async function scanServizio({ select, resolveCurrentService, activeRiderTrip = f
       tableId: session.table_id || null,
     };
   });
-  if (tripCheck && tripCheck.ok === true && tripCheck.active === true) {
-    const trip = tripCheck.trip || {};
-    attiviMap[`trip:${trip.tripId || currentService.id}`] = {
-      kind: "trip",
-      wa_id: "",
-      nombre: "Reparto en curso",
-      hora: "",
-      stato: "REPARTO_ACTIVO",
-      tripId: trip.tripId || null,
-      memberCount: Number.isFinite(trip.memberCount) ? trip.memberCount : null,
-    };
-  }
-
   return {
     ok: true,
     data: oggi,
@@ -154,7 +170,6 @@ async function scanServizio({ select, resolveCurrentService, activeRiderTrip = f
     blocking: {
       orders: Array.isArray(ordiniInCorso) ? ordiniInCorso.length : 0,
       tables: Array.isArray(contiMesaAperti) ? contiMesaAperti.length : 0,
-      trips: tripsBlocking,
     },
     completati: {
       ordini: Array.isArray(ordiniCompletati) ? ordiniCompletati.length : 0,

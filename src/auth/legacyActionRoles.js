@@ -27,16 +27,18 @@ const RIDER_ALLOWED = Object.freeze([
   "registrarSalidaDriver",
   // marcarEntregado: this HTTP-level grant also nominally admits admin/operator (it is
   // not in ADMIN_ONLY below). That is a DOCUMENTED, TESTED, INTENTIONALLY INERT grant,
-  // not a live authority — the canonical RPC it routes to (rider_collect_and_complete_
-  // stop, money collection) refuses admin/operator unconditionally and always has (see
-  // src/auth/authorizationContract.js's RIDER_ONLY_ACTIONS, reclassified 2026-09-18,
-  // POST_OPUS_REVIEW_REMEDIATION Scope A). Unlike marcarEnEntrega/start_rider_trip_v2
-  // (migration 137, which widened the CANONICAL layer to match this HTTP grant), the
-  // correct fix here was the opposite direction: keep the RPC rider-exclusive (only the
-  // physical rider can know a delivery actually happened) and stop the operator UI from
-  // ever attempting this call — TabEntregas.jsx's "Driver de vuelta" control now calls
-  // close_rider_trip instead. Proven end to end (real RPC calls, not just static text) by
-  // ci/giro-authority-certification/harness/groups/b1RiderDispatchOperatorParity.js.
+  // not a live authority: the canonical RPC it routes to (rider_collect_and_complete_
+  // stop, the RIDER's own delivery + money attestation) refuses admin/operator
+  // unconditionally and always has (see src/auth/authorizationContract.js's
+  // RIDER_ONLY_ACTIONS). Unlike marcarEnEntrega/start_rider_trip_v2 (migration 137, which
+  // widened the CANONICAL layer to match this HTTP grant), the rider RPC stays rider-
+  // exclusive: a rider's attestation and the pizzeria's confirmation are two callers of
+  // the same business fact, each recorded under its OWN identity. The pizzeria's
+  // confirmation is the SEPARATE action confirmarEntregaOperador below (migration 139,
+  // operator_confirm_delivery_v1), which reverses the 2026-09-18 product decision that
+  // "only the physical rider can declare a delivery": the operator surface must be able
+  // to confirm it too, as the operator. TabEntregas.jsx's "Driver volvió" is unrelated
+  // and still calls close_rider_trip (an operational trip action, not a delivery).
   "marcarEntregado",
   "chiudiGiro",
   // Planner W6.6 — canonical Trip Authority read (trip_state, frozen
@@ -87,6 +89,10 @@ const ALL_ACTIONS = Object.freeze([
   "cambiaStato", "creaOrdine", "modificaOrdine", "aggiornaRispostaBot", "setConfig",
   "rispondiWA", "updateWaStato", "updateOrden", "updateEstado", "marcarEnEntrega",
   "marcarEntregado", "asignarRepartidor", "registrarSalidaDriver", "chiudiGiro",
+  // DELIVERY x ECONOMY DECOUPLING (migration 139): the pizzeria's own delivery (+ optional payment) confirmation.
+  // admin + operator ONLY (default class; NOT in RIDER_ALLOWED): the rider keeps its own rider-exclusive
+  // marcarEntregado, and the operator confirmation is recorded as the operator, never as the rider.
+  "confirmarEntregaOperador",
   "marcarLlegado", "setUiOffset", "resolveAddress", "previewOrderTiming",
   // PORT-55 — premium planner previews. Read-only siblings of previewOrderTiming:
   // admin + operator, never rider, never admin-only. No write reaches the DB.
