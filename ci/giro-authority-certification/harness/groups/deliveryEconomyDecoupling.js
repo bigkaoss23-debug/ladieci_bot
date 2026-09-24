@@ -77,8 +77,28 @@ async function seedCloseable(c, s) {
 
 const closeV3 = (client, s, corr) => call(client, 'close_service_session_v3', [s, corr, 'operator_primary', 'operator_finalizar_v3']);
 const startV2 = (client, anchor, actor, scope) => call(client, 'start_rider_trip_v2', [anchor.order_uid, actor, 1, scope]);
-const riderStop = (client, orderId, method, idem, actor = 'rider') => call(client, 'rider_collect_and_complete_stop',
-  [orderId, method, actor, 1, 'iphash', META, idem]);
+// B-RID-1 (migration 140): on a POST-140 database the rider RPC takes an 8th argument, the session proof of the collection
+// (sha256(sid)). runRiderCanonicalPayment.js sets BRID_RIDER_SID_HASH to re-run these groups there; the proof is then passed
+// only to a database that HAS the 8-argument function (its PRE-139/PRE-140 contrast templates keep the 7-argument one).
+// Unset (this runner), the call is the unchanged 7-argument one and nothing is probed.
+const riderArity8 = new WeakMap();
+// The few assertions whose EXPECTED outcome B-RID-1 changes on purpose (the rider's payment is canonical: it has a
+// transaction; a stale rider Entregado after an operator payment completes the delivery with the canonical
+// ORDER_PAYMENT_ALREADY_SETTLED tolerance instead of the legacy AUTH_BASIS_EXISTS refusal; the rider-vs-Cash deadlock of the
+// legacy writer is gone) branch on this. Unset (this runner): the migration-139 expectations, unchanged.
+const POST140 = () => !!process.env.BRID_RIDER_SID_HASH;
+const staleRiderNoSecondPayment = (r) => (POST140()
+  ? r.ok === true && r.payment === null && r.payment_note === 'ORDER_PAYMENT_ALREADY_SETTLED'
+  : r.ok === false && r.code === 'PAYMENT_REFUSED' && r.payment_code === 'AUTH_BASIS_EXISTS');
+async function riderStop(client, orderId, method, idem, actor = 'rider') {
+  const sid = process.env.BRID_RIDER_SID_HASH;
+  if (sid && !riderArity8.has(client)) {
+    riderArity8.set(client, (await client.query(
+      "SELECT to_regprocedure('public.rider_collect_and_complete_stop(text,text,text,integer,text,jsonb,text,text)') IS NOT NULL AS v")).rows[0].v);
+  }
+  return call(client, 'rider_collect_and_complete_stop', sid && riderArity8.get(client)
+    ? [orderId, method, actor, 1, 'iphash', META, idem, sid] : [orderId, method, actor, 1, 'iphash', META, idem]);
+}
 const closeTrip = (client, trigger = null) => call(client, 'close_rider_trip', [trigger]);
 const opConfirm = (client, orderId, payment = null, actor = 'operator_primary', sv = 1) =>
   call(client, 'operator_confirm_delivery_v1', [orderId, actor, sv, payment == null ? null : JSON.stringify(payment)]);
@@ -590,7 +610,7 @@ async function run(env) {
     const op = await opConfirm(w.c.svc, o.id, PAY());
     const riderStale = await riderStop(w.c.svc, o.id, 'efectivo', 'rider_delivery_O0050');
     const l = await ledger(w.c, o.id);
-    assert('O7/D: the operator paid off-service; the rider\'s STALE Entregado + Efectivo is refused (AUTH_BASIS_EXISTS): exactly ONE payment', op.ok === true && riderStale.ok === false && riderStale.code === 'PAYMENT_REFUSED' && riderStale.payment_code === 'AUTH_BASIS_EXISTS' && l.events === 1 && l.tx.length === 1 && l.unpaid === 0, { riderStale, l });
+    assert('O7/D: the operator paid off-service; the rider\'s STALE Entregado + Efectivo is refused (AUTH_BASIS_EXISTS) [post-140: delivered with ORDER_PAYMENT_ALREADY_SETTLED]: exactly ONE payment', op.ok === true && staleRiderNoSecondPayment(riderStale) && l.events === 1 && l.tx.length === 1 && l.unpaid === 0, { riderStale, l });
     await w.c.close();
   }
   {
@@ -601,7 +621,8 @@ async function run(env) {
     const opStale = await opConfirm(w.c.svc, o.id, PAY());
     const l = await ledger(w.c, o.id);
     assert('O7/E: the rider paid off-service; the operator\'s STALE delivery + payment is IDEMPOTENT (already settled tolerated): exactly ONE payment, the RIDER\'s',
-      rider.ok === true && opStale.ok === true && opStale.code === 'IDEMPOTENT' && opStale.payment_note === 'ORDER_PAYMENT_ALREADY_SETTLED' && l.events === 1 && l.tx.length === 0 && l.ev[0].by_actor === 'rider', { opStale, l });
+      rider.ok === true && opStale.ok === true && opStale.code === 'IDEMPOTENT' && opStale.payment_note === 'ORDER_PAYMENT_ALREADY_SETTLED' && l.events === 1
+      && (POST140() ? l.tx.length === 1 && l.tx[0].by_role === 'rider' : l.tx.length === 0) && l.ev[0].by_actor === 'rider', { opStale, l });
     await w.c.close();
   }
 
@@ -675,7 +696,7 @@ async function run(env) {
     const riderStale = await riderStop(w.c.svc, a.id, 'efectivo', 'rider_delivery_D0001');
     const la = await ledger(w.c, a.id);
     assert('D1: operator-paid, then the rider retries Entregado + Efectivo: typed PAYMENT_REFUSED (AUTH_BASIS_EXISTS), exactly ONE payment event / transaction, obligation covered once',
-      opFirst.ok === true && riderStale.ok === false && riderStale.code === 'PAYMENT_REFUSED' && riderStale.payment_code === 'AUTH_BASIS_EXISTS'
+      opFirst.ok === true && staleRiderNoSecondPayment(riderStale)
       && la.events === 1 && la.tx.length === 1 && la.paid === 12.5 && la.unpaid === 0 && la.estado === 'RETIRADO', { riderStale, la });
     const riderNoMoney = await riderStop(w.c.svc, a.id, '', 'rider_delivery_D0001b');
     assert('D1: the same stale rider page pressing Entregado without money is an IDEMPOTENT no-op (no second state, no second log)', riderNoMoney.ok === true && riderNoMoney.code === 'IDEMPOTENT' && (await logsFor(w.c, a.id)).length === 1, riderNoMoney);
@@ -689,7 +710,7 @@ async function run(env) {
     const lb = await ledger(w.c, b.id);
     assert('D1: rider-paid, then the operator retries delivery + payment: IDEMPOTENT (already settled tolerated), exactly ONE event, still the RIDER\'s tarjeta payment, no operator audit row',
       riderFirst.ok === true && opStale.ok === true && opStale.code === 'IDEMPOTENT' && opStale.payment_note === 'ORDER_PAYMENT_ALREADY_SETTLED'
-      && lb.events === 1 && lb.tx.length === 0 && lb.ev[0].by_actor === 'rider' && lb.ev[0].payment_method === 'tarjeta' && (await logsFor(w.c, b.id)).length === 0, { opStale, lb });
+      && lb.events === 1 && (POST140() ? lb.tx.length === 1 && lb.tx[0].by_role === 'rider' : lb.tx.length === 0) && lb.ev[0].by_actor === 'rider' && lb.ev[0].payment_method === 'tarjeta' && (await logsFor(w.c, b.id)).length === 0, { opStale, lb });
     await w.c.close();
   }
 
@@ -906,7 +927,8 @@ async function run(env) {
     const op = await cashPay(w.c.svc, wsId, a.o, {});
     const riderStale = await riderStop(w.c.svc, a.o.id, 'efectivo', 'rider_delivery_P0051');
     const l = await ledger(w.c, a.o.id);
-    assert('P6/6b: operator paid first (order still EN_ENTREGA), the rider\'s stale Entregado + Efectivo is refused (AUTH_BASIS_EXISTS): exactly ONE payment', op.ok === true && riderStale.ok === false && riderStale.code === 'PAYMENT_REFUSED' && riderStale.payment_code === 'AUTH_BASIS_EXISTS' && l.events === 1 && l.tx.length === 1, { riderStale, l });
+    assert('P6/6b: operator paid first (order still EN_ENTREGA), the rider\'s stale Entregado + Efectivo is refused (AUTH_BASIS_EXISTS) [post-140: delivered (RETIRADO) with ORDER_PAYMENT_ALREADY_SETTLED]: exactly ONE payment', op.ok === true && staleRiderNoSecondPayment(riderStale) && l.events === 1 && l.tx.length === 1
+      && (!POST140() || l.estado === 'RETIRADO'), { riderStale, l });
     await w.c.close();
   }
 
@@ -1142,8 +1164,9 @@ async function run(env) {
     const o = await w.mk({ estado: 'LISTO', totale: 12.5, id: '#P0011', zona: 'Q1' });
     await startV2(w.c.svc, o, 'operator_primary', w.scope);
     const r = await cashLockModel(w, o, (c) => riderStop(c, o.id, 'efectivo', 'rider_delivery_P0011'));
-    assert('L2b: POST-139 (edited Cash V1 writer): the SAME pre-existing rider-stop vs Cash V1 deadlock (40P01) is still detected -- unchanged, not introduced by 139',
-      r.cashErr === '40P01' || (r.res && r.res.threw === '40P01'), r);
+    assert('L2b: POST-139 (edited Cash V1 writer): the SAME pre-existing rider-stop vs Cash V1 deadlock (40P01) is still detected -- unchanged, not introduced by 139 [post-140: the cycle is GONE -- the rider completes, no 40P01]',
+      POST140() ? (r.cashErr === null && !!r.res && r.res.ok === true && r.res.code === 'OK')
+        : (r.cashErr === '40P01' || (r.res && r.res.threw === '40P01')), r);
     const l = await ledger(w.c, o.id);
     assert('L2b: nothing double-written', l.events <= 1 && l.paid <= l.obligation, l);
     const retry = await riderStop(w.c.svc, o.id, 'efectivo', 'rider_delivery_P0011');

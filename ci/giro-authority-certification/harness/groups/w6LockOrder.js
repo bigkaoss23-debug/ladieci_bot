@@ -81,8 +81,11 @@ async function staticProofL0First(c) {
   // rider_collect_and_complete_stop / start_rider_trip: untouched by this migration,
   // independently re-verified to already satisfy the same shape (L0 first; the rider
   // contract never locks manual_giros at all, so it can never invert L1-before-L0).
+  // Resolved by NAME (exactly one overload exists): migration 140 (B-RID-1) replaces the 7-argument function with an
+  // 8-argument one (trailing p_by_sid_hash DEFAULT NULL); the lock-order property checked here is the same on both.
   const rc = (await c.su.query(
-    `SELECT pg_get_functiondef('public.rider_collect_and_complete_stop(text,text,text,integer,text,jsonb,text)'::regprocedure) AS def`
+    `SELECT pg_get_functiondef(p.oid) AS def FROM pg_proc p
+      WHERE p.proname = 'rider_collect_and_complete_stop' AND p.pronamespace = 'public'::regnamespace`
   )).rows[0].def;
   assert('rider_collect_and_complete_stop: already carries L0', rc.includes('LA_DIECI_DRIVER_STATO'));
   assert('rider_collect_and_complete_stop: never references manual_giros (no L1 inversion possible)', !rc.includes('manual_giros'));

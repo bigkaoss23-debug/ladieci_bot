@@ -118,14 +118,18 @@ function check(label, cond) { if (cond) { pass++; console.log("  ✓ " + label);
   // `p_cobrado` boolean is GONE: it came from the client and the RPC wrote it straight onto
   // `ordenes` with no ledger event. The wrapper forwards the VERIFIED session identity and
   // the method; the amount is derived server-side and never crosses this boundary.
+  const SID_HASH = "a".repeat(64);
   await riderTrip.completeStop("ORD2", "efectivo", {
     byActor: "rider", sessionVersion: 4, ipHash: "iphash",
-    meta: { source: "rider_delivery" }, idemScopeKey: "pay-order-ORD2",
+    meta: { source: "rider_delivery" }, idemScopeKey: "pay-order-ORD2", bySidHash: SID_HASH,
   });
   const a = lastRpc.args;
   check("completeStop -> rider_collect_and_complete_stop", lastRpc.fn === "rider_collect_and_complete_stop");
   check("completeStop whitelist keys exact", JSON.stringify(Object.keys(a).sort()) === JSON.stringify(
-    ["p_by_actor","p_idem_scope_key","p_ip_hash","p_meta","p_metodo_pago","p_order_id","p_session_version"]));
+    ["p_by_actor","p_by_sid_hash","p_idem_scope_key","p_ip_hash","p_meta","p_metodo_pago","p_order_id","p_session_version"]));
+  // B-RID-1 (migration 140) — the canonical writer needs the verified session proof; the
+  // wrapper forwards it untouched and never invents one.
+  check("completeStop forwards the verified session proof (sha256(sid)) as p_by_sid_hash", a.p_by_sid_hash === SID_HASH);
   check("completeStop forbids financial fields",
     !("descuento_tipo" in a) && !("descuento_valor" in a) && !("total" in a) && !("totale" in a) && !("pagado" in a) && !("ya_pagado" in a) && !("estado" in a));
   check("completeStop no longer carries a client-asserted cobrado", !("p_cobrado" in a) && !("cobrado" in a));
@@ -138,6 +142,10 @@ function check(label, cond) { if (cond) { pass++; console.log("  ✓ " + label);
   // must still complete — with an EMPTY method, so the RPC writes no financial event.
   await riderTrip.completeStop("ORD3", "", { byActor: "rider", sessionVersion: 4, ipHash: "iphash", idemScopeKey: "pay-order-ORD3" });
   check("completeStop supports a no-collection stop", lastRpc.args.p_metodo_pago === "");
+  check("completeStop without a session proof forwards NULL (the RPC refuses a collection; never a fabricated proof)",
+    lastRpc.args.p_by_sid_hash === null);
+  check("PAYMENT_CONTEXT_UNAVAILABLE from the RPC maps to 401, never a generic 500",
+    riderTrip.mapResult({ httpStatus: 200, ok: true, body: { ok: false, code: "PAYMENT_CONTEXT_UNAVAILABLE" } }).status === 401);
   await riderTrip.completeStop("ORD4", null, { byActor: "rider", sessionVersion: 4, ipHash: "iphash", idemScopeKey: "pay-order-ORD4" });
   check("completeStop null method becomes empty string, never a default", lastRpc.args.p_metodo_pago === "");
 

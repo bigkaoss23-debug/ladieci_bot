@@ -11,9 +11,10 @@
 // just hashes it, via the SAME shared helper Mesa uses, never a new mechanism.
 //
 // WHAT THIS IS NOT. It is not a payment writer. It writes nothing, derives no amount and
-// records no money. The canonical writer is `public.order_mark_paid` -> `_ledger_write_payment`
-// -- the same authority the operator collection path reaches through registerOperatorPayment --
-// and it is invoked by the DB trigger `ordenes_paid_at_creation_payment_v1` on the order's own
+// records no money. The canonical writer is `public.order_post_payment_v1` (migration 122; the
+// legacy `order_mark_paid` -> `_ledger_write_payment` chain is retired, and migration 140 drops
+// `_ledger_write_payment`) -- the same authority Cash V1, the operator's delivery confirmation and
+// the rider's Entregado reach -- and it is invoked by the DB trigger `ordenes_paid_at_creation_payment_v1` on the order's own
 // INSERT, so order + obligation + payment are one atomic operation. This module only turns a
 // verified request context into the ephemeral intent that trigger consumes, and turns the
 // trigger's refusals back into truthful operator sentences.

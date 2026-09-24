@@ -63,6 +63,7 @@ const { createAdminAccessService } = require("./src/auth/adminAccessService");
 const pinPolicy = require("./src/auth/pinPolicy");
 const { hashPin, verifyPin } = require("./src/auth/scrypt");
 const { ipHash } = require("./src/auth/ipSecurity");
+const { sidHash } = require("./src/auth/sidHash");
 const jwt = require("./src/auth/jwt");
 const { createPinStepUpVerifier } = require("./src/auth/pinStepUp");
 // S2-7D6E — canonical operator payment registration (wires the existing B7A2 ledger into
@@ -268,6 +269,14 @@ async function routeRiderTripAction(action, body) {
       if (payMethod && (typeof ipH !== "string" || !ipH.trim())) {
         return { status: 400, payload: { error: "PAYMENT_CONTEXT_UNAVAILABLE" } };
       }
+      // B-RID-1 (migration 140) — the collection is recorded by the canonical Cash V1 writer,
+      // as the rider, and that writer requires the proof of the session attesting the money:
+      // sha256(sid) of the VERIFIED token (the same proof an operator payment carries). A token
+      // without a sid cannot collect; the rider re-logs in. A stop without money needs no proof.
+      const bySidHash = sidHash(ctx.sid);
+      if (payMethod && !bySidHash) {
+        return { status: 401, payload: { error: "PAYMENT_CONTEXT_UNAVAILABLE" } };
+      }
       // `cobrado` from the body is deliberately NOT read: the client never asserts payment.
       return riderTrip.completeStop(body && body.id, payMethod, {
         byActor: ctx.actor,
@@ -275,6 +284,7 @@ async function routeRiderTripAction(action, body) {
         ipHash: ipH,
         meta: { source: "rider_delivery" },
         idemScopeKey: key,
+        bySidHash,
       });
     }
     case "chiudiGiro":

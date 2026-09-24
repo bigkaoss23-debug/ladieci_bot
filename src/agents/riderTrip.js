@@ -41,6 +41,10 @@ const CODE_TO_HTTP = Object.freeze({
   // The rider retries; the deterministic key makes an honest retry a replay.
   PAYMENT_REFUSED: 409,
   RIDER_STOP_LOST_RACE: 409,
+  // B-RID-1 (migration 140) — a collection reached the RPC without the session proof the
+  // canonical writer requires (sha256(sid)): nothing was written, the stop did not move.
+  // Same status index.js already answers for a missing verified payment context.
+  PAYMENT_CONTEXT_UNAVAILABLE: 401,
   // Identity refusals surfaced by the rider payment contract. Deliberately opaque codes.
   AUTH_METHOD_INVALID: 400,
   AUTH_SESSION_STALE: 401,
@@ -160,12 +164,18 @@ async function startTrip(anchorOrderId, ctx = {}, deps = {}) {
 //
 // The old signature took `cobrado` from the CLIENT and the RPC wrote it straight onto
 // `ordenes` with no ledger event, no actor and no session_version. It is gone: this now
-// calls the dedicated rider contract, which records the collection in
-// order_financial_events (as the rider, source `rider_delivery`) and completes the stop in
-// ONE transaction, rolling both back if the ledger refuses.
+// calls the dedicated rider contract, which records the collection through the canonical
+// payment writer (as the rider, source `rider_delivery`) and completes the stop in ONE
+// transaction, rolling both back if the ledger refuses.
 //
 // This module still derives no amount and builds no digest — SQL owns all of that.
 // `ctx` carries the VERIFIED session identity only; nothing here comes from the body.
+//
+// B-RID-1 (migration 140) — the RPC now records the collection through the canonical Cash V1
+// writer (payment transaction + allocation + event, as the rider), which requires the same
+// session proof an operator payment carries: `bySidHash` = sha256(sid) of the VERIFIED
+// token, computed by index.js. null when absent — the RPC then refuses the collection with a
+// typed PAYMENT_CONTEXT_UNAVAILABLE and writes nothing (a no-money stop needs no proof).
 async function completeStop(orderId, metodoPago, ctx = {}) {
   const r = await sbRpc("rider_collect_and_complete_stop", {
     p_order_id: String(orderId),
@@ -175,6 +185,7 @@ async function completeStop(orderId, metodoPago, ctx = {}) {
     p_ip_hash: ctx.ipHash == null ? "" : String(ctx.ipHash),
     p_meta: ctx.meta || {},
     p_idem_scope_key: ctx.idemScopeKey == null ? "" : String(ctx.idemScopeKey),
+    p_by_sid_hash: typeof ctx.bySidHash === "string" && ctx.bySidHash ? ctx.bySidHash : null,
   });
   return mapResult(r);
 }

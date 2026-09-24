@@ -534,4 +534,9 @@ async function main() {
   process.exit(state.fail === 0 ? 0 : 1);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+// B-RID-1 (migration 140): runRiderCanonicalPayment.js stacks 140 on the SAME chain, so the builders are exported; run
+// directly, this file is the unchanged migration-139 certification.
+module.exports = { applyThroughMigration138, buildPre, buildStubPost, applyRepoAsPostgres, addSingleActiveIndex, catalogFingerprint,
+  fingerprintDiff, md5Of, bodies, FWD, RBK, REGRESSION_GROUPS, STUB_LEDGER_GROUPS, NEW_GROUPS, OLD_SCOPE_CHK, NEW_SCOPE_CHK,
+  LIVE_COMMENT_SERVICE, LIVE_COMMENT_TABLE, PRE_CLOSE_MD5 };
+if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });

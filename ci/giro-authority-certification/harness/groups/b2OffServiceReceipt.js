@@ -428,6 +428,8 @@ async function run(env) {
       return x;
     })();
     await cashPay(w.c.svc, ws, o, { method: 'efectivo' });
+    // B-RID-1: on a POST-140 database the documented rollback order is 140 first, then 139 (139's rollback pins the 139 writer body).
+    if (env.BRID_RBK) { await env.applyRepoAsPostgres(w.c.su, env.BRID_RBK); }
     const before = await env.catalogFingerprint(w.c.su);
     const md5Before = (await w.c.su.query(`SELECT md5(prosrc) AS m FROM pg_proc WHERE oid = 'public.order_post_payment_v1(uuid,text,text,uuid,text,text,numeric,text,text,jsonb,boolean)'::regprocedure`)).rows[0].m;
     let err = null;
@@ -447,6 +449,7 @@ async function run(env) {
     const spare = await w.mk({ estado: 'RETIRADO', totale: 7, id: '#R2002', zona: 'Q1' });
     await cashPay(w.c.svc, ws, o, { method: 'efectivo' });                    // a SERVICE-BEARING receipt (A is open): allowed under the old constraint
     await H.closeV3(w.c.svc, w.s, await H.seedCloseable(w.c, w.s));
+    if (env.BRID_RBK) { await env.applyRepoAsPostgres(w.c.su, env.BRID_RBK); }   // B-RID-1: roll back 140 first (documented order)
     const fp0 = await env.catalogFingerprint(w.c.su);
     let err = null;
     try { await env.applyRepoAsPostgres(w.c.su, env.RBK); } catch (e) { err = e; }
