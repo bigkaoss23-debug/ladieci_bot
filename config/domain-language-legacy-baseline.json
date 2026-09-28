@@ -1,6 +1,21 @@
 {
-  "generatedAt": "2026-08-25T07:28:44.410Z",
+  "generatedAt": "2026-09-28T07:12:55.165Z",
   "entries": [
+    {
+      "file": "cutover/legacy_archive_v1.sql",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "cutover/legacy_archive_v1.sql",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "cutover/legacy_archive_v1.sql",
+      "term": "storico",
+      "count": 4
+    },
     {
       "file": "index.js",
       "term": "archivio",
@@ -9,7 +24,7 @@
     {
       "file": "index.js",
       "term": "chiudi",
-      "count": 18
+      "count": 7
     },
     {
       "file": "index.js",
@@ -29,37 +44,32 @@
     {
       "file": "index.js",
       "term": "ordine",
-      "count": 18
+      "count": 16
     },
     {
       "file": "index.js",
       "term": "ordini",
-      "count": 10
-    },
-    {
-      "file": "index.js",
-      "term": "pizze",
-      "count": 2
-    },
-    {
-      "file": "index.js",
-      "term": "pranzo",
-      "count": 4
-    },
-    {
-      "file": "index.js",
-      "term": "ritiro",
-      "count": 4
-    },
-    {
-      "file": "index.js",
-      "term": "serata",
       "count": 8
     },
     {
       "file": "index.js",
+      "term": "pranzo",
+      "count": 1
+    },
+    {
+      "file": "index.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "index.js",
+      "term": "serata",
+      "count": 4
+    },
+    {
+      "file": "index.js",
       "term": "servizio",
-      "count": 19
+      "count": 6
     },
     {
       "file": "index.js",
@@ -562,6 +572,96 @@
       "count": 1
     },
     {
+      "file": "migrations/2026-09-26_close_day_evidence_freshness_v1_migration_154.sql",
+      "term": "storico",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-09-26_order_editor_canonical_writer_v1_migration_153.sql",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "migrations/2026-09-26_order_editor_canonical_writer_v1_migration_153.sql",
+      "term": "cucina",
+      "count": 2
+    },
+    {
+      "file": "migrations/2026-09-26_order_editor_canonical_writer_v1_migration_153.sql",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "archivio",
+      "count": 21
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "consegna",
+      "count": 13
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "cucina",
+      "count": 5
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "messa",
+      "count": 1
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "ordine",
+      "count": 7
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "ordini",
+      "count": 13
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "pizze",
+      "count": 3
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "pranzo",
+      "count": 14
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "ritiro",
+      "count": 6
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "serata",
+      "count": 50
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "servizio",
+      "count": 2
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "settimana",
+      "count": 1
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "storico",
+      "count": 66
+    },
+    {
+      "file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+      "term": "suggerimenti",
+      "count": 13
+    },
+    {
       "file": "ops/backup/b7a2_e2e_b_restore_2026-07-22.sql",
       "term": "chiuso",
       "count": 6
@@ -605,6 +705,41 @@
       "file": "ops/staging_cleanup_b7a2_e2e_b.sql",
       "term": "storico",
       "count": 8
+    },
+    {
+      "file": "scripts/cutover/legacyImport.js",
+      "term": "archivio",
+      "count": 1
+    },
+    {
+      "file": "scripts/cutover/legacyImport.js",
+      "term": "consegna",
+      "count": 5
+    },
+    {
+      "file": "scripts/cutover/legacyImport.js",
+      "term": "ordini",
+      "count": 3
+    },
+    {
+      "file": "scripts/cutover/legacyImport.js",
+      "term": "ritiro",
+      "count": 1
+    },
+    {
+      "file": "scripts/cutover/legacyImport.js",
+      "term": "serata",
+      "count": 7
+    },
+    {
+      "file": "scripts/cutover/legacyImport.js",
+      "term": "storico",
+      "count": 11
+    },
+    {
+      "file": "scripts/cutover/legacyImport.js",
+      "term": "suggerimenti",
+      "count": 1
     },
     {
       "file": "scripts/deliveryPlannerShadowBackupReadOnly.js",
@@ -769,7 +904,7 @@
     {
       "file": "src/agents/agentOrdini.js",
       "term": "consegna",
-      "count": 68
+      "count": 69
     },
     {
       "file": "src/agents/agentOrdini.js",
@@ -838,18 +973,8 @@
     },
     {
       "file": "src/agents/manualGiros.js",
-      "term": "chiudi",
-      "count": 2
-    },
-    {
-      "file": "src/agents/manualGiros.js",
       "term": "consegna",
-      "count": 3
-    },
-    {
-      "file": "src/agents/manualGiros.js",
-      "term": "servizio",
-      "count": 3
+      "count": 1
     },
     {
       "file": "src/agents/manualGiros.js",
@@ -887,6 +1012,91 @@
       "count": 4
     },
     {
+      "file": "src/agents/previewManualGiroRoute.js",
+      "term": "consegna",
+      "count": 4
+    },
+    {
+      "file": "src/agents/previewManualGiroRoute.js",
+      "term": "ordine",
+      "count": 4
+    },
+    {
+      "file": "src/agents/previewManualGiroRoute.js",
+      "term": "pizze",
+      "count": 3
+    },
+    {
+      "file": "src/agents/previewManualGiroRoute.js",
+      "term": "ritiro",
+      "count": 2
+    },
+    {
+      "file": "src/agents/previewOrderPlanner.js",
+      "term": "consegna",
+      "count": 20
+    },
+    {
+      "file": "src/agents/previewOrderPlanner.js",
+      "term": "pizze",
+      "count": 1
+    },
+    {
+      "file": "src/agents/previewOrderPlanner.js",
+      "term": "ritiro",
+      "count": 3
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "chiuso",
+      "count": 3
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "consegna",
+      "count": 2
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "cucina",
+      "count": 9
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "oggi",
+      "count": 1
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "ordine",
+      "count": 11
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "ordini",
+      "count": 8
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "pizze",
+      "count": 3
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "serata",
+      "count": 1
+    },
+    {
+      "file": "src/agents/previewStrategicOpportunities.js",
+      "term": "servizio",
+      "count": 2
+    },
+    {
       "file": "src/agents/previewTiming.js",
       "term": "completato",
       "count": 1
@@ -899,12 +1109,12 @@
     {
       "file": "src/agents/previewTiming.js",
       "term": "ordine",
-      "count": 7
+      "count": 6
     },
     {
       "file": "src/agents/previewTiming.js",
       "term": "ordini",
-      "count": 4
+      "count": 2
     },
     {
       "file": "src/agents/previewTiming.js",
@@ -914,6 +1124,11 @@
     {
       "file": "src/agents/previewTiming.js",
       "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/agents/resolveDeliveryFieldsReadOnly.js",
+      "term": "ordini",
       "count": 1
     },
     {
@@ -1123,18 +1338,13 @@
     },
     {
       "file": "src/closeout/currentServiceCloseout.js",
-      "term": "chiuso",
-      "count": 1
-    },
-    {
-      "file": "src/closeout/currentServiceCloseout.js",
       "term": "ordine",
       "count": 1
     },
     {
       "file": "src/closeout/currentServiceCloseout.js",
       "term": "storico",
-      "count": 2
+      "count": 1
     },
     {
       "file": "src/closeout/economiaLedgerAggregate.js",
@@ -1152,11 +1362,6 @@
       "count": 1
     },
     {
-      "file": "src/closeout/economiaLedgerAggregate.js",
-      "term": "storico",
-      "count": 1
-    },
-    {
       "file": "src/closeout/economicPeriodReadRule.js",
       "term": "pranzo",
       "count": 1
@@ -1165,6 +1370,21 @@
       "file": "src/config.js",
       "term": "consegna",
       "count": 2
+    },
+    {
+      "file": "src/core/delivery/deliveryChannels.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryChannels.js",
+      "term": "ordine",
+      "count": 3
+    },
+    {
+      "file": "src/core/delivery/deliveryLegs.js",
+      "term": "ordini",
+      "count": 1
     },
     {
       "file": "src/core/delivery/deliveryOperationalMetrics.js",
@@ -1194,6 +1414,26 @@
     {
       "file": "src/core/delivery/deliveryOperationalMetrics.js",
       "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryProposalSelector.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/deliveryProposalSelector.js",
+      "term": "oggi",
+      "count": 2
+    },
+    {
+      "file": "src/core/delivery/deliveryProposalSelector.js",
+      "term": "ordine",
+      "count": 3
+    },
+    {
+      "file": "src/core/delivery/deliveryProposalSelector.js",
+      "term": "storico",
       "count": 1
     },
     {
@@ -1234,7 +1474,7 @@
     {
       "file": "src/core/delivery/planner.js",
       "term": "consegna",
-      "count": 8
+      "count": 3
     },
     {
       "file": "src/core/delivery/planner.js",
@@ -1244,17 +1484,17 @@
     {
       "file": "src/core/delivery/planner.js",
       "term": "ordine",
-      "count": 6
+      "count": 4
     },
     {
       "file": "src/core/delivery/planner.js",
       "term": "ordini",
-      "count": 9
+      "count": 7
     },
     {
       "file": "src/core/delivery/planner.js",
       "term": "pizze",
-      "count": 28
+      "count": 21
     },
     {
       "file": "src/core/delivery/planner.js",
@@ -1272,6 +1512,66 @@
       "count": 1
     },
     {
+      "file": "src/core/delivery/plannerClock.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "chiuso",
+      "count": 4
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "consegna",
+      "count": 3
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "ordini",
+      "count": 2
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "pizze",
+      "count": 3
+    },
+    {
+      "file": "src/core/delivery/plannerSnapshot.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/premiumPlannerBridge.js",
+      "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/premiumPlannerBridge.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/premiumPlannerOpportunities.js",
+      "term": "oggi",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/readOnlyRestDb.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
       "file": "src/core/delivery/riderChainExplanation.js",
       "term": "completato",
       "count": 1
@@ -1280,6 +1580,31 @@
       "file": "src/core/delivery/riderChainExplanation.js",
       "term": "consegna",
       "count": 1
+    },
+    {
+      "file": "src/core/delivery/routeImpact.js",
+      "term": "consegna",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/routeImpact.js",
+      "term": "ordine",
+      "count": 2
+    },
+    {
+      "file": "src/core/delivery/routeImpact.js",
+      "term": "pizze",
+      "count": 7
+    },
+    {
+      "file": "src/core/delivery/routeImpact.js",
+      "term": "servizio",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/routeTimeline.js",
+      "term": "consegna",
+      "count": 4
     },
     {
       "file": "src/core/delivery/shadowPreview.js",
@@ -1299,6 +1624,36 @@
     {
       "file": "src/core/delivery/shadowPreviewEndpoint.js",
       "term": "ordine",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/strategicOpportunities.js",
+      "term": "ordine",
+      "count": 6
+    },
+    {
+      "file": "src/core/delivery/strategicOpportunities.js",
+      "term": "ordini",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/strategicOpportunities.js",
+      "term": "pizze",
+      "count": 2
+    },
+    {
+      "file": "src/core/delivery/timingAssessmentV3.js",
+      "term": "chiuso",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/timingAssessmentV3.js",
+      "term": "completato",
+      "count": 1
+    },
+    {
+      "file": "src/core/delivery/timingAssessmentV3.js",
+      "term": "consegna",
       "count": 1
     },
     {
@@ -1384,7 +1739,7 @@
     {
       "file": "src/menu/__tests__/orderWriteBoundary.test.js",
       "term": "ordine",
-      "count": 12
+      "count": 11
     },
     {
       "file": "src/menu/__tests__/orderWriteBoundary.test.js",
@@ -1414,22 +1769,7 @@
     {
       "file": "src/schedule/serviceSchedule.js",
       "term": "pranzo",
-      "count": 10
-    },
-    {
-      "file": "src/serviceSessions/autoCloseDecision.js",
-      "term": "chiudi",
-      "count": 1
-    },
-    {
-      "file": "src/serviceSessions/autoCloseDecision.js",
-      "term": "pranzo",
-      "count": 1
-    },
-    {
-      "file": "src/serviceSessions/autoCloseDecision.js",
-      "term": "servizio",
-      "count": 1
+      "count": 7
     },
     {
       "file": "src/serviceSessions/currentOperationalSession.js",
@@ -1457,54 +1797,9 @@
       "count": 1
     },
     {
-      "file": "src/serviceSessions/ensureServiceSession.js",
-      "term": "chiudi",
-      "count": 5
-    },
-    {
-      "file": "src/serviceSessions/ensureServiceSession.js",
-      "term": "pranzo",
-      "count": 1
-    },
-    {
-      "file": "src/serviceSessions/ensureServiceSession.js",
-      "term": "servizio",
-      "count": 5
-    },
-    {
-      "file": "src/serviceSessions/incidentSafeRollover.js",
-      "term": "chiudi",
-      "count": 10
-    },
-    {
-      "file": "src/serviceSessions/incidentSafeRollover.js",
-      "term": "servizio",
-      "count": 12
-    },
-    {
       "file": "src/serviceSessions/orderIntakePolicy.js",
       "term": "ordine",
       "count": 1
-    },
-    {
-      "file": "src/serviceSessions/pendingActivityGuard.js",
-      "term": "chiudi",
-      "count": 3
-    },
-    {
-      "file": "src/serviceSessions/pendingActivityGuard.js",
-      "term": "completato",
-      "count": 1
-    },
-    {
-      "file": "src/serviceSessions/pendingActivityGuard.js",
-      "term": "servizio",
-      "count": 3
-    },
-    {
-      "file": "src/serviceSessions/rolloverClassifier.js",
-      "term": "chiudi",
-      "count": 2
     },
     {
       "file": "src/serviceSessions/rolloverClassifier.js",
@@ -1515,21 +1810,6 @@
       "file": "src/serviceSessions/rolloverClassifier.js",
       "term": "completato",
       "count": 1
-    },
-    {
-      "file": "src/serviceSessions/rolloverClassifier.js",
-      "term": "consegna",
-      "count": 2
-    },
-    {
-      "file": "src/serviceSessions/rolloverClassifier.js",
-      "term": "servizio",
-      "count": 3
-    },
-    {
-      "file": "src/serviceSessions/sessionRolloverClassification.js",
-      "term": "pranzo",
-      "count": 3
     },
     {
       "file": "src/tables/mesaDao.js",
@@ -1538,18 +1818,13 @@
     },
     {
       "file": "src/tables/mesaService.js",
-      "term": "chiuso",
-      "count": 1
-    },
-    {
-      "file": "src/tables/mesaService.js",
       "term": "consegna",
       "count": 1
     },
     {
       "file": "src/tables/mesaService.js",
       "term": "cucina",
-      "count": 2
+      "count": 1
     },
     {
       "file": "src/tables/mesaService.js",
@@ -1783,48 +2058,28 @@
     },
     {
       "file": "src/utils/servizio.js",
-      "term": "archivio",
+      "term": "completato",
       "count": 3
     },
     {
       "file": "src/utils/servizio.js",
-      "term": "chiudi",
-      "count": 16
-    },
-    {
-      "file": "src/utils/servizio.js",
-      "term": "chiuso",
-      "count": 7
-    },
-    {
-      "file": "src/utils/servizio.js",
-      "term": "completato",
-      "count": 9
-    },
-    {
-      "file": "src/utils/servizio.js",
       "term": "consegna",
-      "count": 12
-    },
-    {
-      "file": "src/utils/servizio.js",
-      "term": "cucina",
-      "count": 4
+      "count": 6
     },
     {
       "file": "src/utils/servizio.js",
       "term": "oggi",
-      "count": 34
+      "count": 8
     },
     {
       "file": "src/utils/servizio.js",
       "term": "ordine",
-      "count": 18
+      "count": 7
     },
     {
       "file": "src/utils/servizio.js",
       "term": "ordini",
-      "count": 37
+      "count": 22
     },
     {
       "file": "src/utils/servizio.js",
@@ -1838,28 +2093,18 @@
     },
     {
       "file": "src/utils/servizio.js",
-      "term": "pranzo",
-      "count": 6
-    },
-    {
-      "file": "src/utils/servizio.js",
       "term": "ritiro",
-      "count": 6
+      "count": 5
     },
     {
       "file": "src/utils/servizio.js",
       "term": "serata",
-      "count": 20
+      "count": 4
     },
     {
       "file": "src/utils/servizio.js",
       "term": "servizio",
-      "count": 22
-    },
-    {
-      "file": "src/utils/servizio.js",
-      "term": "storico",
-      "count": 44
+      "count": 1
     },
     {
       "file": "src/utils/supabaseResourcePolicy.js",
@@ -2062,21 +2307,6 @@
       "count": 3
     },
     {
-      "file": "tests/autoCloseDecision.test.js",
-      "term": "pranzo",
-      "count": 22
-    },
-    {
-      "file": "tests/autoCloseEngine.test.js",
-      "term": "chiudi",
-      "count": 5
-    },
-    {
-      "file": "tests/autoCloseEngine.test.js",
-      "term": "servizio",
-      "count": 6
-    },
-    {
       "file": "tests/closeoutAttemptOwnership.static.test.js",
       "term": "storico",
       "count": 1
@@ -2162,16 +2392,6 @@
       "count": 3
     },
     {
-      "file": "tests/crossServiceTableBypassSecurity.static.test.js",
-      "term": "chiudi",
-      "count": 9
-    },
-    {
-      "file": "tests/crossServiceTableBypassSecurity.static.test.js",
-      "term": "servizio",
-      "count": 16
-    },
-    {
       "file": "tests/currentOperationalSession.test.js",
       "term": "pranzo",
       "count": 3
@@ -2194,7 +2414,7 @@
     {
       "file": "tests/currentServiceOperationalReads.static.test.js",
       "term": "serata",
-      "count": 2
+      "count": 1
     },
     {
       "file": "tests/currentServiceOperationalReads.static.test.js",
@@ -2214,17 +2434,12 @@
     {
       "file": "tests/deliveryPlanner.test.js",
       "term": "consegna",
-      "count": 4
-    },
-    {
-      "file": "tests/deliveryPlanner.test.js",
-      "term": "ordine",
-      "count": 5
+      "count": 3
     },
     {
       "file": "tests/deliveryPlanner.test.js",
       "term": "pizze",
-      "count": 6
+      "count": 5
     },
     {
       "file": "tests/deliveryPlanner.test.js",
@@ -2239,7 +2454,7 @@
     {
       "file": "tests/deliveryPlannerAB.test.js",
       "term": "ordine",
-      "count": 4
+      "count": 3
     },
     {
       "file": "tests/deliveryPlannerAB.test.js",
@@ -2254,7 +2469,7 @@
     {
       "file": "tests/deliveryPlannerAB.test.js",
       "term": "ritiro",
-      "count": 6
+      "count": 5
     },
     {
       "file": "tests/deliveryPlannerDirtyGeoRecovery.test.js",
@@ -2503,13 +2718,8 @@
     },
     {
       "file": "tests/deliveryPlannerSyntheticStress.test.js",
-      "term": "ordine",
-      "count": 1
-    },
-    {
-      "file": "tests/deliveryPlannerSyntheticStress.test.js",
       "term": "ordini",
-      "count": 2
+      "count": 1
     },
     {
       "file": "tests/deliveryPlannerSyntheticStress.test.js",
@@ -2553,18 +2763,13 @@
     },
     {
       "file": "tests/driverStatoSingleAuthority.test.js",
-      "term": "oggi",
-      "count": 1
-    },
-    {
-      "file": "tests/driverStatoSingleAuthority.test.js",
       "term": "ordini",
       "count": 7
     },
     {
       "file": "tests/driverStatoSingleAuthority.test.js",
       "term": "servizio",
-      "count": 6
+      "count": 4
     },
     {
       "file": "tests/driverTelemetrySecondGiro.test.js",
@@ -2619,32 +2824,12 @@
     {
       "file": "tests/economiaLedgerAggregateParity.test.js",
       "term": "storico",
-      "count": 7
+      "count": 3
     },
     {
       "file": "tests/economicBoundaryEngine.test.js",
       "term": "pranzo",
       "count": 4
-    },
-    {
-      "file": "tests/ensureCurrentSessionRecovery.test.js",
-      "term": "pranzo",
-      "count": 16
-    },
-    {
-      "file": "tests/f10CreaOrdineForgottenRetry.test.js",
-      "term": "ordine",
-      "count": 14
-    },
-    {
-      "file": "tests/f10CreaOrdineForgottenRetry.test.js",
-      "term": "ordini",
-      "count": 2
-    },
-    {
-      "file": "tests/f10ForgottenCloseRecovery.test.js",
-      "term": "ordine",
-      "count": 2
     },
     {
       "file": "tests/f2V3NextServiceOnConflictRepair.static.test.js",
@@ -2777,46 +2962,6 @@
       "count": 1
     },
     {
-      "file": "tests/forcedCloseDeleteVerification.test.js",
-      "term": "archivio",
-      "count": 1
-    },
-    {
-      "file": "tests/forcedCloseDeleteVerification.test.js",
-      "term": "chiudi",
-      "count": 13
-    },
-    {
-      "file": "tests/forcedCloseDeleteVerification.test.js",
-      "term": "chiuso",
-      "count": 3
-    },
-    {
-      "file": "tests/forcedCloseDeleteVerification.test.js",
-      "term": "completato",
-      "count": 1
-    },
-    {
-      "file": "tests/forcedCloseDeleteVerification.test.js",
-      "term": "ordini",
-      "count": 1
-    },
-    {
-      "file": "tests/forcedCloseDeleteVerification.test.js",
-      "term": "serata",
-      "count": 2
-    },
-    {
-      "file": "tests/forcedCloseDeleteVerification.test.js",
-      "term": "servizio",
-      "count": 25
-    },
-    {
-      "file": "tests/forcedCloseDeleteVerification.test.js",
-      "term": "storico",
-      "count": 17
-    },
-    {
       "file": "tests/fornoOutFallbackSlot.test.js",
       "term": "consegna",
       "count": 10
@@ -2882,24 +3027,14 @@
       "count": 4
     },
     {
-      "file": "tests/incidentSafeRollover.test.js",
-      "term": "chiudi",
-      "count": 5
-    },
-    {
-      "file": "tests/incidentSafeRollover.test.js",
-      "term": "pranzo",
-      "count": 2
-    },
-    {
-      "file": "tests/incidentSafeRollover.test.js",
-      "term": "servizio",
-      "count": 5
+      "file": "tests/helpers/editorRpcShim.js",
+      "term": "ordini",
+      "count": 1
     },
     {
       "file": "tests/legacyActionRoleMapCompleteness.test.js",
       "term": "chiudi",
-      "count": 3
+      "count": 2
     },
     {
       "file": "tests/legacyActionRoleMapCompleteness.test.js",
@@ -2912,14 +3047,14 @@
       "count": 1
     },
     {
-      "file": "tests/lifecycleReset.test.js",
-      "term": "oggi",
-      "count": 1
+      "file": "tests/legacyImportInertness.static.test.js",
+      "term": "storico",
+      "count": 3
     },
     {
       "file": "tests/lifecycleReset.test.js",
       "term": "servizio",
-      "count": 10
+      "count": 1
     },
     {
       "file": "tests/liveSafetyGuards.stress.test.js",
@@ -2954,17 +3089,12 @@
     {
       "file": "tests/manualGiros.test.js",
       "term": "consegna",
-      "count": 9
+      "count": 8
     },
     {
       "file": "tests/manualGiros.test.js",
       "term": "ritiro",
-      "count": 2
-    },
-    {
-      "file": "tests/manualGiros.test.js",
-      "term": "servizio",
-      "count": 6
+      "count": 1
     },
     {
       "file": "tests/manualOrderTime.test.js",
@@ -3114,7 +3244,7 @@
     {
       "file": "tests/orderTerminalStateFilters.test.js",
       "term": "completato",
-      "count": 25
+      "count": 23
     },
     {
       "file": "tests/orderTerminalStateFilters.test.js",
@@ -3129,22 +3259,17 @@
     {
       "file": "tests/orderTerminalStateFilters.test.js",
       "term": "servizio",
-      "count": 8
-    },
-    {
-      "file": "tests/pendingActivityGuard.test.js",
-      "term": "chiudi",
-      "count": 3
-    },
-    {
-      "file": "tests/pendingActivityGuard.test.js",
-      "term": "completato",
       "count": 2
     },
     {
-      "file": "tests/pendingActivityGuard.test.js",
-      "term": "servizio",
+      "file": "tests/port55PlannerD1SafetyParity.test.js",
+      "term": "consegna",
       "count": 3
+    },
+    {
+      "file": "tests/port55PlannerD1SafetyParity.test.js",
+      "term": "pizze",
+      "count": 1
     },
     {
       "file": "tests/premiumPlannerBridgeE2E.test.js",
@@ -3174,7 +3299,7 @@
     {
       "file": "tests/previewOrderTiming.test.js",
       "term": "consegna",
-      "count": 11
+      "count": 9
     },
     {
       "file": "tests/previewOrderTiming.test.js",
@@ -3254,7 +3379,7 @@
     {
       "file": "tests/rDay3ScheduleParity.test.js",
       "term": "pranzo",
-      "count": 2
+      "count": 1
     },
     {
       "file": "tests/readActions.test.js",
@@ -3282,23 +3407,8 @@
       "count": 4
     },
     {
-      "file": "tests/riderReads.test.js",
-      "term": "consegna",
-      "count": 5
-    },
-    {
-      "file": "tests/riderReads.test.js",
-      "term": "ritiro",
-      "count": 1
-    },
-    {
       "file": "tests/riderTripRpcsMigration.test.js",
       "term": "completato",
-      "count": 1
-    },
-    {
-      "file": "tests/rolloverClassifier.test.js",
-      "term": "pranzo",
       "count": 1
     },
     {
@@ -3330,41 +3440,6 @@
       "file": "tests/sEEconomicPeriodReaders.static.test.js",
       "term": "pranzo",
       "count": 45
-    },
-    {
-      "file": "tests/serviceCloseGate.test.js",
-      "term": "chiudi",
-      "count": 17
-    },
-    {
-      "file": "tests/serviceCloseGate.test.js",
-      "term": "chiuso",
-      "count": 1
-    },
-    {
-      "file": "tests/serviceCloseGate.test.js",
-      "term": "completato",
-      "count": 1
-    },
-    {
-      "file": "tests/serviceCloseGate.test.js",
-      "term": "consegna",
-      "count": 1
-    },
-    {
-      "file": "tests/serviceCloseGate.test.js",
-      "term": "serata",
-      "count": 9
-    },
-    {
-      "file": "tests/serviceCloseGate.test.js",
-      "term": "servizio",
-      "count": 18
-    },
-    {
-      "file": "tests/serviceCloseGate.test.js",
-      "term": "storico",
-      "count": 6
     },
     {
       "file": "tests/serviceCloseLiveWorkGuardMigration.test.js",
@@ -3400,21 +3475,6 @@
       "file": "tests/serviceCloseoutIncidentsFoundation.static.test.js",
       "term": "storico",
       "count": 3
-    },
-    {
-      "file": "tests/serviceCloseoutV2Slice3RolloverMatrix.test.js",
-      "term": "chiudi",
-      "count": 6
-    },
-    {
-      "file": "tests/serviceCloseoutV2Slice3RolloverMatrix.test.js",
-      "term": "pranzo",
-      "count": 12
-    },
-    {
-      "file": "tests/serviceCloseoutV2Slice3RolloverMatrix.test.js",
-      "term": "servizio",
-      "count": 6
     },
     {
       "file": "tests/serviceIncidents.test.js",
@@ -3454,7 +3514,7 @@
     {
       "file": "tests/serviceSchedule.test.js",
       "term": "pranzo",
-      "count": 32
+      "count": 25
     },
     {
       "file": "tests/serviceSessionIdentityMigration.test.js",
@@ -3477,29 +3537,9 @@
       "count": 4
     },
     {
-      "file": "tests/sessionRolloverClassification.test.js",
-      "term": "pranzo",
-      "count": 15
-    },
-    {
       "file": "tests/snapshotDeleteAndRetry.test.js",
       "term": "ordine",
       "count": 6
-    },
-    {
-      "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
-      "term": "chiudi",
-      "count": 3
-    },
-    {
-      "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
-      "term": "pranzo",
-      "count": 6
-    },
-    {
-      "file": "tests/staleServiceSessionPendingActivityGuard.test.js",
-      "term": "servizio",
-      "count": 3
     },
     {
       "file": "tests/storicoConflictIndexContract.test.js",
@@ -3509,7 +3549,7 @@
     {
       "file": "tests/storicoConflictIndexContract.test.js",
       "term": "storico",
-      "count": 25
+      "count": 23
     },
     {
       "file": "tests/supabaseHelpersRegression.test.js",
@@ -3598,13 +3638,8 @@
     },
     {
       "file": "tests/twoServiceMigration.test.js",
-      "term": "chiudi",
-      "count": 2
-    },
-    {
-      "file": "tests/twoServiceMigration.test.js",
       "term": "pranzo",
-      "count": 7
+      "count": 4
     },
     {
       "file": "tests/twoServiceMigration.test.js",
@@ -3614,7 +3649,7 @@
     {
       "file": "tests/twoServiceMigration.test.js",
       "term": "servizio",
-      "count": 16
+      "count": 2
     },
     {
       "file": "tests/whatsappIntakePolicy.test.js",
@@ -3629,256 +3664,6 @@
     {
       "file": "tests/whatsappIntakePolicy.test.js",
       "term": "ritiro",
-      "count": 1
-    },
-    {
-      "file": "src/agents/previewManualGiroRoute.js",
-      "term": "consegna",
-      "count": 4
-    },
-    {
-      "file": "src/agents/previewManualGiroRoute.js",
-      "term": "ordine",
-      "count": 4
-    },
-    {
-      "file": "src/agents/previewManualGiroRoute.js",
-      "term": "pizze",
-      "count": 3
-    },
-    {
-      "file": "src/agents/previewManualGiroRoute.js",
-      "term": "ritiro",
-      "count": 2
-    },
-    {
-      "file": "src/agents/previewOrderPlanner.js",
-      "term": "consegna",
-      "count": 20
-    },
-    {
-      "file": "src/agents/previewOrderPlanner.js",
-      "term": "pizze",
-      "count": 1
-    },
-    {
-      "file": "src/agents/previewOrderPlanner.js",
-      "term": "ritiro",
-      "count": 3
-    },
-    {
-      "file": "src/agents/previewStrategicOpportunities.js",
-      "term": "chiuso",
-      "count": 3
-    },
-    {
-      "file": "src/agents/previewStrategicOpportunities.js",
-      "term": "completato",
-      "count": 1
-    },
-    {
-      "file": "src/agents/previewStrategicOpportunities.js",
-      "term": "consegna",
-      "count": 2
-    },
-    {
-      "file": "src/agents/previewStrategicOpportunities.js",
-      "term": "cucina",
-      "count": 9
-    },
-    {
-      "file": "src/agents/previewStrategicOpportunities.js",
-      "term": "oggi",
-      "count": 1
-    },
-    {
-      "file": "src/agents/previewStrategicOpportunities.js",
-      "term": "ordine",
-      "count": 11
-    },
-    {
-      "file": "src/agents/previewStrategicOpportunities.js",
-      "term": "ordini",
-      "count": 8
-    },
-    {
-      "file": "src/agents/previewStrategicOpportunities.js",
-      "term": "pizze",
-      "count": 3
-    },
-    {
-      "file": "src/agents/previewStrategicOpportunities.js",
-      "term": "serata",
-      "count": 1
-    },
-    {
-      "file": "src/agents/previewStrategicOpportunities.js",
-      "term": "servizio",
-      "count": 2
-    },
-    {
-      "file": "src/agents/resolveDeliveryFieldsReadOnly.js",
-      "term": "ordini",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/deliveryChannels.js",
-      "term": "consegna",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/deliveryChannels.js",
-      "term": "ordine",
-      "count": 3
-    },
-    {
-      "file": "src/core/delivery/deliveryLegs.js",
-      "term": "ordini",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/deliveryProposalSelector.js",
-      "term": "consegna",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/deliveryProposalSelector.js",
-      "term": "oggi",
-      "count": 2
-    },
-    {
-      "file": "src/core/delivery/deliveryProposalSelector.js",
-      "term": "ordine",
-      "count": 3
-    },
-    {
-      "file": "src/core/delivery/deliveryProposalSelector.js",
-      "term": "storico",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/plannerClock.js",
-      "term": "servizio",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/plannerSnapshot.js",
-      "term": "chiuso",
-      "count": 4
-    },
-    {
-      "file": "src/core/delivery/plannerSnapshot.js",
-      "term": "completato",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/plannerSnapshot.js",
-      "term": "consegna",
-      "count": 3
-    },
-    {
-      "file": "src/core/delivery/plannerSnapshot.js",
-      "term": "ordine",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/plannerSnapshot.js",
-      "term": "ordini",
-      "count": 2
-    },
-    {
-      "file": "src/core/delivery/plannerSnapshot.js",
-      "term": "pizze",
-      "count": 3
-    },
-    {
-      "file": "src/core/delivery/plannerSnapshot.js",
-      "term": "servizio",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/premiumPlannerBridge.js",
-      "term": "ordine",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/premiumPlannerBridge.js",
-      "term": "ordini",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/premiumPlannerOpportunities.js",
-      "term": "oggi",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/readOnlyRestDb.js",
-      "term": "consegna",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/routeImpact.js",
-      "term": "consegna",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/routeImpact.js",
-      "term": "ordine",
-      "count": 2
-    },
-    {
-      "file": "src/core/delivery/routeImpact.js",
-      "term": "pizze",
-      "count": 7
-    },
-    {
-      "file": "src/core/delivery/routeImpact.js",
-      "term": "servizio",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/routeTimeline.js",
-      "term": "consegna",
-      "count": 4
-    },
-    {
-      "file": "src/core/delivery/strategicOpportunities.js",
-      "term": "ordine",
-      "count": 6
-    },
-    {
-      "file": "src/core/delivery/strategicOpportunities.js",
-      "term": "ordini",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/strategicOpportunities.js",
-      "term": "pizze",
-      "count": 2
-    },
-    {
-      "file": "src/core/delivery/timingAssessmentV3.js",
-      "term": "chiuso",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/timingAssessmentV3.js",
-      "term": "completato",
-      "count": 1
-    },
-    {
-      "file": "src/core/delivery/timingAssessmentV3.js",
-      "term": "consegna",
-      "count": 1
-    },
-    {
-      "file": "tests/port55PlannerD1SafetyParity.test.js",
-      "term": "consegna",
-      "count": 3
-    },
-    {
-      "file": "tests/port55PlannerD1SafetyParity.test.js",
-      "term": "pizze",
       "count": 1
     }
   ]
