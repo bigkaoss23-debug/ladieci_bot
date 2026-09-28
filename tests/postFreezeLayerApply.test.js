@@ -104,3 +104,98 @@ test("CLI refuses before connecting: LIVE target (exit 2), apply without --targe
   const stg = spawnSync(process.execPath, [script, "apply", "--layer", "170", "--target", `supabase:${STAGING}`], { env: { PATH: process.env.PATH, PREFLIGHT_DATABASE_URL: `postgres://postgres:x@db.${STAGING}.supabase.co:5432/postgres` }, encoding: "utf8" });
   assert.equal(stg.status, 2); assert.match(stg.stdout, /REFUSED_REMOTE_TARGET_NOT_ACKNOWLEDGED/);
 });
+
+// ── --no-registry: only an ephemeral LOCAL database without a Supabase registry ──────────────────────────────────────────────────────────
+// Every CLI case below runs with W3_PG_NODE_MODULES pointing nowhere: if a guard regressed, the process would fail loading the driver
+// ("connection error"), never open a socket. So STAGING / LIVE / remote hosts are never contacted by these tests.
+const NO_DRIVER = "/nonexistent/post-freeze-test-no-driver";
+function runCli(args, env) {
+  const { spawnSync } = require("child_process");
+  const path = require("path");
+  const r = spawnSync(process.execPath, [path.join(__dirname, "..", "scripts", "postFreezeLayerApply.js"), ...args], { env: { PATH: process.env.PATH, W3_PG_NODE_MODULES: NO_DRIVER, ...env }, encoding: "utf8" });
+  let j = null; try { j = JSON.parse(r.stdout); } catch (_) { /* */ }
+  return { code: r.status, j, stderr: r.stderr };
+}
+const STG_URL = `postgres://postgres:x@db.${STAGING}.supabase.co:5432/postgres`;
+
+test("no-registry (A): a local target passes the pre-connection gate; the database gate allows it only without a Supabase registry", async () => {
+  for (const env of [{ PREFLIGHT_DATABASE_URL: "postgres://postgres@127.0.0.1:55450/lab1" }, { PGHOST: "localhost", PGDATABASE: "x" }, { PGHOST: "/tmp", PGDATABASE: "x" }, {}]) {
+    const t = R.describeTarget(env);
+    assert.equal(t.kind, "LOCAL", JSON.stringify(env)); assert.equal(R.checkNoRegistryTarget(t), null);
+  }
+  const db = (present) => ({ query: async (sql) => { assert.match(sql, /to_regclass\('supabase_migrations\.schema_migrations'\)/); return { rows: [{ present }] }; } });
+  assert.equal(await R.checkNoRegistryDatabase(db(false)), null);
+  assert.equal((await R.checkNoRegistryDatabase(db(true))).result, "REFUSED_NO_REGISTRY_REGISTRY_PRESENT");
+});
+
+test("no-registry (A): apply / preflight / status / rollback refuse on a database WITH a registry before any other statement", async () => {
+  const seen = [];
+  const client = { query: async (sql) => { seen.push(sql); if (/supabase_migrations\.schema_migrations'\) IS NOT NULL AS present/.test(sql)) return { rows: [{ present: true }] }; throw new Error("unexpected statement: " + sql.slice(0, 60)); } };
+  const rs = [await R.apply(client, 170, { noRegistry: true, log: () => {} }), await R.preflight(client, 170, { noRegistry: true }), await R.status(client, { noRegistry: true }),
+    await R.rollback(client, 170, { noRegistry: true, ack: l170.rollback.ack, log: () => {} })];
+  for (const r of rs) assert.equal(r.result, "REFUSED_NO_REGISTRY_REGISTRY_PRESENT");
+  assert.equal(seen.length, 4, "one read-only probe per command, nothing else (no lock, no BEGIN, no write)");
+});
+
+test("no-registry (B): STAGING is refused before connecting, for every command, even with --target and the remote acknowledgement", () => {
+  const t = R.describeTarget({ PREFLIGHT_DATABASE_URL: STG_URL });
+  assert.equal(R.checkNoRegistryTarget(t).result, "REFUSED_NO_REGISTRY_NOT_LOCAL");
+  const id = `supabase:${STAGING}`;
+  for (const args of [["apply", "--layer", "170", "--target", id, "--no-registry"], ["rollback", "--layer", "170", "--target", id, "--ack", l170.rollback.ack, "--no-registry"],
+    ["preflight", "--layer", "170", "--no-registry"], ["status", "--no-registry"], ["apply", "--no-registry", "--layer", "170"]]) {
+    const r = runCli(args, { PREFLIGHT_DATABASE_URL: STG_URL, [R.REMOTE_ACK_ENV]: id });
+    assert.equal(r.code, 2, args.join(" ")); assert.equal(r.j && r.j.result, "REFUSED_NO_REGISTRY_NOT_LOCAL", args.join(" ") + " " + r.stderr);
+  }
+  // the same project reached through the session pooler user, through PG* variables, or through a host-less URL + PGHOST
+  for (const env of [{ PREFLIGHT_DATABASE_URL: `postgres://postgres.${STAGING}:x@aws-0-eu-west-3.pooler.supabase.com:5432/postgres` },
+    { PGHOST: `db.${STAGING}.supabase.co`, PGUSER: "postgres", PGDATABASE: "postgres" }, { PGHOST: "127.0.0.1", PGUSER: `postgres.${STAGING}` },
+    { PREFLIGHT_DATABASE_URL: "postgres:///postgres", PGHOST: `db.${STAGING}.supabase.co` }]) {
+    const r = runCli(["apply", "--layer", "170", "--target", id, "--no-registry"], { ...env, [R.REMOTE_ACK_ENV]: id });
+    assert.equal(r.j && r.j.result, "REFUSED_NO_REGISTRY_NOT_LOCAL", JSON.stringify(env) + " " + r.stderr);
+  }
+});
+
+test("no-registry (C): LIVE is refused (the LIVE refusal comes first, unchanged)", () => {
+  for (const env of [{ PREFLIGHT_DATABASE_URL: `postgres://postgres:x@db.${LIVE}.supabase.co:5432/postgres` }, { PGHOST: `db.${LIVE}.supabase.co` },
+    { PREFLIGHT_DATABASE_URL: `postgres://postgres@127.0.0.1:5432/postgres?host=db.${LIVE}.supabase.co` }]) {
+    for (const args of [["apply", "--layer", "170", "--target", `supabase:${LIVE}`, "--no-registry"], ["status", "--no-registry"]]) {
+      const r = runCli(args, { ...env, [R.REMOTE_ACK_ENV]: `supabase:${LIVE}` });
+      assert.equal(r.code, 2); assert.equal(r.j && r.j.result, "REFUSED_TARGET"); assert.match(r.j.detail, /refused/);
+    }
+  }
+  assert.equal(R.checkNoRegistryTarget(R.describeTarget({ PGHOST: `db.${LIVE}.supabase.co` })).result, "REFUSED_TARGET");
+});
+
+test("no-registry (D): any other remote target is refused; a URL that hides its real host is not classified at all", () => {
+  const rem = "remote:10.0.0.5:5432/db";
+  for (const env of [{ PREFLIGHT_DATABASE_URL: "postgres://u@10.0.0.5:5432/db" }, { PGHOST: "10.0.0.5", PGDATABASE: "db" }, { PREFLIGHT_DATABASE_URL: "postgres:///db", PGHOST: "10.0.0.5" }]) {
+    assert.equal(R.describeTarget(env).id, rem, JSON.stringify(env));
+    for (const args of [["apply", "--layer", "170", "--target", rem, "--no-registry"], ["apply", "--layer", "170", "--no-registry"], ["preflight", "--layer", "170", "--no-registry"], ["status", "--no-registry"]]) {
+      const r = runCli(args, { ...env, [R.REMOTE_ACK_ENV]: rem });
+      assert.equal(r.code, 2); assert.equal(r.j && r.j.result, "REFUSED_NO_REGISTRY_NOT_LOCAL", args.join(" ") + " " + r.stderr);
+    }
+  }
+  // the pg driver honours ?host= / ?port= over the URL authority: before this fix these read as local:127.0.0.1
+  for (const url of [`postgres://postgres@127.0.0.1:5432/postgres?host=db.${STAGING}.supabase.co`, "postgres://u@localhost/db?host=10.0.0.5",
+    "postgres://u@localhost/db?hostaddr=10.0.0.5", "postgres://u@127.0.0.1/db?port=6543"]) {
+    const t = R.describeTarget({ PREFLIGHT_DATABASE_URL: url });
+    assert.equal(t.ok, false, url); assert.match(t.reason, /query string/);
+    const r = runCli(["apply", "--layer", "170", "--target", "local:127.0.0.1:5432/postgres", "--no-registry"], { PREFLIGHT_DATABASE_URL: url });
+    assert.equal(r.code, 2); assert.equal(r.j && r.j.result, "REFUSED_TARGET", url);
+  }
+  // a host-less URL resolves to PGHOST / PGPORT exactly as the driver does
+  assert.equal(R.describeTarget({ PREFLIGHT_DATABASE_URL: "postgres:///db", PGHOST: "127.0.0.1", PGPORT: "55450" }).id, "local:127.0.0.1:55450/db");
+  assert.equal(R.describeTarget({ PREFLIGHT_DATABASE_URL: "postgres://u@/db", PGHOST: "10.0.0.5" }).ok, false, "not a WHATWG URL: refused");
+});
+
+test("no-registry (E/F): without the flag, local and (acknowledged) STAGING targets pass every target gate unchanged", () => {
+  // local: exact --target, no acknowledgement needed; the CLI reaches the connection stage (driver missing here -> connection error)
+  const loc = runCli(["apply", "--layer", "170", "--target", "local:127.0.0.1:1/nowhere"], { PREFLIGHT_DATABASE_URL: "postgres://postgres@127.0.0.1:1/nowhere" });
+  assert.equal(loc.code, 2); assert.equal(loc.j, null); assert.match(loc.stderr, /^connection error: Cannot find module/);
+  // STAGING, registry-backed: structurally usable when named and acknowledged (target gates return null). NOT contacted: checked on the
+  // pure functions only; the CLI is not spawned against the staging host.
+  const env = { PREFLIGHT_DATABASE_URL: STG_URL, [R.REMOTE_ACK_ENV]: `supabase:${STAGING}` };
+  const stg = R.describeTarget(env);
+  assert.equal(stg.ok, true); assert.equal(stg.known, "STAGING");
+  assert.equal(R.checkMutationTarget(stg, `supabase:${STAGING}`, env), null);
+});

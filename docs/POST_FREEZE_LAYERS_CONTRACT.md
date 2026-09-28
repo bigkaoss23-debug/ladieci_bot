@@ -50,7 +50,7 @@ node scripts/postFreezeLayerApply.js plan | verify-files | target
 node scripts/postFreezeLayerApply.js status
 node scripts/postFreezeLayerApply.js preflight --layer N
 node scripts/postFreezeLayerApply.js apply --layer N --target <id> [--no-registry]
-node scripts/postFreezeLayerApply.js rollback --layer N --target <id> --ack <ACK>
+node scripts/postFreezeLayerApply.js rollback --layer N --target <id> --ack <ACK> [--no-registry]
 ```
 
 Connection as the Economy runner (`PREFLIGHT_DATABASE_URL` or `PG*`; `W3_PG_NODE_MODULES`). Exit 0 done / already in state, 1 refused
@@ -81,7 +81,19 @@ ledger row for a layer whose objects are absent, objects without their ledger ro
   `supabase:<ref>` (direct host `db.<ref>.supabase.co` or session-pooler user `postgres.<ref>`), `remote:<host>:<port>/<db>`;
 * a non-local target also needs `LADIECI_POST_FREEZE_REMOTE_TARGET_ACK=<the same id>` in the environment;
 * a libpq keyword connection string or a Supabase host without a readable ref is not classified: refused;
+* the target is read as the pg driver resolves it: a URL without host / port falls back to `PGHOST` / `PGPORT`; a URL whose query string
+  overrides `host`, `hostaddr` or `port` is not classified: refused;
 * after connecting, `current_database()` must be the one named.
+
+**`--no-registry`** (skips the Supabase registry row and its check) exists only for an ephemeral **local** certification database that has
+no Supabase registry. It is refused, fail closed and before any write:
+
+* before connecting, for every command, on any non-local target: STAGING, LIVE, any `supabase:<ref>` (direct host or pooler user), any
+  `remote:` host;
+* after connecting (read-only, before the lock / `BEGIN`), when the database has `supabase_migrations.schema_migrations`, so that a
+  local-looking path to a real project (tunnel, proxy) cannot skip the registry either.
+
+Without the flag every command checks (and `apply` writes) the registry, `rollback` included.
 
 ## 4. Known limitations (by design of "no Economy file modified")
 

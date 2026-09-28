@@ -20,7 +20,12 @@
 //   * apply / rollback require --target <id> equal to the target this process would connect to (local:<host>:<port>/<db>,
 //     supabase:<project ref>, remote:<host>:<port>/<db>);
 //   * a non-local target additionally requires LADIECI_POST_FREEZE_REMOTE_TARGET_ACK=<the same id> in the environment;
-//   * after connecting, the server must be the one named (current_database()).
+//   * after connecting, the server must be the one named (current_database());
+//   * the target is read as the pg driver resolves it: a URL without host / port falls back to PGHOST / PGPORT, and a URL whose query
+//     string overrides host / hostaddr / port is not classified (refused);
+//   * --no-registry is refused for every non-local target (STAGING, LIVE, any Supabase ref, any remote host), for every command, before
+//     connecting; after connecting it is refused as well when the database HAS a Supabase registry (supabase_migrations.schema_migrations),
+//     so a local-looking path to a real project (tunnel, proxy) cannot skip the registry either.
 //
 // Commands (connection as scripts/economyChainApply.js: PREFLIGHT_DATABASE_URL, or PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE;
 // W3_PG_NODE_MODULES for the pg driver):
@@ -32,8 +37,9 @@
 //   status                                                READ-ONLY: Economy composite, ledger rows above 156, every own layer's state
 //   preflight --layer N                                   READ-ONLY: every check `apply` would make, verdict READY / REFUSED
 //   apply --layer N --target <id> [--no-registry]         apply (or re-attach) layer N
-//   rollback --layer N --target <id> --ack <ACK>          the layer's registered rollback (e.g. 170: DETACH, evidence retained)
-//   --no-registry: ONLY for an ephemeral certification database without a Supabase registry. Never on staging / production.
+//   rollback --layer N --target <id> --ack <ACK> [--no-registry]  the layer's registered rollback (e.g. 170: DETACH, evidence retained)
+//   --no-registry: ONLY for an ephemeral LOCAL certification database without a Supabase registry (status / preflight / apply / rollback).
+//                  Refused on any non-local target and on any database that has the registry. Never on staging / production.
 // Exit code: 0 done (or already in the requested state), 1 refused (nothing changed), 2 usage / target / connection / pooler error.
 
 const fs = require('fs');
@@ -60,7 +66,10 @@ function describeTarget(env = process.env) {
   if (raw) {
     let u; try { u = new URL(raw); } catch (_) { u = null; }
     if (!u) return { ok: false, reason: 'PREFLIGHT_DATABASE_URL is not a URL (a libpq keyword string cannot be classified: refused)' };
-    host = u.hostname; port = u.port || '5432'; db = decodeURIComponent(u.pathname.replace(/^\//, '')) || decodeURIComponent(u.username || ''); user = decodeURIComponent(u.username || '');
+    // the pg driver lets the query string override the authority, and falls back to PGHOST / PGPORT when the URL has none
+    const over = ['host', 'hostaddr', 'port'].filter((k) => u.searchParams.has(k));
+    if (over.length) return { ok: false, reason: `PREFLIGHT_DATABASE_URL overrides ${over.join(' / ')} in its query string (cannot be classified: refused)` };
+    host = u.hostname || env.PGHOST || ''; port = u.port || env.PGPORT || '5432'; db = decodeURIComponent(u.pathname.replace(/^\//, '')) || decodeURIComponent(u.username || ''); user = decodeURIComponent(u.username || '');
   }
   const haystack = [raw, host, user, db, env.PGHOST || '', env.PGUSER || ''].join(' ').toLowerCase();
   for (const [ref, label] of Object.entries(FORBIDDEN_REFS)) if (haystack.includes(ref)) return { ok: false, forbidden: label, reason: `refused: the ${label} project (${ref}) is never a target of this runner` };
@@ -81,6 +90,19 @@ function checkMutationTarget(target, requested, env = process.env) {
     return { code: 2, result: 'REFUSED_REMOTE_TARGET_NOT_ACKNOWLEDGED', detail: `${target.id}${target.known ? ` (${target.known})` : ''} is not local: set ${REMOTE_ACK_ENV}=${target.id} as well` };
   }
   return null;
+}
+
+// --no-registry skips the Supabase registry row and its check: only for an ephemeral LOCAL certification database.
+function checkNoRegistryTarget(target) {
+  if (!target.ok) return { code: 2, result: 'REFUSED_TARGET', detail: target.reason };
+  if (target.kind !== 'LOCAL') return { code: 2, result: 'REFUSED_NO_REGISTRY_NOT_LOCAL', detail: `--no-registry is refused on ${target.id}${target.known ? ` (${target.known})` : ''}: only an ephemeral local database without a Supabase registry` };
+  return null;
+}
+
+// ... and only when the database really has no registry (a local-looking path to a real project has one). Read-only; before any write.
+async function checkNoRegistryDatabase(client) {
+  const r = (await client.query("SELECT to_regclass('supabase_migrations.schema_migrations') IS NOT NULL AS present")).rows[0];
+  return r.present === true ? { code: 2, result: 'REFUSED_NO_REGISTRY_REGISTRY_PRESENT', detail: 'this database has a Supabase registry (supabase_migrations.schema_migrations): --no-registry is refused' } : null;
 }
 
 async function assertConnectedTarget(client, target) {
@@ -185,6 +207,7 @@ async function applyChecks(client, l, { noRegistry = false, inTx = false } = {})
 
 // ── commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 async function status(client, { noRegistry = false } = {}) {
+  if (noRegistry) { const g = await checkNoRegistryDatabase(client); if (g) return g; }
   const econ = await economyComposite(client, { noRegistry });
   const layers = [];
   for (const l of REG.POST_FREEZE_LAYERS) {
@@ -200,6 +223,7 @@ async function preflight(client, n, { noRegistry = false } = {}) {
   const l = ownLayer(n);
   if (!l) return { code: 2, result: 'USAGE', detail: `layer ${n} is not an OWN registered layer` };
   try { readCertified(l); readCertified(l, true); } catch (e) { return { code: 1, result: 'REFUSED_FILE_NOT_CERTIFIED', detail: e.message }; }
+  if (noRegistry) { const g = await checkNoRegistryDatabase(client); if (g) return g; }
   await client.query('BEGIN TRANSACTION READ ONLY');
   try {
     const c = await applyChecks(client, l, { noRegistry, inTx: true });
@@ -212,6 +236,7 @@ async function apply(client, n, { noRegistry = false, log = console.error } = {}
   const l = ownLayer(n);
   if (!l) return { code: 2, result: 'USAGE', detail: `layer ${n} is not an OWN registered layer` };
   let f; try { f = readCertified(l); readCertified(l, true); } catch (e) { return { code: 1, result: 'REFUSED_FILE_NOT_CERTIFIED', detail: e.message }; }
+  if (noRegistry) { const g = await checkNoRegistryDatabase(client); if (g) return g; }
   return withLock(client, async () => {
     const c = await applyChecks(client, l, { noRegistry });
     if (c.before.state === 'APPLIED' && !c.reasons.length) return { code: 0, result: 'ALREADY_APPLIED', layer: n };
@@ -238,13 +263,14 @@ async function apply(client, n, { noRegistry = false, log = console.error } = {}
   });
 }
 
-async function rollback(client, n, { ack = null, log = console.error } = {}) {
+async function rollback(client, n, { ack = null, noRegistry = false, log = console.error } = {}) {
   const l = ownLayer(n);
   if (!l || !l.rollback) return { code: 2, result: 'USAGE', detail: `layer ${n} has no registered rollback` };
   if (ack !== l.rollback.ack) return { code: 1, result: 'REFUSED_ACK', detail: `rollback of ${n} (${l.rollback.kind}: ${l.rollback.meaning}) requires --ack ${l.rollback.ack}` };
   let f; try { f = readCertified(l, true); readCertified(l); } catch (e) { return { code: 1, result: 'REFUSED_FILE_NOT_CERTIFIED', detail: e.message }; }
+  if (noRegistry) { const g = await checkNoRegistryDatabase(client); if (g) return g; }
   return withLock(client, async () => {
-    const econ = await economyComposite(client, { noRegistry: true });
+    const econ = await economyComposite(client, { noRegistry });
     if (!econ.ok) return { code: 1, result: 'REFUSED_ECONOMY_NOT_POST_APPLY_OR_UNKNOWN_LEDGER', detail: econ };
     const before = await layerState(client, l);
     if (before.state !== 'APPLIED') return { code: 1, result: 'REFUSED_NOT_APPLIED', detail: before };
@@ -254,7 +280,7 @@ async function rollback(client, n, { ack = null, log = console.error } = {}) {
       await client.query(f.body);                                                   // its own guard: acknowledgement, exact attached state
       const after = await layerState(client, l);
       if (after.state !== l.rollback.to) throw Object.assign(new Error(`state is not ${l.rollback.to} inside the transaction`), { detail: after });
-      const econ2 = await economyComposite(client, { noRegistry: true, inTx: true });
+      const econ2 = await economyComposite(client, { noRegistry, inTx: true });
       if (!econ2.catalogOk) throw Object.assign(new Error('Economy catalog changed'), { detail: econ2 });
       await client.query('COMMIT');
       log(`rollback (${l.rollback.kind}) of layer ${l.n} committed: ${l.rollback.meaning}; the ledger keeps row ${l.n}`);
@@ -282,7 +308,7 @@ async function connect() {
   return client;
 }
 
-module.exports = { describeTarget, checkMutationTarget, verifyFiles, readCertified, economyComposite, layerState, applyChecks, status, preflight, apply, rollback, plan, connect,
+module.exports = { describeTarget, checkMutationTarget, checkNoRegistryTarget, checkNoRegistryDatabase, verifyFiles, readCertified, economyComposite, layerState, applyChecks, status, preflight, apply, rollback, plan, connect,
   FORBIDDEN_REFS, KNOWN_REFS, REMOTE_ACK_ENV };
 
 if (require.main === module) {
@@ -290,7 +316,7 @@ if (require.main === module) {
     const [cmd, ...rest] = process.argv.slice(2);
     const opt = (k) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : undefined; };
     const out = (r) => { console.log(JSON.stringify(r, null, 1)); process.exit(r.code); };
-    const usage = 'usage: postFreezeLayerApply.js plan | verify-files | target | status | preflight --layer N | apply --layer N --target <id> [--no-registry] | rollback --layer N --target <id> --ack <ACK>';
+    const usage = 'usage: postFreezeLayerApply.js plan | verify-files | target | status | preflight --layer N | apply --layer N --target <id> [--no-registry] | rollback --layer N --target <id> --ack <ACK> [--no-registry]';
     if (!['plan', 'verify-files', 'target', 'status', 'preflight', 'apply', 'rollback'].includes(cmd)) { console.error(usage); process.exit(2); }
     if (cmd === 'plan') out(plan());
     if (cmd === 'verify-files') out(verifyFiles());
@@ -299,15 +325,16 @@ if (require.main === module) {
     if (!target.ok) out({ code: 2, result: 'REFUSED_TARGET', detail: target.reason });
     const n = Number(opt('--layer'));
     if (['preflight', 'apply', 'rollback'].includes(cmd) && !Number.isInteger(n)) { console.error(usage); process.exit(2); }
+    const noRegistry = rest.includes('--no-registry');
+    if (noRegistry) { const t = checkNoRegistryTarget(target); if (t) out(t); }
     if (cmd === 'apply' || cmd === 'rollback') { const t = checkMutationTarget(target, opt('--target')); if (t) out(t); }
     let client;
     try { client = await connect(); await assertConnectedTarget(client, target); } catch (e) { console.error('connection error: ' + e.message); process.exit(2); }
     try {
-      const noRegistry = rest.includes('--no-registry');
       const r = cmd === 'status' ? await status(client, { noRegistry })
         : cmd === 'preflight' ? await preflight(client, n, { noRegistry })
           : cmd === 'apply' ? await apply(client, n, { noRegistry })
-            : await rollback(client, n, { ack: opt('--ack') || null });
+            : await rollback(client, n, { ack: opt('--ack') || null, noRegistry });
       console.log(JSON.stringify({ target: target.id, ...r }, null, 1)); process.exit(r.code);
     } finally { await client.end().catch(() => {}); }
   })().catch((e) => { console.error(e.message); process.exit(2); });
