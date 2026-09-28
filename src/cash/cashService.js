@@ -185,11 +185,21 @@ function createCashService({ dao = defaultDao, hashSid = defaultSidHash } = {}) 
         orderUid, newGross: gross, reason: trimmedReason,
         expectedCurrentGross: expectedCurrentGross == null ? null : Number(expectedCurrentGross),
       };
-      return dao.postCommercialAdjustment({
+      const args = {
         workspaceId: ctx.workspaceId, byActor: ctx.actor, bySidHash,
         ...semantic, clientRequestId, requestHash: canonicalHash(semantic),
         meta: { source: 'servicio_dashboard' },
-      });
+      };
+      try {
+        return await dao.postCommercialAdjustment(args);
+      } catch (error) {
+        // POST-ASTRA F1 -- the order's service is closed: 151 refused the ordinary revision and wrote nothing. The correction is recorded
+        // as the append-only post-close resolution fact (same key + hash), the closed service's closeout stays frozen.
+        if (error && error.code === 'ORDER_ECONOMIC_SERVICE_CLOSED' && typeof dao.postPostCloseResolution === 'function') {
+          return dao.postPostCloseResolution(args);
+        }
+        throw error;
+      }
     },
   });
 }

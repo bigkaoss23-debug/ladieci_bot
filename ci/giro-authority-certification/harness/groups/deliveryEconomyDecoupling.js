@@ -798,8 +798,9 @@ async function run(env) {
       !!ia && ia.amount === 12.5 && ia.serviceSessionId === w.s && ia.direction === 'POR_COBRAR', p.porCobrar);
     assert('P1/1: the backend names the action: allowedActions == [COLLECT], delivery fact ENTREGADO (only the money is open)',
       JSON.stringify([...ia.allowedActions]) === '["COLLECT"]' && ia.deliveryState === 'ENTREGADO', ia);
-    assert('P1/9: the EN_ENTREGA sibling stays visible as "Entrega sin confirmar" (SIN_CONFIRMAR) and offers NO collection (a plain "Registrar cobro" would fake the delivery)',
-      !!ib && ib.deliveryState === 'SIN_CONFIRMAR' && ib.allowedActions.length === 0 && ib.amount === 9.5, ib);
+    // POST-ASTRA F1 (migration 152): its only action is now the post-close cancellation of the failed delivery; never a collection.
+    assert('P1/9: the EN_ENTREGA sibling stays visible as "Entrega sin confirmar" (SIN_CONFIRMAR) and offers NO collection (a plain "Registrar cobro" would fake the delivery) -- only CANCEL (F1)',
+      !!ib && ib.deliveryState === 'SIN_CONFIRMAR' && JSON.stringify([...ib.allowedActions]) === '["CANCEL"]' && ib.amount === 9.5, ib);
     assert('P1: the reader wrote nothing (order still RETIRADO / EN_ENTREGA, no event, no transaction)',
       (await orderEstado(w.c, a.o.id)) === 'RETIRADO' && (await orderEstado(w.c, inTransit.id)) === 'EN_ENTREGA' && (await ledger(w.c, a.o.id)).events === 0);
     await w.c.close();

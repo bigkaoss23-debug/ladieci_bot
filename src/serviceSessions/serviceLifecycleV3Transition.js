@@ -46,7 +46,9 @@ function createServiceLifecycleV3Transition({ rpc = sbRpc } = {}) {
     // Idempotent: if the session is already closed (e.g. a retry after this
     // RPC already succeeded once but the caller crashed before marking the
     // closeout attempt completed), returns success with idempotent:true
-    // instead of erroring.
+    // instead of erroring. R4B: the engine no longer calls this (it uses
+    // closeAndCompleteAttempt below); since migration 149 a close made
+    // through it alone cannot commit while its attempt is still active.
     async close({ serviceSessionId, closeoutCorrelationId, actor, source }) {
       const res = normalize(await rpc("close_service_session_v3", {
         p_service_session_id: serviceSessionId,
@@ -64,6 +66,99 @@ function createServiceLifecycleV3Transition({ rpc = sbRpc } = {}) {
         idempotent: res.idempotent === true,
         code: res.code,
         session: publicSession(res.session),
+      };
+    },
+
+    // R4B (migration 149) — the terminal step the V3 engine actually uses:
+    // close_service_session_v3 and the attempt completion in ONE
+    // transaction (close_service_session_and_complete_attempt_v1). Success
+    // only when the RPC confirms this attempt is completed; a completion the
+    // database refused rolled the close back with it. A transport failure is
+    // reported as a failure even though the transaction may have committed:
+    // the retry then finds the attempt completed (engine CASE C).
+    async closeAndCompleteAttempt({ serviceSessionId, closeoutCorrelationId, actor, source }) {
+      let raw;
+      try {
+        raw = await rpc("close_service_session_and_complete_attempt_v1", {
+          p_service_session_id: serviceSessionId,
+          p_closeout_correlation_id: closeoutCorrelationId,
+          p_closed_by: actor,
+          p_source: source,
+        });
+      } catch (e) {
+        // outcome unknown (it may have committed): a typed failure, never a success
+        raw = null;
+      }
+      const res = normalize(raw);
+      const attempt = res.attempt && typeof res.attempt === "object" ? res.attempt : null;
+      const attemptCompleted = res.attemptCompleted === true && !!attempt && attempt.status === "completed"
+        && attempt.closeout_correlation_id === closeoutCorrelationId && attempt.service_session_id === serviceSessionId;
+      if (res.ok !== true || !attemptCompleted) {
+        return {
+          success: false,
+          code: res.ok === true ? "V3_CLOSE_ATTEMPT_NOT_CONFIRMED" : (res.code || "SERVICE_LIFECYCLE_V3_CLOSE_FAILED"),
+          missing: res.missing,
+          session: null,
+        };
+      }
+      return {
+        success: true,
+        idempotent: res.idempotent === true,
+        code: res.code,
+        attemptCompleted: true,
+        session: publicSession(res.session),
+      };
+    },
+
+    // CORRECTIVE SLICE 150 — the terminal step the V3 engine uses from now on:
+    // close_service_session_with_evidence_v1 judges the attempt's evidence under
+    // the close's own lock prefix (the snapshot must still equal the service's
+    // live facts; the receipts attributed to the service must still be exactly
+    // `receiptIds`) and then creates the closeout, persists the reconciliation
+    // and runs the 149 close + completion in ONE transaction. `closeout` /
+    // `reconciliation` are the create_service_closeout /
+    // create_service_closeout_reconciliation_v1 arguments (null when that row is
+    // already committed). CLOSE_EVIDENCE_STALE comes back typed with nothing
+    // written. Success exactly as closeAndCompleteAttempt: only with THIS attempt
+    // completed; a transport failure is a failure (the retry finds CASE C).
+    async closeWithEvidence({ serviceSessionId, closeoutCorrelationId, actor, source, closeout = null, reconciliation = null, receiptIds = null }) {
+      let raw;
+      try {
+        raw = await rpc("close_service_session_with_evidence_v1", {
+          p_service_session_id: serviceSessionId,
+          p_closeout_correlation_id: closeoutCorrelationId,
+          p_closed_by: actor,
+          p_source: source,
+          p_closeout: closeout,
+          p_reconciliation: reconciliation,
+          p_receipt_ids: receiptIds,
+        });
+      } catch (e) {
+        // outcome unknown (it may have committed): a typed failure, never a success
+        raw = null;
+      }
+      const res = normalize(raw);
+      const attempt = res.attempt && typeof res.attempt === "object" ? res.attempt : null;
+      const attemptCompleted = res.attemptCompleted === true && !!attempt && attempt.status === "completed"
+        && attempt.closeout_correlation_id === closeoutCorrelationId && attempt.service_session_id === serviceSessionId;
+      if (res.ok !== true || !attemptCompleted) {
+        return {
+          success: false,
+          code: res.ok === true ? "V3_CLOSE_ATTEMPT_NOT_CONFIRMED" : (res.code || "SERVICE_LIFECYCLE_V3_CLOSE_FAILED"),
+          missing: res.missing,
+          stale: Array.isArray(res.stale) ? res.stale : undefined,
+          closeoutCommitted: res.closeoutCommitted === true,
+          session: null,
+        };
+      }
+      return {
+        success: true,
+        idempotent: res.idempotent === true,
+        code: res.code,
+        attemptCompleted: true,
+        session: publicSession(res.session),
+        closeoutRow: res.closeout && typeof res.closeout === "object" ? res.closeout : null,
+        reconciliationRow: res.reconciliation && typeof res.reconciliation === "object" ? res.reconciliation : null,
       };
     },
 
@@ -97,4 +192,7 @@ function createServiceLifecycleV3Transition({ rpc = sbRpc } = {}) {
 
 const serviceLifecycleV3Transition = createServiceLifecycleV3Transition();
 
-module.exports = { createServiceLifecycleV3Transition, serviceLifecycleV3Transition };
+// publicSession is exported for the engine's CASE D (R4), which already holds
+// the closed session row and must return it in exactly this shape without
+// asking for a transition.
+module.exports = { createServiceLifecycleV3Transition, serviceLifecycleV3Transition, publicSession };

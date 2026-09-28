@@ -178,17 +178,28 @@ console.log("\n── the three writers must not report a refused edit as succes
 {
   check("the order-writer module imports the refusal helpers",
     /require\("\.\.\/financial\/paidOrderEconomicGuard"\)/.test(writersSrc));
-  const refusals = writersSrc.match(/if \(isEconomicMutationRefusal\([a-zA-Z]+\)\) return economicMutationRefusal\(ordenId\);/g) || [];
+  // POST-ASTRA F5 / F7 -- the three writers no longer bind a raw sbUpdate result each: they all write through ONE helper,
+  // writeOrderPatch, which classifies every result (classifyOrderWriteResult: N-5 refusal first, then the other typed
+  // refusals, anything else a typed ORDER_WRITE_FAILED -- never a success). The intent pinned here is unchanged: a refused
+  // write is reported as a refusal and returns before any downstream side effect.
+  const guardSrc = fs.readFileSync(path.join(__dirname, "..", "src", "financial", "paidOrderEconomicGuard.js"), "utf8");
+  const classifier = guardSrc.slice(guardSrc.indexOf("function classifyOrderWriteResult("), guardSrc.indexOf("\n}\n", guardSrc.indexOf("function classifyOrderWriteResult(")));
+  const refusals = writersSrc.match(/const (modRefusal|stateRefusal|addRefusal) = await writeOrderPatch\(ordenId,/g) || [];
+  const returns = writersSrc.match(/if \((modRefusal|stateRefusal|addRefusal)\) return \1;/g) || [];
   // language-guard: allow-legacy modificaOrdine is the existing JS edit function name being cited, not new vocabulary
-  check("all three writers check their sbUpdate result (modificaOrdine, cambiaStato, aggiungiItems)",
-    refusals.length === 3);
+  check("all three writers check their write result (modificaOrdine, cambiaStato, aggiungiItems)",
+    refusals.length === 3 && returns.length === 3
+      && /if \(isEconomicMutationRefusal\(result\)\) return economicMutationRefusal\(orderId\);/.test(classifier)
+      && /return orderWriteFailure\(orderId\);/.test(classifier));
   // Every `sbUpdate("ordenes", ...)` in the file must EITHER be checked (its result is
-  // bound and tested) or be a writer that touches no economic column. Exactly one is
+  // bound and classified) or be a writer that touches no economic column. Exactly one is
   // unchecked today: risincronizzaGiro's driver-schedule patch (advisory fields only).
   const writes = writersSrc.split("\n").filter((l) => l.includes('sbUpdate("ordenes"'));
   const unchecked = writes.filter((l) => !/^\s*const \w+ = await sbUpdate/.test(l));
+  const helperBody = writersSrc.slice(writersSrc.indexOf("async function writeOrderPatch("), writersSrc.indexOf("\n}\n", writersSrc.indexOf("async function writeOrderPatch(")));
   check("every ordenes writer is either result-checked or provably non-economic",
-    writes.length === 4 && unchecked.length === 1 && unchecked[0].includes("u.patch"));
+    writes.length === 2 && unchecked.length === 1 && unchecked[0].includes("u.patch")
+      && /const res = await sbUpdate\("ordenes"[\s\S]*return classifyOrderWriteResult\(ordenId, res\);/.test(helperBody));
 
   // Scope the ordering checks to the function bodies, not the whole file: both
   // logOrderStateTransition and risincronizzaGiro also appear inside the creation path above.
@@ -200,16 +211,16 @@ console.log("\n── the three writers must not report a refused edit as succes
   // language-guard: allow-legacy modificaOrdine is the existing JS edit function name whose body is sliced here, not new vocabulary
   const modificaBody = bodyOf("modificaOrdine");
   check("cambiaStato returns BEFORE writing a transition log for a rejected write",
-    cambiaStatoBody.includes("isEconomicMutationRefusal(stateRes)")
-      && cambiaStatoBody.indexOf("isEconomicMutationRefusal(stateRes)")
+    cambiaStatoBody.includes("if (stateRefusal) return stateRefusal;")
+      && cambiaStatoBody.indexOf("if (stateRefusal) return stateRefusal;")
          < cambiaStatoBody.indexOf("await logOrderStateTransition("));
   check("cambiaStato returns BEFORE the DRIVER_STATO reconciliation hook",
-    cambiaStatoBody.indexOf("isEconomicMutationRefusal(stateRes)")
+    cambiaStatoBody.indexOf("if (stateRefusal) return stateRefusal;")
       < cambiaStatoBody.indexOf("recordDeliveryAndMaybeReturn("));
   // language-guard: allow-legacy modificaOrdine is the same existing JS edit function name, restated for this assertion, not new vocabulary
   check("modificaOrdine returns BEFORE re-syncing the giro off a patch that never landed",
-    modificaBody.includes("isEconomicMutationRefusal(modRes)")
-      && modificaBody.indexOf("isEconomicMutationRefusal(modRes)")
+    modificaBody.includes("if (modRefusal) return modRefusal;")
+      && modificaBody.indexOf("if (modRefusal) return modRefusal;")
          < modificaBody.indexOf("await risincronizzaGiro("));
 }
 

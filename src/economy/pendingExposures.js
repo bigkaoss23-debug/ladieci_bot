@@ -69,7 +69,7 @@
 
 const { sbSelect } = require("../utils/supabase");
 const {
-  safeTicket, round, CANCELLED, latestObligationsByOrder,
+  safeTicket, round, CANCELLED, withTableSettlement, obligationIndexByIdentity,
 } = require("../closeout/currentServiceCloseout");
 // CANONICAL SCOPE — the SAME window authority economicSnapshot.js uses. This
 // module does NOT compute a Madrid 04:00 boundary, a 17:30 split, a DST offset
@@ -193,6 +193,15 @@ function isUnconfirmedDeliveryOfClosedService({ order, serviceSession }) {
 // keeps that OUT of Pendientes). Non-Mesa is governed by estado, plus the
 // closed-service delivery rule above (`serviceSession` is optional: a caller
 // that does not pass it gets exactly the estado-only answer it always had).
+// POST-ASTRA F1 -- the B1 rule generalized: ANY non-terminal non-Mesa order whose service is CLOSED has
+// outlived the operational UI (the board only shows the open service), not only an EN_ENTREGA one. A LISTO
+// pickup that nobody collected before Finalizar used to be invisible here AND off the board.
+function isNonTerminalOrderOfClosedService({ order, serviceSession }) {
+  if (order.table_session_id) return false;
+  if (NON_MESA_TERMINAL_STATES.has(String(order.estado || "").toUpperCase())) return false;
+  return !!serviceSession && serviceSession.status === "closed";
+}
+
 function isOperationallyOver({ order, tableSession, serviceSession }) {
   if (order.table_session_id) {
     // Fail closed: a Mesa order whose table_sessions row could not be
@@ -200,7 +209,8 @@ function isOperationallyOver({ order, tableSession, serviceSession }) {
     return !!tableSession && tableSession.status !== "open";
   }
   if (NON_MESA_TERMINAL_STATES.has(String(order.estado || "").toUpperCase())) return true;
-  return isUnconfirmedDeliveryOfClosedService({ order, serviceSession });
+  return isUnconfirmedDeliveryOfClosedService({ order, serviceSession })
+    || isNonTerminalOrderOfClosedService({ order, serviceSession });
 }
 
 // Mesa's synthetic customer fields (mesaService.js: `nombre: table_ref`,
@@ -281,10 +291,20 @@ function isDeliveredEstado(estado) {
 //                  as unavailable here rather than overstated. Refund V1
 //                  Slice A itself is out of scope for this reader (§24).
 // `order` is optional: a caller that does not pass it gets exactly the answer this function always gave.
+// POST-ASTRA F1 -- a POR_COBRAR on a non-Mesa order that never reached the customer (still in a cancellable,
+// non-terminal state; only listed here once its service is closed) can be CANCELLED: the canonical path is
+// the existing cancellation (updateEstado -> cambiaStato -> order_cancel_v1), which for a closed service
+// records the post-close resolution fact (migration 152) instead of rewriting the closed obligation.
+const CANCELLABLE_ESTADOS = new Set(["POR_CONFIRMAR", "NUEVO", "EN_COCINA", "LISTO", "EN_ENTREGA"]);
+
 function allowedActionsFor(direction, channel, order = null) {
   if (direction === "POR_DEVOLVER" && channel === "MESA") return Object.freeze(["REFUND"]);
   if (direction === "POR_COBRAR" && channel !== "MESA" && order && order.order_uid && isDeliveredEstado(order.estado)) {
     return Object.freeze(["COLLECT"]);
+  }
+  if (direction === "POR_COBRAR" && channel !== "MESA" && order && order.order_uid
+      && CANCELLABLE_ESTADOS.has(String(order.estado || "").toUpperCase())) {
+    return Object.freeze(["CANCEL"]);
   }
   return Object.freeze([]);
 }
@@ -295,6 +315,8 @@ function allowedActionsFor(direction, channel, order = null) {
 //   everything else               -> null            (a pickup/counter order has no delivery fact to state)
 function deliveryStateOf(order, channel) {
   if (String(order.estado || "").toUpperCase() === "EN_ENTREGA") return "SIN_CONFIRMAR";
+  // POST-ASTRA F1 -- never handed over (a pickup nobody collected, an order still in the kitchen at Finalizar).
+  if (CANCELLABLE_ESTADOS.has(String(order.estado || "").toUpperCase())) return "SIN_ENTREGAR";
   if (channel === "DOMICILIO" && isDeliveredEstado(order.estado)) return "ENTREGADO";
   return null;
 }
@@ -357,18 +379,72 @@ function buildRevisionItem({ reasonCode, amount = null, direction = null, order 
 //    copies rather than exporting internals out of a certified reader for a
 //    one-off reuse). Plumbing only; the ECONOMIC arithmetic is always
 //    safeTicket, imported verbatim above. ──────────────────────────────────
+// POST-FINAL-BLIND M-1 — COMPLETE READS. Every population read of this reader
+// used to be ONE request with a fixed ceiling (`order=created_at.asc&limit=5000`
+// on ordenes / the archive table, `limit=20000` on the orphan scan, unbounded id
+// batches that a provider row cap would silently truncate): past the ceiling the
+// NEWEST rows were dropped, and with them real exposures. Every read now walks
+// the table by its PRIMARY KEY (keyset: `<pk>=gt.<last>&order=<pk>.asc`) until a
+// page comes back EMPTY. It never stops on a "short" page, so a provider cap
+// lower than PAGE_SIZE (PostgREST db-max-rows) only means more pages, never
+// fewer rows. Rows are de-duplicated by primary key, and the walk also stops
+// if a page adds no new key (a select that ignores the cursor cannot loop).
+// The consumers keep their previous ordering: each caller re-sorts the complete
+// set exactly as the single request used to order it.
+const PAGE_SIZE = 1000;
+// Per-call paging state. Once the provider has answered ONE page with PAGE_SIZE rows it has proved that it does not cap below the page
+// size, and from then on a shorter page can only be the last one, so the confirming empty request is skipped. Until then (a cap below
+// PAGE_SIZE is possible) the walk always ends on an empty page.
+function withPagingState(select) {
+  const paged = (table, query) => select(table, query);
+  paged.paging = { fullPageSeen: false };
+  return paged;
+}
+async function selectAllPages(select, table, pk, filter = "") {
+  const out = [];
+  const seen = new Set();
+  let cursor = null;
+  for (;;) {
+    const parts = [];
+    if (filter) parts.push(filter);
+    if (cursor !== null) parts.push(`${pk}=gt.${enc(String(cursor))}`);
+    parts.push(`order=${pk}.asc`, `limit=${PAGE_SIZE}`);
+    const rows = await select(table, parts.join("&"));
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    const fresh = [];
+    const keyless = [];
+    let last = null;
+    for (const row of rows) {
+      const key = row == null ? null : row[pk];
+      if (key === null || key === undefined) { if (row != null) keyless.push(row); continue; }
+      last = key;
+      if (seen.has(String(key))) continue;
+      seen.add(String(key));
+      fresh.push(row);
+    }
+    // The primary key is NOT NULL in every table read here; a keyless row (only a hand-built fixture has one) is kept from the FIRST
+    // page only, where it cannot be a repeat. The walk stops when a page brings no new key.
+    if (cursor === null) out.push(...keyless);
+    out.push(...fresh);
+    if (fresh.length === 0 || last === null) break;
+    if (select.paging && rows.length >= PAGE_SIZE) select.paging.fullPageSeen = true;
+    if (select.paging && select.paging.fullPageSeen && rows.length < PAGE_SIZE) break;
+    cursor = last;
+  }
+  return out;
+}
+const timeOf = (v) => { const t = new Date(v).getTime(); return Number.isFinite(t) ? t : 0; };
+const byKey = (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0);
+const byCreatedAt = (pk) => (a, b) => (timeOf(a.created_at) - timeOf(b.created_at)) || byKey(a[pk], b[pk]);
+
 async function selectOrders(select) {
-  // Slice-1 scale decision, stated explicitly: 59 live orders today, no
-  // pagination. A materially larger dataset is a real future concern (the
-  // architecture audit's §20 already flags it) — not solved here, per "do
-  // not build enterprise filtering" for this slice.
-  const rows = await select("ordenes", "order=created_at.asc&limit=5000");
-  return Array.isArray(rows) ? rows : [];
+  const rows = await selectAllPages(select, "ordenes", "id");
+  return rows.sort(byCreatedAt("id"));
 }
 
 async function selectLegacyArchive(select) {
-  const rows = await select("storico", "order=created_at.asc&limit=5000"); // language-guard: allow-legacy storico is the existing archive table name this reader queries, not new vocabulary
-  return Array.isArray(rows) ? rows : [];
+  const rows = await selectAllPages(select, "storico", "id"); // language-guard: allow-legacy storico is the existing archive table name this reader queries, not new vocabulary
+  return rows.sort(byCreatedAt("id"));
 }
 
 // PRE-DEPLOY REVIEW §2 — SCALE. This is the index-supported, bounded path,
@@ -385,13 +461,10 @@ async function selectEventsForIds(select, ids) {
   if (!ids.length) return [];
   const out = [];
   for (const batch of chunk(ids, ID_BATCH)) {
-    const rows = await select(
-      "order_financial_events",
-      `order_id=in.(${batch.map((id) => enc(String(id))).join(",")})&order=created_at.asc`,
-    );
-    if (Array.isArray(rows)) out.push(...rows);
+    // M-1 — a batch of display ids can match more events than one page (a recycled number carries every service's events).
+    out.push(...await selectAllPages(select, "order_financial_events", "id", `order_id=in.(${batch.map((id) => enc(String(id))).join(",")})`));
   }
-  return out;
+  return out.sort(byCreatedAt("id"));
 }
 
 // PRE-DEPLOY REVIEW §2 — the ONE remaining unbounded read, and it is
@@ -407,15 +480,13 @@ async function selectEventsForIds(select, ids) {
 // is a schema addition and therefore explicitly out of scope this slice —
 // reported, not implemented (see this slice's pre-deploy report §D).
 //
-// What CAN be done without a migration, and is done here: no `ORDER BY` is
-// requested. Orphan grouping (below) computes its own per-group max()
-// regardless of input order, so the one cost this call can shed without an
-// index is the sort itself — Postgres can stream the table rather than
-// materialize and sort all of it. Still O(n) in ledger size; see the report
-// for the growth ceiling this remains safe under.
+// What CAN be done without a migration, and is done here: no chronological
+// sort is requested. Orphan grouping (below) computes its own per-group max()
+// regardless of input order. M-1: the scan is COMPLETE — keyset pages over the
+// primary key (an index walk, never a materialized sort), where it used to stop
+// silently at 20000 rows. Still O(n) in ledger size.
 async function selectAllEventsForOrphanScan(select) {
-  const rows = await select("order_financial_events", "limit=20000");
-  return Array.isArray(rows) ? rows : [];
+  return selectAllPages(select, "order_financial_events", "id");
 }
 
 // WORKSPACE ISOLATION — `order_obligations` carries `workspace_id` (verified
@@ -423,17 +494,33 @@ async function selectAllEventsForOrphanScan(select) {
 // `table_sessions`/`restaurant_tables`/`table_reservations` reads by. Scoping
 // here matches that established convention rather than leaning solely on the
 // DB-wide singleton invariant (see selectByIds below).
-async function selectObligationsForIds(select, ids, workspaceId) {
-  if (!ids.length) return [];
+// POST-ASTRA F4 -- by PERMANENT identity (order_uid), never by the bare display id: an `order_id IN (...)`
+// fetch across services also returned the obligations of an unrelated order that shared a recycled number.
+// A row without order_uid (legacy) is looked up by its (service_session_id, order_id) provenance only.
+async function selectObligationsForOrders(select, orders, workspaceId) {
+  const uids = [...new Set((orders || []).map((o) => o && o.order_uid).filter(Boolean).map(String))];
+  const legacy = (orders || []).filter((o) => o && !o.order_uid && o.service_session_id);
   const out = [];
-  for (const batch of chunk(ids, ID_BATCH)) {
-    const rows = await select(
-      "order_obligations",
-      `order_id=in.(${batch.map((id) => enc(String(id))).join(",")})&workspace_id=eq.${enc(workspaceId)}&order=revision.asc`,
-    );
-    if (Array.isArray(rows)) out.push(...rows);
+  for (const batch of chunk(uids, ID_BATCH)) {
+    out.push(...await selectAllPages(select, "order_obligations", "id",
+      `order_uid=in.(${batch.map(enc).join(",")})&workspace_id=eq.${enc(workspaceId)}`));
   }
-  return out;
+  const legacyIds = [...new Set(legacy.map((o) => String(o.id)).filter(Boolean))];
+  const legacySessions = [...new Set(legacy.map((o) => String(o.service_session_id)))];
+  for (const batch of chunk(legacyIds, ID_BATCH)) {
+    out.push(...await selectAllPages(select, "order_obligations", "id",
+      `order_id=in.(${batch.map(enc).join(",")})&service_session_id=in.(${legacySessions.map(enc).join(",")})&workspace_id=eq.${enc(workspaceId)}`));
+  }
+  // M-1 — the complete set keeps the previous `order=revision.asc` order (ties by primary key).
+  out.sort((a, b) => (Number(a.revision) - Number(b.revision)) || byKey(a.id, b.id));
+  // The two fetches can return the same revision: keep one per (order_uid, revision) -- the table's own unique key.
+  const seen = new Set();
+  return out.filter((r) => {
+    const key = `${String(r.order_uid || "")}::${String(r.revision)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // WORKSPACE ISOLATION — `workspace_id` is applied whenever the target table
@@ -465,11 +552,6 @@ function matchedEventsFor(order, allEvents) {
   const session = String(order.service_session_id || "");
   return allEvents.filter((event) => String(event.order_id ?? event.orden_id ?? "") === id
     && String(event.service_session_id || "") === session);
-}
-
-function latestObligationFor(order, obligationByOrder) {
-  const id = String(order.id ?? order.orden_id ?? "");
-  return obligationByOrder.get(id) || null;
 }
 
 function withinRange(iso, from, to) {
@@ -582,12 +664,13 @@ async function resolvePendencyScope({ select, preset, serviceSessionId, business
   });
 }
 
-function createPendingExposures({ select = sbSelect } = {}) {
+function createPendingExposures({ select: baseSelect = sbSelect } = {}) {
   return async function getPendingExposures({
     workspaceId, direction, from, to, q,
     preset, serviceSessionId, businessDate,
     now = new Date(),
   } = {}) {
+    const select = withPagingState(baseSelect); // M-1: fresh paging state for every read
     // WORKSPACE ISOLATION — fail closed with the SAME code+status
     // cashCountService.js's own `requireContext` already uses for exactly
     // this condition: an absent/malformed workspaceId means the caller was
@@ -633,8 +716,8 @@ function createPendingExposures({ select = sbSelect } = {}) {
     const knownIds = [...new Set([...orderIds, ...archiveIds])];
     const events = await selectEventsForIds(select, knownIds);
     // WORKSPACE ISOLATION — scoped; see selectObligationsForIds above.
-    const obligationRows = await selectObligationsForIds(select, orderIds, workspaceId);
-    const obligationByOrder = latestObligationsByOrder(obligationRows);
+    const obligationRows = await selectObligationsForOrders(select, orders, workspaceId);
+    const obligationFor = obligationIndexByIdentity(obligationRows);
 
     // WORKSPACE NOTE — `service_sessions` carries no workspace_id column at
     // all (verified against the live schema), the SAME as `ordenes`, the
@@ -659,14 +742,24 @@ function createPendingExposures({ select = sbSelect } = {}) {
     const porDevolver = [];
     const requiereRevision = [];
 
-    for (const order of orders) {
-      const matchedEvents = matchedEventsFor(order, events);
-      const obligation = latestObligationFor(order, obligationByOrder);
-      // session is passed as null on purpose: safeTicket's economicKind // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values this economicKind field reports, not new vocabulary
-      // (its era-of-sale reporting) is not part of this reader's contract, and
-      // originalBusinessDate below is read independently from the session
-      // map, decoupled from safeTicket's internal usage of it.
-      const rawTicket = safeTicket(order, matchedEvents, null, obligation);
+    // POST-ASTRA F3 -- the ONE table-session netting the closeout and Economía already apply
+    // (withTableSettlement): a comanda's over-collection first covers what the other comandas of the SAME
+    // table session still owe, so an exactly settled table never lists a phantom POR_COBRAR next to a
+    // phantom (and REFUND-actionable) POR_DEVOLVER. Computed over the whole population before any filter.
+    // session is passed as null on purpose: safeTicket's economicKind // language-guard: allow-legacy PRANZO/SERA are the existing service_kind enum values this economicKind field reports, not new vocabulary
+    // (its era-of-sale reporting) is not part of this reader's contract, and
+    // originalBusinessDate below is read independently from the session
+    // map, decoupled from safeTicket's internal usage of it.
+    const matchedByIndex = orders.map((order) => matchedEventsFor(order, events));
+    const nettedTickets = withTableSettlement(
+      orders.map((order, i) => safeTicket(order, matchedByIndex[i], null, obligationFor(order))),
+      orders,
+    );
+
+    for (let index = 0; index < orders.length; index += 1) {
+      const order = orders[index];
+      const matchedEvents = matchedByIndex[index];
+      const rawTicket = nettedTickets[index];
       const ticket = Object.freeze({
         ...rawTicket,
         lastMovementAt: lastMovementOf(matchedEvents),
@@ -852,7 +945,7 @@ const getPendingExposures = createPendingExposures();
 module.exports = {
   createPendingExposures, getPendingExposures, PendingExposuresError,
   // Exported for direct unit testing — pure, no I/O.
-  NON_MESA_TERMINAL_STATES, isCancelLike, channelOf, isOperationallyOver, isUnconfirmedDeliveryOfClosedService,
+  NON_MESA_TERMINAL_STATES, isCancelLike, channelOf, isOperationallyOver, isUnconfirmedDeliveryOfClosedService, isNonTerminalOrderOfClosedService,
   normalizeCustomer, buildDisplay, allowedActionsFor, deliveryStateOf, isDeliveredEstado, matchesQuery, withinRange,
   PENDENCY_PRESETS, resolvePendencyScope,
 };

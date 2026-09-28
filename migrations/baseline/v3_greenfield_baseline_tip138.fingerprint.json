@@ -1,0 +1,29 @@
+{
+ "baseline_file": "migrations/baseline/2026-09-27_v3_greenfield_baseline_tip138.sql",
+ "baseline_sha256": "7ba2492c41fe178487ba60cd1e220d9f2b47f4e4379447e9db7035f10a01401c",
+ "catalog_dir": "migrations/baseline/catalog_tip138",
+ "catalog_files_sha256": {
+  "functions.json": "b4f9fb0b2f7d9734e741341f67f8e20892c2c66f11e51e2776676e1f960e0ebb",
+  "structure.json": "f01fe32c35dcdcc7cc1e1642e4c242c0976a4b1f68c3af407a81655460e649ec",
+  "extras.json": "2f2a9c748e0ad9ebbcda12031280f6cde62281d5b2aa3b7447ec4562a6071719"
+ },
+ "catalog_fingerprint_sha256": "8cee65e4d6793c2911f5a791a7eb647f78893bd197388c4807fae4535c586bda",
+ "catalog_fingerprint_sections": {
+  "schemas": "89b85ff4cebc140e8ba119326e35848f7670ba9989762de765bb31b28329411e",
+  "sequences": "be1500bbef550d2d6a3649b733661c4506c0163f58382ad74e2055f7a7f3a2e5",
+  "tables": "9f7c0248134bb4a30053a215194783b9b720d087cef8898e50f43ca379c2f4b4",
+  "functions": "17a0018a9a7ba2d5ead1f9a7ce2685194f6fefad516009ca49beb284cb88fd2a",
+  "publications": "08c0e0f2172a910211987f08b0fa6f4ac9bc87addfd57fc309c85ba7ecb73e3f",
+  "function_comments": "d0f1179d6dc1d293aff3543c686fa52e47f58c24a36f18a574ff9817baacab15",
+  "schema_comments": "c9238b8f13890d260fbe221e9bfb6f0e4b567dc8b6ac9d9024eafa9dbb04747d",
+  "platform_triggers": "bc4a715f136248aaafb14e30b20413d8e22c99e796f76692fc5c83ecd725dde7"
+ },
+ "counts": {
+  "functions": 163,
+  "tables": 62,
+  "sequences": 7,
+  "publications": 3,
+  "platform_triggers": 1
+ },
+ "source": "staging tdikhfeinufaahagmpjz, ledger tip 138, read-only catalog, 2026-09-27; sanitized by catalog-from-snapshot"
+}

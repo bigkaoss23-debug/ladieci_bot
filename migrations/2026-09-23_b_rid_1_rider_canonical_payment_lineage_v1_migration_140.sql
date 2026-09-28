@@ -55,6 +55,14 @@
 --      writer already counts them (net collected is read from order_financial_events), so an order paid the old way
 --      can never be paid a second time the new way.
 --
+-- R5 LOCK-ORDER AMENDMENT (2026-09-25, candidate not yet applied anywhere). The rider RPC got ONE more marked block,
+-- "140:BEGIN workspace_before_actor": a COLLECTION locks the workspace row of the rider's own actor right after L0 and
+-- BEFORE the actor row, so the rider follows L0 -> workspace -> actor -> DRIVER_STATO -> [writer: workspace (held) ->
+-- actor (held) -> entity -> order -> service pointer], the same workspace-before-actor order as every other writer and
+-- as auth_set_actor_pin_v2/v3 and the V3 actor-management RPCs. Before it, a PIN rotation (workspace -> every actor row)
+-- overlapping a rider collection (actor -> ... -> workspace) was a reachable 40P01 cycle (C8 exception E1). A stop
+-- without money takes no workspace lock, exactly as before. No contract, refusal code, table or other body changes.
+--
 -- IDENTITY. The payment is recorded AS THE RIDER: payment_transactions.by_actor/by_role and order_financial_events
 -- by_actor/by_role = the rider (the OFE constraints already admit 'rider'), meta.source 'rider_delivery'. Never an
 -- operator, never an admin, never owner.
@@ -530,6 +538,21 @@ BEGIN
   -- this function's ordering, refusal codes or lock strengths changes.
   PERFORM pg_advisory_xact_lock(hashtext('LA_DIECI_DRIVER_STATO'));
 
+  -- 140:BEGIN workspace_before_actor
+  -- R5 (targeted findings 2026-09-25). A COLLECTION reaches the canonical writer, which locks the workspace row
+  -- and then the actor row. Locking the actor row first (below) and the workspace only inside the writer was the
+  -- one actor-before-workspace edge of the Economy lock graph: the PIN rotation and the V3 actor-management RPCs
+  -- lock the workspace row and then the actor rows of that workspace, so a rotation overlapping a rider collection
+  -- deadlocked (40P01). The workspace row of the rider's own actor is locked HERE, after L0 and before the actor
+  -- row, so a collection follows L0 -> workspace -> actor like every other writer; the writer re-locks the same
+  -- row (already held, no wait). A stop without money never reaches the writer and still takes no workspace lock.
+  IF v_method <> '' THEN
+    PERFORM 1 FROM public.workspaces w
+     WHERE w.id = (SELECT a.workspace_id FROM public.auth_actors a WHERE a.actor = p_by_actor)
+     FOR UPDATE;
+  END IF;
+  -- 140:END workspace_before_actor
+
   -- IDENTITY. Role must be exactly 'rider' — this contract never serves admin/operator,
   -- and never lets a rider borrow their authority.
   SELECT * INTO v_by FROM public.auth_actors WHERE actor = p_by_actor FOR UPDATE;
@@ -721,7 +744,7 @@ BEGIN
 
   v_rider := (SELECT p.prosrc FROM pg_proc p WHERE p.oid = 'public.rider_collect_and_complete_stop(text,text,text,integer,text,jsonb,text,text)'::regprocedure);
   v_opp   := (SELECT p.prosrc FROM pg_proc p WHERE p.oid = 'public.order_post_payment_v1(uuid,text,text,uuid,text,text,numeric,text,text,jsonb,boolean)'::regprocedure);
-  IF md5(v_rider) IS DISTINCT FROM '4a4494aa8b579c64a9d943c7573e5ede' THEN
+  IF md5(v_rider) IS DISTINCT FROM 'ef3d423028b2d4d823359264bc5cfadc' THEN
     RAISE EXCEPTION 'B_RID_1 post-condition failed: rider_collect_and_complete_stop is not the exact 140 body';
   END IF;
   IF md5(v_opp) IS DISTINCT FROM 'ea4fe577feddbd2ba6f6ae42695feba6' THEN

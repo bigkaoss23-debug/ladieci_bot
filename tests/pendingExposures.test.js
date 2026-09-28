@@ -525,14 +525,16 @@ let result; // populated once, reused by every read-only assertion below
     const eventCalls = freshCalls.filter((c) => c.table === "order_financial_events");
     const unbounded = eventCalls.filter((c) => !c.query.includes("order_id=in."));
     const bounded = eventCalls.filter((c) => c.query.includes("order_id=in."));
-    assert.strictEqual(unbounded.length, 1,
-      "exactly one order_financial_events read may be unfiltered by order_id — the orphan scan, and no other");
+    // POST-FINAL-BLIND M-1: the orphan scan is the only read unfiltered by order_id, and it is now COMPLETE -- a keyset walk over the
+    // primary key (first page without a cursor, every later page `id=gt.<last>`), never the old single `limit=20000` request.
+    assert.strictEqual(unbounded.filter((c) => !c.query.includes("id=gt.")).length, 1,
+      "exactly one order_financial_events read may be unfiltered by order_id and cursor-free -- the first page of the orphan scan");
     assert.ok(bounded.length > 0, "the primary population must be fetched id-scoped, using the live order_financial_events_order_created_idx");
-    // The orphan scan must not request a sort either — see its own header
-    // for why: no consumer of it needs chronological order, and requesting
-    // one would force Postgres to materialize and sort the whole table for
-    // no reason this reader can use.
-    assert.ok(!unbounded[0].query.includes("order="), "the orphan scan must not request a sort");
+    // The orphan scan never asks for a chronological sort (no consumer needs one): it walks the primary key index only.
+    for (const c of unbounded) {
+      assert.ok(/(^|&)order=id\.asc(&|$)/.test(c.query) && !c.query.includes("created_at"), `the orphan scan walks the primary key only: ${c.query}`);
+      assert.ok(!c.query.includes("limit=20000"), "the old 20000-row ceiling is gone");
+    }
   });
 
   console.log(`pendingExposures: ${passed} passed`);

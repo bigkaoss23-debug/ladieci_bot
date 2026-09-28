@@ -66,10 +66,12 @@ const ordenes = [
     order_uid: "bbbb2222-0000-4000-8000-000000000001" },
 ];
 
+// POST-ASTRA F4 -- every canonical obligation row carries its order's PERMANENT identity (order_uid NOT NULL in the schema);
+// the readers attach an obligation by that identity, never by the recyclable display id.
 const order_obligations = [
-  { order_id: "#SVC1", revision: 1, gross_amount: 60, service_session_id: SVC_CROSS },
-  { order_id: "#SVC2", revision: 1, gross_amount: 40, service_session_id: SVC_CROSS },
-  { order_id: "#NEST1", revision: 1, gross_amount: 20, service_session_id: SVC_NEST },
+  { order_id: "#SVC1", order_uid: "aaaa1111-0000-4000-8000-000000000001", revision: 1, gross_amount: 60, service_session_id: SVC_CROSS },
+  { order_id: "#SVC2", order_uid: "aaaa1111-0000-4000-8000-000000000002", revision: 1, gross_amount: 40, service_session_id: SVC_CROSS },
+  { order_id: "#NEST1", order_uid: "bbbb2222-0000-4000-8000-000000000001", revision: 1, gross_amount: 20, service_session_id: SVC_NEST },
 ];
 
 const ev = (id, order, type, amount, method, at, session) => ({

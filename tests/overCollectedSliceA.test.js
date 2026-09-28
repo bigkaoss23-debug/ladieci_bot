@@ -27,6 +27,14 @@ const { createCashCountService } = require("../src/economy/cashCountService");
 const { createMemorySelect } = require("./fixtures/postgrestMemorySelect");
 
 const session = (overrides = {}) => ({ id: "s1", covers_total: null, ...overrides });
+// R2 (Economy 147) — the session obligation is the commands' CURRENT canonical obligation,
+// never a line sum: each scenario states "obligation N" as one command whose latest
+// order_obligations revision is N.
+const OWED_UID = "0b1a0000-0000-4000-8000-000000000001";
+const owed = (gross) => ({
+  orders: [{ id: "o1", order_uid: OWED_UID, estado: "EN_COCINA", totale: gross }],
+  obligations: [{ order_uid: OWED_UID, revision: 1, gross_amount: gross }],
+});
 const closeoutSession = (overrides = {}) => ({
   id: "00000000-0000-4000-8000-00000000000a", business_date: "2026-08-13",
   opened_at: "2026-08-13T17:00:00Z", closed_at: null, status: "open", ...overrides,
@@ -53,7 +61,7 @@ test("over-collected §16: obligation 0 / collected 75 (mirrors live table_sessi
 test("over-collected §16: obligation 20 / collected 30 -> outstanding 0, overCollected 10", () => {
   const account = projectSessionAccount(session(), {
     lines: [{ id: "l1", amount: 20, paid: 20, remaining: 0 }],
-    orders: [],
+    ...owed(20),
     transactions: [{ id: "p1", kind: "payment", amount: 30, payment_method: "tarjeta" }],
   });
   assert.equal(account.total, 20);
@@ -65,7 +73,7 @@ test("over-collected §16: obligation 20 / collected 30 -> outstanding 0, overCo
 test("over-collected §16: obligation 30 / collected 20 -> unpaid 10, overCollected 0", () => {
   const account = projectSessionAccount(session(), {
     lines: [{ id: "l1", amount: 30, paid: 20, remaining: 10 }],
-    orders: [],
+    ...owed(30),
     transactions: [{ id: "p1", kind: "payment", amount: 20, payment_method: "efectivo" }],
   });
   assert.equal(account.total, 30);
@@ -77,7 +85,7 @@ test("over-collected §16: obligation 30 / collected 20 -> unpaid 10, overCollec
 test("over-collected §16: obligation 30 / collected 30 -> both zero", () => {
   const account = projectSessionAccount(session(), {
     lines: [{ id: "l1", amount: 30, paid: 30, remaining: 0 }],
-    orders: [],
+    ...owed(30),
     transactions: [{ id: "p1", kind: "payment", amount: 30, payment_method: "bizum" }],
   });
   assert.equal(account.outstanding, 0);
@@ -87,7 +95,7 @@ test("over-collected §16: obligation 30 / collected 30 -> both zero", () => {
 test("over-collected §16: payment 30, refund 10, obligation 30 -> netCollected 20 / unpaid 10 / overCollected 0", () => {
   const account = projectSessionAccount(session(), {
     lines: [{ id: "l1", amount: 30, paid: 20, remaining: 10 }],
-    orders: [],
+    ...owed(30),
     transactions: [
       { id: "p1", kind: "payment", amount: 30, payment_method: "efectivo" },
       { id: "r1", kind: "refund", amount: 10, payment_method: "efectivo" },
@@ -110,7 +118,7 @@ test("over-collected §17: a force-closed-table order's line and payment still c
   const rows = {
     tables: [{ id: "t1", table_number: 9, display_name: "Mesa 9", capacity: 4, position_x: 0, position_y: 0, shape: "round", active: true }],
     sessions: [{ id: "s1", table_id: "t1", service_session_id: "svc-1", status: "open", covers_total: 2, opened_at: "now" }],
-    orders: [{ id: "o1", table_session_id: "s1", table_command_number: 1, estado: FORCE_CLOSED_TABLE_ESTADO, totale: 75, items: [] }],
+    orders: [{ id: "o1", order_uid: OWED_UID, table_session_id: "s1", table_command_number: 1, estado: FORCE_CLOSED_TABLE_ESTADO, totale: 75, items: [] }],
     lines: [{ id: "l1", table_session_id: "s1", order_id: "o1", source_line_id: "g1", source_line_index: 1, unit_index: 1, description: "Pizza", product_snapshot: {}, net_amount: 75 }],
     transactions: [{ id: "p1", table_session_id: "s1", kind: "payment", mode: "full", amount: 75, payment_method: "efectivo", covers_settled: 2 }],
     allocations: [{ payment_transaction_id: "p1", table_order_line_id: "l1", amount: 75 }],

@@ -186,6 +186,8 @@ async function testWriters() {
   supa.sbUpsert = async () => ({});
   supa.sbDelete = async () => ({});
   supa.getConfig = async () => ({});
+  // POST-ASTRA F5 -- the editor writes through rpc order_apply_editor_patch_v1; routed to the sbUpdate model above (N-5 body included).
+  supa.sbRpc = require("./helpers/editorRpcShim").withEditorRpc((...a) => supa.sbUpdate(...a), supa.sbRpc);
 
   const mgPath = require.resolve("../src/agents/manualGiros");
   require(mgPath);

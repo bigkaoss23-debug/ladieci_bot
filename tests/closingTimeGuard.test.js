@@ -64,6 +64,8 @@ require.cache[supabasePath] = {
       return [];
     },
     getConfig: async () => ({}),
+    // POST-ASTRA F5 -- the editor writes through rpc order_apply_editor_patch_v1; routed to sbUpdate above via require.cache.
+    sbRpc: (...a) => require("./helpers/editorRpcShim").withEditorRpc((...u) => require.cache[supabasePath].exports.sbUpdate(...u))(...a),
   },
 };
 

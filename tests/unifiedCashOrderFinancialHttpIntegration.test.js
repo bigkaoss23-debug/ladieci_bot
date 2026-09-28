@@ -93,9 +93,11 @@ function reqHttp(server, { auth, action }) {
 
     check(`${ACTION}: every row carries an additive financial block`,
       rows.every((r) => r.financial && typeof r.financial === "object"));
-    check(`${ACTION}: financial shape is exactly projectOrderFinancial's`,
+    // STALE PAYMENT MIRROR (H1/H2): plus the canonical settlement (orderObligationProjection.js), nothing else.
+    check(`${ACTION}: financial shape is exactly projectOrderFinancial's plus the canonical settlement`,
       JSON.stringify(Object.keys(a.financial || {}).sort()) ===
-      JSON.stringify(["adjustable", "commercialAdjustment", "currentObligation", "obligationRevision", "orderUid", "originalObligation"]));
+      JSON.stringify(["adjustable", "commercialAdjustment", "currentObligation", "legacyPaymentConflict", "netCollected", "obligationRevision", "orderUid",
+        "originalObligation", "outstanding", "overCollected", "payState"]));
 
     check(`${ACTION}: adjusted order exposes original 30 AND current 22`,
       a.financial && a.financial.originalObligation === 30 && a.financial.currentObligation === 22 && a.financial.commercialAdjustment === -8);
@@ -112,6 +114,8 @@ function reqHttp(server, { auth, action }) {
     check(`${ACTION}: that read is a batched in.(...) over both order_uids`,
       obCalls.length === 1 && /order_uid=in\.\(/.test(obCalls[0].query) &&
       obCalls[0].query.includes(UID_A) && obCalls[0].query.includes(UID_B));
+    check(`${ACTION}: exactly ONE order_financial_events read (no N+1)`,
+      sbCalls.filter((c) => c.table === "order_financial_events").length === 1);
     check(`${ACTION}: no write-shaped supabase call issued`,
       !sbCalls.some((c) => /rpc\//.test(c.table || "")));
   }

@@ -246,7 +246,8 @@ test('F3: a genuinely cancelled order -> obligation basis 0, not adjustable', ()
 test('G: financial + orderUid are purely additive -- all pre-existing command/account fields survive', () => {
   const base = {
     orders: [order({ totale: 30 })],
-    lines: [{ id: 'l1', table_session_id: SESSION_ID, order_id: '#001', net_amount: 30 }],
+    // projectSessionAccount receives NORMALISED lines (normalizeLinesBySession): orderId / amount.
+    lines: [{ id: 'l1', orderId: '#001', amount: 30 }],
     transactions: [{ id: 'p1', table_session_id: SESSION_ID, kind: 'payment', amount: 30, payment_method: 'bizum' }],
   };
   const before = projectSessionAccount(openSession(), base); // no `obligations` key at all -> defaults []

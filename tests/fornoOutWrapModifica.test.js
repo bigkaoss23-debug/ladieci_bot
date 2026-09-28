@@ -68,6 +68,8 @@ supa.sbUpdate = async (table, query, patch) => {
 supa.sbInsert = async () => [];
 supa.sbUpsert = async () => ({});
 supa.sbDelete = async () => ({});
+// POST-ASTRA F5 -- the editor writes through rpc order_apply_editor_patch_v1; routed to the sbUpdate model above.
+supa.sbRpc = require("./helpers/editorRpcShim").withEditorRpc((...a) => supa.sbUpdate(...a));
 
 const { modificaOrdine } = require("../src/agents/agentOrdini");
 

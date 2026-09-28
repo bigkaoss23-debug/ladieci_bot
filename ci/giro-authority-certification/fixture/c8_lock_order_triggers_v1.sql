@@ -1,0 +1,30 @@
+-- C8 real-body harness: the staging triggers of the graph tables that the frozen fixture lacks or shapes differently (SELECT-only catalog reads, 2026-09-24).
+-- ordenes_zz_giro_intent_capture_v1 and workspace_activation_integrity_trg are added by the kit itself (they need the giro_authority schema / the live body).
+SET ROLE postgres;
+DROP TRIGGER IF EXISTS mesa_snapshot_order_lines_v1 ON public.ordenes;
+CREATE TRIGGER mesa_snapshot_order_lines_v1 AFTER INSERT ON public.ordenes FOR EACH ROW EXECUTE FUNCTION public.mesa_snapshot_order_lines_v1();
+DROP TRIGGER IF EXISTS ordenes_paid_at_creation_payment_v1 ON public.ordenes;
+CREATE TRIGGER ordenes_paid_at_creation_payment_v1 AFTER INSERT ON public.ordenes FOR EACH ROW WHEN ((new.initial_payment_intent IS NOT NULL)) EXECUTE FUNCTION public.order_initial_payment_v1();
+DROP TRIGGER IF EXISTS ordenes_order_economic_basis_lock_v1 ON public.ordenes;
+CREATE TRIGGER ordenes_order_economic_basis_lock_v1 BEFORE UPDATE OF totale, items, delivery_fee, descuento_tipo, descuento_valor, descuento_importe ON public.ordenes FOR EACH ROW EXECUTE FUNCTION public.order_economic_basis_lock_v1();
+DROP TRIGGER IF EXISTS ordenes_paid_order_economic_mutation_guard_v1 ON public.ordenes;
+CREATE TRIGGER ordenes_paid_order_economic_mutation_guard_v1 BEFORE UPDATE OF totale, delivery_fee, descuento_tipo, descuento_valor, descuento_importe ON public.ordenes FOR EACH ROW EXECUTE FUNCTION public.paid_order_economic_mutation_guard_v1();
+DROP TRIGGER IF EXISTS business_day_lifecycle_state_guard_v1 ON public.business_day_lifecycle_state;
+CREATE TRIGGER business_day_lifecycle_state_guard_v1 BEFORE UPDATE ON public.business_day_lifecycle_state FOR EACH ROW EXECUTE FUNCTION public.business_day_lifecycle_state_guard_v1();
+DROP TRIGGER IF EXISTS service_sessions_business_day_derive_v1 ON public.service_sessions;
+CREATE TRIGGER service_sessions_business_day_derive_v1 BEFORE INSERT ON public.service_sessions FOR EACH ROW EXECUTE FUNCTION public.service_session_business_day_derive_v1();
+DROP TRIGGER IF EXISTS service_sessions_closed_live_work_guard ON public.service_sessions;
+CREATE TRIGGER service_sessions_closed_live_work_guard BEFORE UPDATE OF status ON public.service_sessions FOR EACH ROW EXECUTE FUNCTION public.guard_service_session_closed_v1();
+DROP TRIGGER IF EXISTS service_sessions_lifecycle_semantics_immutable_guard ON public.service_sessions;
+CREATE TRIGGER service_sessions_lifecycle_semantics_immutable_guard BEFORE UPDATE OF lifecycle_semantics ON public.service_sessions FOR EACH ROW EXECUTE FUNCTION public.guard_service_sessions_lifecycle_semantics_immutable_v1();
+DROP TRIGGER IF EXISTS table_order_lines_stamp_economic_period_v1 ON public.table_order_lines;
+CREATE TRIGGER table_order_lines_stamp_economic_period_v1 BEFORE INSERT ON public.table_order_lines FOR EACH ROW EXECUTE FUNCTION public.table_order_lines_stamp_economic_period_v1();
+DROP TRIGGER IF EXISTS table_order_lines_append_only_v1 ON public.table_order_lines;
+CREATE TRIGGER table_order_lines_append_only_v1 BEFORE DELETE OR UPDATE ON public.table_order_lines FOR EACH ROW EXECUTE FUNCTION public.mesa_append_only_v1();
+DROP TRIGGER IF EXISTS mesa_complete_reservation_v1 ON public.table_sessions;
+CREATE TRIGGER mesa_complete_reservation_v1 AFTER UPDATE OF status ON public.table_sessions FOR EACH ROW EXECUTE FUNCTION public.mesa_complete_reservation_v1();
+DROP TRIGGER IF EXISTS table_sessions_guard_covers_monotonic_v1 ON public.table_sessions;
+CREATE TRIGGER table_sessions_guard_covers_monotonic_v1 BEFORE UPDATE OF covers_total ON public.table_sessions FOR EACH ROW EXECUTE FUNCTION public.mesa_guard_covers_monotonic_v1();
+DROP TRIGGER IF EXISTS order_entities_append_only_v1 ON public.order_entities;
+CREATE TRIGGER order_entities_append_only_v1 BEFORE DELETE OR UPDATE ON public.order_entities FOR EACH ROW EXECUTE FUNCTION public.mesa_append_only_v1();
+RESET ROLE;

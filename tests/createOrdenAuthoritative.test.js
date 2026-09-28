@@ -21,6 +21,8 @@ const supa = require.cache[supaPath].exports;
 let INSERTED = [];
 let UPDATED = [];
 let STORE = {}; // id → ordine (per modificaOrdine fetch)
+// POST-ASTRA F5 -- the editor writes through rpc order_apply_editor_patch_v1; routed to the sbUpdate model below.
+supa.sbRpc = require("./helpers/editorRpcShim").withEditorRpc((...a) => supa.sbUpdate(...a));
 
 supa.sbSelect = async (table, query = "") => {
   if (table === "config") return []; // ORDER_RESET_TS, GEO_PROVIDER → default

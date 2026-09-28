@@ -72,8 +72,14 @@ const r2 = (n) => Math.round(n * 100) / 100;
     assert.strictEqual(isUnconfirmedDeliveryOfClosedService({ order: o("EN_ENTREGA"), serviceSession: OPEN }), false);
     assert.strictEqual(isUnconfirmedDeliveryOfClosedService({ order: o("EN_ENTREGA"), serviceSession: ROLLED }), false, "rolled_over is still an operational scope");
     assert.strictEqual(isUnconfirmedDeliveryOfClosedService({ order: o("EN_ENTREGA"), serviceSession: null }), false, "unresolved service fails CLOSED toward live");
+    // POST-ASTRA F1 -- generalizes the B1 rule: ANY non-terminal non-Mesa order of a CLOSED service is operationally over
+    // (historical money, listed in Pendientes: a pickup nobody collected, an order still in the kitchen at Finalizar). The
+    // same states of an OPEN / rolled-over / unresolved service keep their live answer.
     for (const estado of ["LISTO", "EN_COCINA", "NUEVO", "POR_CONFIRMAR"]) {
-      assert.strictEqual(isOperationallyOver({ order: o(estado), serviceSession: CLOSED }), false, `${estado} on a closed service keeps its old (live) answer`);
+      assert.strictEqual(isOperationallyOver({ order: o(estado), serviceSession: CLOSED }), true, `${estado} on a closed service is historical (F1)`);
+      assert.strictEqual(isOperationallyOver({ order: o(estado), serviceSession: OPEN }), false, `${estado} on an open service stays live`);
+      assert.strictEqual(isOperationallyOver({ order: o(estado), serviceSession: ROLLED }), false, `${estado} on a rolled-over service stays live`);
+      assert.strictEqual(isOperationallyOver({ order: o(estado), serviceSession: null }), false, `${estado} with an unresolved service fails closed toward live`);
     }
     assert.strictEqual(isOperationallyOver({ order: o("RETIRADO"), serviceSession: OPEN }), true, "terminal stays terminal");
     assert.strictEqual(isOperationallyOver({ order: o("EN_ENTREGA") }), false, "a caller that passes no service gets the estado-only answer it always had");
@@ -102,7 +108,8 @@ const r2 = (n) => Math.round(n * 100) / 100;
     assert.strictEqual(p.porCobrar[0].amount, 12.5);
     assert.strictEqual(p.porCobrar[0].serviceSessionId, CLOSED.id, "the sale stays attributed to the CLOSED service");
     assert.strictEqual(p.porCobrar[0].deliveryState, "SIN_CONFIRMAR", "the delivery fact travels next to the money fact");
-    assert.deepStrictEqual([...p.porCobrar[0].allowedActions], [], "EN_ENTREGA (delivery not confirmed) never offers a plain collection -- it would read as a delivery confirmation");
+    // POST-ASTRA F1 -- the only action is the post-close cancellation (failed delivery); never a plain collection.
+    assert.deepStrictEqual([...p.porCobrar[0].allowedActions], ["CANCEL"], "EN_ENTREGA (delivery not confirmed) never offers a plain collection -- it would read as a delivery confirmation");
     const s = await h.snapshot();
     assert.strictEqual(s.obligation.unpaid, 12.5);
     assert.strictEqual(s.obligation.currentServiceUnpaid, 0, "no longer counted as a live balance");
@@ -191,11 +198,17 @@ const r2 = (n) => Math.round(n * 100) / 100;
     assert.strictEqual((await h.snapshot()).obligation.currentServiceUnpaid, 12.5);
   });
 
-  await atest("other non-terminal states of a closed service keep their old answer (LISTO stays live)", async () => {
+  // POST-ASTRA F1 -- this used to pin "LISTO of a closed service stays live": that made a pickup nobody collected invisible
+  // in Pendientes and unresolvable (151 freezes its obligation), a permanent false POR_COBRAR. It is now historical money,
+  // listed with the post-close cancellation as its only action, and no longer a live balance of the current service.
+  await atest("other non-terminal states of a closed service are historical too (LISTO: Sin entregar, CANCEL only)", async () => {
     const o = order({ id: "#I", order_uid: "uid-i", estado: "LISTO" });
     const h = build({ ordenes: [o] });
-    assert.strictEqual((await h.pending()).totals.porCobrar, 0);
-    assert.strictEqual((await h.snapshot()).obligation.currentServiceUnpaid, 12.5);
+    const p = await h.pending();
+    assert.strictEqual(p.totals.porCobrar, 12.5);
+    assert.strictEqual(p.porCobrar[0].deliveryState, "SIN_ENTREGAR");
+    assert.deepStrictEqual([...p.porCobrar[0].allowedActions], ["CANCEL"]);
+    assert.strictEqual((await h.snapshot()).obligation.currentServiceUnpaid, 0);
   });
 
   await atest("Mesa is untouched: an EN_ENTREGA-shaped Mesa order on an OPEN table of a closed service is not a pendency", async () => {

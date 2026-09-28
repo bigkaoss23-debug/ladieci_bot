@@ -1,0 +1,161 @@
+{
+ "_doc": "C8 real-body harness fixture: the repo migration file + text variant whose function body has EXACTLY the md5(prosrc) recorded from STAGING (SELECT-only catalog reads, 2026-09-24). variant: raw = as written; strip = SQL line comments removed (staging stores the body without them); moji = the file text as staging stores it (UTF-8 bytes re-read as MacRoman by the original psql load); moji+strip = both. The harness refuses to install a body whose md5 differs.",
+ "bodies": [
+  {
+   "name": "order_intake_policy_v1",
+   "file": "2026-09-16_o5_order_intake_first_service_boundary_single_authority_migration_136.sql",
+   "variant": "raw",
+   "md5": "ac03ce46d677f423957d0fd60fe5ce6c"
+  },
+  {
+   "name": "open_operational_service_v1",
+   "file": "2026-08-20_g1_autonomous_resume_operational_service.sql",
+   "variant": "raw",
+   "md5": "497183409192e9a15c0f3b33c2d336ba"
+  },
+  {
+   "name": "resolve_order_intake_context_v1",
+   "file": "2026-09-16_o5_order_intake_first_service_boundary_single_authority_migration_136.sql",
+   "variant": "raw",
+   "md5": "6a9b99bb2c5df5b208ba9a8b90c76cbe"
+  },
+  {
+   "name": "service_session_assign_order",
+   "file": "2026-08-16_r_day3_business_day_intake_authority.sql",
+   "variant": "strip",
+   "md5": "bb8a5c75f1891ce2ef7549a806098d6e"
+  },
+  {
+   "name": "order_entity_anchor_v1",
+   "file": "2026-08-16_r_day2_permanent_order_identity.sql",
+   "variant": "moji",
+   "md5": "3db9189218204ad2488cff64fd55eb9c"
+  },
+  {
+   "name": "mesa_prepare_table_order_v1",
+   "file": "2026-08-09_service_lifecycle_v3_foundation.sql",
+   "variant": "raw",
+   "md5": "50c48c3083e106b586940f29f9640fab"
+  },
+  {
+   "name": "mesa_snapshot_order_lines_v1",
+   "file": "2026-08-15_s2_attribution_writers_receipt_service.sql",
+   "variant": "strip",
+   "md5": "3456626e2a87cb58058f91df567d97e9"
+  },
+  {
+   "name": "order_initial_payment_v1",
+   "file": "2026-09-08_order_initial_payment_digest_schema_fix_migration_123.sql",
+   "variant": "raw",
+   "md5": "e397b66e3aabe66a123a5356c825f124"
+  },
+  {
+   "name": "business_day_lifecycle_state_guard_v1",
+   "file": "2026-08-16_r_day1_business_day_authority_substrate.sql",
+   "variant": "strip",
+   "md5": "f6472a04e95462cbf248f2fc42a86bbc"
+  },
+  {
+   "name": "service_session_business_day_derive_v1",
+   "file": "2026-08-16_r_day2_hotfix_service_sessions_business_day_derive.sql",
+   "variant": "moji",
+   "md5": "0701cdb20c65181cb5265b81b7f9fa8b"
+  },
+  {
+   "name": "guard_service_session_closed_v1",
+   "file": "2026-08-17_f3_v3_order_residue_guard_repair.sql",
+   "variant": "moji",
+   "md5": "3959692b77acda03e0fe7400549d6e2b"
+  },
+  {
+   "name": "guard_service_sessions_lifecycle_semantics_immutable_v1",
+   "file": "2026-08-17_f4b_service_sessions_lifecycle_semantics_immutable.sql",
+   "variant": "strip",
+   "md5": "a7eed40b4d8c1c878c70f2db5229e0fd"
+  },
+  {
+   "name": "order_economic_basis_lock_v1",
+   "file": "2026-09-11_economic_writer_hardening_v1_migration_126.sql",
+   "variant": "moji",
+   "md5": "2a72a4b53666d539960917685eb90fed"
+  },
+  {
+   "name": "paid_order_economic_mutation_guard_v1",
+   "file": "2026-08-24_n5_paid_order_economic_mutation_guard.sql",
+   "variant": "raw",
+   "md5": "fcbc86950c285232aaee2b47f20c9ba7"
+  },
+  {
+   "name": "service_session_immutable_order",
+   "file": "2026-07-28_service_order_number.sql",
+   "variant": "strip",
+   "md5": "33c843a10a016415fe8efa3c45802c80"
+  },
+  {
+   "name": "mesa_post_payment_v1",
+   "file": "2026-09-11_economic_writer_hardening_v1_migration_126.sql",
+   "variant": "moji",
+   "md5": "9543ab52d9933ffd52cc7f9b595c4cfb"
+  },
+  {
+   "name": "mesa_post_refund_v1",
+   "file": "2026-09-07_check_centric_universal_cash_v1_migration_122.sql",
+   "variant": "moji",
+   "md5": "62f0e128a6e5d0623b0423a69f0329d3"
+  },
+  {
+   "name": "order_post_refund_v1",
+   "file": "2026-09-07_check_centric_universal_cash_v1_migration_122.sql",
+   "variant": "moji",
+   "md5": "f057928b8f6fade25d38d4bb1d3ed09a"
+  },
+  {
+   "name": "order_apply_commercial_adjustment_v1",
+   "file": "2026-09-07_check_centric_universal_cash_v1_migration_122.sql",
+   "variant": "moji",
+   "md5": "bfac890abc0e6103466649d37fe92ddf"
+  },
+  {
+   "name": "mesa_singleton_workspace_v1",
+   "file": "2026-08-16_r_day2_permanent_order_identity.sql",
+   "variant": "strip",
+   "md5": "7f431effcabf52dc541f5456dcdf7f28"
+  },
+  {
+   "name": "classify_economic_period_v1",
+   "file": "2026-08-17_s_c_economic_period_stamping.sql",
+   "variant": "strip",
+   "md5": "c4f988bbd4311b8fdb38683f8fbaff2a"
+  },
+  {
+   "name": "table_order_lines_stamp_economic_period_v1",
+   "file": "2026-08-17_s_c_economic_period_stamping.sql",
+   "variant": "strip",
+   "md5": "841ba7aaa34748d26e8059c26e8f9137"
+  },
+  {
+   "name": "mesa_guard_covers_monotonic_v1",
+   "file": "2026-08-02_v3j_mesa_nomenclature_cutover.sql",
+   "variant": "strip",
+   "md5": "4e7335ccd223e6d653b60fe08518714c"
+  },
+  {
+   "name": "mesa_complete_reservation_v1",
+   "file": "2026-08-02_v3j_mesa_nomenclature_cutover.sql",
+   "variant": "strip",
+   "md5": "97c230dd5f673ae1a5dddee4e7132ae7"
+  },
+  {
+   "name": "mesa_open_session_v1",
+   "file": "2026-08-23_o3_operational_service_until_finalizar.sql",
+   "variant": "moji+strip",
+   "md5": "874b7679a1f293f615b9037442e1269b"
+  },
+  {
+   "name": "mesa_open_reservation_v1",
+   "file": "2026-08-23_o3_operational_service_until_finalizar.sql",
+   "variant": "moji+strip",
+   "md5": "79bd9fb6d0310c9eaae421dc8f8fc2c0"
+  }
+ ]
+}

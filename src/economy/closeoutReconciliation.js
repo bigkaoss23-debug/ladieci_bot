@@ -460,16 +460,38 @@ function createCloseoutReconciliation({
     });
   }
 
-  // Persist the context a close was actually made under. Called by the V3
-  // engine AFTER the closeout row exists and BEFORE the terminal transition,
-  // so a failure here leaves the service OPEN and the attempt active rather
-  // than closed-without-context. Idempotent on closeoutCorrelationId.
-  async function persist({ serviceSessionId, closeoutCorrelationId, actor, now = new Date() } = {}) {
+  // CORRECTIVE SLICE 150 — the create_service_closeout_reconciliation_v1 arguments for the context a close is being
+  // made under, built and NOT persisted. The V3 engine hands them to close_service_session_with_evidence_v1
+  // (migration 150), which persists the reconciliation in the SAME transaction as the terminal close, so a
+  // reconciliation can never outlive a terminal step that did not commit. persist() below is this plus the RPC.
+  // POST-ASTRA F2 (migration 154) -- the digest of the Business Day window, read BEFORE the reconciliation is
+  // built. The terminal close step recomputes it under the close's lock prefix and refuses (CLOSE_EVIDENCE_STALE,
+  // 'day_window') if any fact of the window committed in between, so the persisted reconciliation can never
+  // hold facts that no longer describe the day. A database without 154 has no such function (PGRST202): the
+  // digest is then omitted, and that database does not ask for it. Any other failure is a typed refusal.
+  async function readDayEvidence(serviceSessionId) {
+    const rows = await select("service_sessions", `id=eq.${enc(String(serviceSessionId))}&limit=1`);
+    const session = Array.isArray(rows) ? rows[0] : null;
+    if (!session) throw new ReconciliationError("RECONCILIATION_SESSION_NOT_FOUND", 404);
+    const win = windowForService(session);
+    const from = new Date(win.from).toISOString();
+    const to = new Date(win.to).toISOString();
+    const res = await rpc("service_close_day_evidence_digest_v1", { p_from: from, p_to: to });
+    if (res && res.ok === true && res.body && typeof res.body.digest === "string") {
+      return { from, to, digest: res.body.digest };
+    }
+    if (res && res.ok === false && res.body && res.body.code === "PGRST202") return { from, to, digest: null };
+    throw new ReconciliationError("RECONCILIATION_DAY_EVIDENCE_UNAVAILABLE", 503);
+  }
+
+  async function buildRpcArgs({ serviceSessionId, closeoutCorrelationId, actor, now = new Date(), withDayEvidence = false } = {}) {
     if (!serviceSessionId || !closeoutCorrelationId) {
       return { success: false, code: "RECONCILIATION_INVALID_ARGS" };
     }
     let view;
+    let day = null;
     try {
+      if (withDayEvidence) day = await readDayEvidence(serviceSessionId);
       view = await build({ serviceSessionId, now });
     } catch (e) {
       return { success: false, code: e?.code || "RECONCILIATION_BUILD_FAILED", detail: String((e && e.message) || e) };
@@ -486,14 +508,20 @@ function createCloseoutReconciliation({
       && view.cashCountStatus === "current"
       && sameWindow(r.window, view.cashCount.window)
       ? view.cashCount : null;
-
-    let result;
-    try {
-      result = await rpc("create_service_closeout_reconciliation_v1", {
+    const windowFrom = new Date(r.window.from).toISOString();
+    const windowTo = new Date(r.window.to).toISOString();
+    // The digest must describe exactly the window this reconciliation covers.
+    if (day && (day.from !== windowFrom || day.to !== windowTo)) {
+      return { success: false, code: "RECONCILIATION_DAY_WINDOW_MISMATCH" };
+    }
+    const dayEvidence = day && day.digest ? { p_day_evidence_digest: day.digest } : {};
+    return {
+      success: true,
+      args: {
         p_service_session_id: String(serviceSessionId),
         p_closeout_correlation_id: String(closeoutCorrelationId),
-        p_window_from: new Date(r.window.from).toISOString(),
-        p_window_to: new Date(r.window.to).toISOString(),
+        p_window_from: windowFrom,
+        p_window_to: windowTo,
         p_window_timezone: r.window.timezone,
         p_window_preset: r.window.preset,
         p_business_date: String(view.businessDate).slice(0, 10),
@@ -511,7 +539,19 @@ function createCloseoutReconciliation({
         p_actor: String(actor || "system"),
         p_cash_count_id: count ? count.id : null,
         p_counted_cash_cents: count ? toCents(count.countedCash) : null,
-      });
+        ...dayEvidence,
+      },
+    };
+  }
+
+  // Persist the context a close was actually made under. Idempotent on closeoutCorrelationId. Since migration 150
+  // the V3 engine uses buildRpcArgs() instead (the terminal step persists it); this stays for its other callers.
+  async function persist({ serviceSessionId, closeoutCorrelationId, actor, now = new Date() } = {}) {
+    const built = await buildRpcArgs({ serviceSessionId, closeoutCorrelationId, actor, now });
+    if (!built.success) return built;
+    let result;
+    try {
+      result = await rpc("create_service_closeout_reconciliation_v1", built.args);
     } catch (e) {
       return { success: false, code: "RECONCILIATION_PERSIST_TRANSPORT_ERROR", detail: String((e && e.message) || e) };
     }
@@ -534,7 +574,7 @@ function createCloseoutReconciliation({
     return projectReconciliation(Array.isArray(rows) ? rows[0] : null);
   }
 
-  return Object.freeze({ build, persist, getBySessionId, windowForService, resolveActiveSession, sameWindow });
+  return Object.freeze({ build, buildRpcArgs, persist, getBySessionId, windowForService, resolveActiveSession, sameWindow, projectReconciliation });
 }
 
 const closeoutReconciliation = createCloseoutReconciliation();

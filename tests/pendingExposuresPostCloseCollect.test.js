@@ -75,7 +75,8 @@ const pending = (ordenes, events = [], extra = {}) => createPendingExposures({
   await atest("2 · EN_ENTREGA + unpaid on a closed service stays 'Entrega sin confirmar' and offers NO collection", async () => {
     const item = (await pending([order({ estado: "EN_ENTREGA" })])).porCobrar[0];
     assert.strictEqual(item.deliveryState, "SIN_CONFIRMAR");
-    assert.deepStrictEqual([...item.allowedActions], [], "a plain 'Registrar cobro' would falsify the delivery");
+    // POST-ASTRA F1 -- its one action is the post-close cancellation (the delivery failed); never a plain collection.
+    assert.deepStrictEqual([...item.allowedActions], ["CANCEL"], "a plain 'Registrar cobro' would falsify the delivery");
   });
 
   await atest("3 · a PARTIALLY paid delivered order: COLLECT for exactly the remainder", async () => {
@@ -98,8 +99,15 @@ const pending = (ordenes, events = [], extra = {}) => createPendingExposures({
     for (const estado of ["COMPLETADO", "COMPLETATO", "ENTREGADO"]) { // language-guard: allow-legacy COMPLETADO/COMPLETATO/ENTREGADO are the existing estado literals under test, not new vocabulary
       assert.deepStrictEqual([...allowedActionsFor("POR_COBRAR", "DOMICILIO", { estado, order_uid: "u" })], ["COLLECT"], estado);
     }
-    for (const estado of ["CHIUSO_FORZATO", "CANCELADO", "ANULADO", "LISTO", "EN_COCINA", "EN_ENTREGA", null]) { // language-guard: allow-legacy CHIUSO_FORZATO/CANCELADO/ANULADO are the existing estado literals under test, not new vocabulary
+    for (const estado of ["CHIUSO_FORZATO", "CANCELADO", "ANULADO", null]) { // language-guard: allow-legacy CHIUSO_FORZATO/CANCELADO/ANULADO are the existing estado literals under test, not new vocabulary
       assert.deepStrictEqual([...allowedActionsFor("POR_COBRAR", "DOMICILIO", { estado, order_uid: "u" })], [], String(estado));
+    }
+    // POST-ASTRA F1 -- never handed over: not collectable, cancellable after the close (post-close resolution fact).
+    for (const estado of ["LISTO", "EN_COCINA", "EN_ENTREGA", "POR_CONFIRMAR", "NUEVO"]) {
+      assert.deepStrictEqual([...allowedActionsFor("POR_COBRAR", "DOMICILIO", { estado, order_uid: "u" })], ["CANCEL"], String(estado));
+      assert.deepStrictEqual([...allowedActionsFor("POR_COBRAR", "DOMICILIO", { estado, order_uid: null })], [], `${estado} without identity`);
+      assert.deepStrictEqual([...allowedActionsFor("POR_COBRAR", "MESA", { estado, order_uid: "u" })], [], `${estado} Mesa`);
+      assert.deepStrictEqual([...allowedActionsFor("POR_DEVOLVER", "DOMICILIO", { estado, order_uid: "u" })], [], `${estado} por devolver`);
     }
   });
 
@@ -135,7 +143,8 @@ const pending = (ordenes, events = [], extra = {}) => createPendingExposures({
     assert.strictEqual(deliveryStateOf({ estado: "EN_ENTREGA" }, "DOMICILIO"), "SIN_CONFIRMAR");
     assert.strictEqual(deliveryStateOf({ estado: "RETIRADO" }, "DOMICILIO"), "ENTREGADO");
     assert.strictEqual(deliveryStateOf({ estado: "RETIRADO" }, "RETIRO"), null);
-    assert.strictEqual(deliveryStateOf({ estado: "LISTO" }, "DOMICILIO"), null);
+    assert.strictEqual(deliveryStateOf({ estado: "LISTO" }, "DOMICILIO"), "SIN_ENTREGAR"); // POST-ASTRA F1: never handed over
+    assert.strictEqual(deliveryStateOf({ estado: "CHIUSO_FORZATO" }, "DOMICILIO"), null); // language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal under test, not new vocabulary
     assert.strictEqual(isDeliveredEstado("retirado"), true);
     assert.strictEqual(isDeliveredEstado("CHIUSO_FORZATO"), false); // language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal under test, not new vocabulary
   });

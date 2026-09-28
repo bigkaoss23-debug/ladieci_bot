@@ -143,34 +143,41 @@ const ENGINE = "src/serviceSessions/serviceLifecycleEngine.js";
 
 test("J-1 · the close still has exactly ONE closer, and reconciliation is not it", () => {
   const engine = code(ENGINE);
-  // The engine's only terminal transition remains the V3 one.
-  const closes = engine.match(/transition\.close\(/g) || [];
+  // The engine's only terminal transition remains the V3 one. R4B (migration 149): the atomic close +
+  // attempt completion; corrective slice 150: reached ONLY through close_service_session_with_evidence_v1,
+  // which judges the evidence and commits closeout + reconciliation + close + completion together. Neither
+  // the bare transition.close nor the 149 step on its own is called by the engine any more.
+  const closes = engine.match(/transition\.closeWithEvidence\(/g) || [];
   assert.strictEqual(closes.length, 2, "one on the main path, one on the resume path — no third closer");
+  assert.ok(!/transition\.close\(/.test(engine), "no bare (non-atomic) terminal close remains");
+  assert.ok(!/transition\.closeAndCompleteAttempt\(/.test(engine), "the 149 step is reached only through the evidence-judging terminal step (150)");
   // The reconciliation module cannot close anything.
   const rec = code(RECONCILIATION);
   for (const symbol of ["close_service_session_v3", "transition.close", "closeServiceV3", "serviceLifecycleEngine"]) {
     assert.ok(!rec.includes(symbol), `${RECONCILIATION} must not reference ${symbol}`);
   }
-  // And it writes through exactly one RPC, its own.
+  // And it writes through exactly one RPC, its own. POST-ASTRA F2 (migration 154) adds exactly one READ-ONLY rpc: the STABLE
+  // digest of the Business Day window, read before the build and recomputed by the terminal step -- it writes nothing.
   const rpcs = [...rec.matchAll(/rpc\(\s*["']([a-z_0-9]+)["']/g)].map((m) => m[1]);
-  assert.deepStrictEqual([...new Set(rpcs)], ["create_service_closeout_reconciliation_v1"]);
+  assert.deepStrictEqual([...new Set(rpcs)].sort(), ["create_service_closeout_reconciliation_v1", "service_close_day_evidence_digest_v1"]);
 });
 
-test("J-1 · reconciliation persists BEFORE the terminal transition, so a failure fails closed", () => {
+test("J-1 · reconciliation is built before the terminal step and persisted BY it (150), so a failure fails closed", () => {
   const engine = code(ENGINE);
-  // Main path: the persist call and its failure return must both precede the
-  // Phase E transition. Closing first could strand a closed service with no
-  // record of the economy it was closed against — the exact outcome this
-  // slice exists to prevent.
-  const persistAt = engine.indexOf("reconciliation.persist({");
+  // Main path: the reconciliation is BUILT (and its failure returned) before the
+  // terminal step, and persisted BY it -- corrective slice 150: in the same
+  // transaction as the closeout and the close, so a failure leaves the service
+  // open with no frozen context, and a closed service always has its context.
+  const buildAt = engine.indexOf("const reconciliationArgs = await reconciliation.buildRpcArgs({");
   const failAt = engine.indexOf("V3_CLOSE_RECONCILIATION_PERSIST_FAILED");
-  const transitionAt = engine.indexOf("const transitionResult = await transition.close({ serviceSessionId, closeoutCorrelationId, actor, source });");
-  assert.ok(persistAt > 0 && failAt > 0 && transitionAt > 0, "all three landmarks present");
-  assert.ok(persistAt < transitionAt, "persist must come before the transition");
-  assert.ok(failAt < transitionAt, "and its fail-closed return must too");
-  // Both close paths are covered.
-  const persists = engine.match(/reconciliation\.persist\(/g) || [];
-  assert.strictEqual(persists.length, 2, "main path and resume path both persist context");
+  const transitionAt = engine.indexOf("const transitionResult = await transition.closeWithEvidence({\n      serviceSessionId, closeoutCorrelationId, actor, source,\n      closeout: closeoutArgs, reconciliation: reconciliationArgs.args, receiptIds,");
+  assert.ok(buildAt > 0 && failAt > 0 && transitionAt > 0, "all three landmarks present");
+  assert.ok(buildAt < transitionAt, "the context is built before the terminal step, which persists it");
+  assert.ok(failAt < transitionAt, "and its fail-closed return comes first too");
+  // Both close paths are covered, and neither persists the context on its own any more.
+  const builds = engine.match(/reconciliation\.buildRpcArgs\(/g) || [];
+  assert.strictEqual(builds.length, 2, "main path and resume path both build the context for the terminal step");
+  assert.ok(!/reconciliation\.persist\(/.test(engine), "the context is never persisted outside the terminal transaction");
 });
 
 test("J-1 · the reconciliation module performs no economic mutation of any kind", () => {

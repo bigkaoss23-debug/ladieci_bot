@@ -35,7 +35,7 @@ BEGIN
   END IF;
   SELECT p.prosrc INTO v_src FROM pg_proc p
    WHERE p.oid = to_regprocedure('public.rider_collect_and_complete_stop(text,text,text,integer,text,jsonb,text,text)');
-  IF md5(v_src) IS DISTINCT FROM '4a4494aa8b579c64a9d943c7573e5ede' THEN
+  IF md5(v_src) IS DISTINCT FROM 'ef3d423028b2d4d823359264bc5cfadc' THEN
     RAISE EXCEPTION 'B_RID_1 rollback refused: rider_collect_and_complete_stop is not the exact 140 body (md5 mismatch) -- resolve drift first';
   END IF;
   SELECT p.prosrc INTO v_src FROM pg_proc p

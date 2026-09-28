@@ -5,6 +5,7 @@ const defaultDao = require('./mesaDao');
 const { lifecycle: defaultLifecycle } = require('../serviceSessions/serviceSessionLifecycle');
 const { creaOrdine: defaultCreateOrder, cambiaStato: defaultChangeOrderState } = require('../agents/agentOrdini');
 const { nextEqualShare, aggregateByMethod } = require('./billingMath');
+const { netTableSettlement } = require('./tableSettlementNetting');
 const { sidHash: defaultSidHash } = require('../auth/sidHash');
 // STALE SERVICE PROTECTION V1 — the mesa seating RPCs do not guard an
 // operational_service_v1 by Business Day (O-3), so the first-seating helper
@@ -192,7 +193,7 @@ function projectOrderFinancial(order, revisions) {
 // could disagree with it. This function is pure and reads no status: it does
 // not care whether the session is open or closed, which is precisely why it can
 // serve both.
-function projectSessionAccount(session, { lines = [], transactions = [], orders = [], obligations = [] }) {
+function projectSessionAccount(session, { lines = [], transactions = [], orders = [], obligations = [], allocations = [] }) {
   // AJUSTE COMERCIAL V1 — group obligation revisions by the PERMANENT order_uid. Safe to
   // hand the whole set in: order_uid is globally unique, so a revision for another
   // session's order simply matches no command here.
@@ -202,7 +203,88 @@ function projectSessionAccount(session, { lines = [], transactions = [], orders 
     if (!revisionsByUid.has(key)) revisionsByUid.set(key, []);
     revisionsByUid.get(key).push(revision);
   }
-  const totalCents = lines.reduce((sum, line) => sum + cents(line.amount), 0);
+  const financialByOrder = new Map(orders.map((order) => [order,
+    projectOrderFinancial(order, revisionsByUid.get(String(order.order_uid)) || [])]));
+  // R2 (Economy 147) — the session total is what the table OWES NOW: the sum of the
+  // commands' current canonical obligations (projectOrderFinancial = order_canonical_
+  // obligation_v1), never the sum of table_order_lines. A commercial adjustment moves
+  // order_obligations and never the lines, so a line sum kept showing the pre-adjustment
+  // debt (pay 100 -> adjust 80 -> refund 20 read total 100 / outstanding 20) and hid real
+  // over-collection. Inclusion is the Mesa writers' own rule (mesa_post_payment_v1,
+  // mesa_post_refund_v1, mesa_close_session_v1): a command with an order_uid that has an
+  // obligation revision or a line of this session. `lines` holds only non-cancelled
+  // commands' lines, which is equivalent here: a cancelled command without revisions has
+  // a canonical obligation of 0 either way.
+  const orderIdsWithLines = new Set(lines.map((line) => String(line.orderId)));
+  const totalCents = orders.reduce((sum, order) => {
+    if (!order.order_uid) return sum;
+    if (!revisionsByUid.has(String(order.order_uid)) && !orderIdsWithLines.has(String(order.id))) return sum;
+    return sum + cents(financialByOrder.get(order).currentObligation);
+  }, 0);
+  // R2 (Economy 147) — per-command SETTLEMENT, the fact the floor UI needs so it never
+  // rebuilds a command's paid state from its historical lines. Net collected per command
+  // is this session's payment_allocations for that command (payments minus refunds): the
+  // exact base of mesa_post_payment_v1's per-order cap (v_order_caps = canonical obligation
+  // minus the order's net allocations in this table session), and the same amounts the
+  // writers post per order to order_financial_events. Only allocations of THIS session's
+  // transactions count (the floor hands in every open table's allocations). An allocation
+  // without order_id falls back to its line's command.
+  const txKindById = new Map(transactions.map((tx) => [String(tx.id), tx.kind]));
+  const orderIdByLine = new Map(lines.map((line) => [String(line.id), String(line.orderId)]));
+  const netCentsByOrder = new Map();
+  for (const allocation of allocations || []) {
+    const kind = txKindById.get(String(allocation.payment_transaction_id));
+    if (!kind) continue;
+    const orderId = allocation.order_id != null
+      ? String(allocation.order_id) : orderIdByLine.get(String(allocation.table_order_line_id));
+    if (orderId == null) continue;
+    netCentsByOrder.set(orderId, (netCentsByOrder.get(orderId) || 0) + (kind === 'refund' ? -1 : 1) * cents(allocation.amount));
+  }
+  const remainingCentsByOrder = new Map();
+  for (const line of lines) {
+    const key = String(line.orderId);
+    remainingCentsByOrder.set(key, (remainingCentsByOrder.get(key) || 0) + cents(line.remaining));
+  }
+  // CORRECTIVE SLICE 150 (#5) -- one settlement per table session: a comanda's over-collection first
+  // covers what the other comandas of THIS table still owe (src/tables/tableSettlementNetting.js), so
+  // the per-comanda settlement agrees with the table's own outstanding -- the only amount the writer
+  // will ever accept -- and a settled table never shows a phantom debt next to a phantom credit.
+  // netCollected stays the comanda's real allocations; no money is re-allocated.
+  const nettedByOrder = netTableSettlement(orders.map((order) => {
+    const obligationCents = cents(financialByOrder.get(order).currentObligation);
+    const netCents = netCentsByOrder.get(String(order.id)) || 0;
+    return {
+      key: String(order.id), tableSessionId: session.id, commandNumber: order.table_command_number, id: order.id,
+      owedCents: Math.max(0, obligationCents - netCents), overCents: Math.max(0, netCents - obligationCents),
+    };
+  }));
+  const settlementOf = (order) => {
+    const obligationCents = cents(financialByOrder.get(order).currentObligation);
+    const netCents = netCentsByOrder.get(String(order.id)) || 0;
+    const netted = nettedByOrder.get(String(order.id));
+    const owedCents = netted.owedCents;
+    return {
+      currentObligation: money(obligationCents),
+      netCollected: money(netCents),
+      outstanding: money(owedCents),
+      overCollected: money(netted.overCents),
+      // The part of this comanda's debt the table's over-collection on its other comandas covers (0 when none).
+      coveredByTable: money(netted.coveredCents),
+      // The writers' own pay-state rule (new_pay_state of mesa_post_payment_v1 /
+      // mesa_post_refund_v1), which is also their cobrado/ya_pagado rule -- except that a
+      // comanda whose whole remaining debt the table covered (150 #5) reads "paid": the
+      // table owes nothing for it, although its own mirror still says what its own
+      // allocations say.
+      payState: obligationCents > 0 && owedCents === 0 && netted.coveredCents > 0 ? 'paid'
+        : netCents <= 0 ? 'unpaid' : (netCents >= obligationCents ? 'paid' : 'partially_paid'),
+      // True only when the command's lines still owe EXACTLY what the command owes, so any
+      // item_selection over them stays within the writer's per-order cap. After an
+      // adjustment the historical lines owe more than the command does: the writer would
+      // refuse the line amounts, so the command is charged by amount instead. Same for a
+      // comanda part of whose debt the table covers: it is charged by amount, never by lines.
+      payableByLines: owedCents > 0 && (remainingCentsByOrder.get(String(order.id)) || 0) === owedCents,
+    };
+  };
   // OVER-COLLECTED SLICE A — netCollected is money truth and comes from
   // payment transactions (payments minus refunds), NEVER from summing
   // line.paid. Line visibility can change (a cancelled/identity-broken order
@@ -250,14 +332,20 @@ function projectSessionAccount(session, { lines = [], transactions = [], orders 
       commandNumber: order.table_command_number,
       serviceOrderNumber: order.service_order_number,
       state: order.estado,
-      total: Number(order.totale || 0),
+      // R2 (Economy 147) — what this command OWES NOW: its current canonical obligation,
+      // the same per-command figure the session total sums and cashService.buildCheckAccount
+      // publishes as a check's total. ordenes.totale is the pre-adjustment gross and stays
+      // non-zero for a cancelled command; the original obligation remains available as
+      // financial.originalObligation. For a live command never adjusted, the value is unchanged.
+      total: financialByOrder.get(order).currentObligation,
       time: order.hora,
       items: order.items,
       note: order.nota,
       // language-guard: allow-legacy nota_cucina is the existing ordenes column name, projected verbatim as buildFloor already did, not new vocabulary
       kitchenNote: order.nota_cucina,
       // AJUSTE COMERCIAL V1 reader gap — additive canonical obligation shape.
-      financial: projectOrderFinancial(order, revisionsByUid.get(String(order.order_uid)) || []),
+      financial: financialByOrder.get(order),
+      settlement: settlementOf(order),
     })),
     lines,
     // REFUND V1 SLICE B0 — reversesTransactionId was already fetched by mesaDao.js
@@ -336,6 +424,7 @@ function buildFloor(rows) {
         // AJUSTE COMERCIAL V1 — every revision; projectSessionAccount buckets by the
         // globally-unique order_uid, so passing the whole set per table is safe.
         obligations: rows.obligations || [],
+        allocations: rows.allocations || [],
       }),
     };
   });
@@ -375,6 +464,7 @@ function buildClosedAccount(session, rows, table) {
       transactions,
       orders,
       obligations: rows.obligations || [],
+      allocations: rows.allocations || [],
     }),
   };
 }
@@ -756,11 +846,21 @@ function createMesaService({
         reason: trimmedReason,
         expectedCurrentGross: expectedCurrentGross == null ? null : Number(expectedCurrentGross),
       };
-      return dao.postCommercialAdjustment({
+      const args = {
         workspaceId: ctx.workspaceId, byActor: ctx.actor, bySidHash,
         ...semantic, clientRequestId, requestHash: canonicalHash(semantic),
         meta: { source: 'mesa_dashboard' },
-      });
+      };
+      try {
+        return await dao.postCommercialAdjustment(args);
+      } catch (error) {
+        // POST-ASTRA F1 -- a comanda of a service that is already closed (a table carried across Finalizar): 151 refused the ordinary
+        // revision, nothing was written. Recorded as the append-only post-close resolution fact (same key + hash, same table session).
+        if (error && error.code === 'ORDER_ECONOMIC_SERVICE_CLOSED' && typeof dao.postPostCloseResolution === 'function') {
+          return dao.postPostCloseResolution(args);
+        }
+        throw error;
+      }
     },
 
     async saveTable({ context, table } = {}) {

@@ -261,7 +261,7 @@ const REGISTRY = Object.freeze([
   entry('rpc/create_service_incident', KIND.RPC, ['POST'], SENSITIVITY.AUDIT,
     'serviceIncidents.js report(), called by incidentSafeRollover.js'),
   entry('rpc/supersede_closeout_attempt', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
-    'closeoutAttempts.js supersede(), called by incidentSafeRollover.js on a state-drift retry'),
+    'closeoutAttempts.js supersede(), called by incidentSafeRollover.js on a state-drift retry and by serviceLifecycleEngine.js when the terminal step judges a round\'s evidence stale (migration 150)'),
   entry('rpc/complete_closeout_attempt', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'closeoutAttempts.js complete(), called by incidentSafeRollover.js after a successful close'),
   entry('rpc/resolve_service_incident', KIND.RPC, ['POST'], SENSITIVITY.AUDIT,
@@ -286,6 +286,19 @@ const REGISTRY = Object.freeze([
     'serviceCloseoutCreation.js create(), called by serviceLifecycleEngine.js — the only writer of service_closeouts'),
   entry('rpc/close_service_session_v3', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
     'serviceLifecycleV3Transition.js close(), called by serviceLifecycleEngine.js — the V3-native terminal transition'),
+  // R4B (migration 149) — the terminal step the engine now calls: the same
+  // close plus the attempt completion, committed together.
+  entry('rpc/close_service_session_and_complete_attempt_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL,
+    'serviceLifecycleV3Transition.js closeAndCompleteAttempt(), called by serviceLifecycleEngine.js (main path + CASE B resume) — terminal close and attempt completion in one transaction'),
+  // CORRECTIVE SLICE 150 — the terminal step of the V3 close since migration 150: judges the attempt's evidence
+  // (snapshot vs live facts, receipts vs the reconciliation) under the close's lock prefix, then closeout +
+  // reconciliation + close + completion in one transaction, or nothing.
+  entry('rpc/close_service_session_with_evidence_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
+    'serviceLifecycleV3Transition.js closeWithEvidence(), called by serviceLifecycleEngine.js (main path + CASE B resume) — evidence judgement + closeout + reconciliation + terminal close + attempt completion in one transaction'),
+  // POST-ASTRA F2 (migration 154) — read-only digest of the Business Day window, read before the reconciliation is
+  // built and recomputed by the terminal step under the close's lock prefix.
+  entry('rpc/service_close_day_evidence_digest_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
+    'economy/closeoutReconciliation.js buildRpcArgs({ withDayEvidence }), called by serviceLifecycleEngine.js (main path + CASE B resume)'),
   // J-1 — the ONLY writer of service_closeout_reconciliations. Called by the
   // V3 close engine between Phase D (closeout persisted) and Phase E (terminal
   // transition), so a failure leaves the service open rather than closed
@@ -368,6 +381,13 @@ const REGISTRY = Object.freeze([
   // DAO call is rejected before it reaches Supabase, with NO transport log line at all.
   entry('rpc/order_cancel_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
     'agents/agentOrdini.js cambiaStato'),  // language-guard: allow-legacy agentOrdini is the existing module filename being cross-referenced, not new vocabulary
+  // POST-ASTRA F1 (migration 152) — the post-close resolution fact: reached only after the ordinary cancellation /
+  // adjustment was refused with ORDER_ECONOMIC_SERVICE_CLOSED (same key + hash).
+  entry('rpc/order_post_close_obligation_resolution_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
+    'financial/postCloseResolution.js (cancellation), cash/cashDao.js + tables/mesaDao.js (post-close Corregir importe)'),
+  // POST-ASTRA F5 (migration 153) — the canonical editor writer: W -> [TS] -> ENTITY -> ORDER, compare-and-set on the economic basis.
+  entry('rpc/order_apply_editor_patch_v1', KIND.RPC, ['POST'], SENSITIVITY.FINANCIAL,
+    'agents/agentOrdini.js writeOrderPatch (modificaOrdine / aggiungiItems / cambiaStato discount)'),  // language-guard: allow-legacy agentOrdini/modificaOrdine/aggiungiItems/cambiaStato are the existing module/function names being cross-referenced, not new vocabulary
   entry('rpc/mesa_save_reservation_v1', KIND.RPC, ['POST'], SENSITIVITY.PII, 'tables/mesaDao.js'),
   entry('rpc/mesa_set_reservation_status_v1', KIND.RPC, ['POST'], SENSITIVITY.PII, 'tables/mesaDao.js'),
   entry('rpc/mesa_open_reservation_v1', KIND.RPC, ['POST'], SENSITIVITY.INTERNAL_OPERATIONAL, 'tables/mesaDao.js'),

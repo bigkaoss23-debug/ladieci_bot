@@ -19,6 +19,7 @@
 // tests/serviceLifecycleV3IncidentPolicyEngine.test.js.
 
 const { createServiceLifecycleEngine } = require('../src/serviceSessions/serviceLifecycleEngine');
+const { withEvidenceTerminal } = require('./helpers/v3EvidenceTerminalFake');
 
 let pass = 0, fail = 0;
 const assert = (n, c, d = '') => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n + (d ? '  -> ' + d : '')); } };
@@ -52,6 +53,11 @@ function fakeEnv({
   financialEvents = [],
   yieldForConcurrency = false,
   failCompleteOnce = false,
+  // R4B — how the ONE terminal step (migration 149: close + attempt completion
+  // in one transaction) misbehaves on its first call: 'refused' = the
+  // database refused the completion and rolled the close back with it;
+  // 'lostAfterCommit' = it committed, then the response was lost.
+  terminalFailOnce = null,
 } = {}) {
   const env = {
     sessions: new Map([[sessionRow.id, { ...sessionRow }]]),
@@ -99,6 +105,16 @@ function fakeEnv({
       env.attemptsBySession.set(serviceSessionId, row);
       return { success: true, created: true, code: 'ACQUIRED', attempt: row };
     },
+    // CORRECTIVE SLICE 150 — mirrors supersede_closeout_attempt: active -> superseded (idempotent), its incidents retired.
+    async supersede({ closeoutCorrelationId, actor, reason }) {
+      (env.calls.supersede = env.calls.supersede || []).push({ closeoutCorrelationId, actor, reason });
+      const row = env.attemptsByCorr.get(closeoutCorrelationId);
+      if (!row) return { success: false, code: 'ATTEMPT_NOT_FOUND' };
+      if (row.status === 'completed') return { success: false, code: 'CANNOT_SUPERSEDE_COMPLETED_ATTEMPT' };
+      row.status = 'superseded';
+      if (env.attemptsBySession.get(row.serviceSessionId) === row) env.attemptsBySession.delete(row.serviceSessionId);
+      return { success: true, code: 'SUPERSEDED', attempt: row };
+    },
     async complete({ closeoutCorrelationId, actor }) {
       env.calls.complete.push({ closeoutCorrelationId, actor });
       if (failCompleteOnce && !env._completeFailedOnce) {
@@ -127,9 +143,13 @@ function fakeEnv({
       if (env.snapshotsByCorr.has(closeoutCorrelationId)) {
         return { success: true, created: false, code: 'ALREADY_CAPTURED', snapshot: env.snapshotsByCorr.get(closeoutCorrelationId) };
       }
-      const row = { id: 'snap-' + (env.snapshotsByCorr.size + 1), serviceSessionId, closeoutCorrelationId, payload };
+      const row = { id: 'snap-' + (env.snapshotsByCorr.size + 1), serviceSessionId, closeoutCorrelationId, payload, capturedAt: '2026-08-09T22:59:00Z' };
       env.snapshotsByCorr.set(closeoutCorrelationId, row);
       return { success: true, created: true, code: 'CAPTURED', snapshot: row };
+    },
+    // R4 — CASE D reads the snapshot back by correlation (closeoutSnapshots.js getByCorrelationId).
+    async getByCorrelationId({ closeoutCorrelationId }) {
+      return env.snapshotsByCorr.get(closeoutCorrelationId) || null;
     },
   };
 
@@ -148,6 +168,7 @@ function fakeEnv({
       closeSource: fields.source,
       closeReason: fields.closeReason || null,
       closedBy: fields.closedBy,
+      closedAt: '2026-08-09T22:59:30Z',
       financial: {
         grossSalesCents: fields.grossSalesCents,
         netSalesCents: fields.netSalesCents,
@@ -221,6 +242,39 @@ function fakeEnv({
       row.close_source = source;
       return { success: true, idempotent: false, code: 'V3_CLOSED', session: row };
     },
+    // R4B — migration 149's terminal step, modelled on its SQL: the close and
+    // the attempt completion commit together or not at all; ALREADY_CLOSED is
+    // a success only when this exact attempt is already completed.
+    async closeAndCompleteAttempt({ serviceSessionId, closeoutCorrelationId, actor, source }) {
+      env.calls.close.push({ serviceSessionId, closeoutCorrelationId, actor, source, atomic: true });
+      const row = env.sessions.get(serviceSessionId);
+      if (!row) return { success: false, code: 'SERVICE_SESSION_NOT_FOUND', session: null };
+      const attempt = env.attemptsByCorr.get(closeoutCorrelationId);
+      if (row.status === 'closed') {
+        if (!attempt || attempt.serviceSessionId !== serviceSessionId) return { success: false, code: 'ATTEMPT_NOT_FOUND', session: null };
+        if (attempt.status !== 'completed') return { success: false, code: 'CLOSED_ATTEMPT_NOT_COMPLETED', session: null };
+        return { success: true, idempotent: true, code: 'ALREADY_CLOSED', attemptCompleted: true, session: row };
+      }
+      const closeoutRow = env.closeoutsBySession.get(serviceSessionId);
+      if (!closeoutRow || closeoutRow.closeoutCorrelationId !== closeoutCorrelationId) {
+        return { success: false, code: 'CLOSEOUT_NOT_FOUND', session: null };
+      }
+      if (!attempt || attempt.status !== 'active') return { success: false, code: 'ATTEMPT_NOT_ACTIVE', session: null };
+      if (terminalFailOnce === 'refused' && !env._terminalFailedOnce) {
+        env._terminalFailedOnce = true;
+        return { success: false, code: 'ATTEMPT_COMPLETION_REFUSED', session: null };
+      }
+      row.status = 'closed';
+      row.closed_at = '2026-08-09T23:00:00Z';
+      row.closed_by = actor;
+      row.close_source = source;
+      attempt.status = 'completed';
+      if (terminalFailOnce === 'lostAfterCommit' && !env._terminalFailedOnce) {
+        env._terminalFailedOnce = true;
+        return { success: false, code: 'SERVICE_LIFECYCLE_V3_TRANSITION_TRANSPORT_ERROR', session: null };
+      }
+      return { success: true, idempotent: false, code: 'V3_CLOSED', attemptCompleted: true, session: row };
+    },
   };
 
   // SLICE 3.3 — minimal idempotent fakes for the engine's incident-policy
@@ -246,7 +300,10 @@ function fakeEnv({
 }
 
 function engineFrom(env) {
-  return createServiceLifecycleEngine({
+  // CORRECTIVE SLICE 150 — the terminal step is close_service_session_with_evidence_v1, modelled on its SQL over the
+  // fakes above (tests/helpers/v3EvidenceTerminalFake.js): closeout + reconciliation + close + completion commit together,
+  // a refusal rolls the fake closeout back, env.isStale simulates evidence the service has outgrown.
+  return createServiceLifecycleEngine(withEvidenceTerminal({
     // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — these unit tests model a service with no
     // rider trip; the guard's own behaviour is proven in tests/activeRiderTripServiceCloseGuard.test.js.
     activeRiderTrip: env.activeRiderTrip || (async () => ({ ok: true, active: false })),
@@ -262,14 +319,24 @@ function engineFrom(env) {
     // and Phase E. These are unit tests with no database, so inject a stub
     // that records the call. A test can override env.reconciliation to prove
     // the close FAILS CLOSED (service stays open) when context cannot persist.
+    // R4 — CASE D reads that context back (getBySessionId), so the stub
+    // keeps what it recorded.
     reconciliation: env.reconciliation || {
-      persist: async ({ closeoutCorrelationId }) => ({
-        success: true,
-        created: true,
-        reconciliation: { closeoutCorrelationId, stubbed: true },
-      }),
+      persist: async ({ serviceSessionId, closeoutCorrelationId }) => {
+        env.reconciliationBySession = env.reconciliationBySession || new Map();
+        const row = { serviceSessionId, closeoutCorrelationId, createdAt: '2026-08-09T22:59:45Z', stubbed: true };
+        env.reconciliationBySession.set(serviceSessionId, row);
+        return { success: true, created: true, reconciliation: row };
+      },
+      getBySessionId: async ({ serviceSessionId }) => (env.reconciliationBySession && env.reconciliationBySession.get(serviceSessionId)) || null,
     },
-  });
+  }, {
+    calls: env.calls,
+    isClosed: (id) => { const row = env.sessions.get(id); return !!row && row.status === 'closed'; },
+    isStale: (args) => (env.isStale ? env.isStale(args) : null),
+    receipts: () => env.receipts || [],
+    rollbackCloseout: (row) => { env.closeoutsByCorr.delete(row.closeoutCorrelationId); env.closeoutsBySession.delete(row.serviceSessionId); },
+  }));
 }
 
 (async () => {
@@ -286,6 +353,7 @@ function engineFrom(env) {
     assert('A4: gross/paid/unpaid all 0', result.closeout.financial.grossSalesCents === 0 && result.closeout.financial.paidAmountCents === 0 && result.closeout.financial.unpaidExposureCents === 0);
     assert('A5: session transitioned to closed', result.session && result.session.status === 'closed');
     assert('A6: attempt marked completed', env.attemptsByCorr.get(result.closeoutCorrelationId).status === 'completed');
+    assert('A7 (R4B): by the ONE terminal step (close + completion together), with no separate completion call', env.calls.close.length === 1 && env.calls.close[0].atomic === true && env.calls.complete.length === 0);
   }
 
   console.log('\n── Scenario B: fully paid service, 3 terminal orders ──');
@@ -329,33 +397,65 @@ function engineFrom(env) {
     assert('C5: session still transitions to closed', result.session.status === 'closed');
   }
 
-  console.log('\n── Scenario D: retry after closeout created, attempt-completion crashed ──');
+  console.log('\n── Scenario D (R4B): the terminal step is refused — no false success, the service stays open, the retry resumes ──');
   {
     const orders = [order({ totale: 10 })];
     const events = [paymentEvent({ amount: 10 })];
-    const env = fakeEnv({ allOrders: orders, financialEvents: events, failCompleteOnce: true });
+    const env = fakeEnv({ allOrders: orders, financialEvents: events, terminalFailOnce: 'refused' });
     const closeServiceV3 = engineFrom(env);
 
-    // First call: everything succeeds except attempts.complete(), which throws
-    // once (simulated crash) — non-fatal per Phase F, so the call still reports success.
+    // First call: the database refused the attempt completion, so (migration
+    // 149) the close was rolled back with it. Before R4B this reported
+    // success while the attempt stayed active (Phase G was non-fatal).
     const first = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
-    assert('D1: first call still reports success (Phase F failure is non-fatal)', first.success === true, JSON.stringify(first));
-    assert('D2: exactly one closeout exists after the first call', env.closeoutsByCorr.size === 1);
+    assert('D1: first call reports FAILURE with the database code (never V3_CLOSED while the attempt is not completed)', first.success === false && first.code === 'ATTEMPT_COMPLETION_REFUSED', JSON.stringify(first));
+    // CORRECTIVE SLICE 150 — the closeout commits only with the terminal close: the refusal rolled it back too.
+    assert('D2: NO closeout exists after the refused first call (it commits only together with the terminal close, migration 150)', env.closeoutsByCorr.size === 0);
+    assert('D2b: the service is still OPEN and its attempt still ACTIVE (nothing half-committed)', env.sessions.get(SESSION_ID).status === 'open' && env.attemptsByCorr.get(first.closeoutCorrelationId).status === 'active');
 
-    // Session is now already closed at the DB layer (per the fake). Retry.
     const second = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test-retry' });
-    assert('D3: second call is a no-op success, same correlation id resumed', second.success === true && second.closeoutCorrelationId === first.closeoutCorrelationId, JSON.stringify(second));
+    assert('D3: the retry resumes the SAME attempt (acquire answers ALREADY_ACTIVE) and succeeds', second.success === true && second.closeoutCorrelationId === first.closeoutCorrelationId, JSON.stringify(second));
     assert('D4: STILL exactly one closeout — retry did not create a second', env.closeoutsByCorr.size === 1);
-    // SLICE 3.2.1 — the retry now resumes via explicit lineage (CASE D: closed
-    // + closeout exists + attempt still active) BEFORE ever reaching Phase A/D
-    // again, so create() is called exactly ONCE total (first call only) and
-    // acquire() is never called a second time either — the old design re-ran
-    // the whole pipeline on every retry and relied on create_service_closeout's
-    // OWN idempotency to no-op; this is stronger: the retry never even asks.
-    assert('D5: create() was called only ONCE — the retry short-circuits via lineage detection, never reaching Phase D again', env.calls.create.length === 1, String(env.calls.create.length));
-    assert('D6: transition.close() second call was idempotent (ALREADY_CLOSED)', env.calls.close.length === 2);
-    assert('D7: attempt eventually completed once the retry succeeded', env.attemptsByCorr.get(first.closeoutCorrelationId).status === 'completed');
-    assert('D8: attempts.acquire() was called only ONCE (first call) — the retry never mints/touches a new attempt', env.calls.acquire.length === 1, String(env.calls.acquire.length));
+    assert('D5: create() ran in each terminal step (refused + rolled back, then committed) and exactly ONE closeout exists', env.calls.create.length === 2 && env.closeoutsByCorr.size === 1, String(env.calls.create.length));
+    assert('D6: the terminal step ran twice (refused, then committed); both times the atomic close + completion, never a bare close', env.calls.close.length === 2 && env.calls.close.every((c) => c.atomic === true), JSON.stringify(env.calls.close));
+    assert('D7: the attempt is completed and the service closed, together', env.attemptsByCorr.get(first.closeoutCorrelationId).status === 'completed' && env.sessions.get(SESSION_ID).status === 'closed');
+    assert('D8: the retry re-acquires the SAME active attempt — only ONE attempt was ever minted', env.calls.acquire.length === 2 && env.attemptsByCorr.size === 1, String(env.calls.acquire.length));
+    assert('D9: no separate completion call anywhere (Phase G is part of the terminal step now)', env.calls.complete.length === 0, String(env.calls.complete.length));
+  }
+
+  console.log('\n── Scenario D-lost (R4B): the terminal step committed but its response was lost — failure reported, retry = CASE C ──');
+  {
+    const orders = [order({ totale: 10 })];
+    const events = [paymentEvent({ amount: 10 })];
+    const env = fakeEnv({ allOrders: orders, financialEvents: events, terminalFailOnce: 'lostAfterCommit' });
+    const closeServiceV3 = engineFrom(env);
+    const first = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
+    assert('DL1: first call reports failure (the outcome is unknown to the caller), not success', first.success === false && first.code === 'SERVICE_LIFECYCLE_V3_TRANSITION_TRANSPORT_ERROR', JSON.stringify(first));
+    assert('DL2: the database state is the committed one: closed + completed together', env.sessions.get(SESSION_ID).status === 'closed' && env.attemptsByCorr.get(first.closeoutCorrelationId).status === 'completed');
+    const second = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test-retry' });
+    assert('DL3: the retry is the exact idempotent success (CASE C), same correlation', second.success === true && second.idempotent === true && second.closeoutCorrelationId === first.closeoutCorrelationId, JSON.stringify(second));
+    assert('DL4: the retry asks for NO transition and NO completion, and creates nothing', env.calls.close.length === 1 && env.calls.complete.length === 0 && env.calls.create.length === 1 && env.calls.acquire.length === 1);
+  }
+
+  console.log('\n── Scenario D-hist (R4, preserved): a closed service whose attempt stayed active (a close made before migration 149) ──');
+  {
+    const orders = [order({ totale: 10 })];
+    const events = [paymentEvent({ amount: 10 })];
+    const env = fakeEnv({ allOrders: orders, financialEvents: events });
+    const closeServiceV3 = engineFrom(env);
+    const first = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
+    // forge the pre-149 history: same close facts, attempt left active
+    env.attemptsByCorr.get(first.closeoutCorrelationId).status = 'active';
+    const calls0 = env.calls.close.length;
+    const second = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test-retry' });
+    assert('DH1: the retry completes the attempt from the session\'s own close facts (CASE D) and succeeds', second.success === true && second.closeoutCorrelationId === first.closeoutCorrelationId, JSON.stringify(second));
+    // R4 — CASE D no longer asks for a second transition: the session is
+    // already terminal, and close_service_session_v3's ALREADY_CLOSED answer
+    // depends on the current-service pointer. The attempt is completed from
+    // the session's own close facts instead.
+    assert('DH2 (was D6): no transition is asked for on the retry (the session is already terminal)', env.calls.close.length === calls0, String(env.calls.close.length));
+    assert('DH3: the attempt is completed through the completion RPC exactly once', env.calls.complete.length === 1 && env.attemptsByCorr.get(first.closeoutCorrelationId).status === 'completed');
+    assert('DH4: still ONE closeout, ONE attempt', env.closeoutsByCorr.size === 1 && env.calls.acquire.length === 1 && env.calls.create.length === 1);
   }
 
   console.log('\n── Scenario E: two concurrent callers converge on ONE authoritative closeout ──');
@@ -392,7 +492,7 @@ function engineFrom(env) {
     assert('F2: code is V3_CLOSED', result.code === 'V3_CLOSED');
     assert('F3: exactly 1 financial incident, exposure 1000 cents', result.incidents.length === 1 && result.incidents[0].incidentType === 'UNPAID_BALANCE_AT_CLOSE');
     assert('F4: a closeout WAS created, unpaidExposureCents is 1000 (frozen, not zeroed)', env.closeoutsByCorr.size === 1 && result.closeout.financial.unpaidExposureCents === 1000);
-    assert('F5: transition.close() WAS called — the close proceeds', env.calls.close.length === 1);
+    assert('F5: the terminal step WAS called — the close proceeds', env.calls.close.length === 1);
     assert('F6: attempt reaches completed', env.attemptsByCorr.get(result.closeoutCorrelationId).status === 'completed');
     assert('F7: session transitions to closed', env.sessions.get(SESSION_ID).status === 'closed');
   }
@@ -450,6 +550,54 @@ function engineFrom(env) {
     assert('G1: success', result.success === true, JSON.stringify(result));
     assert('G2: order_count is 1 — the other session\'s order is excluded', result.closeout.financial.orderCount === 1, String(result.closeout.financial.orderCount));
     assert('G3: gross is exactly the current-session order (1000), never 999+1000', result.closeout.financial.grossSalesCents === 1000, String(result.closeout.financial.grossSalesCents));
+  }
+
+  console.log('\n── Scenario S (150): the terminal step judges the evidence — a stale round is superseded, never closed from ──');
+  {
+    const env = fakeEnv({ allOrders: [order({ totale: 10 })], financialEvents: [paymentEvent({ amount: 10 })] });
+    let rounds = 0;
+    env.isStale = () => (++rounds === 1 ? ['service_facts'] : null);
+    const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
+    assert('S1: stale once -> the attempt is superseded and a fresh round closes the service', result.success === true && result.code === 'V3_CLOSED', JSON.stringify(result));
+    assert('S2: the stale round wrote NO closeout (the terminal step refused before any write); exactly one closeout, owned by the fresh attempt',
+      env.closeoutsByCorr.size === 1 && env.closeoutsByCorr.has(result.closeoutCorrelationId) && result.closeoutCorrelationId === 'corr-2', JSON.stringify([...env.closeoutsByCorr.keys()]));
+    assert('S3: the first attempt is superseded (reason CLOSE_EVIDENCE_STALE), the second completed', env.attemptsByCorr.get('corr-1').status === 'superseded'
+      && env.attemptsByCorr.get('corr-2').status === 'completed' && env.calls.supersede.length === 1 && env.calls.supersede[0].reason === 'CLOSE_EVIDENCE_STALE');
+    assert('S4: each round captured its own snapshot (two attempts, two snapshots; the stale one stays as audit of a superseded attempt)', env.snapshotsByCorr.size === 2);
+  }
+  {
+    const env = fakeEnv({ allOrders: [order({ totale: 10 })], financialEvents: [paymentEvent({ amount: 10 })] });
+    env.isStale = () => ['service_facts', 'receipts'];
+    const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
+    assert('S5: a service that keeps changing under every round is refused, typed (V3_CLOSE_EVIDENCE_STALE), never closed', result.success === false && result.code === 'V3_CLOSE_EVIDENCE_STALE' && result.rounds === 3, JSON.stringify(result));
+    assert('S6: nothing committed: no closeout, service open, every attempt superseded', env.closeoutsByCorr.size === 0 && env.sessions.get(SESSION_ID).status === 'open'
+      && [...env.attemptsByCorr.values()].every((a) => a.status === 'superseded') && env.attemptsByCorr.size === 3);
+  }
+  {
+    // a resumed attempt (terminal failure earlier, same correlation still active) computes its closeout from ITS snapshot
+    const env = fakeEnv({ allOrders: [order({ totale: 10 })], financialEvents: [paymentEvent({ amount: 10 })] });
+    env.attemptsByCorr.set('corr-9', { closeoutCorrelationId: 'corr-9', serviceSessionId: SESSION_ID, status: 'active', createdBy: 'system' });
+    env.attemptsBySession.set(SESSION_ID, env.attemptsByCorr.get('corr-9'));
+    env.snapshotsByCorr.set('corr-9', { id: 'snap-9', serviceSessionId: SESSION_ID, closeoutCorrelationId: 'corr-9', capturedAt: '2026-08-09T22:00:00Z',
+      payload: { session: session(), orders: [order({ totale: 7 })], tableSessions: [], financialEvents: [paymentEvent({ amount: 7 })], orderObligations: [] } });
+    const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
+    assert('S7: a resumed attempt closes from its own snapshot, never from newer reads (gross 700 frozen in the snapshot, not 1000 read now)',
+      result.success === true && result.closeoutCorrelationId === 'corr-9' && result.closeout.financial.grossSalesCents === 700, JSON.stringify(result.closeout && result.closeout.financial));
+  }
+  {
+    // CASE B (a closeout committed before migration 150 while the service stayed open) whose evidence is stale: typed refusal, never success
+    const env = fakeEnv({ allOrders: [order({ totale: 10 })], financialEvents: [paymentEvent({ amount: 10 })] });
+    env.attemptsByCorr.set('corr-7', { closeoutCorrelationId: 'corr-7', serviceSessionId: SESSION_ID, status: 'active', createdBy: 'system' });
+    env.attemptsBySession.set(SESSION_ID, env.attemptsByCorr.get('corr-7'));
+    const legacyCloseout = { id: 'co-legacy', serviceSessionId: SESSION_ID, closeoutCorrelationId: 'corr-7', closedAt: '2026-08-09T22:00:00Z', financial: { grossSalesCents: 700 }, operational: { occupiedTablesAtClose: 0 } };
+    env.closeoutsByCorr.set('corr-7', legacyCloseout); env.closeoutsBySession.set(SESSION_ID, legacyCloseout);
+    env.isStale = () => ['service_facts'];
+    const result = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
+    assert('S8: CASE B with a committed but stale closeout -> V3_CLOSE_COMMITTED_EVIDENCE_STALE, service still open, attempt still active (an operator decision; never V3_CLOSED)',
+      result.success === false && result.code === 'V3_CLOSE_COMMITTED_EVIDENCE_STALE' && env.sessions.get(SESSION_ID).status === 'open' && env.attemptsByCorr.get('corr-7').status === 'active', JSON.stringify(result));
+    env.isStale = () => null;
+    const retry = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'test' });
+    assert('S9: the same CASE B with fresh evidence closes from the committed closeout (no second closeout)', retry.success === true && env.closeoutsByCorr.size === 1 && env.sessions.get(SESSION_ID).status === 'closed', JSON.stringify(retry));
   }
 
   console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');

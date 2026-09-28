@@ -1,0 +1,13 @@
+-- staging body of public.workspace_activation_integrity() (md5 db9ad46a69f2949f13eeeb297f5c111a); trigger function text between the dollar quotes
+
+BEGIN
+  IF NEW.lifecycle_status = 'active' THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM public.workspace_memberships
+       WHERE workspace_id = NEW.id AND role = 'workspace_owner' AND status = 'active'
+    ) THEN
+      RAISE EXCEPTION 'WORKSPACE_ACTIVATE_REQUIRES_OWNER (workspace %)', NEW.id USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+  RETURN NULL;
+END 

@@ -14,6 +14,7 @@
 // other test file covers.
 
 const { createServiceLifecycleEngine } = require('../src/serviceSessions/serviceLifecycleEngine');
+const { withEvidenceTerminal } = require('./helpers/v3EvidenceTerminalFake');
 
 let pass = 0, fail = 0;
 const assert = (n, c, d = '') => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n + (d ? '  -> ' + d : '')); } };
@@ -235,11 +236,33 @@ function fakeEnv({
     return releaseEmptyTable(args);
   };
 
+  // R4B — migration 149's terminal step (the engine's only transition call):
+  // this fake's own close and its own attempt completion, committed together
+  // or not at all; ALREADY_CLOSED is a success only for a completed attempt.
+  env.transition.closeAndCompleteAttempt = async (args) => {
+    const row = env.sessions.get(args.serviceSessionId);
+    const before = row ? { ...row } : null;
+    const rollback = () => { if (row) { for (const k of Object.keys(row)) if (!(k in before)) delete row[k]; Object.assign(row, before); } };
+    const closed = await env.transition.close(args);
+    if (!closed.success) return closed;
+    const attempt = env.attemptsByCorr.get(args.closeoutCorrelationId);
+    if (closed.code === 'ALREADY_CLOSED') {
+      return attempt && attempt.status === 'completed' ? { ...closed, attemptCompleted: true } : { success: false, code: 'CLOSED_ATTEMPT_NOT_COMPLETED', session: null };
+    }
+    let done;
+    try { done = await env.attempts.complete({ closeoutCorrelationId: args.closeoutCorrelationId, actor: args.actor }); }
+    catch (e) { rollback(); return { success: false, code: 'SERVICE_LIFECYCLE_V3_TRANSITION_TRANSPORT_ERROR', session: null }; }
+    if (!done || done.success !== true || done.code !== 'COMPLETED') { rollback(); return { success: false, code: 'ATTEMPT_COMPLETION_REFUSED', session: null }; }
+    return { ...closed, attemptCompleted: true };
+  };
+
   return env;
 }
 
 function engineFrom(env, overrides = {}) {
-  return createServiceLifecycleEngine({
+  // CORRECTIVE SLICE 150 — the terminal step is close_service_session_with_evidence_v1, modelled on its SQL over the
+  // fakes above (tests/helpers/v3EvidenceTerminalFake.js): closeout + reconciliation + close + completion commit together.
+  return createServiceLifecycleEngine(withEvidenceTerminal({
     // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — these unit tests model a service with no
     // rider trip; the guard's own behaviour is proven in tests/activeRiderTripServiceCloseGuard.test.js.
     activeRiderTrip: env.activeRiderTrip || (async () => ({ ok: true, active: false })),
@@ -263,7 +286,13 @@ function engineFrom(env, overrides = {}) {
         reconciliation: { closeoutCorrelationId, stubbed: true },
       }),
     },
-  });
+  }, {
+    calls: env.calls,
+    isClosed: (id) => { const row = env.sessions.get(id); return !!row && row.status === 'closed'; },
+    isStale: (args) => (env.isStale ? env.isStale(args) : null),
+    receipts: () => env.receipts || [],
+    rollbackCloseout: (row) => { env.closeoutsByCorr.delete(row.closeoutCorrelationId); env.closeoutsBySession.delete(row.serviceSessionId); },
+  }));
 }
 
 (async () => {

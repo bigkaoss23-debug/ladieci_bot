@@ -301,9 +301,11 @@ const tryAdjust = async (role, over = {}) => {
     assert(s + ' is an economic cancellation', co.isEconomicCancellation(s) === true);
   for (const s of ['CHIUSO_FORZATO','RETIRADO','COMPLETADO','EN_COCINA',null,''])  // language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this slice deliberately keeps OUT of every economic filter, named here as evidence, not new vocabulary
     assert(String(s) + ' is NOT an economic cancellation', co.isEconomicCancellation(s) === false);
-  assert('request id is deterministic per order and PostgREST-safe',
-    co.buildCancelRequestId('#999034') === 'cancel-order-999034'
-    && /^[A-Za-z0-9_-]{8,128}$/.test(co.buildCancelRequestId('#999034')));
+  // POST-ASTRA F8 -- the key is the PERMANENT identity (order_uid); a bare display id no longer yields a key.
+  assert('request id is deterministic per permanent order identity and PostgREST-safe',
+    co.buildCancelRequestId('7ac2c8ab-f4a7-437f-a53b-b7fd5f4cbb24') === 'cancel-order-7ac2c8ab-f4a7-437f-a53b-b7fd5f4cbb24'
+    && /^[A-Za-z0-9_-]{8,128}$/.test(co.buildCancelRequestId('7ac2c8ab-f4a7-437f-a53b-b7fd5f4cbb24'))
+    && co.buildCancelRequestId('#999034') === null);
   assert('an unattributable actor fails closed',
     (await co.cancelOrderCanonical({ orderId: '#1', targetEstado: 'CANCELADO', extras: {} })).code
       === 'ORDER_CANCEL_ACTOR_REQUIRED');
@@ -320,8 +322,12 @@ const tryAdjust = async (role, over = {}) => {
     ord.includes('if (!_isNoop && isEconomicCancellation(nuovoStato)) {'));
   assert('a self-loop cancel stays a pure no-op (no financial writer, no actor demanded)',
     ord.includes('!_isNoop && isEconomicCancellation'));
-  assert('the non-cancel path still uses the ordinary sbUpdate + N-5 refusal check',
-    ord.includes('const stateRes = await sbUpdate("ordenes"') && ord.includes('isEconomicMutationRefusal(stateRes)'));
+  // POST-ASTRA F5 / F7 -- the non-cancel path writes through writeOrderPatch (plain PATCH for non-economic fields, the canonical
+  // editor writer for a discount), and every result is classified (N-5 refusal first) before anything downstream runs.
+  assert('the non-cancel path still uses the ordinary write + N-5 refusal check',
+    ord.includes('const stateRefusal = await writeOrderPatch(ordenId, upd, stateBasisRow);') && ord.includes('if (stateRefusal) return stateRefusal;')
+      && /if \(isEconomicMutationRefusal\(result\)\) return economicMutationRefusal\(orderId\);/.test(
+        fs.readFileSync(path.join(__dirname, '..', 'src', 'financial', 'paidOrderEconomicGuard.js'), 'utf8')));
   assert('a refused cancellation reports failure instead of inventing a transition',
     ord.includes('if (!cancelled.ok) {'));
   assert('collecting/discounting cannot ride along with a cancellation',

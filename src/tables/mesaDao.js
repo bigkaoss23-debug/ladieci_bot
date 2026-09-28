@@ -340,7 +340,25 @@ const setCovers = (args) => rpc('mesa_set_session_covers_v1', {
   p_covers_total: args.coversTotal,
 });
 
+
+// POST-ASTRA F1 -- the post-close resolution fact (migration 152). Reached ONLY after the ordinary adjustment was refused with
+// ORDER_ECONOMIC_SERVICE_CLOSED (the order's service is closed), with the SAME client request id and request hash.
+const postPostCloseResolution = (args) => rpc('order_post_close_obligation_resolution_v1', {
+  p_order_uid: args.orderUid,
+  p_by_actor: args.byActor,
+  p_new_gross: args.newGross,
+  p_cause: 'manual',
+  p_reason: args.reason,
+  p_client_request_id: args.clientRequestId,
+  p_request_hash: args.requestHash,
+  p_expected_current_gross: args.expectedCurrentGross ?? null,
+  p_target_estado: null,
+  p_table_session_id: args.tableSessionId ?? null,
+  p_workspace_id: args.workspaceId,
+});
+
 module.exports = {
+  postPostCloseResolution,
   listFloorRows,
   getSession,
   // ACC-01 — read-only closed-account access

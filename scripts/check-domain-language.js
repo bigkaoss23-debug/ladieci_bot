@@ -87,6 +87,18 @@ const ALLOWLIST_PATTERNS = [
   // the only correct resolution. Its ROLLBACK carries no blocked term and
   // needs no exemption.
   /^migrations\/2026-09-11_economic_writer_hardening_v1_migration_126\.sql$/,
+  // Final Concurrency Fix (migration 151) restates the CURRENT body of
+  // order_obligation_apply_adjustment_v1 byte for byte (forward: that body + ONE
+  // marked block; ROLLBACK: that body verbatim), and that body legitimately
+  // contains the existing economic_period_kind literals ('PRANZO','SERA') in its
+  // bootstrap branch. Its md5(prosrc) is pinned by the migration's own guards,
+  // post-conditions and the rollout preflight (b4c358e2... / 2c411d98...), and
+  // "removing the 151 block yields the predecessor byte for byte" is a certified
+  // property -- an inline suppression marker inside the function body would
+  // change those bytes. Exactly the H-1 / 135 / 137 ROLLBACK situation above:
+  // a file-level exemption for the pair is the only correct resolution.
+  /^migrations\/2026-09-26_economic_close_gate_v1_migration_151\.sql$/,
+  /^migrations\/2026-09-26_economic_close_gate_v1_migration_151\.ROLLBACK\.sql$/,
   // The guard's own source and its unit tests: they must hold the
   // blocked-term list, allowlist patterns and fixture strings as literal
   // data — that is not domain contamination.

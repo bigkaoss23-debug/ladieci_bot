@@ -63,9 +63,9 @@
 const { sbSelect } = require("../utils/supabase");
 const { closeoutAttempts } = require("../closeout/closeoutAttempts");
 const { closeoutSnapshots } = require("../closeout/closeoutSnapshots");
-const { serviceCloseoutCreation } = require("../closeout/serviceCloseoutCreation");
-const { serviceCloseouts } = require("../closeout/serviceCloseouts");
-const { serviceLifecycleV3Transition } = require("./serviceLifecycleV3Transition");
+const { closeoutRpcArgs } = require("../closeout/serviceCloseoutCreation");
+const { serviceCloseouts, publicCloseout } = require("../closeout/serviceCloseouts");
+const { serviceLifecycleV3Transition, publicSession } = require("./serviceLifecycleV3Transition");
 const { aggregate } = require("../closeout/currentServiceCloseout");
 const { serviceIncidents } = require("../incidents/serviceIncidents");
 const { classifyForV3Close } = require("./v3IncidentPolicy");
@@ -85,6 +85,13 @@ const TERMINAL_ORDER_STATES = new Set([
   "CANCELADO", "CANCELLED", "ANULADO", "CHIUSO_FORZATO",
 ]);
 
+// CORRECTIVE SLICE 150 — the terminal step judged a round's evidence stale;
+// a module-private marker, never part of any response.
+const EVIDENCE_STALE = Symbol("V3_CLOSE_EVIDENCE_STALE_ROUND");
+// A service that keeps changing under every round is refused rather than
+// chased forever; each round that lost the race left nothing committed.
+const MAX_EVIDENCE_ROUNDS = 3;
+
 function toCents(euros) {
   return Math.round((Number(euros) || 0) * 100);
 }
@@ -93,7 +100,6 @@ function createServiceLifecycleEngine({
   select = sbSelect,
   attempts = closeoutAttempts,
   snapshots = closeoutSnapshots,
-  closeoutCreation = serviceCloseoutCreation,
   closeouts = serviceCloseouts,
   transition = serviceLifecycleV3Transition,
   aggregateCloseout = aggregate,
@@ -119,6 +125,57 @@ function createServiceLifecycleEngine({
     } catch (e) {
       return { openTablesCarried: null, openTableSessionIds: [], readFailed: true, detail: String((e && e.message) || e) };
     }
+  }
+
+  const projectRecon = (row) => (typeof reconciliation.projectReconciliation === "function" ? reconciliation.projectReconciliation(row) : row);
+
+  // CORRECTIVE SLICE 150 — the receipts attributed to this service (its cash
+  // drawer: payment_transactions.service_session_id), read BEFORE the
+  // reconciliation is built. The terminal step re-reads the same set under the
+  // close's lock prefix and refuses the close (CLOSE_EVIDENCE_STALE) unless it is
+  // unchanged, so the persisted reconciliation can never miss a receipt that
+  // committed after it was computed.
+  async function readReceiptIds(serviceSessionId) {
+    const rows = await select("payment_transactions", `service_session_id=eq.${encodeURIComponent(serviceSessionId)}&select=id`);
+    if (!Array.isArray(rows)) throw new Error("payment_transactions read did not return rows");
+    return rows.map((r) => String(r.id));
+  }
+
+  // R4 — CASE D proof. Reads (never writes, never re-derives) this session's
+  // OWN close facts under the attempt's correlation: its snapshot, its
+  // closeout and its reconciliation, and checks they were made in the order
+  // the V3 close makes them (Phase B -> D -> D.2 -> E), so a session closed by
+  // something else BEFORE this closeout existed is never taken as proof.
+  // Nothing here reads the current-service pointer or any other service.
+  // Every fact is append-only or terminal (closed is terminal; snapshots,
+  // closeouts and reconciliations are append-only), so once proven it cannot
+  // be invalidated before the attempt is completed.
+  async function proveRealizedClose({ session, closeout, attempt }) {
+    const closeoutCorrelationId = attempt.closeoutCorrelationId;
+    let snapshot, context;
+    try {
+      snapshot = await snapshots.getByCorrelationId({ closeoutCorrelationId });
+      context = await reconciliation.getBySessionId({ serviceSessionId: session.id });
+    } catch (e) {
+      return { ok: false, code: "V3_CLOSE_LINEAGE_READ_FAILED", detail: String((e && e.message) || e) };
+    }
+    const missing = [];
+    if (!snapshot || snapshot.serviceSessionId !== session.id || snapshot.closeoutCorrelationId !== closeoutCorrelationId) {
+      missing.push("snapshot");
+    }
+    if (!context || context.serviceSessionId !== session.id || context.closeoutCorrelationId !== closeoutCorrelationId) {
+      missing.push("reconciliation");
+    }
+    if (!session.closed_at) missing.push("session_closed_at");
+    if (missing.length === 0) {
+      // service_closeouts.closed_at is the closeout row's own write time.
+      const order = [snapshot.capturedAt, closeout.closedAt, context.createdAt, session.closed_at].map((v) => Date.parse(v));
+      if (order.some((t) => Number.isNaN(t)) || order[0] > order[1] || order[1] > order[2] || order[2] > order[3]) {
+        missing.push("close_order");
+      }
+    }
+    if (missing.length > 0) return { ok: false, code: "V3_CLOSE_RESUME_EVIDENCE_INCOMPLETE", missing };
+    return { ok: true, reconciliation: context };
   }
 
   return async function closeServiceV3({ serviceSessionId, source = "v3_engine", actor = "system" } = {}) {
@@ -215,26 +272,88 @@ function createServiceLifecycleEngine({
         };
       }
 
-      if (existingAttempt.status === "active") {
-        // CASES B and D converge here. CASE B: service still open/closing —
-        // crash happened after Phase D (closeout persisted) but before Phase
-        // E (terminal transition). CASE D: service already closed — crash
-        // happened after Phase E succeeded but before Phase F (attempt
-        // bookkeeping). transition.close() is idempotent (its real RPC
-        // returns ALREADY_CLOSED when the session is already closed under
-        // this exact identity — see close_service_session_v3), so the SAME
-        // two calls safely finish whichever of B/D actually happened, and
-        // NEVER create a second closeout (Phase D is never reached here).
-        // J-1 — the same Phase D.2, on the resume path. CASE B is exactly a
-        // crash between D and E, so the context may legitimately not exist
-        // yet; the RPC is idempotent, so CASE D (already past E) simply gets
-        // the existing row back. Still before the transition, for the same
-        // fail-closed reason as the main path.
-
-        const resumeReconciliation = await reconciliation.persist({
-          serviceSessionId,
+      if (existingAttempt.status === "active" && alreadyClosed) {
+        // CASE D (R4) — service already closed: the terminal transition
+        // (Phase E) committed, but the attempt was never marked completed (a
+        // crash before Phase G, or Phase G's own call failing — possible only
+        // for closes made before migration 149, which commits both together
+        // and refuses to commit one without the other). Nothing is
+        // left to transition, so no transition is asked for:
+        // close_service_session_v3 answers ALREADY_CLOSED only while this
+        // session is still the recent-closed one with no current service, so
+        // once the next service opened, a resume through it got
+        // SESSION_CLOSE_IDENTITY_MISMATCH forever and the attempt stayed
+        // active. The attempt is completed instead on proof from this
+        // session's own close facts (proveRealizedClose), without re-running
+        // the reconciliation (a missing one is never recreated from a
+        // Business Day that may now hold the next service). Fails closed on
+        // any missing or out-of-order fact. The completion RPC (via
+        // attempts.complete) re-checks the attempt's status under its row
+        // lock (idempotent, refuses a superseded attempt), so concurrent
+        // resumes complete it exactly once. Success is returned only once
+        // completion is confirmed.
+        const proof = await proveRealizedClose({ session, closeout: existingCloseout, attempt: existingAttempt });
+        if (!proof.ok) {
+          return {
+            success: false, code: proof.code, missing: proof.missing, detail: proof.detail,
+            closeoutCorrelationId: existingAttempt.closeoutCorrelationId, closeout: existingCloseout,
+          };
+        }
+        let completion;
+        try {
+          completion = await attempts.complete({ closeoutCorrelationId: existingAttempt.closeoutCorrelationId, actor });
+        } catch (e) {
+          completion = { success: false, detail: String((e && e.message) || e) };
+        }
+        if (!completion || completion.success !== true) {
+          return {
+            success: false, code: (completion && completion.code) || "V3_CLOSE_ATTEMPT_COMPLETE_FAILED",
+            detail: completion && completion.detail,
+            closeoutCorrelationId: existingAttempt.closeoutCorrelationId, closeout: existingCloseout,
+          };
+        }
+        const carryoverSummary = await computeCarryoverSummary(serviceSessionId);
+        return {
+          success: true, code: "V3_CLOSED", idempotent: true,
           closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
-          actor,
+          closeout: existingCloseout,
+          reconciliation: proof.reconciliation,
+          session: publicSession(session),
+          occupiedTablesAtClose: existingCloseout.operational.occupiedTablesAtClose,
+          carryoverSummary,
+        };
+      }
+
+      if (existingAttempt.status === "active") {
+        // CASE B: service still open/closing — crash happened after Phase D
+        // (closeout persisted) but before Phase E (terminal transition). The
+        // resume finishes the transition and the bookkeeping, and NEVER
+        // creates a second closeout (Phase D is never reached here). CASE D
+        // (already closed) is handled just above.
+        // CORRECTIVE SLICE 150 — this state (a closeout committed while the
+        // service stayed open) can only come from BEFORE migration 150: since
+        // then a closeout commits only together with the terminal close
+        // (service_closeouts_terminal_close_v1). The closeout is permanent
+        // (service_closeouts_session_uq, append-only), so the resume may use it
+        // ONLY if it still describes the service: the terminal step re-judges
+        // the attempt's snapshot against the live facts (and the receipts
+        // against the reconciliation) under the close's lock prefix. Stale ->
+        // a typed refusal, NEVER a success from frozen evidence; the service
+        // stays open for an operator decision (it cannot be corrected here).
+        // A missing reconciliation is built now and persisted by the same
+        // terminal transaction (J-1 context, still before the transition).
+        let resumeReceiptIds, resumeReconciliation;
+        try {
+          resumeReceiptIds = await readReceiptIds(serviceSessionId);
+        } catch (e) {
+          return {
+            success: false, code: "V3_CLOSE_LIVE_STATE_READ_FAILED", detail: String((e && e.message) || e),
+            closeoutCorrelationId: existingAttempt.closeoutCorrelationId, closeout: existingCloseout,
+          };
+        }
+        // POST-ASTRA F2 (154): the day window's digest is read before the build and judged by the terminal step.
+        resumeReconciliation = await reconciliation.buildRpcArgs({
+          serviceSessionId, closeoutCorrelationId: existingAttempt.closeoutCorrelationId, actor, withDayEvidence: true,
         });
         if (!resumeReconciliation.success) {
           return {
@@ -245,12 +364,18 @@ function createServiceLifecycleEngine({
           };
         }
 
-        const transitionResult = await transition.close({
+        // R4B + 150 — the reconciliation, the terminal transition and the
+        // attempt completion commit together, so a resume never leaves a
+        // closed session with an active attempt, and success means all happened.
+        const transitionResult = await transition.closeWithEvidence({
           serviceSessionId, closeoutCorrelationId: existingAttempt.closeoutCorrelationId, actor, source,
+          closeout: null, reconciliation: resumeReconciliation.args, receiptIds: resumeReceiptIds,
         });
         if (!transitionResult.success) {
           return {
-            success: false, code: transitionResult.code || "V3_CLOSE_TRANSITION_FAILED",
+            success: false,
+            code: transitionResult.code === "CLOSE_EVIDENCE_STALE" ? "V3_CLOSE_COMMITTED_EVIDENCE_STALE" : (transitionResult.code || "V3_CLOSE_TRANSITION_FAILED"),
+            missing: transitionResult.missing, stale: transitionResult.stale,
             closeoutCorrelationId: existingAttempt.closeoutCorrelationId, closeout: existingCloseout,
           };
         }
@@ -259,24 +384,11 @@ function createServiceLifecycleEngine({
         // resume now goes straight from the terminal transition to the
         // carryover summary, exactly like the main happy path below.
         const carryoverSummary = await computeCarryoverSummary(serviceSessionId);
-
-        // Non-fatal if this fails: the session is already closed and the
-        // closeout already persisted, so a failed completion is never
-        // retried into a duplicate of either — same discipline as Phase F
-        // below.
-        try {
-          await attempts.complete({ closeoutCorrelationId: existingAttempt.closeoutCorrelationId, actor });
-        } catch (e) {
-          console.warn(
-            "[serviceLifecycleEngine] resume: marking the attempt completed failed (non-fatal — the session is already closed and the closeout already persisted):",
-            (e && e.message) || e
-          );
-        }
         return {
           success: true, code: "V3_CLOSED", idempotent: true,
           closeoutCorrelationId: existingAttempt.closeoutCorrelationId,
           closeout: existingCloseout,
-          reconciliation: resumeReconciliation.reconciliation,
+          reconciliation: projectRecon(transitionResult.reconciliationRow),
           session: transitionResult.session,
           occupiedTablesAtClose: existingCloseout.operational.occupiedTablesAtClose,
           carryoverSummary,
@@ -305,6 +417,44 @@ function createServiceLifecycleEngine({
       return { success: false, code: "V3_CLOSE_SESSION_ALREADY_CLOSED_NOT_RECOVERABLE" };
     }
 
+    // CORRECTIVE SLICE 150 — a close is made from evidence that still
+    // describes the service at the moment of the terminal commit, or not at
+    // all. Each round acquires/resumes an attempt, captures (or re-reads) its
+    // snapshot, classifies, and hands the closeout + reconciliation to the ONE
+    // terminal step (close_service_session_with_evidence_v1), which judges the
+    // evidence under the close's lock prefix. CLOSE_EVIDENCE_STALE (the service
+    // kept trading after a terminal step that did not commit, or while this
+    // round ran) -> the attempt is superseded through attempts.supersede (the
+    // database retires its incidents with it) and a fresh round starts. Nothing of a stale
+    // round was ever committed as a closeout or a reconciliation. Bounded: a
+    // service that keeps changing under every round is refused, typed, never
+    // closed from evidence that is already old.
+    let lastStale = null;
+    for (let round = 1; round <= MAX_EVIDENCE_ROUNDS; round += 1) {
+      const outcome = await closeRound();
+      if (!outcome || outcome[EVIDENCE_STALE] !== true) return outcome;
+      lastStale = outcome;
+      let superseded;
+      try {
+        superseded = await attempts.supersede({ closeoutCorrelationId: outcome.closeoutCorrelationId, actor, reason: "CLOSE_EVIDENCE_STALE" });
+      } catch (e) {
+        superseded = { success: false, detail: String((e && e.message) || e) };
+      }
+      if (!superseded || superseded.success !== true) {
+        return {
+          success: false, code: (superseded && superseded.code) || "V3_CLOSE_ATTEMPT_SUPERSEDE_FAILED",
+          detail: superseded && superseded.detail, closeoutCorrelationId: outcome.closeoutCorrelationId,
+        };
+      }
+    }
+    return {
+      success: false, code: "V3_CLOSE_EVIDENCE_STALE", stale: lastStale.stale, rounds: MAX_EVIDENCE_ROUNDS,
+      closeoutCorrelationId: lastStale.closeoutCorrelationId,
+    };
+
+    // One evidence round (Phase A -> E). Returns the final result, or the
+    // EVIDENCE_STALE marker when the terminal step judged its evidence stale.
+    async function closeRound() {
     // CASE A (and CASE F, which is CASE A with zero orders — no special
     // handling: happy-path reconciliation below treats an empty service
     // exactly like any other). Phase A — acquire/resume the closeout
@@ -369,6 +519,19 @@ function createServiceLifecycleEngine({
     });
     if (!captureResult.success) {
       return { success: false, code: captureResult.code || "V3_CLOSE_SNAPSHOT_FAILED", closeoutCorrelationId };
+    }
+    // CORRECTIVE SLICE 150 — a resumed attempt already has its snapshot
+    // (capture is idempotent per correlation: ALREADY_CAPTURED returns the
+    // stored row). Its evidence IS that snapshot: the closeout and the
+    // incidents are computed from it, never from newer reads, and the terminal
+    // step decides whether it still describes the service.
+    if (captureResult.created === false) {
+      const frozen = captureResult.snapshot && captureResult.snapshot.payload;
+      if (!frozen || !Array.isArray(frozen.orders) || !Array.isArray(frozen.tableSessions)
+          || !Array.isArray(frozen.financialEvents) || !Array.isArray(frozen.orderObligations)) {
+        return { success: false, code: "V3_CLOSE_SNAPSHOT_PAYLOAD_INVALID", closeoutCorrelationId };
+      }
+      ({ orders, tableSessions, financialEvents, orderObligations } = frozen);
     }
 
     // Phase C — deterministic reconciliation. `orders` is already scoped by
@@ -552,8 +715,9 @@ function createServiceLifecycleEngine({
     const incidentCount = persistedIncidents.length;
     const criticalIncidentCount = persistedIncidents.filter((i) => i && i.severity === "critical").length;
 
-    // Phase D — persist the ONE authoritative service_closeouts row.
-    const createResult = await closeoutCreation.create({
+    // Phase D — the ONE authoritative service_closeouts row, built here and
+    // committed ONLY by the terminal step below (CORRECTIVE SLICE 150).
+    const closeoutArgs = closeoutRpcArgs({
       serviceSessionId,
       closeoutCorrelationId,
       closedBy: actor,
@@ -582,71 +746,62 @@ function createServiceLifecycleEngine({
       currentObligationCents,
       overCollectedCents,
     });
-    if (!createResult.success) {
-      return { success: false, code: createResult.code || "V3_CLOSE_CLOSEOUT_PERSIST_FAILED", closeoutCorrelationId };
-    }
 
-    // Phase D.2 (J-1) — persist the ECONOMIC CONTEXT this close was made
-    // under: the Business Day window of THIS service, its snapshot totals, and
-    // the physical cash count if (and only if) one exists for exactly that
-    // window. Deliberately placed AFTER Phase D and BEFORE Phase E:
-    //
-    //   - after D, because create_service_closeout_reconciliation_v1 refuses
-    //     to write context for a closeout row that does not exist yet, which
-    //     makes an orphan reconciliation structurally impossible;
-    //   - before E, because a failure here must leave the service OPEN and the
-    //     attempt ACTIVE. The alternative — closing first — could strand a
-    //     closed service with no record of the economy it was closed against,
-    //     which is precisely the outcome this slice exists to prevent.
-    //
-    // A retry resumes the same closeoutCorrelationId, and the RPC is
-    // idempotent on it, so this never produces a second reconciliation.
-    // This step reads and appends ONE row. It creates no payment, no refund,
-    // no adjustment and no cancellation, and changes no order, event, cash
-    // count or service_closeouts total.
-    const reconciliationResult = await reconciliation.persist({
-      serviceSessionId, closeoutCorrelationId, actor,
-    });
-    if (!reconciliationResult.success) {
+    // Phase D.2 (J-1) — the ECONOMIC CONTEXT this close is made under: the
+    // Business Day window of THIS service, its snapshot totals, and the
+    // physical cash count if (and only if) one exists for exactly that window.
+    // Built here, persisted by the terminal step in the same transaction as
+    // the closeout and the close (CORRECTIVE SLICE 150), so a failure leaves
+    // the service OPEN, the attempt ACTIVE and NO frozen reconciliation. The
+    // service's receipts are read FIRST: the terminal step refuses the close
+    // unless they are still exactly these, so the reconciliation cannot miss
+    // a receipt that committed after it was computed.
+    let receiptIds;
+    try {
+      receiptIds = await readReceiptIds(serviceSessionId);
+    } catch (e) {
+      return { success: false, code: "V3_CLOSE_LIVE_STATE_READ_FAILED", closeoutCorrelationId, detail: String((e && e.message) || e) };
+    }
+    // POST-ASTRA F2 (154): the Business Day window's digest is read BEFORE the build (inside buildRpcArgs) and
+    // travels in the reconciliation payload; the terminal step recomputes it under its lock prefix.
+    const reconciliationArgs = await reconciliation.buildRpcArgs({ serviceSessionId, closeoutCorrelationId, actor, withDayEvidence: true });
+    if (!reconciliationArgs.success) {
       return {
         success: false,
-        code: reconciliationResult.code || "V3_CLOSE_RECONCILIATION_PERSIST_FAILED",
+        code: reconciliationArgs.code || "V3_CLOSE_RECONCILIATION_PERSIST_FAILED",
         closeoutCorrelationId,
-        closeout: createResult.closeout,
       };
     }
 
-    // Phase E — the V3-native terminal transition. occupiedTablesAtClose > 0
-    // does NOT block this — see the migration's PART 3 for exactly why that
-    // is safe (gated on the service_closeouts row Phase D just created).
-    const transitionResult = await transition.close({ serviceSessionId, closeoutCorrelationId, actor, source });
+    // Phase E + G (R4B, migration 149) + evidence judgement (migration 150) —
+    // closeout, reconciliation, terminal transition and attempt completion in
+    // ONE transaction, after the database re-checked that this attempt's
+    // snapshot and the service's receipts still describe the service.
+    // occupiedTablesAtClose > 0 does NOT block this (migration 149 PART 3).
+    const transitionResult = await transition.closeWithEvidence({
+      serviceSessionId, closeoutCorrelationId, actor, source,
+      closeout: closeoutArgs, reconciliation: reconciliationArgs.args, receiptIds,
+    });
     if (!transitionResult.success) {
+      if (transitionResult.code === "CLOSE_EVIDENCE_STALE" && transitionResult.closeoutCommitted !== true) {
+        return { [EVIDENCE_STALE]: true, closeoutCorrelationId, stale: transitionResult.stale };
+      }
       return {
         success: false,
         code: transitionResult.code || "V3_CLOSE_TRANSITION_FAILED",
+        missing: transitionResult.missing,
+        stale: transitionResult.stale,
         closeoutCorrelationId,
-        closeout: createResult.closeout,
       };
     }
+    const createResult = { closeout: publicCloseout(transitionResult.closeoutRow) };
+    const reconciliationResult = { reconciliation: projectRecon(transitionResult.reconciliationRow) };
 
     // Phase F — carryover is a non-event by construction (no mutation
     // happens here — see this file's own header); this only summarizes what
     // already, structurally, carried over. F-5 retired the old Phase F0
     // ("ensure/reuse the next current service B") that used to sit here.
     const carryoverSummary = await computeCarryoverSummary(serviceSessionId);
-
-    // Phase G — mark the closeout attempt completed. Non-fatal if this
-    // fails: the session is already closed and the closeout already
-    // persisted, so a failed completion is never retried into a duplicate
-    // of either (same pattern as incidentSafeRollover.js's own final step).
-    try {
-      await attempts.complete({ closeoutCorrelationId, actor });
-    } catch (e) {
-      console.warn(
-        "[serviceLifecycleEngine] marking the attempt completed failed (non-fatal — the session is already closed and the closeout already persisted):",
-        (e && e.message) || e
-      );
-    }
 
     return {
       success: true,
@@ -659,6 +814,7 @@ function createServiceLifecycleEngine({
       incidents: persistedIncidents,
       carryoverSummary,
     };
+    }
   };
 }
 

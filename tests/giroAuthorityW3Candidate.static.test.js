@@ -133,7 +133,16 @@ const atc138Applied = fs.existsSync(ATC138_STATIC_GUARD);
 // successor above — an unauthorized new giro_authority migration still fails this check.
 const DED139_STATIC_GUARD = path.join(ROOT, 'tests', 'deliveryEconomyDecouplingMigration.test.js');
 const ded139Applied = fs.existsSync(DED139_STATIC_GUARD);
-assert('exactly the migration-130, migration-131, migration-132, migration-133, migration-134, (once its own guard is present) migration-135, (once its own guard is present) migration-137, (once its own guard is present) migration-138, and (once its own guard is present) migration-139 forward+rollback pairs reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
+// ECONOMY FINAL LIVENESS GATE 2026-09-27 — migration 155 re-defines start_rider_trip_v2 and three giro_authority commands
+// (create_or_move_v1, attach_or_move_v1, consume_intent_v1) as their predecessor bodies plus ONE marked KEY SHARE block each (N2,
+// see MIGRATION_MANIFEST.md row 155), so its forward+rollback pair references giro_authority like migrations 131/133/135 already
+// do; migration 156 (the close gate on the window fact inserts) names those four 155 bodies in its guard and post-condition only,
+// so only its FORWARD file references giro_authority (its rollback drops a trigger function and never mentions them). Admitted here
+// ONLY because their own static guard exists on the branch to vouch for them (byte-level: predecessor + marked blocks only),
+// exactly like every earlier successor above — an unauthorized new giro_authority migration still fails this check.
+const GATE155_STATIC_GUARD = path.join(ROOT, 'tests', 'economyFinalLivenessGateMigrations.test.js');
+const gate155Applied = fs.existsSync(GATE155_STATIC_GUARD);
+assert('exactly the migration-130, migration-131, migration-132, migration-133, migration-134, (once its own guard is present) migration-135, (once its own guard is present) migration-137, (once its own guard is present) migration-138, (once its own guard is present) migration-139 and (once their own guard is present) migration-155 forward+rollback pairs, plus the migration-156 forward file, reference giro_authority under migrations/ (MANIFEST excluded, it is narrative)',
   JSON.stringify(giroAuthoritySqlFiles) === JSON.stringify([
     '2026-09-14_giro_authority_v1_migration_130.ROLLBACK.sql',
     '2026-09-14_giro_authority_v1_migration_130.sql',
@@ -160,6 +169,11 @@ assert('exactly the migration-130, migration-131, migration-132, migration-133, 
     ...(ded139Applied ? [
       '2026-09-19_delivery_economy_decoupling_v1_migration_139.ROLLBACK.sql',
       '2026-09-19_delivery_economy_decoupling_v1_migration_139.sql',
+    ] : []),
+    ...(gate155Applied ? [
+      '2026-09-27_close_gate_on_window_facts_v1_migration_156.sql',
+      '2026-09-27_planner_entity_key_share_before_order_lock_v1_migration_155.ROLLBACK.sql',
+      '2026-09-27_planner_entity_key_share_before_order_lock_v1_migration_155.sql',
     ] : []),
   ]), giroAuthoritySqlFiles.join(', '));
 assert('MIGRATION_MANIFEST.md documents migration 130 (giro_authority row present)',

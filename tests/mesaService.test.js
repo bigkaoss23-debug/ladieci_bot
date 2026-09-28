@@ -21,7 +21,7 @@ test('floor exposes exact partial balance, mixed methods and remaining covers', 
   const rows = {
     tables: [{ id: 't1', table_number: 1, display_name: 'Mesa 1', capacity: 4, position_x: 15, position_y: 18, shape: 'round', active: true }],
     sessions: [{ id: 's1', table_id: 't1', service_session_id: 'service', status: 'open', covers_total: 5, opened_at: 'now' }],
-    orders: [{ id: 'o1', table_session_id: 's1', table_command_number: 1, estado: 'EN_COCINA', totale: 50, items: [] }],
+    orders: [{ id: 'o1', order_uid: 'a1a1a1a1-0000-4000-8000-000000000001', table_session_id: 's1', table_command_number: 1, estado: 'EN_COCINA', totale: 50, items: [] }],
     lines: [
       { id: 'l1', table_session_id: 's1', order_id: 'o1', source_line_id: 'g1', source_line_index: 1, unit_index: 1, description: 'Pizza', product_snapshot: {}, net_amount: 20 },
       { id: 'l2', table_session_id: 's1', order_id: 'o1', source_line_id: 'g2', source_line_index: 2, unit_index: 1, description: 'Bibita', product_snapshot: {}, net_amount: 30 },
@@ -472,8 +472,8 @@ test('a new account never inherits products or payments from the closed account'
     tables: [{ id: 't1', table_number: 3, display_name: 'Mesa 3', position_x: 0, position_y: 0, shape: 'round', active: true }],
     sessions: [{ id: 'new', table_id: 't1', service_session_id: 'service', status: 'open', covers_total: 2 }],
     orders: [
-      { id: 'old-order', table_session_id: 'closed', table_command_number: 1, estado: 'RETIRADO', totale: 50, items: [] },
-      { id: 'new-order', table_session_id: 'new', table_command_number: 1, estado: 'EN_COCINA', totale: 4, items: [] },
+      { id: 'old-order', order_uid: 'a1a1a1a1-0000-4000-8000-000000000002', table_session_id: 'closed', table_command_number: 1, estado: 'RETIRADO', totale: 50, items: [] },
+      { id: 'new-order', order_uid: 'a1a1a1a1-0000-4000-8000-000000000003', table_session_id: 'new', table_command_number: 1, estado: 'EN_COCINA', totale: 4, items: [] },
     ],
     lines: [
       { id: 'old-line', table_session_id: 'closed', order_id: 'old-order', description: 'Cuenta anterior', net_amount: 50 },

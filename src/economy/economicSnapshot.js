@@ -60,8 +60,8 @@
 
 const { sbSelect } = require("../utils/supabase");
 const {
-  safeTicket, paymentBucket, eventType, eventAmount, emptyPaymentTotals, addMethodAmount, round, CANCELLED,
-  latestObligationsByOrder,
+  safeTicket, paymentBucket, eventType, eventAmount, emptyPaymentTotals, addMethodAmount, round, CANCELLED, withTableSettlement,
+  obligationIndexByIdentity,
 } = require("../closeout/currentServiceCloseout");
 const { resolveEconomicPeriodKind } = require("../closeout/economicPeriodReadRule");
 const {
@@ -150,22 +150,37 @@ async function selectEventsForOrders(select, ids, { before = null } = {}) {
   return out;
 }
 
-// N-2 — canonical obligation rows for the given orders, batched exactly like
-// selectEventsForOrders above. Every revision is fetched; safeTicket's caller
-// folds them to the highest revision per order. Orders created before N-2
-// return nothing here and fall through to the legacy `totale`.
-async function selectObligationsForOrders(select, ids) {
-  if (!ids.length) return [];
+// N-2 — canonical obligation rows for the given orders. Every revision is fetched; the caller folds them
+// to the highest revision per order. Orders created before N-2 return nothing here and fall through to the
+// legacy `totale`.
+// POST-ASTRA F4 -- fetched by PERMANENT identity (order_uid) for every row that has one; only a row without
+// it (the legacy archive table) is looked up by its (service_session_id, order_id) provenance, and
+// obligationIndexByIdentity attaches that only when it names exactly one order. A bare display-id fetch
+// across services attached a later order's obligation to a legacy ticket (a historical day changed).
+async function selectObligationsForOrders(select, rows) {
+  const uids = [...new Set((rows || []).map((r) => r && r.order_uid).filter(Boolean).map(String))];
+  const legacy = (rows || []).filter((r) => r && !r.order_uid && r.service_session_id);
   const out = [];
-  for (const batch of chunk(ids, ID_BATCH)) {
-    const parts = [
-      `order_id=in.(${batch.map((id) => enc(String(id))).join(",")})`,
-      "order=revision.asc",
-    ];
-    const rows = await select("order_obligations", parts.join("&"));
-    if (Array.isArray(rows)) out.push(...rows);
+  for (const batch of chunk(uids, ID_BATCH)) {
+    const got = await select("order_obligations", `order_uid=in.(${batch.map(enc).join(",")})&order=revision.asc`);
+    if (Array.isArray(got)) out.push(...got);
   }
-  return out;
+  const legacyIds = [...new Set(legacy.map(orderId).filter(Boolean))];
+  const legacySessions = [...new Set(legacy.map(sessionId).filter(Boolean))];
+  for (const batch of chunk(legacyIds, ID_BATCH)) {
+    if (!legacySessions.length) break;
+    const got = await select("order_obligations",
+      `order_id=in.(${batch.map((id) => enc(String(id))).join(",")})&service_session_id=in.(${legacySessions.map(enc).join(",")})&order=revision.asc`);
+    if (Array.isArray(got)) out.push(...got);
+  }
+  // The two fetches can return the same revision: keep one per (order_uid, revision) -- the table's own unique key.
+  const seen = new Set();
+  return out.filter((r) => {
+    const key = `${String(r.order_uid || "")}::${String(r.revision)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function selectOrdersByIds(select, ids) {
@@ -284,7 +299,7 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
     // and the order is already the thing this window selected. Windowing the
     // revisions too would drop a later revision out of view and silently
     // report a stale gross.
-    const obligationRecords = await selectObligationsForOrders(select, obligationIds);
+    const obligationRecords = await selectObligationsForOrders(select, obligationRows);
 
     // ── 3. RECEIPTS: events recorded inside the window ──────────────────────
     const receiptEvents = (await (async () => {
@@ -328,15 +343,20 @@ function createEconomicSnapshot({ select = sbSelect } = {}) {
     // N-2 — fold to the highest revision per order, then apply the same
     // canonical-first / legacy-fallback precedence safeTicket enforces for the
     // service-scoped readers. One shared rule, two scopes.
-    const obligationByOrderId = latestObligationsByOrder(obligationRecords);
-    const obligations = obligationRows.map((row) => {
+    // POST-ASTRA F4 -- by permanent identity (order_uid), never by the bare display id.
+    const obligationFor = obligationIndexByIdentity(obligationRecords);
+    // CORRECTIVE SLICE 150 (#5) -- the same table-session netting the closeout applies
+    // (withTableSettlement): a settled Mesa table never reports a phantom unpaid comanda next to a
+    // phantom over-collected one. Money (collected / refunded / per-method) is untouched.
+    const nettedTickets = withTableSettlement(obligationRows.map((row) => safeTicket(
+      row,
+      eventsByOrder.get(orderKey(row)) || [],
+      sessionOf(row),
+      obligationFor(row),
+    )), obligationRows);
+    const obligations = obligationRows.map((row, index) => {
       const key = orderKey(row);
-      const ticket = safeTicket(
-        row,
-        eventsByOrder.get(key) || [],
-        sessionOf(row),
-        obligationByOrderId.get(orderId(row)) || null,
-      );
+      const ticket = nettedTickets[index];
       // ECON-R1 — the same predicate Pendencias uses to decide an order has
       // left the normal operational UI. A Mesa order (table_session_id set)
       // asks its table session's status; anything else asks its own estado.

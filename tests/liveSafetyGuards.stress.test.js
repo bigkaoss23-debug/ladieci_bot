@@ -55,6 +55,8 @@ require.cache[sbPath] = {
       return { success: true };
     },
     sbUpsert: async () => ({}), sbInsert: async () => ({}), sbDelete: async () => ({}),
+    // POST-ASTRA F5 -- the editor writes through rpc order_apply_editor_patch_v1; routed to sbUpdate above via require.cache.
+    sbRpc: (...a) => require("./helpers/editorRpcShim").withEditorRpc((...u) => require.cache[sbPath].exports.sbUpdate(...u))(...a),
     getConfig: async () => ({ "AUTO_RISPOSTA": "TRUE", "AI_FORZA": "BASIC" }),
   },
   paths: Module._nodeModulePaths(path.dirname(sbPath)),

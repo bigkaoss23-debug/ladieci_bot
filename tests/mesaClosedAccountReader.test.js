@@ -46,9 +46,9 @@ const closedSession = (overrides = {}) => ({
 
 const MESA_4_ROWS = {
   orders: [
-    { id: '#999015', table_session_id: SESSION_ID, table_command_number: 1, service_order_number: 3,
+    { id: '#999015', order_uid: 'c4c4c4c4-0000-4000-8000-000000000015', table_session_id: SESSION_ID, table_command_number: 1, service_order_number: 3,
       estado: 'RETIRADO', totale: 101, items: [], hora: '21:13', nota: null, ts: 1 },
-    { id: '#999017', table_session_id: SESSION_ID, table_command_number: 2, service_order_number: 5,
+    { id: '#999017', order_uid: 'c4c4c4c4-0000-4000-8000-000000000017', table_session_id: SESSION_ID, table_command_number: 2, service_order_number: 5,
       estado: 'RETIRADO', totale: 27.5, items: [], hora: '21:27', nota: null, ts: 2 },
   ],
   lines: [

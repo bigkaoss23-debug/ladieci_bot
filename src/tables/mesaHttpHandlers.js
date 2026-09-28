@@ -49,16 +49,24 @@ function safeError(error) {
     // AJUSTE COMERCIAL V1 — the obligation moved (or refused to move) under the operator.
     'MESA_ADJUSTMENT_STALE_OBLIGATION','MESA_ADJUSTMENT_NO_CHANGE',
     'MESA_ADJUSTMENT_IDEMPOTENCY_CONFLICT',
+    // POST-ASTRA F1 (migration 152) -- the post-close resolution fact's typed state conflicts (same set as Cash V1).
+    'ORDER_POST_CLOSE_SERVICE_STILL_OPEN','ORDER_POST_CLOSE_STALE_OBLIGATION','ORDER_POST_CLOSE_NO_CHANGE',
+    'ORDER_POST_CLOSE_IDEMPOTENCY_CONFLICT','ORDER_POST_CLOSE_EXCEEDS_OBLIGATION',
+    // Migration 151 -- a commercial adjustment / cancellation of a comanda whose service is already closed.
+    'ORDER_ECONOMIC_SERVICE_CLOSED',
+    // CORRECTIVE SLICE 150 (#2) -- a table order whose legacy paid mirror contradicts its canonical ledger:
+    // mesa_post_payment_v1 refuses to charge the table again until that order is reconciled (a state conflict).
+    'ORDER_PAYMENT_LEGACY_IMPORT_REQUIRED',
   ]);
   const denied = new Set([
     'MESA_PAYMENT_FORBIDDEN','MESA_OPEN_FORBIDDEN','MESA_LAYOUT_FORBIDDEN','MESA_RESERVATION_FORBIDDEN','MESA_CLOSE_FORBIDDEN',
     'MESA_REFUND_FORBIDDEN',
-    'MESA_ADJUSTMENT_FORBIDDEN','ORDER_CANCEL_FORBIDDEN',
+    'MESA_ADJUSTMENT_FORBIDDEN','ORDER_CANCEL_FORBIDDEN','ORDER_POST_CLOSE_FORBIDDEN',
   ]);
   const missing = new Set([
     'MESA_SESSION_NOT_FOUND','MESA_TABLE_NOT_FOUND','MESA_WORKSPACE_NOT_FOUND','MESA_COMMAND_NOT_FOUND','MESA_RESERVATION_NOT_FOUND',
     'MESA_TRANSACTION_NOT_FOUND',
-    'MESA_ADJUSTMENT_ORDER_NOT_FOUND','ORDER_CANCEL_NOT_FOUND',
+    'MESA_ADJUSTMENT_ORDER_NOT_FOUND','ORDER_CANCEL_NOT_FOUND','ORDER_POST_CLOSE_ORDER_NOT_FOUND',
   ]);
   // REFUND V1 SLICE A — MESA_REFUND_ALLOCATION_MISMATCH is an invariant breach
   // (§L.3), never a client mistake: 500, fail closed, no SQL detail forwarded.

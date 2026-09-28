@@ -126,8 +126,63 @@ const {
   // Mesa/adjusted/cancelled orders (N-5's own guard above covers paid orders).
   isEconomicBasisLockRefusal,
   economicBasisLockRefusal,
+  isEconomicServiceClosedRefusal,
+  economicServiceClosedRefusal,
   orderHasCommercialAdjustmentRevision,
+  // POST-ASTRA F5 / F7 -- one classification of every ordenes write result (typed refusal or typed failure, never a false success).
+  classifyOrderWriteResult,
+  orderWriteFailure,
+  orderEditConflictRefusal,
 } = require("../financial/paidOrderEconomicGuard");
+
+// POST-ASTRA F5 (+ N1) -- the economic basis of an order. A write that moves any of these fields goes through the ONE canonical
+// editor writer (migration 153, order_apply_editor_patch_v1): it takes the money writers' lock order (WORKSPACE -> [TABLE_SESSION] ->
+// ENTITY -> ORDER), so it can no longer deadlock against a payment, and it compares the basis this backend read with the locked row, so
+// a concurrent committed edit is an explicit ORDER_EDIT_CONFLICT instead of a silent stale overwrite. A write that moves none of them
+// keeps the plain PATCH (non-economic fields), but its result is classified fail-closed too.
+const EDITOR_BASIS_FIELDS = Object.freeze(["items", "totale", "delivery_fee", "descuento_tipo", "descuento_valor", "descuento_importe", "tipo_consegna"]);
+
+function editorBasisOf(row) {
+  const basis = {};
+  for (const key of EDITOR_BASIS_FIELDS) basis[key] = row && row[key] !== undefined ? row[key] : null;
+  return basis;
+}
+
+// POST-ASTRA F5 -- the client-side half of the compare-and-set. A whole-item-list edit is computed by the dashboard from ITS
+// copy of the order; the backend's own read happens later. The client sends that copy (expected_items) and it must still be
+// the stored list, or the edit would silently drop what another operator committed in between. Key order is irrelevant
+// (jsonb semantics); anything else must be equal.
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value === undefined ? null : value);
+}
+
+async function writeOrderPatch(ordenId, patch, basisRow) {
+  const movesBasis = EDITOR_BASIS_FIELDS.some((key) => patch[key] !== undefined);
+  if (movesBasis) {
+    // The basis the write was computed from is mandatory: without it the conflict cannot be proven, so nothing is written.
+    if (!basisRow) return orderWriteFailure(ordenId);
+    let res;
+    try {
+      res = await sbRpc("order_apply_editor_patch_v1", { p_order_id: ordenId, p_patch: patch, p_expected: editorBasisOf(basisRow) });
+    } catch (e) {
+      console.warn(`[order write ${ordenId}] editor writer transport failure:`, e?.message || e);
+      return orderWriteFailure(ordenId);
+    }
+    if (res && res.ok === true && res.body && res.body.ok === true) return null;
+    // Rollout window only: a database without migration 153 does not know the function (PostgREST PGRST202). The write then takes the
+    // pre-153 path below -- the direct PATCH, still classified fail-closed -- so this backend can be deployed BEFORE 151..154 (the
+    // package order: 139 .. 150 -> backend -> 151 -> 152 -> 153 -> 154). Any other refusal or failure of the function is final.
+    if (!(res && res.ok === false && res.body && res.body.code === "PGRST202")) {
+      return classifyOrderWriteResult(ordenId, res && res.body) || orderWriteFailure(ordenId);
+    }
+  }
+  const res = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, patch);
+  return classifyOrderWriteResult(ordenId, res);
+}
 // N-3 — recognising a refused canonical initial payment in the INSERT's error body. The order
 // never existed when this fires, so it is a creation failure, never a partial success.
 const { describeInitialPaymentFailure } = require("../financial/initialPaymentIntent");
@@ -797,9 +852,14 @@ async function modificaOrdine(ordenId, updates) {
   // Se items, tipo_consegna o descuento cambiano, ricalcola delivery_fee + totale.
   // Se hora, tipo_consegna o durata_andata_min cambiano, ricalcola forno_out.
   // Servono i valori attuali del DB per le parti non aggiornate.
+  let basisRow = null;
   if (upd.items || upd.tipo_consegna !== undefined || upd.hora !== undefined || upd.direccion !== undefined || updates.durata_andata_min !== undefined || descPassed) {
     const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
     const ord = rows?.[0];
+    basisRow = ord || null;
+    if (ord && updates.expected_items !== undefined && canonicalJson(updates.expected_items) !== canonicalJson(ord.items || [])) {
+      return orderEditConflictRefusal(ordenId);
+    }
     if (ord) {
       const itemsFinali = upd.items || (ord.items || []).filter(i => i.n !== "Entrega a domicilio");
       const tipoConsegna = upd.tipo_consegna !== undefined ? upd.tipo_consegna : (ord.tipo_consegna || "RITIRO");
@@ -922,11 +982,10 @@ async function modificaOrdine(ordenId, updates) {
   // N-5 — if the DB refused this as a paid-order economic mutation, return the typed
   // failure and run NO side effects: the row did not move, so re-syncing the giro off a
   // patch that was never applied would push the schedule off a phantom edit.
-  const modRes = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
-  if (isEconomicMutationRefusal(modRes)) return economicMutationRefusal(ordenId);
-  // E-1 backstop — the anticipated pre-check above is best-effort; this recognises the
-  // DB's own refusal if that pre-check missed it (lookup failure, race, etc.).
-  if (isEconomicBasisLockRefusal(modRes)) return economicBasisLockRefusal(ordenId);
+  // POST-ASTRA F5 / F7 -- the canonical writer for an economic edit (compare-and-set on the basis read above), and a typed refusal /
+  // failure for anything the database did not write (paid-order guard, basis lock, closed service, edit conflict, or any other error).
+  const modRefusal = await writeOrderPatch(ordenId, upd, basisRow);
+  if (modRefusal) return modRefusal;
   if (upd.forno_out !== undefined) {
     const zonaSync = upd.zona !== undefined ? upd.zona : undefined;
     const horaSync = upd.hora !== undefined ? upd.hora : undefined;
@@ -988,9 +1047,11 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
   // Descuento applicato al RETIRADO (cliente davanti, operatore incassa): ricalcoliamo totale.
   // Funziona anche se chiamato con stato diverso da RETIRADO — applica e basta.
   const descPassed = (extras.descuento_tipo !== undefined) || (extras.descuento_valor !== undefined);
+  let stateBasisRow = null;
   if (descPassed) {
     const rows = await sbSelect("ordenes", `id=eq.${encodeURIComponent(ordenId)}`);
     const ord = rows?.[0];
+    stateBasisRow = ord || null;
     if (ord) {
       // Economic Writer Hardening V1 (E-1, migration 126) — anticipated rejection.
       // `ord` is already the full row, so this costs no extra query. Mesa orders, orders
@@ -1104,8 +1165,13 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
       };
     }
 
+    if (extras.expected_order_uid !== undefined && String(extras.expected_order_uid) !== String(orderUidActual || "")) {
+      return { success: false, error: "ORDER_IDENTITY_MISMATCH", code: "ORDER_IDENTITY_MISMATCH", estado_actual: estadoActual };
+    }
     const cancelled = await cancelOrderCanonical({
       orderId: ordenId,
+      // POST-ASTRA F8 -- the cancellation's idempotency key is the PERMANENT identity, never the recycled display id.
+      orderUid: orderUidActual,
       targetEstado: nuovoStato,
       extras,
     });
@@ -1123,11 +1189,10 @@ async function cambiaStato(ordenId, nuovoStato, extras = {}) {
     // statement carrying estado + the economic columns. Returning before the transition log
     // and the DRIVER_STATO reconciliation is what keeps the audit trail honest — logging a
     // transition that the DB rejected would be inventing history.
-    const stateRes = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, upd);
-    if (isEconomicMutationRefusal(stateRes)) return economicMutationRefusal(ordenId);
-    // E-1 backstop — recognises the DB's own refusal if the anticipated pre-check above
-    // (inside the descPassed branch) missed it.
-    if (isEconomicBasisLockRefusal(stateRes)) return economicBasisLockRefusal(ordenId);
+    // POST-ASTRA F5 / F7 -- a discount carried by a state change is an economic edit (canonical writer, compare-and-set); every
+    // other state write is classified fail-closed: a write the database did not perform is never logged as a transition.
+    const stateRefusal = await writeOrderPatch(ordenId, upd, stateBasisRow);
+    if (stateRefusal) return stateRefusal;
   }
 
   // No-op (self-loop): nessun log di transizione — non c'è transizione. Evita
@@ -1280,13 +1345,13 @@ async function aggiungiItems(ordenId, newItems) {
   const tipoConsegna = rows[0].tipo_consegna || "RITIRO";
   // N-5 — adding items to an order that has already been paid moves what is owed. The
   // conversational flow must be told, not handed a merged item list that was never stored.
-  const addRes = await sbUpdate("ordenes", `id=eq.${encodeURIComponent(ordenId)}`, {
+  // POST-ASTRA F5 / F7 -- merged from the row read above: the canonical writer refuses it if that row changed meanwhile.
+  const addRefusal = await writeOrderPatch(ordenId, {
     items: merged,
     delivery_fee: deliveryFeeFor(tipoConsegna),
     totale:       calcolaTotaleOrdine(merged, tipoConsegna)
-  });
-  if (isEconomicMutationRefusal(addRes)) return economicMutationRefusal(ordenId);
-  if (isEconomicBasisLockRefusal(addRes)) return economicBasisLockRefusal(ordenId);
+  }, rows[0]);
+  if (addRefusal) return addRefusal;
   return { success: true, items: merged };
 }
 

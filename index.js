@@ -106,6 +106,9 @@ const { lifecycle: serviceSessionLifecycle } = require("./src/serviceSessions/se
 // authority, so exactly one application module imports the engine itself.
 // Transparent forwarder: identical arguments, identical result.
 const { closeServiceSessionV3 } = require("./src/serviceSessions/serviceCloseAuthority");
+// R4B — the service a Finalizar request is bound to (client-sent id, never
+// re-targeted by the server; see the module header).
+const { resolveFinalizarTarget } = require("./src/serviceSessions/finalizarTarget");
 const { ensureCurrentServiceSession } = require("./src/serviceSessions/ensureServiceSession");
 // STALE SERVICE PROTECTION V1 — the remediation half. Migration 120 makes the
 // SQL resolvers fail closed on a stale open service; this runs the canonical
@@ -544,8 +547,27 @@ app.get("/api", async (req, res) => {
       if (identity?.ok && identity.session?.lifecycle_semantics === "operational_service_v1") {
         const actorId = req.authCtx?.actor;
         if (!actorId) return res.status(401).json({ error: "UNVERIFIED_ACTOR" });
+        // R4B — the request names the service it finalizes (the id the
+        // pre-close scan showed), and every retry of the same flow names the
+        // same one. The server closes only that service, and only while it is
+        // the one resolved above; any other id is accepted only for a service
+        // that is already closed (the engine can then only confirm or complete
+        // that service's own close, never close the current one).
+        const target = identity.session?.id
+          ? await resolveFinalizarTarget({
+              requested: req.query.serviceSessionId,
+              clientFields: req.query,
+              identity,
+              readSession: async (id) => {
+                const rows = await sbSelect("service_sessions", `id=eq.${encodeURIComponent(id)}&select=id,status,lifecycle_semantics`);
+                return Array.isArray(rows) ? rows[0] || null : null;
+              },
+            })
+          : null;
         if (!identity.session?.id) {
           result = { success: false, error: "invalid_service_session_identity" };
+        } else if (!target.ok) {
+          result = { success: false, error: target.code, code: target.code, fields: target.fields };
         } else {
           // "operator_finalizar_v3" — the one new truthful close_source this
           // slice adds: normal operator Finalizar via the V3 engine. Distinct
@@ -555,13 +577,13 @@ app.get("/api", async (req, res) => {
           // already idempotent on retry (its own CASE B/C/D lineage handling),
           // and creates no successor (F-5) — nothing else is done here.
           const v3Result = await closeServiceSessionV3({
-            serviceSessionId: identity.session.id,
+            serviceSessionId: target.serviceSessionId,
             source: "operator_finalizar_v3",
             actor: actorId,
           });
           result = v3Result.success
-            ? v3Result
-            : { success: false, error: v3Result.code || "V3_CLOSE_FAILED", ...v3Result };
+            ? { ...v3Result, finalizarServiceSessionId: target.serviceSessionId }
+            : { success: false, error: v3Result.code || "V3_CLOSE_FAILED", ...v3Result, finalizarServiceSessionId: target.serviceSessionId };
         }
       } else {
         // N-2 — LEGACY CLOSE PATH RETIRED (application-wide dead-code purge).
@@ -1206,6 +1228,12 @@ app.post("/api", async (req, res) => {
       // written at all), so existing callers are byte-for-byte unaffected.
       if (typeof req.body.reason === "string" && req.body.reason.trim()) {
         extras.reason = req.body.reason.trim().slice(0, 500);
+      }
+      // POST-ASTRA F1/F4 -- a caller that targets an order from a canonical read (Economía Pendientes "Anular pedido")
+      // pins its PERMANENT identity: the display id only locates the row, and the cancellation is refused unless the row
+      // it locates is that order.
+      if (typeof req.body.expected_order_uid === "string" && req.body.expected_order_uid.trim()) {
+        extras.expected_order_uid = req.body.expected_order_uid.trim();
       }
 
       // S2-7D6E — money first, state second. A RETIRADO carrying a payment method is a

@@ -158,8 +158,9 @@ console.log("\n== the canonical readers stay canonical ==");
   assert("economiaLedgerAggregate passes 4 args to aggregate",
     /aggregate\(session, list, Array\.isArray\(events\)/.test(led));
   const snap = fs.readFileSync(path.join(SRC, "economy", "economicSnapshot.js"), "utf8");
+  // POST-ASTRA F4 -- the obligation is attached by permanent identity (obligationIndexByIdentity), never by the bare display id.
   assert("economicSnapshot passes the obligation into safeTicket",
-    /obligationByOrderId\.get\(orderId\(row\)\) \|\| null/.test(snap));
+    /const obligationFor = obligationIndexByIdentity\(obligationRecords\)/.test(snap) && /safeTicket\([\s\S]{0,300}?obligationFor\(row\),?\s*\)/.test(snap));
 }
 
 console.log("\n=== RESULT: " + pass + " passed, " + fail + " failed ===");

@@ -22,6 +22,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const { createServiceLifecycleEngine } = require("../src/serviceSessions/serviceLifecycleEngine");
+const { closeoutFieldsFromArgs, rawCloseout } = require("./helpers/v3EvidenceTerminalFake");
 const { createServiceCloseAuthority } = require("../src/serviceSessions/serviceCloseAuthority");
 const { createStaleServiceRecovery, RECOVERY_CODE } = require("../src/serviceSessions/staleServiceRecovery");
 const { createServiceLifecycleV3Transition } = require("../src/serviceSessions/serviceLifecycleV3Transition");
@@ -73,6 +74,7 @@ function makeWorld({
     if (table === "table_sessions") return w.tables.filter((t) => t.service_session_id === sid && (!status || t.status === status));
     if (table === "order_financial_events") return w.events.filter((e) => e.service_session_id === sid);
     if (table === "order_obligations" || table === "conv" || table === "wa_msgs") return [];
+    if (table === "payment_transactions") return []; // corrective slice 150: the receipts the reconciliation is built from
     throw new Error("unexpected table " + table);
   };
   const attempts = {
@@ -108,18 +110,31 @@ function makeWorld({
     },
   };
   const closeouts = { async getBySessionId({ serviceSessionId }) { return w.closeouts.get(serviceSessionId) || null; } };
-  // close_service_session_v3 as migration 139 defines it, at the wire level: idempotent when already closed, otherwise it
-  // closes -- whatever trip exists. (A rider trip is not an input of the close any more.)
+  // close_service_session_v3 as migration 139 defines it, reached through migration 149's terminal step (close + attempt
+  // completion in one transaction), at the wire level: idempotent when already closed, otherwise it closes -- whatever trip
+  // exists. (A rider trip is not an input of the close any more.)
+  // Corrective slice 150: the terminal step is close_service_session_with_evidence_v1 -- the closeout and the reconciliation
+  // are persisted by it, in the same transaction as the 149 close + completion (modelled here with the same recorders).
   w.dbRpc = async (name, args) => {
-    assert.equal(name, "close_service_session_v3");
+    assert.equal(name, "close_service_session_with_evidence_v1");
+    let createdCloseout = null;
+    if (args.p_closeout && !w.closeouts.get(args.p_service_session_id)) {
+      createdCloseout = (await closeoutCreation.create(closeoutFieldsFromArgs(args.p_closeout))).closeout;
+    }
+    if (args.p_reconciliation) await reconciliation.persist({ closeoutCorrelationId: args.p_closeout_correlation_id });
     w.calls.close += 1;
-    if (w.session.status === "closed") return { ok: true, body: { ok: true, code: "ALREADY_CLOSED", idempotent: true, session: w.session } };
+    const att = [...w.attempts.values()].find((a) => a.closeoutCorrelationId === args.p_closeout_correlation_id);
+    const wire = () => ({ closeout_correlation_id: att.closeoutCorrelationId, service_session_id: att.serviceSessionId, status: att.status });
+    if (w.session.status === "closed") return { ok: true, body: { ok: true, code: "ALREADY_CLOSED", idempotent: true, session: w.session, attemptCompleted: true, attempt: wire() } };
     Object.assign(w.session, { status: "closed", closed_by: args.p_closed_by, close_source: args.p_source });
-    return { ok: true, body: { ok: true, code: "V3_CLOSED", idempotent: false, session: w.session } };
+    att.status = "completed";
+    return { ok: true, body: { ok: true, code: "V3_CLOSED", idempotent: false, session: w.session, attemptCompleted: true, attempt: wire(),
+      closeout: rawCloseout(createdCloseout || w.closeouts.get(args.p_service_session_id)), reconciliation: { closeout_correlation_id: args.p_closeout_correlation_id } } };
   };
   const transition = createServiceLifecycleV3Transition({ rpc: w.dbRpc });
   const incidents = { async report(f) { w.incidentsReported.push(f); return { success: true, created: true, code: "RECORDED", incident: { id: "inc" + w.incidentsReported.length, ...f } }; }, async resolve() { return { success: true }; } };
   const reconciliation = { async persist({ closeoutCorrelationId }) { w.calls.persist += 1; return { success: true, created: true, reconciliation: { closeoutCorrelationId } }; },
+    async buildRpcArgs({ serviceSessionId, closeoutCorrelationId }) { return { success: true, args: { p_service_session_id: serviceSessionId, p_closeout_correlation_id: closeoutCorrelationId } }; },
     async build() { return { ok: true, service: { unpaid: 0, overCollected: 0 } }; } };
 
   w.engine = createServiceLifecycleEngine({

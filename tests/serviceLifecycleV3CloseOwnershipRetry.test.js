@@ -16,6 +16,7 @@
 // RETRY/ownership decisions layered on top.
 
 const { createServiceLifecycleEngine } = require('../src/serviceSessions/serviceLifecycleEngine');
+const { withEvidenceTerminal } = require('./helpers/v3EvidenceTerminalFake');
 
 let pass = 0, fail = 0;
 const assert = (n, c, d = '') => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n + (d ? '  -> ' + d : '')); } };
@@ -104,9 +105,13 @@ function fakeEnv({ sessionRow = session(), allOrders = [], tableSessions = [], f
       if (env.snapshotsByCorr.has(closeoutCorrelationId)) {
         return { success: true, created: false, code: 'ALREADY_CAPTURED', snapshot: env.snapshotsByCorr.get(closeoutCorrelationId) };
       }
-      const row = { id: 'snap-' + (env.snapshotsByCorr.size + 1), serviceSessionId, closeoutCorrelationId, payload };
+      const row = { id: 'snap-' + (env.snapshotsByCorr.size + 1), serviceSessionId, closeoutCorrelationId, payload, capturedAt: '2026-08-09T22:59:00Z' };
       env.snapshotsByCorr.set(closeoutCorrelationId, row);
       return { success: true, created: true, code: 'CAPTURED', snapshot: row };
+    },
+    // R4 — CASE D reads the snapshot back by correlation (closeoutSnapshots.js getByCorrelationId).
+    async getByCorrelationId({ closeoutCorrelationId }) {
+      return env.snapshotsByCorr.get(closeoutCorrelationId) || null;
     },
   };
 
@@ -118,6 +123,7 @@ function fakeEnv({ sessionRow = session(), allOrders = [], tableSessions = [], f
       closeSource: fields.source,
       closeReason: fields.closeReason || null,
       closedBy: fields.closedBy,
+      closedAt: fields.closedAt || '2026-08-09T22:59:30Z',
       financial: {
         grossSalesCents: fields.grossSalesCents, netSalesCents: fields.netSalesCents, totalDiscountsCents: 0,
         totalRefundsCents: fields.totalRefundsCents, totalVoidCents: fields.totalVoidCents,
@@ -199,11 +205,48 @@ function fakeEnv({ sessionRow = session(), allOrders = [], tableSessions = [], f
     return row;
   };
 
+  // R4 — CASE D's proof reads the snapshot and the reconciliation of the
+  // SAME correlation, written in close order before the session's closed_at.
+  env.reconciliationBySession = new Map();
+  env.seedSnapshot = (corrId, extra = {}) => {
+    const row = { id: 'snap-seed-' + corrId, serviceSessionId: SESSION_ID, closeoutCorrelationId: corrId, capturedAt: '2026-08-09T22:59:00Z', ...extra };
+    env.snapshotsByCorr.set(corrId, row);
+    return row;
+  };
+  env.seedReconciliation = (corrId, extra = {}) => {
+    const row = { id: 'rec-seed-' + corrId, serviceSessionId: SESSION_ID, closeoutCorrelationId: corrId, createdAt: '2026-08-09T22:59:45Z', ...extra };
+    env.reconciliationBySession.set(row.serviceSessionId, row);
+    return row;
+  };
+  env.seedRealizedClose = (corrId) => { env.seedAttempt(corrId, 'active'); env.seedCloseout(corrId); env.seedSnapshot(corrId); env.seedReconciliation(corrId); };
+
+  // R4B — migration 149's terminal step (the engine's only transition call):
+  // this fake's own close and its own attempt completion, committed together
+  // or not at all; ALREADY_CLOSED is a success only for a completed attempt.
+  env.transition.closeAndCompleteAttempt = async (args) => {
+    const row = env.sessions.get(args.serviceSessionId);
+    const before = row ? { ...row } : null;
+    const rollback = () => { if (row) { for (const k of Object.keys(row)) if (!(k in before)) delete row[k]; Object.assign(row, before); } };
+    const closed = await env.transition.close(args);
+    if (!closed.success) return closed;
+    const attempt = env.attemptsByCorr.get(args.closeoutCorrelationId);
+    if (closed.code === 'ALREADY_CLOSED') {
+      return attempt && attempt.status === 'completed' ? { ...closed, attemptCompleted: true } : { success: false, code: 'CLOSED_ATTEMPT_NOT_COMPLETED', session: null };
+    }
+    let done;
+    try { done = await env.attempts.complete({ closeoutCorrelationId: args.closeoutCorrelationId, actor: args.actor }); }
+    catch (e) { rollback(); return { success: false, code: 'SERVICE_LIFECYCLE_V3_TRANSITION_TRANSPORT_ERROR', session: null }; }
+    if (!done || done.success !== true || done.code !== 'COMPLETED') { rollback(); return { success: false, code: 'ATTEMPT_COMPLETION_REFUSED', session: null }; }
+    return { ...closed, attemptCompleted: true };
+  };
+
   return env;
 }
 
 function engineFrom(env) {
-  return createServiceLifecycleEngine({
+  // CORRECTIVE SLICE 150 — the terminal step is close_service_session_with_evidence_v1, modelled on its SQL over the
+  // fakes above (tests/helpers/v3EvidenceTerminalFake.js): closeout + reconciliation + close + completion commit together.
+  return createServiceLifecycleEngine(withEvidenceTerminal({
     // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — these unit tests model a service with no
     // rider trip; the guard's own behaviour is proven in tests/activeRiderTripServiceCloseGuard.test.js.
     activeRiderTrip: env.activeRiderTrip || (async () => ({ ok: true, active: false })),
@@ -213,14 +256,22 @@ function engineFrom(env) {
     // and Phase E. These are unit tests with no database, so inject a stub
     // that records the call. A test can override env.reconciliation to prove
     // the close FAILS CLOSED (service stays open) when context cannot persist.
+    // R4 — getBySessionId serves CASE D's read of the persisted context.
     reconciliation: env.reconciliation || {
+      getBySessionId: async ({ serviceSessionId }) => env.reconciliationBySession.get(serviceSessionId) || null,
       persist: async ({ closeoutCorrelationId }) => ({
         success: true,
         created: true,
         reconciliation: { closeoutCorrelationId, stubbed: true },
       }),
     },
-  });
+  }, {
+    calls: env.calls,
+    isClosed: (id) => { const row = env.sessions.get(id); return !!row && row.status === 'closed'; },
+    isStale: (args) => (env.isStale ? env.isStale(args) : null),
+    receipts: () => env.receipts || [],
+    rollbackCloseout: (row) => { env.closeoutsByCorr.delete(row.closeoutCorrelationId); env.closeoutsBySession.delete(row.serviceSessionId); },
+  }));
 }
 
 function noNewMutation(env) {
@@ -271,12 +322,28 @@ function noNewMutation(env) {
     assert('I8: attempt ends up completed', env.attemptsByCorr.get(corrId).status === 'completed');
   }
 
-  console.log('\n── J: CASE D — resume after crash between terminal transition and attempt-complete bookkeeping ──');
+  console.log('\n── I-R4B: CASE B resume whose completion is refused — the close is rolled back with it, no success is reported ──');
   {
-    const env = fakeEnv({ sessionRow: session({ status: 'closed' }) });
-    const corrId = 'corr-seed-2';
+    const env = fakeEnv({ allOrders: [order()], financialEvents: [paymentEvent()] });
+    const corrId = 'corr-seed-r4b';
     env.seedAttempt(corrId, 'active');
     env.seedCloseout(corrId);
+    const realComplete = env.attempts.complete;
+    env.attempts.complete = async (a) => { env.calls.complete.push(a); return { success: false, code: 'CANNOT_COMPLETE_SUPERSEDED_ATTEMPT' }; };
+    const r1 = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'resume' });
+    assert('I-R4B-1: refused, never V3_CLOSED', r1.success === false && r1.code === 'ATTEMPT_COMPLETION_REFUSED', JSON.stringify(r1));
+    assert('I-R4B-2: the service is still open and the attempt still active (the close rolled back with the refused completion)', env.sessions.get(SESSION_ID).status === 'open' && env.attemptsByCorr.get(corrId).status === 'active');
+    env.attempts.complete = realComplete;
+    const r2 = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'resume' });
+    assert('I-R4B-3: the next resume closes and completes together', r2.success === true && r2.closeoutCorrelationId === corrId && env.sessions.get(SESSION_ID).status === 'closed' && env.attemptsByCorr.get(corrId).status === 'completed', JSON.stringify(r2));
+    assert('I-R4B-4: still one closeout, no acquire', env.closeoutsByCorr.size === 1 && env.calls.acquire.length === 0 && env.calls.create.length === 0);
+  }
+
+  console.log('\n── J: CASE D — resume after crash between terminal transition and attempt-complete bookkeeping ──');
+  {
+    const env = fakeEnv({ sessionRow: session({ status: 'closed', closed_at: '2026-08-09T23:00:00Z' }) });
+    const corrId = 'corr-seed-2';
+    env.seedRealizedClose(corrId);
     // session is ALREADY 'closed' in env.sessions — Phase E succeeded, Phase F never ran.
 
     const closeServiceV3 = engineFrom(env);
@@ -285,9 +352,69 @@ function noNewMutation(env) {
     assert('J2: resumes the seeded correlation id', result.closeoutCorrelationId === corrId);
     assert('J3: acquire() is NEVER called', env.calls.acquire.length === 0);
     assert('J4: create() is NEVER called — no second closeout', env.calls.create.length === 0 && env.closeoutsByCorr.size === 1);
-    assert('J5: transition.close() WAS called once, idempotently (ALREADY_CLOSED under the fake)', env.calls.close.length === 1);
+    assert('J5: transition.close() is NEVER called — the session is already terminal (R4: no pointer-dependent transition)', env.calls.close.length === 0);
     assert('J6: attempts.complete() WAS called exactly once — finishes the pending bookkeeping', env.calls.complete.length === 1);
     assert('J7: attempt ends up completed', env.attemptsByCorr.get(corrId).status === 'completed');
+  }
+
+  console.log('\n── R4: CASE D after the NEXT service opened — completion proven from the session\'s own facts, never from the pointer ──');
+  const closedA = () => session({ status: 'closed', closed_at: '2026-08-09T23:00:00Z' });
+  const pointerMovedOn = (env) => {
+    // close_service_session_v3 as it answers once B is current: a closed A is no longer
+    // (recent_closed = A AND current IS NULL), so every call would be an identity mismatch.
+    env.transition.close = async (args) => { env.calls.close.push(args); return { success: false, code: 'SESSION_CLOSE_IDENTITY_MISMATCH', session: null }; };
+  };
+  {
+    const env = fakeEnv({ sessionRow: closedA() });
+    const corrId = 'corr-r4';
+    env.seedRealizedClose(corrId);
+    pointerMovedOn(env);
+    const closeServiceV3 = engineFrom(env);
+    const r1 = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'resume' });
+    assert('R4-1: resume succeeds although the pointer moved on', r1.success === true && r1.code === 'V3_CLOSED' && r1.idempotent === true, JSON.stringify(r1));
+    assert('R4-2: same correlation, same closeout', r1.closeoutCorrelationId === corrId && r1.closeout.closeoutCorrelationId === corrId);
+    assert('R4-3: no transition asked, no acquire, no create', env.calls.close.length === 0 && env.calls.acquire.length === 0 && env.calls.create.length === 0);
+    assert('R4-4: attempt completed exactly once', env.calls.complete.length === 1 && env.attemptsByCorr.get(corrId).status === 'completed');
+    assert('R4-5: result carries the closed session and the persisted reconciliation', r1.session && r1.session.status === 'closed' && r1.reconciliation && r1.reconciliation.closeoutCorrelationId === corrId);
+    const r2 = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'resume' });
+    assert('R4-6: a later retry is CASE C — read-only idempotent success', r2.success === true && r2.idempotent === true && env.calls.complete.length === 1 && env.calls.close.length === 0, JSON.stringify(r2));
+  }
+  {
+    const env = fakeEnv({ sessionRow: closedA() });
+    env.seedRealizedClose('corr-r4c');
+    const closeServiceV3 = engineFrom(env);
+    const [a, b] = await Promise.all([
+      closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'caller-1' }),
+      closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'caller-2' }),
+    ]);
+    assert('R4-7: two concurrent resumes both succeed on the same correlation', a.success && b.success && a.closeoutCorrelationId === 'corr-r4c' && b.closeoutCorrelationId === 'corr-r4c', JSON.stringify([a, b]));
+    assert('R4-8: the attempt ends completed; no closeout, transition or acquire', env.attemptsByCorr.get('corr-r4c').status === 'completed' && env.closeoutsByCorr.size === 1 && env.calls.close.length === 0 && env.calls.acquire.length === 0);
+  }
+  const refusedCase = async (label, prep, expectCode, expectMissing) => {
+    const env = fakeEnv({ sessionRow: closedA() });
+    const corrId = 'corr-neg';
+    env.seedRealizedClose(corrId);
+    prep(env, corrId);
+    const closeServiceV3 = engineFrom(env);
+    const r = await closeServiceV3({ serviceSessionId: SESSION_ID, actor: 'system', source: 'resume' });
+    const status = env.attemptsByCorr.get(corrId) ? env.attemptsByCorr.get(corrId).status : null;
+    assert(`${label}: refused (${expectCode})`, r.success === false && r.code === expectCode && (!expectMissing || (r.missing || []).includes(expectMissing)), JSON.stringify(r));
+    assert(`${label}: attempt NOT completed, nothing written`, status !== 'completed' && env.calls.create.length === 0 && env.calls.close.length === 0 && env.calls.acquire.length === 0);
+  };
+  await refusedCase('R4-N1 snapshot missing', (env, c) => env.snapshotsByCorr.delete(c), 'V3_CLOSE_RESUME_EVIDENCE_INCOMPLETE', 'snapshot');
+  await refusedCase('R4-N2 snapshot of another service', (env, c) => { env.snapshotsByCorr.get(c).serviceSessionId = 'sess-B'; }, 'V3_CLOSE_RESUME_EVIDENCE_INCOMPLETE', 'snapshot');
+  await refusedCase('R4-N3 reconciliation missing (never recreated)', (env) => env.reconciliationBySession.clear(), 'V3_CLOSE_RESUME_EVIDENCE_INCOMPLETE', 'reconciliation');
+  await refusedCase('R4-N4 reconciliation of another correlation', (env) => { env.seedReconciliation('corr-other'); }, 'V3_CLOSE_RESUME_EVIDENCE_INCOMPLETE', 'reconciliation');
+  await refusedCase('R4-N5 session closed BEFORE the closeout existed', (env) => { env.sessions.get(SESSION_ID).closed_at = '2026-08-09T22:59:10Z'; }, 'V3_CLOSE_RESUME_EVIDENCE_INCOMPLETE', 'close_order');
+  await refusedCase('R4-N6 closed session without closed_at', (env) => { env.sessions.get(SESSION_ID).closed_at = null; }, 'V3_CLOSE_RESUME_EVIDENCE_INCOMPLETE', 'session_closed_at');
+  await refusedCase('R4-N7 completion refused by the RPC (superseded meanwhile)', (env) => { env.attempts.complete = async (a) => { env.calls.complete.push(a); return { success: false, code: 'CANNOT_COMPLETE_SUPERSEDED_ATTEMPT' }; }; }, 'CANNOT_COMPLETE_SUPERSEDED_ATTEMPT');
+  await refusedCase('R4-N8 completion transport failure -> no success reported', (env) => { env.attempts.complete = async (a) => { env.calls.complete.push(a); throw new Error('network'); }; }, 'V3_CLOSE_ATTEMPT_COMPLETE_FAILED');
+  {
+    const env = fakeEnv({ sessionRow: closedA() });
+    env.seedRealizedClose('corr-r4r');
+    env.snapshots.getByCorrelationId = async () => { throw new Error('read failed'); };
+    const r = await engineFrom(env)({ serviceSessionId: SESSION_ID, actor: 'system', source: 'resume' });
+    assert('R4-N9: an evidence read failure fails closed', r.success === false && r.code === 'V3_CLOSE_LINEAGE_READ_FAILED' && env.calls.complete.length === 0, JSON.stringify(r));
   }
 
   console.log('\n── K: CASE C — exact idempotent success on an already fully-completed lineage (pure read-only) ──');

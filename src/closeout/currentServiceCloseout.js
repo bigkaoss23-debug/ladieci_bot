@@ -7,6 +7,8 @@ const { resolveEconomicPeriodKind, singleKindOrNull, KNOWN_KINDS } = require("./
 const { snapshotToEconomicShape, describeDivergence } = require("./closedServiceEconomicTruth");
 // N-11 -- the ONE definition of which statuses are historical (orders may be archived).
 const { isHistoricalServiceStatus } = require("../economy/serviceStatusReporting");
+// CORRECTIVE SLICE 150 (#5) -- one settlement per Mesa table session.
+const { netTableSettlement } = require("../tables/tableSettlementNetting");
 
 const round = (value) => Math.round((Number(value) || 0) * 100) / 100;
 // P0 — CHIUSO_FORZATO is deliberately NOT in this set. It is an operational -- language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this whole paragraph explains the ECONOMIC treatment of, not new vocabulary
@@ -68,6 +70,38 @@ function latestObligationsByOrder(obligations) {
     if (!prev || Number(row.revision || 0) > Number(prev.revision || 0)) byOrder.set(id, row);
   }
   return byOrder;
+}
+
+// POST-ASTRA F4 -- obligation lookup by PERMANENT identity, for readers whose rows span more than one
+// service (a timestamp window, the whole Pendencias population). latestObligationsByOrder above keys on
+// the bare display id, which is safe ONLY once every row is already scoped to one service_session_id
+// (the closeout / ledger aggregate readers). Across services the display id recurs -- the legacy archive
+// restarted numbering daily and the V3 era restarted at #001 -- so a bare-id fold attaches another
+// order's obligation to a row (proven: a legacy day changed after today's #001/#002 got obligations).
+// Precedence: order_uid (permanent identity) > (service_session_id, order_id) provenance when it names
+// exactly one order_uid > none (the row's own legacy totale). Never a bare display id.
+function obligationIndexByIdentity(obligations) {
+  const byUid = new Map();
+  const byProvenance = new Map();
+  const newer = (a, b) => !b || Number(a.revision || 0) > Number(b.revision || 0);
+  for (const row of obligations || []) {
+    const uid = row && row.order_uid ? String(row.order_uid) : "";
+    if (uid && newer(row, byUid.get(uid))) byUid.set(uid, row);
+    const key = `${String((row && row.service_session_id) || "")}::${String((row && row.order_id) || "")}`;
+    const slot = byProvenance.get(key) || { uids: new Set(), latest: null };
+    slot.uids.add(uid);
+    if (newer(row, slot.latest)) slot.latest = row;
+    byProvenance.set(key, slot);
+  }
+  return function obligationFor(orderRow) {
+    const uid = orderRow && orderRow.order_uid ? String(orderRow.order_uid) : "";
+    if (uid) return byUid.get(uid) || null;
+    const key = `${String((orderRow && orderRow.service_session_id) || "")}::${String((orderRow && (orderRow.orden_id || orderRow.id)) || "")}`;
+    const slot = byProvenance.get(key);
+    // Ambiguous provenance (more than one permanent identity behind the same service + display id):
+    // fail closed to the row's own legacy totale rather than guess.
+    return slot && slot.uids.size === 1 ? slot.latest : null;
+  };
 }
 
 function safeTicket(order, events, session, obligation = null) {
@@ -207,6 +241,42 @@ function safeTicket(order, events, session, obligation = null) {
   });
 }
 
+// CORRECTIVE SLICE 150 (#5) -- the per-ticket owed / over-collected projection netted inside each
+// Mesa table session (see src/tables/tableSettlementNetting.js): a comanda's over-collection first
+// covers what the other comandas of the SAME table session still owe, so a settled table never
+// shows a phantom unpaid comanda next to a phantom over-collected one. `orderRows[i]` is the order
+// `tickets[i]` was built from (table_session_id, table_command_number). Money is untouched:
+// collectedAmount / refundedAmount / paymentTotals stay the ledger's. A ticket whose remaining debt
+// the table covered reads "paid". Tickets of orders without a table session are returned as is.
+function withTableSettlement(tickets, orderRows) {
+  const list = Array.isArray(tickets) ? tickets : [];
+  const rows = Array.isArray(orderRows) ? orderRows : [];
+  const cents = (value) => Math.round((Number(value) || 0) * 100);
+  const netted = netTableSettlement(list.map((ticket, i) => ({
+    key: i,
+    tableSessionId: rows[i] && rows[i].table_session_id ? String(rows[i].table_session_id) : null,
+    commandNumber: rows[i] ? rows[i].table_command_number : null,
+    id: ticket.id,
+    owedCents: cents(ticket.unpaidAmount),
+    overCents: cents(ticket.overCollectedAmount),
+  })));
+  return list.map((ticket, i) => {
+    const n = netted.get(i);
+    if (!n || (n.coveredCents === 0 && n.appliedOverCents === 0)) return ticket;
+    const unpaidAmount = round(n.owedCents / 100);
+    const paymentState = !ticket.cancelled && unpaidAmount === 0 && ticket.amount > 0
+      && (ticket.paymentState === "partially_paid" || ticket.paymentState === "unpaid") ? "paid" : ticket.paymentState;
+    return Object.freeze({
+      ...ticket,
+      unpaidAmount,
+      overCollectedAmount: round(n.overCents / 100),
+      paymentState,
+      tableSettlementCoveredAmount: round(n.coveredCents / 100),
+      tableSettlementAppliedOverAmount: round(n.appliedOverCents / 100),
+    });
+  });
+}
+
 function aggregate(session, orders, events, obligations) {
   const status = session ? session.status : "none";
   const byOrder = new Map();
@@ -219,10 +289,10 @@ function aggregate(session, orders, events, obligations) {
   // pre-N-2 legacy behaviour for every ticket, so no reader breaks on the day
   // this ships and each one can adopt the canonical facts on its own commit.
   const obligationByOrder = latestObligationsByOrder(obligations);
-  const tickets = (orders || []).map((order) => {
+  const tickets = withTableSettlement((orders || []).map((order) => {
     const id = String(order.orden_id || order.id || "");
     return safeTicket(order, byOrder.get(id) || [], session, obligationByOrder.get(id) || null);
-  });
+  }), orders || []);
   // OVER-COLLECTED SLICE A — unconditional (was `if (ticket.cancelled)
   // continue`). A cancelled/voided ticket's real payment/refund money is a
   // fact that already happened and must reach the service-level totals too,
@@ -470,8 +540,10 @@ const getCurrentServiceCloseout = createCurrentServiceCloseout();
 module.exports = {
   createCurrentServiceCloseout, getCurrentServiceCloseout, aggregate, withOfficialSnapshot,
   safeTicket, paymentBucket, eventType, eventAmount, emptyPaymentTotals, addMethodAmount,
-  round, CANCELLED, loadSessionOrders,
+  round, CANCELLED, loadSessionOrders, withTableSettlement,
   // N-2 — exported so the timestamp-windowed reader applies the SAME
   // canonical-obligation precedence instead of re-deriving it.
   latestObligationsByOrder,
+  // POST-ASTRA F4 -- the permanent-identity lookup for multi-service readers.
+  obligationIndexByIdentity,
 };

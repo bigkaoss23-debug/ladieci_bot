@@ -24,6 +24,8 @@
 // (`overCollected`) and resolved later by a real, deliberate refund.
 
 const { sbRpc } = require('../utils/supabase');
+// POST-ASTRA F1 -- the cancellation of an order whose service is already closed is recorded as a post-close resolution fact.
+const { resolvePostCloseCancellation } = require('./postCloseResolution');
 const crypto = require('crypto');
 
 // The three states that are genuine ECONOMIC cancellations. CHIUSO_FORZATO is deliberately  // language-guard: allow-legacy CHIUSO_FORZATO is the existing terminal-state literal this slice deliberately keeps OUT of every economic filter, named here as evidence, not new vocabulary
@@ -41,9 +43,12 @@ function isEconomicCancellation(estado) {
 // (`^[A-Za-z0-9_-]{8,128}$`). One order can only be cancelled once, so the natural
 // idempotency scope is the order itself: a retry replays instead of appending a second
 // obligation revision.
-function buildCancelRequestId(orderId) {
-  const cleaned = String(orderId == null ? '' : orderId).replace(/[^A-Za-z0-9_-]/g, '');
-  if (cleaned.length === 0) return null;
+// POST-ASTRA F8 -- the idempotency key is the PERMANENT order identity (order_uid), never the display id: a recycled "#NNN" must never
+// let one order's cancellation answer another's as "already done". A retry that straddles this change is still safe: order_cancel_v1
+// answers a replay by the order's own state (already in the target cancel state) before it ever reads the key.
+function buildCancelRequestId(orderUid) {
+  const cleaned = String(orderUid == null ? '' : orderUid).replace(/[^A-Za-z0-9_-]/g, '');
+  if (cleaned.length < 8) return null;
   return `cancel-order-${cleaned}`.slice(0, 128);
 }
 
@@ -79,19 +84,21 @@ function codeFromRpcBody(body) {
 // Returns {ok:true, result} or {ok:false, code}. Never throws: cambiaStato's contract with
 // its callers is a typed result object, and a cancellation that the DB refused must NOT be
 // reported to the operator as a successful state change.
-async function cancelOrderCanonical({ orderId, targetEstado, extras = {} } = {}) {
+async function cancelOrderCanonical({ orderId, orderUid, targetEstado, extras = {} } = {}) {
   const actor = typeof extras.actor_id === 'string' && extras.actor_id ? extras.actor_id : null;
   // FAIL CLOSED on an unattributable actor. This writer reduces what the restaurant is
   // owed; N-3 set the precedent that a context we cannot verify refuses the operation
   // outright rather than quietly producing a financial fact nobody can be held to.
   if (!actor) return { ok: false, code: 'ORDER_CANCEL_ACTOR_REQUIRED' };
 
-  const clientRequestId = buildCancelRequestId(orderId);
-  if (!clientRequestId) return { ok: false, code: 'ORDER_CANCEL_INVALID' };
+  if (orderId == null || String(orderId).trim() === '') return { ok: false, code: 'ORDER_CANCEL_INVALID' };
+  // POST-ASTRA F8 -- without the permanent identity there is no safe key: fail closed (order_cancel_v1 refuses such an order anyway).
+  const clientRequestId = buildCancelRequestId(orderUid);
+  if (!clientRequestId) return { ok: false, code: 'ORDER_WITHOUT_STABLE_IDENTITY' };
 
   const target = String(targetEstado || '').trim().toUpperCase();
   const reason = resolveReason(extras, extras.origin);
-  const requestHash = canonicalHash({ orderId: String(orderId), target, reason });
+  const requestHash = canonicalHash({ orderUid: String(orderUid), orderId: String(orderId), target, reason });
 
   let response;
   try {
@@ -109,7 +116,18 @@ async function cancelOrderCanonical({ orderId, targetEstado, extras = {} } = {})
     return { ok: false, code: RETRYABLE_TRANSPORT };
   }
 
-  if (!response || !response.ok) return { ok: false, code: codeFromRpcBody(response && response.body) };
+  if (!response || !response.ok) {
+    const code = codeFromRpcBody(response && response.body);
+    // POST-ASTRA F1 -- the order's service is closed (151 refused the ordinary cancellation, nothing was written): the cancellation is
+    // recorded as the post-close resolution fact, with the SAME key and hash, instead of leaving a false receivable behind.
+    if (code === 'ORDER_ECONOMIC_SERVICE_CLOSED') {
+      const post = await resolvePostCloseCancellation({
+        orderUid: String(orderUid), byActor: actor, reason, clientRequestId, requestHash, targetEstado: target,
+      });
+      return post.ok ? { ok: true, postClose: true, result: post.result } : { ok: false, code: post.code };
+    }
+    return { ok: false, code };
+  }
   return { ok: true, result: response.body || null };
 }
 

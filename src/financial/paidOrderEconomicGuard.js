@@ -134,6 +134,92 @@ function economicBasisLockRefusal(orderId) {
   };
 }
 
+// FINAL CONCURRENCY FIX (migration 151) -- a FOURTH DB refusal of an economic order write, sibling of the two above.
+// Every obligation revision (a totale edit through the ordenes trigger, a cancellation, a commercial adjustment) now takes
+// the close gate and is refused -- nothing written -- when the order's service is no longer open: its closeout is frozen.
+// Recognised here so the three totale writers of this file's callers report it instead of a false success.
+const ORDER_ECONOMIC_SERVICE_CLOSED = 'ORDER_ECONOMIC_SERVICE_CLOSED';
+
+const SERVICE_CLOSED_MESSAGE =
+  'El servicio de este pedido ya está cerrado: su importe no se puede modificar. No se guardó nada.';
+
+function isEconomicServiceClosedRefusal(sbResult) {
+  if (!sbResult || typeof sbResult !== 'object' || Array.isArray(sbResult)) return false;
+  for (const key of ['message', 'details', 'detail', 'hint', 'code']) {
+    const v = sbResult[key];
+    if (typeof v === 'string' && v.includes(ORDER_ECONOMIC_SERVICE_CLOSED)) return true;
+  }
+  return false;
+}
+
+function economicServiceClosedRefusal(orderId) {
+  return {
+    success: false,
+    error: ORDER_ECONOMIC_SERVICE_CLOSED,
+    code: ORDER_ECONOMIC_SERVICE_CLOSED,
+    id: typeof orderId === 'string' ? orderId : undefined,
+    message: SERVICE_CLOSED_MESSAGE,
+  };
+}
+
+// POST-ASTRA F5 -- the canonical editor writer (migration 153, order_apply_editor_patch_v1) refuses a write whose economic basis
+// changed after it was read: an explicit conflict, never a silent stale overwrite.
+const ORDER_EDIT_CONFLICT = 'ORDER_EDIT_CONFLICT';
+const EDIT_CONFLICT_MESSAGE =
+  'El pedido cambió mientras lo editabas. Recárgalo y vuelve a aplicar el cambio. No se guardó nada.';
+
+function isOrderEditConflict(sbResult) {
+  if (!sbResult || typeof sbResult !== 'object' || Array.isArray(sbResult)) return false;
+  for (const key of ['message', 'details', 'detail', 'hint', 'code']) {
+    const v = sbResult[key];
+    if (typeof v === 'string' && v.includes(ORDER_EDIT_CONFLICT)) return true;
+  }
+  return false;
+}
+
+function orderEditConflictRefusal(orderId) {
+  return {
+    success: false,
+    error: ORDER_EDIT_CONFLICT,
+    code: ORDER_EDIT_CONFLICT,
+    id: typeof orderId === 'string' ? orderId : undefined,
+    message: EDIT_CONFLICT_MESSAGE,
+  };
+}
+
+// POST-ASTRA F7 -- a write the database did not perform is NEVER reported as a success. The known refusals keep their typed
+// codes; ANY other error body (a deadlock, a timeout, an unknown trigger refusal, a transport error page) is a typed failure.
+const ORDER_WRITE_FAILED = 'ORDER_WRITE_FAILED';
+const WRITE_FAILED_MESSAGE = 'No se pudo guardar el pedido. No se guardó nada: recarga e inténtalo de nuevo.';
+
+function isDbWriteFailure(result) {
+  if (result === null || result === undefined) return false;
+  if (typeof result === 'string') return result.trim() !== '';
+  if (Array.isArray(result)) return false;
+  if (typeof result === 'object') return typeof result.message === 'string' || typeof result.code === 'string';
+  return false;
+}
+
+function orderWriteFailure(orderId) {
+  return {
+    success: false,
+    error: ORDER_WRITE_FAILED,
+    code: ORDER_WRITE_FAILED,
+    id: typeof orderId === 'string' ? orderId : undefined,
+    message: WRITE_FAILED_MESSAGE,
+  };
+}
+
+// The ONE mapping of an ordenes write result: null = written; otherwise the typed refusal to return as is.
+function classifyOrderWriteResult(orderId, result) {
+  if (!isDbWriteFailure(result)) return null;
+  if (isEconomicMutationRefusal(result)) return economicMutationRefusal(orderId);
+  if (isEconomicBasisLockRefusal(result)) return economicBasisLockRefusal(orderId);
+  if (isEconomicServiceClosedRefusal(result)) return economicServiceClosedRefusal(orderId);
+  if (isOrderEditConflict(result)) return orderEditConflictRefusal(orderId);
+  return orderWriteFailure(orderId);
+}
+
 // Best-effort: does this order_uid already carry a commercial-adjustment or cancellation
 // revision (order_obligations.source = 'order_commercial_adjustment_v1')? Mirrors E-1's own
 // predicate (b) exactly. Returns false (never throws) on a missing uid or a lookup failure
@@ -154,6 +240,15 @@ async function orderHasCommercialAdjustmentRevision(orderUid, deps = {}) {
 }
 
 module.exports = {
+  ORDER_EDIT_CONFLICT,
+  EDIT_CONFLICT_MESSAGE,
+  isOrderEditConflict,
+  orderEditConflictRefusal,
+  ORDER_WRITE_FAILED,
+  WRITE_FAILED_MESSAGE,
+  isDbWriteFailure,
+  orderWriteFailure,
+  classifyOrderWriteResult,
   PAID_ORDER_ECONOMIC_MUTATION_FORBIDDEN,
   OPERATOR_MESSAGE,
   isEconomicMutationRefusal,
@@ -163,5 +258,9 @@ module.exports = {
   BASIS_LOCKED_MESSAGE,
   isEconomicBasisLockRefusal,
   economicBasisLockRefusal,
+  ORDER_ECONOMIC_SERVICE_CLOSED,
+  SERVICE_CLOSED_MESSAGE,
+  isEconomicServiceClosedRefusal,
+  economicServiceClosedRefusal,
   orderHasCommercialAdjustmentRevision,
 };

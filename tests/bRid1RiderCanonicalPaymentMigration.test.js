@@ -56,9 +56,25 @@ function cut(text, from, to, label) {
 
 console.log("\n── files, numbering, transaction ──");
 check("forward and rollback exist under migrations/ with number 140", fs.existsSync(path.join(ROOT, FWD_REL)) && fs.existsSync(path.join(ROOT, RBK_REL)));
-check("140 is the next number after 139 (no other 140+ migration in the repo)",
+check("140 is the next number after 139: the only migrations >= 140 are the 140 pair and, in this Economia candidate, the C8 pairs 143 / 144, the Finding A pair 145, the Finding B pair 146, the R2 pair 147, the legacy paid guard pair 148, the R4B atomic close pair 149, the corrective slice pair 150, the final concurrency fix pair 151, the POST-ASTRA pairs 152 / 153 / 154 and the final liveness gate pairs 155 / 156 (the Economy package: 140, 143, 144, 145, 146, 147, 148, 149, 150; 141 / 142 = Fiscal M141 / M142 are NOT in it and stay forbidden here)",
   fs.readdirSync(path.join(ROOT, "migrations")).filter((f) => /_migration_1(4\d|[5-9]\d)\b/.test(f)).sort().join(",")
-    === "2026-09-23_b_rid_1_rider_canonical_payment_lineage_v1_migration_140.ROLLBACK.sql,2026-09-23_b_rid_1_rider_canonical_payment_lineage_v1_migration_140.sql");
+    === ["2026-09-23_b_rid_1_rider_canonical_payment_lineage_v1_migration_140.ROLLBACK.sql", "2026-09-23_b_rid_1_rider_canonical_payment_lineage_v1_migration_140.sql",
+      "2026-09-24_c8_order_cancel_w_first_v1_migration_144.ROLLBACK.sql", "2026-09-24_c8_order_cancel_w_first_v1_migration_144.sql",
+      "2026-09-24_c8_order_intake_lock_prelude_v1_migration_143.ROLLBACK.sql", "2026-09-24_c8_order_intake_lock_prelude_v1_migration_143.sql",
+      "2026-09-24_payment_close_receipt_lock_v1_migration_145.ROLLBACK.sql", "2026-09-24_payment_close_receipt_lock_v1_migration_145.sql",
+      "2026-09-25_close_attempt_atomic_completion_v1_migration_149.ROLLBACK.sql", "2026-09-25_close_attempt_atomic_completion_v1_migration_149.sql",
+      "2026-09-25_legacy_paid_ambiguity_payment_guard_v1_migration_148.ROLLBACK.sql", "2026-09-25_legacy_paid_ambiguity_payment_guard_v1_migration_148.sql",
+      "2026-09-25_mesa_refund_canonical_projection_v1_migration_147.ROLLBACK.sql", "2026-09-25_mesa_refund_canonical_projection_v1_migration_147.sql",
+      "2026-09-25_refund_close_receipt_lock_v1_migration_146.ROLLBACK.sql", "2026-09-25_refund_close_receipt_lock_v1_migration_146.sql",
+      "2026-09-26_close_evidence_freshness_mesa_legacy_guard_v1_migration_150.ROLLBACK.sql", "2026-09-26_close_evidence_freshness_mesa_legacy_guard_v1_migration_150.sql",
+      "2026-09-26_economic_close_gate_v1_migration_151.ROLLBACK.sql", "2026-09-26_economic_close_gate_v1_migration_151.sql",
+      // POST-ASTRA corrective cycle: 152 (post-close resolution fact), 153 (canonical order editor), 154 (day-window freshness).
+      "2026-09-26_close_day_evidence_freshness_v1_migration_154.ROLLBACK.sql", "2026-09-26_close_day_evidence_freshness_v1_migration_154.sql",
+      "2026-09-26_order_editor_canonical_writer_v1_migration_153.ROLLBACK.sql", "2026-09-26_order_editor_canonical_writer_v1_migration_153.sql",
+      "2026-09-26_post_close_obligation_resolution_v1_migration_152.ROLLBACK.sql", "2026-09-26_post_close_obligation_resolution_v1_migration_152.sql",
+      // final liveness gate: 155 (Planner entity KEY SHARE before the order lock, N2), 156 (close gate on the window fact inserts, F2).
+      "2026-09-27_planner_entity_key_share_before_order_lock_v1_migration_155.ROLLBACK.sql", "2026-09-27_planner_entity_key_share_before_order_lock_v1_migration_155.sql",
+      "2026-09-27_close_gate_on_window_facts_v1_migration_156.ROLLBACK.sql", "2026-09-27_close_gate_on_window_facts_v1_migration_156.sql"].sort().join(","));
 check("both files run in ONE transaction (BEGIN ... COMMIT)", /\nBEGIN;\n/.test(fwd) && /\nCOMMIT;\n$/.test(fwd) && /\nBEGIN;\n/.test(rbk) && /\nCOMMIT;\n$/.test(rbk));
 check("the manifest registers migration 140 as authored locally and NOT applied",
   /\| 140 \| B-RID-1/.test(read("migrations/MIGRATION_MANIFEST.md")) && /NOT APPLIED to staging/.test(read("migrations/MIGRATION_MANIFEST.md").split("| 140 | B-RID-1")[1] || ""));
@@ -98,9 +114,17 @@ const para = (t) => t.replace(/\n{3,}/g, "\n\n");
 check("the 135 body has no triple newline (the paragraph normalization below only affects the 140 side)", !/\n{3,}/.test(r135.body));
 check("removing the 140 blocks from the 140 body == removing the legacy-writer call regions (and the two comments that named them) from the 135 body",
   para(stripBlocks(r140.body)) === legacy);
-check("the 140 rider body has exactly the seven named blocks",
+check("the 140 rider body has exactly the eight named blocks",
   JSON.stringify((r140.body.match(/-- 140:BEGIN ([a-z_]+)/g) || []).map((s) => s.slice(13)))
-    === JSON.stringify(["decl", "collection_proofs", "canonical_request", "canonical_collect_replay", "money_first_comment", "canonical_collect", "operative_comment"]));
+    === JSON.stringify(["decl", "collection_proofs", "workspace_before_actor", "canonical_request", "canonical_collect_replay", "money_first_comment", "canonical_collect", "operative_comment"]));
+// R5 (targeted findings 2026-09-25): a collection locks the rider's own workspace row after L0 and BEFORE the actor row lock.
+const r5 = /-- 140:BEGIN workspace_before_actor\n([\s\S]*?)-- 140:END workspace_before_actor/.exec(r140.body)[1];
+check("R5: the workspace_before_actor block locks exactly the rider actor's own workspace row FOR UPDATE, only for a collection (v_method <> '')",
+  /IF v_method <> '' THEN\n\s+PERFORM 1 FROM public\.workspaces w\n\s+WHERE w\.id = \(SELECT a\.workspace_id FROM public\.auth_actors a WHERE a\.actor = p_by_actor\)\n\s+FOR UPDATE;\n\s+END IF;/.test(r5)
+  && (r140.body.match(/FROM public\.workspaces/g) || []).length === 1);
+check("R5: order is L0 -> workspace row -> actor row (the block sits after L0 and before the actor FOR UPDATE)",
+  r140.body.indexOf("hashtext('LA_DIECI_DRIVER_STATO')") < r140.body.indexOf("-- 140:BEGIN workspace_before_actor")
+  && r140.body.indexOf("-- 140:END workspace_before_actor") < r140.body.indexOf("SELECT * INTO v_by FROM public.auth_actors WHERE actor = p_by_actor FOR UPDATE;"));
 check("signature: the 7 original parameters unchanged + p_by_sid_hash text DEFAULT NULL last",
   /CREATE FUNCTION public\.rider_collect_and_complete_stop\(\n  p_order_id text, p_metodo_pago text, p_by_actor text, p_session_version integer,\n  p_ip_hash text, p_meta jsonb, p_idem_scope_key text,\n  p_by_sid_hash text DEFAULT NULL\)/.test(fwd));
 const b = r140.body;

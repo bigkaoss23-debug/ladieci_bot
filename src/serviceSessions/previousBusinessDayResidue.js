@@ -23,20 +23,55 @@
 // REPORT.md §9/§22). No GET/read action anywhere calls this module.
 //
 // NEVER MUTATES canonical state. Only reads ordenes/table_sessions/
-// service_sessions/service_closeouts and writes service_incidents rows via
-// serviceIncidents.report() — an order's estado, a table's status, and every
+// service_sessions/service_closeouts (plus, for the scanned orders,
+// order_obligations/order_financial_events) and writes service_incidents rows
+// via serviceIncidents.report() — an order's estado, a table's status, and every
 // financial fact are left exactly as they were.
+//
+// ECONOMIC vs OPERATIONAL RESIDUE (stale payment mirror, H1). Every order found
+// here is operational residue by construction (a non-terminal estado left on a
+// previous business date). Whether it is ALSO economic residue is decided by
+// the canonical settlement — current obligation minus net collected, the same
+// arithmetic order_post_payment_v1 uses (orderObligationProjection.js) — never
+// by ya_pagado/cobrado (a commercial adjustment leaves them stale) nor by
+// ordenes.totale (the pre-adjustment gross):
+//   outstanding > 0   -> 'financial', exposure = outstanding (what is still owed)
+//   otherwise         -> 'operational', no exposure
+// financial_exposure_cents is a receivable (recovered payments and write-offs
+// settle against it), so an over-collection — money owed BACK to the customer —
+// is never written there; it stays visible in the returned `economic` facts and
+// in the closeout / cash readers that already publish overCollected.
+// A legacy row whose paid mirror contradicts the ledger (migration 148's
+// ORDER_PAYMENT_LEGACY_IMPORT_REQUIRED predicate) is NOT treated as paid: the
+// mirror is not money. It is reported 'financial' with the ledger outstanding
+// and flagged legacyPaymentConflict, until the historical payment is imported
+// or the obligation reconciled.
 // ===============================================================
 
 const { sbSelect } = require("../utils/supabase");
 const { serviceIncidents } = require("../incidents/serviceIncidents");
 const { getCurrentOperationalBusinessDate } = require("./currentOperationalSession");
+const { readOrderFinancials } = require("../tables/orderObligationProjection");
 
 const NON_TERMINAL_ORDER_STATES = "POR_CONFIRMAR,NUEVO,EN_COCINA,LISTO,EN_ENTREGA";
 const RESIDUE_INCIDENT_TYPE = "PREVIOUS_BUSINESS_DAY_OPERATIONAL_RESIDUE";
 
 function toCents(euros) {
   return Math.round((Number(euros) || 0) * 100);
+}
+
+// The economic side of one residue order, from its canonical settlement.
+function economicResidueOf(financial) {
+  const outstandingCents = toCents(financial.outstanding);
+  return {
+    residue: outstandingCents > 0 ? "RECEIVABLE" : (toCents(financial.overCollected) > 0 ? "OVER_COLLECTED" : "NONE"),
+    currentObligation: financial.currentObligation,
+    netCollected: financial.netCollected,
+    outstanding: financial.outstanding,
+    overCollected: financial.overCollected,
+    payState: financial.payState,
+    legacyPaymentConflict: financial.legacyPaymentConflict === true,
+  };
 }
 
 async function safeReport(incidents, args) {
@@ -129,27 +164,44 @@ function createResidueReconciler({
         continue;
       }
 
+      // Canonical settlement of every scanned order: two batched reads for the
+      // whole session, never one per order. Unreadable -> skip the session like
+      // any other scan error (retried on the next reconciliation) rather than
+      // record an immutable incident on a guessed category.
+      let financialOf;
+      try {
+        financialOf = await readOrderFinancials(Array.isArray(orders) ? orders : [], { select });
+      } catch (e) {
+        scanErrors++;
+        continue;
+      }
+
       for (const order of (Array.isArray(orders) ? orders : [])) {
         // Financial separation (brief, verbatim): an order becoming stale
-        // operationally does not settle money. Unpaid residue is a
-        // 'financial' incident carrying the real exposure; paid residue is
-        // 'operational' (no exposure — purely a loose end, e.g. a paid pizza
-        // never marked delivered). Neither branch touches ya_pagado/estado.
-        const unpaid = order.ya_pagado !== true;
+        // operationally does not settle money. Residue that still OWES money is
+        // a 'financial' incident carrying the canonical outstanding; settled or
+        // over-collected residue is 'operational' (no exposure — purely a loose
+        // end, e.g. a paid pizza never marked delivered). Neither branch
+        // touches ya_pagado/estado.
+        const economic = economicResidueOf(financialOf(order));
+        const receivable = economic.residue === "RECEIVABLE";
         const result = await safeReport(incidents, {
           serviceSessionId: session.id,
           closeoutCorrelationId,
           incidentType: RESIDUE_INCIDENT_TYPE,
-          category: unpaid ? "financial" : "operational",
+          category: receivable ? "financial" : "operational",
           severity: "warning",
           detectedBy: actor,
           entityType: "order",
           entityId: order.id,
           orderId: order.id,
           tableSessionId: order.table_session_id || null,
-          financialExposureCents: unpaid ? toCents(order.totale) : null,
+          financialExposureCents: receivable ? toCents(economic.outstanding) : null,
         });
-        reported.push({ kind: "order", entityId: order.id, businessDate: session.business_date, ...result });
+        reported.push({
+          kind: "order", entityId: order.id, businessDate: session.business_date,
+          economic, operational: { estado: order.estado }, ...result,
+        });
       }
 
       for (const table of (Array.isArray(tableSessions) ? tableSessions : [])) {

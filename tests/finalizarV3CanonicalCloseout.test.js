@@ -16,6 +16,7 @@
 // Run: node tests/finalizarV3CanonicalCloseout.test.js
 
 const { createServiceLifecycleEngine } = require('../src/serviceSessions/serviceLifecycleEngine');
+const { withEvidenceTerminal } = require('./helpers/v3EvidenceTerminalFake');
 const { aggregate } = require('../src/closeout/currentServiceCloseout');
 const {
   snapshotToEconomicShape,
@@ -44,7 +45,9 @@ function run({ orders = [], events = [], obligations = [], tableSessions = [] })
     if (table === 'order_obligations') return obligations;
     throw new Error('unexpected table ' + table);
   };
-  const engine = createServiceLifecycleEngine({
+  // CORRECTIVE SLICE 150 — the terminal step is close_service_session_with_evidence_v1, modelled over these fakes
+  // (tests/helpers/v3EvidenceTerminalFake.js): the closeout is created by the terminal step, with exactly these fields.
+  const engine = createServiceLifecycleEngine(withEvidenceTerminal({
     // ACTIVE RIDER TRIP / SERVICE CLOSE GUARD — these unit tests model a service with no
     // rider trip; the guard's own behaviour is proven in tests/activeRiderTripServiceCloseGuard.test.js.
     activeRiderTrip: async () => ({ ok: true, active: false }),
@@ -69,6 +72,8 @@ function run({ orders = [], events = [], obligations = [], tableSessions = [] })
     closeouts: { async getBySessionId() { return null; } },
     transition: {
       async close() { return { success: true, code: 'V3_CLOSED', session: { ...sessionRow, status: 'closed' } }; },
+      // R4B — migration 149's terminal step (close + attempt completion in one transaction)
+      async closeAndCompleteAttempt() { return { success: true, code: 'V3_CLOSED', attemptCompleted: true, session: { ...sessionRow, status: 'closed' } }; },
     },
     incidents: {
       async report(fields) { captured.incidents.push(fields); return { success: true, created: true, incident: { id: 'inc-' + captured.incidents.length, ...fields, severity: fields.severity } }; },
@@ -76,7 +81,7 @@ function run({ orders = [], events = [], obligations = [], tableSessions = [] })
     },
     releaseEmptyTable: async () => ({ ok: true }),
     reconciliation: { persist: async () => ({ success: true, reconciliation: { id: 'rec-1' } }) },
-  });
+  }));
   return engine({ serviceSessionId: SID, source: 'operator_finalizar_v3', actor: 'tester' }).then((res) => ({ res, ...captured }));
 }
 
