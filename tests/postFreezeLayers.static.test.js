@@ -10,6 +10,7 @@ const crypto = require("crypto");
 
 const ROOT = path.join(__dirname, "..");
 const REG = require("../scripts/lib/postFreezeLayers.js");
+const { LAYER_CHECKS } = require("../scripts/lib/postFreezeLayerChecks.js");
 const R = require("../scripts/postFreezeLayerApply.js");
 const PF = require("../scripts/economy139to146Preflight.js");
 const sha = (rel) => crypto.createHash("sha256").update(fs.readFileSync(path.join(ROOT, rel))).digest("hex");
@@ -41,6 +42,19 @@ test("G4 (157) is reserved as EXTERNAL with its certified bytes; this branch car
   assert.ok(!fs.existsSync(path.join(ROOT, "docs/G4_CLIENTES_GEO_CACHE_SECURITY_CONTRACT.md")));
 });
 
+test("layer 170 (FISCAL_PREREQ / P1) is OWN, pinned to its file bytes, with a DETACH rollback and an exact state check", () => {
+  const l = REG.layerOf(170);
+  assert.equal(l.status, "OWN"); assert.equal(l.domain, "FISCAL_PREREQ");
+  assert.equal(sha(`${l.dir}/${l.file}`), l.sha);
+  assert.equal(sha(`${l.dir}/${l.file.replace(/\.sql$/, ".ROLLBACK.sql")}`), l.rbkSha);
+  assert.deepEqual([...l.applyFrom], ["ABSENT", "DETACHED"]);
+  assert.equal(l.rollback.kind, "DETACH"); assert.equal(l.rollback.to, "DETACHED");
+  assert.equal(l.rollback.ack, "DETACH_SALE_EVIDENCE_CAPTURE_ACCEPT_EVIDENCE_GAP");
+  const chk = LAYER_CHECKS[170];
+  assert.ok(chk && typeof chk.read === "function" && typeof chk.classify === "function");
+  for (const [k, v] of Object.entries(chk.pins)) assert.ok(typeof v === "string" && v.length > 20 && !/PENDING/.test(v), `pin ${k} not recorded`);
+});
+
 test("verify-files: own layer bytes, no unregistered post-freeze file, Economy 139..156 files byte-identical to their certified sha256", () => {
   const r = R.verifyFiles();
   assert.deepEqual(r.problems, []);
@@ -57,8 +71,8 @@ test("post-freeze files live OUTSIDE the migrations/ root the Economy tooling en
   const high = root.filter((f) => { const m = /_migration_(\d+)\b/.exec(f); return m && Number(m[1]) > 156; });
   assert.deepEqual(high, []);
   assert.ok(root.every((f) => !/_layer_\d+/.test(f)));
-  const dir = path.join(ROOT, "migrations/post_freeze");
-  assert.deepEqual(fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".sql")) : [], [], "no layer file before a layer is registered");
+  const pf = fs.readdirSync(path.join(ROOT, "migrations/post_freeze")).filter((f) => f.endsWith(".sql")).sort();
+  assert.deepEqual(pf, ["2026-09-28_fiscal_prereq_sale_evidence_v1_layer_170.ROLLBACK.sql", "2026-09-28_fiscal_prereq_sale_evidence_v1_layer_170.sql"]);
 });
 
 test("isCertifiedPostFreezeRow: exact (apply_order, filename, sha256/16) only", () => {

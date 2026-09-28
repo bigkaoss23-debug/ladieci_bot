@@ -36,6 +36,17 @@ const POST_FREEZE_LAYERS = Object.freeze([
     sha: '0880353a36abbb876d0610d453c49c19e18308282019f6ae9e9a372088d540c1', rbkSha: '47685c26d141a9299a02f0576a0d4fadb1d0f34d4337d8a3f532790bb3262105',
     origin: '~/Downloads/ladieci-g4-security-be (G4_SECURITY_PASS local 2026-09-27, not deployed)',
   }),
+  Object.freeze({
+    n: 170, domain: 'FISCAL_PREREQ', name: 'FISCAL_PREREQ/P1 sale_evidence (immutable accepted-sale composition evidence)', status: 'OWN',
+    dir: 'migrations/post_freeze', file: '2026-09-28_fiscal_prereq_sale_evidence_v1_layer_170.sql',
+    sha: '32a354f0a61938ea43d63566e1b75d47a0efe27f8f1875775bc43f974c61e7f6', rbkSha: '6ed93cffd20c856f20f96316e84cb96d15111e49e5e7fc893a4950fc1c4d7661',
+    requires: Object.freeze([]),
+    // the states from which `apply` may run (DETACHED = re-attach after a rollback) and the state a rollback leaves
+    applyFrom: Object.freeze(['ABSENT', 'DETACHED']),
+    rollback: Object.freeze({ kind: 'DETACH', to: 'DETACHED', ackGuc: 'ladieci.fp1_detach_ack', ack: 'DETACH_SALE_EVIDENCE_CAPTURE_ACCEPT_EVIDENCE_GAP',
+      meaning: 'drops the two capture triggers and the capture function; every evidence row is retained; the gap is recorded as an epoch' }),
+    contract: 'docs/FISCAL_P1_SALE_EVIDENCE_CONTRACT.md',
+  }),
 ]);
 
 const domainOf = (n) => DOMAINS.find((d) => n >= d.from && n <= d.to) || null;

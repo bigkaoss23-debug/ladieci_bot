@@ -24,7 +24,7 @@ Economy certification boundary, and nothing here modifies an Economy file.
 |---|---|---|
 | 139 – 156 | ECONOMY (frozen) | the certified chain |
 | 157 – 169 | SECURITY | 157 = SECURITY/G4 (isolated copy `~/Downloads/ladieci-g4-security-be`, **EXTERNAL** here); G4b takes the next free number |
-| 170 – 189 | FISCAL_PREREQ | reserved for the Fiscal prerequisite layers FP-1 … FP-5 (FP-1 first: 170) |
+| 170 – 189 | FISCAL_PREREQ | 170 = FP-1 `sale_evidence`; FP-2 / FP-3 / FP-5 take the next free numbers |
 | 190 – 209 | FISCAL_CORE | none |
 | 210 – 229 | DELIVERY (G2) | none |
 | ≥ 230 | unallocated | a new domain gets a range by a reviewed change of the registry |
@@ -99,3 +99,4 @@ ledger row for a layer whose objects are absent, objects without their ledger ro
 | n | Domain | Status | Layer | Rollback |
 |---|---|---|---|---|
 | 157 | SECURITY | EXTERNAL | G4 `clientes` / `geo_cache` anon exposure (not in this checkout) | its own runner |
+| 170 | FISCAL_PREREQ | OWN | P1 `sale_evidence` — `docs/FISCAL_P1_SALE_EVIDENCE_CONTRACT.md` | DETACH, ack `DETACH_SALE_EVIDENCE_CAPTURE_ACCEPT_EVIDENCE_GAP` |
